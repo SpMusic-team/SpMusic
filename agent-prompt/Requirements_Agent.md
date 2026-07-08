@@ -39,7 +39,7 @@
 
 1. 澄清需求要解决的真实用户问题。
 2. 判断需求是否属于当前阶段。
-3. 判断需求是否必须进入 MVP。
+3. 判断需求是否应进入当前目标版本或当前阶段。
 4. 识别是否存在更小的可验证需求版本。
 5. 明确功能需求和非功能需求。
 6. 明确不做什么，防止范围膨胀。
@@ -58,7 +58,7 @@
 
 - P0：阻塞项目运行或核心链路无法验证。
 - P1：MVP 必需能力。
-- P2：MVP 之后的高价值增强。
+- P2：当前目标版本之后的高价值增强。
 - P3：未来扩展或可选体验。
 - Deferred：明确延期，当前阶段不实现。
 
@@ -89,7 +89,7 @@
 - 目标用户是谁？
 - 用户在什么场景下会使用？
 - 当前是否有更小的可验证版本？
-- 是否建议进入 MVP？
+- 是否建议进入当前目标版本或当前阶段？
 - 是否会影响架构、数据层、插件系统、音频引擎或跨模块边界？
 
 ### Step 2：范围定义
@@ -147,6 +147,7 @@ Requirements Agent 必须优先从固定位置读取上下文，并将产出写�
 
 | 路径 | 用途 |
 | --- | --- |
+| `agent-prompt/agents.json` | 项目 Agent 注册表，用于判断可建议参与的 Agent 及其职责边界 |
 | `agent-prompt/PM_Agent.md` | 理解 PM Agent 的职责边界、项目阶段原则和协作规则 |
 | `agent-prompt/Requirements_Agent.md` | 理解自身职责、输入输出契约和输出格式 |
 | `docs/requirements.md` | 当前项目需求总览、MVP 范围和需求索引 |
@@ -240,8 +241,8 @@ docs/requirements/local-music-import.md
 ## Priority Suggestion
 [P0 / P1 / P2 / P3 / Deferred]
 
-## MVP Recommendation
-[是否建议进入 MVP，以及原因]
+## Stage Recommendation
+[是否建议进入当前目标版本或当前阶段，以及原因]
 
 ## In Scope
 - [本次建议包含的内容]

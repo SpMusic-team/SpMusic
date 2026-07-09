@@ -27,6 +27,7 @@ source_documents:
 - 将模板页面替换为 SpMusic 最小播放界面。
 - 在 UI/UX 规格完成后，对播放界面做视觉与交互修正。
 - 实现播放 / 暂停 / 上一首 / 下一首的 UI 状态切换。
+- 展示 UI-only 播放进度条和演示频谱或等价音频视觉化区域。
 - 前端实现保留轻量护栏：集中 CSS token、集中用户可见文案、稳定状态枚举。
 - 建立验证清单：`npm run lint`、`npm run build`、`npm run tauri dev`。
 - 更新 README。
@@ -34,6 +35,7 @@ source_documents:
 ## 不在范围内
 
 - 真实音频播放、音量、进度拖动、音频解码。
+- 与真实音频同步的播放进度和基于真实音频数据的频谱分析。
 - 本地文件读取、文件夹扫描、媒体库、数据库、元数据、封面、歌词。
 - 最小 Tauri command 或 React 到 Rust 通信验证。
 - 可导入主题、主题编辑器、主题持久化、完整国际化框架和语言切换。
@@ -51,8 +53,8 @@ source_documents:
 | SP-002 | 需求索引、路线图与发布边界 | P0 | PM Agent | Done | SP-001 |
 | SP-003 | 播放界面 UI 规格 | P1 | UI/UX Agent | Ready | SP-001 |
 | SP-004 | 总体架构蓝图与播放器状态结构 | P1 | Architecture Agent | Done | SP-001 |
-| SP-005 | 前端基础骨架与实现约束 | P1 | Frontend Agent | Ready | SP-004 |
-| SP-006 | 最小播放界面实现 | P1 | Frontend Agent | Blocked | SP-005 |
+| SP-005 | 前端基础骨架与实现约束 | P1 | Frontend Agent | Done | SP-004 |
+| SP-006 | 最小播放界面实现 | P1 | Frontend Agent | Ready | SP-005 |
 | SP-007 | 播放界面视觉与交互修正 | P1 | Frontend Agent | Blocked | SP-003, SP-006 |
 | SP-008 | v0.2 虚构播放列表管理 UI 预研边界 | P2 | PM Agent | Ready | SP-001 |
 | SP-009 | README 当前能力与限制更新 | P1 | Documentation Agent | Blocked | SP-001, SP-002, SP-007 |
@@ -79,6 +81,8 @@ source_documents:
 - 应用展示 SpMusic 播放界面。
 - 系统存在至少 5 条假歌曲数据用于状态验证。
 - 播放 / 暂停 / 上一首 / 下一首能改变 UI 状态。
+- 播放界面存在 UI-only 播放进度条。
+- 播放界面存在演示频谱或等价音频视觉化区域。
 - 空歌曲列表存在可渲染 Empty State 分支。
 - 主要视觉值使用集中 CSS token 或等价方式管理。
 - 用户可见文案集中管理，业务状态不依赖中文展示文案。

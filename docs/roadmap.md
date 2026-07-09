@@ -6,7 +6,7 @@ status: "active"
 owner_agent: "PM Agent"
 version_scope: "project"
 created: "2026-07-09"
-updated: "2026-07-09"
+updated: "2026-07-10"
 source_documents:
   - "docs/requirements/总需求分析.md"
   - "docs/requirements.md"
@@ -29,11 +29,15 @@ source_documents:
 - 播放界面：当前歌曲信息和基础播放控制。
 - 假歌曲数据。
 - UI-only 播放状态。
+- UI-only 播放进度条。
+- 演示频谱或等价音频视觉化区域。
 - 基础验证命令和发布检查清单。
 
 不包含：
 
 - 真实音频播放。
+- 真实音频进度同步。
+- 真实音频频谱分析。
 - 本地文件读取。
 - 最小前后端通信验证。
 - 媒体库。

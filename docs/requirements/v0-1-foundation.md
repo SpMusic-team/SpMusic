@@ -6,7 +6,7 @@ status: "approved"
 owner_agent: "Requirements Agent"
 version_scope: "v0.1"
 created: "2026-07-09"
-updated: "2026-07-09"
+updated: "2026-07-10"
 source_documents:
   - "docs/requirements/总需求分析.md"
 ---

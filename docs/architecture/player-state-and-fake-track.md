@@ -6,7 +6,7 @@ status: "active"
 owner_agent: "Architecture Agent"
 version_scope: "v0.1"
 created: "2026-07-09"
-updated: "2026-07-09"
+updated: "2026-07-10"
 source_documents:
   - "agent-prompt/Architecture_Agent.md"
   - "docs/requirements/v0-1-foundation.md"
@@ -17,24 +17,25 @@ source_documents:
 
 ## 摘要
 
-v0.1 的播放器状态是纯前端、纯内存、UI-only 的最小契约。它只需要支持当前歌曲展示、播放 / 暂停状态切换、上一首 / 下一首切换和空歌曲列表 Empty State，不表达真实音频播放、播放队列、媒体库、播放列表或持久化能力。
+v0.1 的播放器状态是纯前端、纯内存、UI-only 的最小契约。它只需要支持当前歌曲展示、播放 / 暂停状态切换、上一首 / 下一首切换、UI-only 播放进度、演示频谱和空歌曲列表 Empty State，不表达真实音频播放、真实音频进度、真实频谱分析、播放队列、媒体库、播放列表或持久化能力。
 
 ## 背景
 
-v0.1 要求至少 5 条虚构歌曲信息、当前歌曲展示、播放控制状态切换和空歌曲列表分支。当前版本不做真实音频播放、本地文件读取、Tauri command、媒体库、数据库和真实播放列表。
+v0.1 要求至少 5 条虚构歌曲信息、当前歌曲展示、播放控制状态切换、UI-only 播放进度、演示频谱和空歌曲列表分支。当前版本不做真实音频播放、本地文件读取、Tauri command、媒体库、数据库和真实播放列表。
 
 ## 范围
 
 - 定义 `Track` 假歌曲结构。
 - 定义 `PlayerState` 前端播放器状态。
-- 定义播放、暂停、上一首、下一首和空列表的状态规则。
+- 定义播放、暂停、上一首、下一首、UI-only 进度、演示频谱和空列表的状态规则。
 - 定义文案、格式化和国际化前置约束。
 - 定义 Frontend Agent 可直接使用的 TypeScript 形状。
 
 ## 不在范围内
 
 - 不包含真实音频播放状态。
-- 不包含音量、进度、缓冲、随机、循环、播放队列、播放历史。
+- 不包含音量、真实音频进度、缓冲、随机、循环、播放队列、播放历史。
+- 不包含基于真实音频数据的频谱分析。
 - 不包含本地文件路径、文件读取权限、媒体库来源、扫描状态。
 - 不包含播放列表 ID、`m3u8` 字段、跨列表条目关系。
 - 不包含 Tauri command 输入输出、Rust 结构体或持久化字段。
@@ -72,10 +73,17 @@ type Track = {
   durationSeconds: number
 }
 
+type SpectrumBar = {
+  id: string
+  level: number
+}
+
 type PlayerState = {
   tracks: Track[]
   currentTrackId: string | null
   playbackStatus: PlaybackStatus
+  progressSeconds: number
+  spectrumBars: SpectrumBar[]
 }
 ```
 
@@ -91,6 +99,10 @@ type PlayerState = {
 | `tracks` | `PlayerState` | 是 | 固定假歌曲列表，v0.1 默认至少 5 条。 |
 | `currentTrackId` | `PlayerState` | 是 | 当前歌曲 ID；空列表时为 `null`。 |
 | `playbackStatus` | `PlayerState` | 是 | UI-only 播放状态，只能是 `paused` 或 `playing`。 |
+| `progressSeconds` | `PlayerState` | 是 | UI-only 播放进度秒数，不来自真实音频播放进度。 |
+| `spectrumBars` | `PlayerState` | 是 | 演示频谱条数据，只用于视觉化区域，不来自真实音频分析。 |
+| `id` | `SpectrumBar` | 是 | 演示频谱条唯一标识。 |
+| `level` | `SpectrumBar` | 是 | 演示频谱条高度比例，建议范围为 `0` 到 `1`。 |
 
 ## 初始状态规则
 
@@ -98,6 +110,8 @@ type PlayerState = {
 - 当 `tracks.length > 0` 时，`currentTrackId` 默认使用第一首歌曲的 `id`。
 - 当 `tracks.length === 0` 时，`currentTrackId` 必须为 `null`，界面展示 Empty State。
 - 初始 `playbackStatus` 建议为 `paused`。
+- 初始 `progressSeconds` 建议为 `0`。
+- 初始 `spectrumBars` 可以使用固定演示数据；为空时界面应展示后备视觉状态或不崩溃。
 
 ## 状态流转规则
 
@@ -122,6 +136,19 @@ type PlayerState = {
 - 当 `tracks.length > 1` 时，切换到当前索引后一首。
 - 当前索引为最后一首时，建议循环到第一首，确保连续点击始终有有效当前歌曲。
 - 如果 `currentTrackId` 不存在于 `tracks` 中，建议回退到第一首歌曲。
+
+### UI-only 播放进度
+
+- `progressSeconds` 只用于播放界面进度条展示，不读取、控制或同步真实音频。
+- 当当前歌曲不存在、时长为空或时长为 `0` 时，进度条不得导致界面崩溃。
+- 当切换上一首 / 下一首时，建议将 `progressSeconds` 重置为 `0`。
+- 当进度超过当前歌曲 `durationSeconds` 时，界面展示应限制在歌曲时长上限内。
+
+### 演示频谱
+
+- `spectrumBars` 只表达演示视觉效果，不分析真实音频。
+- `level` 应在展示前被限制到 `0` 到 `1` 的安全范围。
+- 当 `spectrumBars.length === 0` 时，频谱区域不得导致界面崩溃。
 
 ## 文案与格式化约束
 
@@ -164,10 +191,10 @@ stateDiagram-v2
 ## 验收标准
 
 - 文档定义 `Track` 假歌曲渲染所需字段。
-- 文档定义 `PlayerState` 的 `tracks`、`currentTrackId` 和 `playbackStatus`。
+- 文档定义 `PlayerState` 的 `tracks`、`currentTrackId`、`playbackStatus`、`progressSeconds` 和 `spectrumBars`。
 - 文档定义空歌曲列表状态表达。
-- 文档定义播放 / 暂停、上一首、下一首状态流转规则。
-- 文档明确不包含真实播放、音量、进度、媒体库、Tauri command 和持久化字段。
+- 文档定义播放 / 暂停、上一首、下一首、UI-only 进度和演示频谱状态规则。
+- 文档明确不包含真实播放、音量、真实音频进度、真实音频分析、媒体库、Tauri command 和持久化字段。
 - 文档明确播放状态枚举、文案集中管理和时长格式化约束。
 - Frontend Agent 可以基于本文档直接实现 v0.1 状态结构。
 

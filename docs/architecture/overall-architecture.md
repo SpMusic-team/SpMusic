@@ -6,7 +6,7 @@ status: "active"
 owner_agent: "Architecture Agent"
 version_scope: "v0.1"
 created: "2026-07-09"
-updated: "2026-07-09"
+updated: "2026-07-10"
 source_documents:
   - "agent-prompt/Architecture_Agent.md"
   - "docs/requirements/总需求分析.md"
@@ -22,7 +22,7 @@ source_documents:
 
 ## 摘要
 
-SpMusic 的长期架构应保持前端界面、前端状态、Tauri command、Rust 本地能力、音频引擎、媒体库、播放列表、网络存储和插件增强之间的清晰边界。v0.1 只实现 React 前端播放界面和 UI-only 播放状态，不实现 Tauri command、真实音频播放、本地文件读取、媒体库、真实播放列表、网络存储或插件系统；但前端实现应从第一版开始保留视觉 token、文案集中管理和状态枚举稳定性，避免后续主题与国际化改造返工。
+SpMusic 的长期架构应保持前端界面、前端状态、Tauri command、Rust 本地能力、音频引擎、媒体库、播放列表、网络存储和插件增强之间的清晰边界。v0.1 只实现 React 前端播放界面、UI-only 播放状态、UI-only 播放进度和演示频谱，不实现 Tauri command、真实音频播放、本地文件读取、真实音频进度同步、真实频谱分析、媒体库、真实播放列表、网络存储或插件系统；但前端实现应从第一版开始保留视觉 token、文案集中管理和状态枚举稳定性，避免后续主题与国际化改造返工。
 
 ## 背景
 
@@ -63,8 +63,8 @@ v0.1 的目标是把模板项目收敛为可运行、可验证的 SpMusic 播放
 
 ### v0.1 当前边界
 
-- 前端 UI：负责渲染 SpMusic 播放界面、当前歌曲信息、基础播放控制、当前歌曲标记和 Empty State。
-- 前端状态：负责维护固定假歌曲列表、当前歌曲 ID 和播放状态。
+- 前端 UI：负责渲染 SpMusic 播放界面、当前歌曲信息、基础播放控制、UI-only 播放进度条、演示频谱、当前歌曲标记和 Empty State。
+- 前端状态：负责维护固定假歌曲列表、当前歌曲 ID、播放状态、UI-only 播放进度和演示频谱数据。
 - 视觉基础：允许使用简易界面先行，但颜色、间距、圆角、阴影等基础视觉值应优先通过集中 CSS 变量或等价 token 表达。
 - 文案基础：用户可见文案应集中在前端 copy 对象或简单文案模块中，业务状态使用稳定英文枚举，不使用中文展示文案作为状态值。
 - Tauri 外壳：只负责启动桌面窗口和承载前端，不暴露业务 command。
@@ -134,9 +134,9 @@ flowchart LR
 v0.1 具体状态契约见 `docs/architecture/player-state-and-fake-track.md`。总体约束如下：
 
 - `Track` 只表达假歌曲渲染所需字段。
-- `PlayerState` 只表达当前歌曲、播放状态和假歌曲列表。
+- `PlayerState` 只表达当前歌曲、播放状态、假歌曲列表、UI-only 播放进度和演示频谱数据。
 - 空歌曲列表以 `tracks: []` 和 `currentTrackId: null` 表达。
-- v0.1 不包含音量、进度、音频文件路径、媒体库 ID、播放列表 ID、持久化状态、Tauri command 状态、真实音频错误或多语言资源加载状态。
+- v0.1 不包含音量、真实音频进度、真实频谱分析、音频文件路径、媒体库 ID、播放列表 ID、持久化状态、Tauri command 状态、真实音频错误或多语言资源加载状态。
 
 ## 备选方案与取舍
 
@@ -147,7 +147,7 @@ v0.1 具体状态契约见 `docs/architecture/player-state-and-fake-track.md`。
 
 ## 演进路径
 
-- v0.1：完成 UI-only 播放界面和固定假歌曲状态。
+- v0.1：完成 UI-only 播放界面、固定假歌曲状态、UI-only 播放进度和演示频谱。
 - v0.2：在不读取文件、不持久化的前提下，评估并定义虚构播放列表 UI 状态与 v0.1 当前歌曲状态的联动边界。
 - v0.3：在真实播放或文件读取前，先建立薄前后端通信骨架，再单独评估真实音频播放方案，决定 Tauri command、Rust 音频模块和前端播放状态的同步契约。
 - v0.4 及以后：在真实播放链路稳定后，再评估媒体库、持久化、真实播放列表、网络存储和插件边界。

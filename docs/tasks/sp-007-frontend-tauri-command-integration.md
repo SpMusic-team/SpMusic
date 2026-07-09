@@ -1,35 +1,33 @@
-# 任务：前端 Tauri command 集成
+# 任务：README 当前能力与限制更新
 
 ## 背景
 
-Rust command 存在后，前端需要调用它并展示连接状态。
+v0.1 范围调整为播放界面后，README 需要准确说明当前能力和限制，避免用户误解为已经支持虚构播放列表管理、真实播放或本地文件读取。
 
 ## 目标
 
-从 React UI 调用最小 Tauri command，并展示返回状态或不可用状态。
+更新 README 中的当前能力、运行方式和 v0.1 限制说明。
 
 ## 非目标
 
-- 不增加更大的后端 API。
-- command 失败时不阻塞整个 UI。
+- 不编写前端业务实现。
+- 不引入真实播放。
+- 不访问用户文件。
 
 ## 负责 Agent
 
-Frontend Agent
+Documentation Agent
 
 ## 涉及文件 / 模块
 
-- `src/App.tsx`
-- `src/App.css`
+- `README.md`
 
 ## 验收标准
 
-- 前端调用 Architecture Agent 定义、Rust/Tauri Agent 实现的 command。
-- UI 展示成功结果或不可用 / 错误状态。
-- command 调用失败不会导致应用崩溃。
-- `npm run lint` 通过。
-- `npm run build` 通过。
+- README 描述 v0.1 当前只包含播放界面。
+- README 明确 v0.1 使用假数据，不读取本地文件，不播放真实音频。
+- README 说明 v0.2 计划进入虚构播放列表管理 UI，v0.3 计划进入本地播放技术验证。
 
 ## 备注
 
-该任务依赖 SP-006。
+该任务替代原前端 Tauri command 集成任务。

@@ -23,6 +23,7 @@ source_documents:
 - 由 PM Agent 基于版本需求建立需求索引、路线图、发布计划和首批任务卡。
 - 设计播放界面说明。
 - 建立总体架构蓝图，定义模块边界、v0.1 架构限制、最小播放器状态与假歌曲结构。
+- 在最小播放界面实现前建立前端基础骨架，集中类型、假数据、文案、CSS token 和播放状态约束。
 - 将模板页面替换为 SpMusic 最小播放界面。
 - 在 UI/UX 规格完成后，对播放界面做视觉与交互修正。
 - 实现播放 / 暂停 / 上一首 / 下一首的 UI 状态切换。
@@ -50,13 +51,14 @@ source_documents:
 | SP-002 | 需求索引、路线图与发布边界 | P0 | PM Agent | Done | SP-001 |
 | SP-003 | 播放界面 UI 规格 | P1 | UI/UX Agent | Ready | SP-001 |
 | SP-004 | 总体架构蓝图与播放器状态结构 | P1 | Architecture Agent | Ready | SP-001 |
-| SP-005A | 最小播放界面实现 | P1 | Frontend Agent | Blocked | SP-004 |
-| SP-005B | 播放界面视觉与交互修正 | P1 | Frontend Agent | Blocked | SP-003, SP-005A |
-| SP-006 | v0.2 虚构播放列表管理 UI 预研边界 | P2 | PM Agent | Ready | SP-001 |
-| SP-007 | README 当前能力与限制更新 | P1 | Documentation Agent | Blocked | SP-001, SP-002, SP-005B |
-| SP-008 | 验证清单与测试报告 | P1 | Test Agent | Blocked | SP-005B |
-| SP-009 | README 与开发文档 | P1 | Documentation Agent | Ready | SP-001, SP-002 |
-| SP-010 | Sprint 复盘与范围闸门 | P0 | PM Agent | Blocked | SP-001 至 SP-009 |
+| SP-005 | 前端基础骨架与实现约束 | P1 | Frontend Agent | Blocked | SP-004 |
+| SP-006 | 最小播放界面实现 | P1 | Frontend Agent | Blocked | SP-005 |
+| SP-007 | 播放界面视觉与交互修正 | P1 | Frontend Agent | Blocked | SP-003, SP-006 |
+| SP-008 | v0.2 虚构播放列表管理 UI 预研边界 | P2 | PM Agent | Ready | SP-001 |
+| SP-009 | README 当前能力与限制更新 | P1 | Documentation Agent | Blocked | SP-001, SP-002, SP-007 |
+| SP-010 | 验证清单与测试报告 | P1 | Test Agent | Blocked | SP-007 |
+| SP-011 | README 与开发文档 | P1 | Documentation Agent | Ready | SP-001, SP-002 |
+| SP-012 | Sprint 复盘与范围闸门 | P0 | PM Agent | Blocked | SP-001 至 SP-011 |
 
 ## 风险
 
@@ -72,6 +74,7 @@ source_documents:
 - `docs/requirements.md`、`docs/roadmap.md`、`docs/sprint-plan.md`、`docs/release-plan.md` 存在并相互一致。
 - `docs/tasks/` 中存在首批任务卡，且每张卡包含负责 Agent、目标、非目标和验收标准。
 - `docs/architecture/overall-architecture.md` 存在，并明确总体模块边界与 v0.1 不实现的架构能力。
+- 前端存在最小 `Track` / `PlayerState` 类型、假歌曲 fixture、集中用户可见文案和基础 CSS token。
 - 应用首屏不再是 Vite / React 模板页面。
 - 应用展示 SpMusic 播放界面。
 - 系统存在至少 5 条假歌曲数据用于状态验证。

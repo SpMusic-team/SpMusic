@@ -12,7 +12,7 @@ source_documents:
   - "docs/roadmap.md"
   - "docs/sprint-plan.md"
   - "docs/release-plan.md"
-  - "docs/tasks/sp-009-readme-and-developer-documentation.md"
+  - "docs/tasks/sp-011-readme-and-developer-documentation.md"
   - "package.json"
   - "src/App.tsx"
   - "src-tauri/Cargo.toml"

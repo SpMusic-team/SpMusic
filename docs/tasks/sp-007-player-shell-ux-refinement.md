@@ -1,5 +1,5 @@
 ---
-doc_id: "TASK-SP-005B"
+doc_id: "TASK-SP-007"
 title: "播放界面视觉与交互修正"
 doc_type: "task"
 status: "blocked"
@@ -9,13 +9,13 @@ created: "2026-07-09"
 updated: "2026-07-09"
 source_documents:
   - "docs/tasks/sp-003-player-shell-ui-spec.md"
-  - "docs/tasks/sp-005a-minimal-player-shell-implementation.md"
+  - "docs/tasks/sp-006-minimal-player-shell-implementation.md"
 ---
 # 任务：播放界面视觉与交互修正
 
 ## 背景
 
-SP-005A 负责先让项目脱离模板状态。UI/UX Agent 完成播放界面规格后，需要 Frontend Agent 根据规格对最小播放界面做视觉、布局、文案和交互状态修正。
+SP-006 负责先让项目脱离模板状态。UI/UX Agent 完成播放界面规格后，需要 Frontend Agent 根据规格对最小播放界面做视觉、布局、文案和交互状态修正。
 
 ## 目标
 
@@ -53,4 +53,4 @@ Frontend Agent
 
 ## 备注
 
-该任务依赖 SP-003 和 SP-005A。它是修正任务，不应重新设计状态结构或扩大功能范围。
+该任务依赖 SP-003 和 SP-006。它是修正任务，不应重新设计状态结构或扩大功能范围。

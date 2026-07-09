@@ -1,5 +1,5 @@
 ---
-doc_id: "TASK-SP-007"
+doc_id: "TASK-SP-009"
 title: "README 当前能力与限制更新"
 doc_type: "task"
 status: "blocked"
@@ -10,7 +10,7 @@ updated: "2026-07-09"
 source_documents:
   - "docs/sprint-plan.md"
   - "docs/release-plan.md"
-  - "docs/tasks/sp-005b-player-shell-ux-refinement.md"
+  - "docs/tasks/sp-007-player-shell-ux-refinement.md"
 ---
 # 任务：README 当前能力与限制更新
 

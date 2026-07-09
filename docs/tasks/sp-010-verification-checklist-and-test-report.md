@@ -1,5 +1,5 @@
 ---
-doc_id: "TASK-SP-008"
+doc_id: "TASK-SP-010"
 title: "验证清单与测试报告"
 doc_type: "task"
 status: "ready"
@@ -48,4 +48,4 @@ Test Agent
 
 ## 备注
 
-该任务应在 SP-005B 后执行。v0.1 不验证延期的 Tauri command 或真实音频能力。
+该任务应在 SP-007 后执行。v0.1 不验证延期的 Tauri command 或真实音频能力。

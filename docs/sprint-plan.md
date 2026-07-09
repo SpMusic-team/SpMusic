@@ -1,171 +1,64 @@
-# Sprint Plan
+# Sprint 计划
 
-## Sprint Goal
+## Sprint 目标
 
-完成 SpMusic v0.1「项目地基阶段」：将当前 Tauri + React + TypeScript 模板项目收敛为一个可运行、可验证、边界清晰的本地优先桌面音乐播放器雏形。
+完成 SpMusic v0.1「项目地基」：把当前 Tauri + React + TypeScript 模板项目收敛为有项目身份、有静态播放器外壳、有最小前后端通信、有基础验收流程的 SpMusic 项目地基。
 
-本轮不追求真实音频播放，不实现媒体库、数据库或插件系统；重点是确认 MVP 范围、建立基础工程验证链路、完成静态播放器主界面、打通最小前后端通信，并形成后续迭代可依赖的文档与验收标准。
+## 范围
 
-## Current State
+- 由 Requirements Agent 从总需求中切出 v0.1 版本需求和验收边界。
+- 由 PM Agent 基于版本需求建立需求索引、路线图、发布计划和首批任务卡。
+- 设计静态播放器主界面说明。
+- 定义最小播放器状态与 Tauri command 契约。
+- 将模板页面替换为 SpMusic 播放器界面。
+- 实现播放 / 暂停 / 上一首 / 下一首的 UI 状态切换。
+- 实现最小 Tauri command，并在前端展示连接结果。
+- 建立验证清单：`npm run lint`、`npm run build`、`cargo check`、`npm run tauri dev`。
+- 更新 README。
 
-- 项目已具备 Tauri 2 + React + TypeScript + Vite 基础结构。
-- `package.json` 已包含 `dev`、`build`、`lint`、`tauri` 脚本。
-- `src/App.tsx` 仍为 Vite/React 默认示例页面。
-- `src-tauri/src/lib.rs` 仅包含 Tauri 默认启动逻辑，尚无业务 command。
-- `docs/` 目录尚未建立，本文件为首个阶段计划文档。
-- `README.md` 仍为模板说明，尚未反映 SpMusic 产品目标。
+## 不在范围内
 
-## Scope
+- 真实音频播放、音量、进度拖动、音频解码。
+- 文件夹扫描、媒体库、数据库、元数据、封面、歌词。
+- 播放列表真实导入导出与 `m3u8` 实现。
+- FTP、SMB、WebDAV 网络存储播放。
+- 插件系统、插件市场、扩展运行时。
+- Last.fm、Pano Scrobbler、云同步、自定义功能区。
 
-- 建立 v0.1 MVP 边界文档，明确本轮做什么和不做什么。
-- 将默认模板界面替换为 SpMusic 静态播放器主界面。
-- 定义并使用最小 `PlayerState` 前端状态模型。
-- 使用假歌曲数据展示播放队列或歌曲列表。
-- 实现播放 / 暂停 / 上一首 / 下一首的 UI 状态切换，不接入真实音频。
-- 增加一个最小 Tauri command，用于验证 React 到 Rust 的调用链路。
-- 建立基础质量门禁：TypeScript 构建、ESLint、Rust `cargo check`、Tauri dev 启动验证。
-- 更新项目 README，使其说明当前阶段目标、运行方式和已知限制。
+## 任务
 
-## Out of Scope
+| 任务 ID | 标题 | 优先级 | 负责 Agent | 依赖 |
+| --- | --- | --- | --- | --- |
+| SP-001 | v0.1 版本需求分析与验收边界 | P0 | Requirements Agent | `docs/requirements/总需求分析.md` |
+| SP-002 | 需求索引、路线图与发布边界 | P0 | PM Agent | SP-001 |
+| SP-003 | 播放器外壳 UI 规格 | P1 | UI/UX Agent | SP-001 |
+| SP-004 | 播放器状态与命令契约 | P1 | Architecture Agent | SP-001 |
+| SP-005 | 静态播放器外壳实现 | P1 | Frontend Agent | SP-003, SP-004 |
+| SP-006 | 最小 Tauri 健康检查命令 | P1 | Rust/Tauri Agent | SP-004 |
+| SP-007 | 前端 Tauri command 集成 | P1 | Frontend Agent | SP-005, SP-006 |
+| SP-008 | 验证清单与测试报告 | P1 | Test Agent | SP-005, SP-006, SP-007 |
+| SP-009 | README 与开发文档 | P1 | Documentation Agent | SP-001, SP-002 |
+| SP-010 | Sprint 复盘与范围闸门 | P0 | PM Agent | SP-001 至 SP-009 |
 
-- 真实音频解码、播放、暂停、进度控制和音量控制。
-- 文件系统扫描、媒体库导入、元数据解析和封面提取。
-- 数据库存储、缓存层、迁移系统。
-- 插件系统、插件市场、主题编辑器或扩展运行时。
-- 在线音乐搜索、账号系统、云同步、Last.fm 等在线服务。
-- 高级音频 DSP、均衡器、可视化效果。
-- 复杂应用架构、过度抽象的模块系统。
-- shadcn/ui 完整接入；如需 UI 组件，本轮只允许按需、最小化引入。
+## 风险
 
-## Tasks
+- 总需求覆盖面很大，若不先做版本需求切分，容易把最终愿景误当作当前开发范围。
+- 当前项目仍有模板页面和模板 README，项目身份尚未落地。
+- 前后端通信尚未验证，Tauri command 风险需要早暴露。
+- 真实播放、媒体库、网络存储和插件系统都很有吸引力，但进入 v0.1 会显著扩大风险。
 
-### SP-001: Define v0.1 MVP Requirements
+## 完成定义
 
-- **Priority**: P0
-- **Owner Agent**: Requirements Agent
-- **Description**: 建立 `docs/requirements.md`，明确 v0.1 的功能需求、非功能需求、MVP 范围、暂不实现范围和核心用户场景。
-- **Acceptance Criteria**:
-  - `docs/requirements.md` 存在。
-  - 文档包含功能需求、非功能需求、MVP Scope、Out of Scope、User Scenarios 五个章节。
-  - 明确说明 v0.1 不包含真实音频播放、媒体库、数据库、插件系统和在线服务。
-  - 至少定义 3 个可验证用户场景：启动应用、查看假歌曲列表、切换播放 UI 状态。
-- **Dependencies**: 无。
-
-### SP-002: Establish Roadmap and Release Boundary
-
-- **Priority**: P0
-- **Owner Agent**: Documentation Agent
-- **Description**: 建立 `docs/roadmap.md` 和 `docs/release-plan.md`，将 v0.1、v0.2、v0.3 的阶段目标粗粒度拆开，避免 v0.1 被未来功能侵入。
-- **Acceptance Criteria**:
-  - `docs/roadmap.md` 存在，并至少包含 v0.1、v0.2、v0.3 三个阶段。
-  - `docs/release-plan.md` 存在，并包含 v0.1 发布内容、发布前检查清单和不发布内容。
-  - 真实音频播放、媒体库、插件系统被明确放入后续版本或 Deferred。
-- **Dependencies**: SP-001。
-
-### SP-003: Replace Template UI with Static Player Shell
-
-- **Priority**: P1
-- **Owner Agent**: UI/UX Agent + Frontend Agent
-- **Description**: 将当前 Vite/React 默认页面替换为 SpMusic 静态播放器主界面，包括应用标题、歌曲信息区、播放控制区、假歌曲列表和空状态预留。
-- **Acceptance Criteria**:
-  - 页面中不再出现 Vite、React 默认模板文案或外链入口。
-  - 首屏展示 SpMusic 品牌名称或应用名称。
-  - 界面包含当前歌曲标题、艺术家、专辑或时长中的至少 3 类展示信息。
-  - 界面包含播放 / 暂停、上一首、下一首三个可点击控制。
-  - 歌曲列表至少展示 5 条假数据。
-  - `npm run build` 通过。
-- **Dependencies**: SP-001。
-
-### SP-004: Define Minimal PlayerState and UI-only Playback Behavior
-
-- **Priority**: P1
-- **Owner Agent**: Frontend Agent
-- **Description**: 在前端定义最小 `PlayerState`，驱动当前歌曲、高亮歌曲、播放 / 暂停状态和上一首 / 下一首切换。所有行为仅改变 UI 状态，不接入音频。
-- **Acceptance Criteria**:
-  - 存在类型定义或等价结构，表达 `currentTrackId`、`isPlaying`、`queue`。
-  - 点击播放 / 暂停按钮会切换 `isPlaying` 并更新按钮状态或图标。
-  - 点击上一首 / 下一首会切换当前歌曲，并在列表中体现当前歌曲状态。
-  - 队列为空时存在可渲染的 Empty State 分支。
-  - 不引入真实音频 API，不使用 `HTMLAudioElement` 播放文件。
-  - `npm run lint` 和 `npm run build` 通过。
-- **Dependencies**: SP-003。
-
-### SP-005: Add Minimal Tauri Command for Frontend-Backend Verification
-
-- **Priority**: P1
-- **Owner Agent**: Rust/Tauri Agent + Frontend Agent
-- **Description**: 增加一个最小 Rust command，例如返回应用状态或固定问候信息，用于验证 React 调用 Tauri command 的链路。
-- **Acceptance Criteria**:
-  - Rust 侧存在一个可被前端调用的 Tauri command。
-  - 前端启动后能调用该 command，并在界面中展示返回结果或连接状态。
-  - command 不访问文件系统、不扫描音乐、不播放音频。
-  - `cargo check` 在 `src-tauri/` 下通过。
-  - `npm run tauri dev` 可启动应用并完成一次 command 调用验证。
-- **Dependencies**: SP-003。
-
-### SP-006: Establish Engineering Verification Checklist
-
-- **Priority**: P1
-- **Owner Agent**: Test Agent
-- **Description**: 建立本阶段的基础验收清单，覆盖前端构建、Lint、Rust 检查、Tauri 启动和核心 UI 行为人工验证。
-- **Acceptance Criteria**:
-  - `docs/release-plan.md` 或独立检查章节中记录 v0.1 验证命令。
-  - 检查清单至少包含 `npm run lint`、`npm run build`、`cargo check`、`npm run tauri dev`。
-  - 每项检查说明通过标准。
-  - 明确记录 UI 行为验证项：播放 / 暂停、上一首 / 下一首、当前歌曲高亮、后端连接状态。
-- **Dependencies**: SP-003、SP-004、SP-005。
-
-### SP-007: Update README for Project Identity and Local Startup
-
-- **Priority**: P1
-- **Owner Agent**: Documentation Agent
-- **Description**: 将模板 README 更新为 SpMusic 项目说明，包含项目定位、当前阶段、运行方式、质量检查命令和暂不支持事项。
-- **Acceptance Criteria**:
-  - `README.md` 标题和介绍反映 SpMusic，而非 React + TypeScript + Vite 模板。
-  - README 包含本地开发启动命令和 Tauri 启动命令。
-  - README 明确当前版本不支持真实音频播放、媒体库和插件系统。
-  - README 指向 `docs/sprint-plan.md`、`docs/requirements.md`、`docs/roadmap.md`。
-- **Dependencies**: SP-001、SP-002。
-
-### SP-008: Sprint Review and Scope Gate
-
-- **Priority**: P0
-- **Owner Agent**: PM Agent
-- **Description**: 在 v0.1 地基任务完成后，基于验收结果决定是否进入下一阶段，记录范围偏差、技术债和后续优先级。
-- **Acceptance Criteria**:
-  - `docs/retrospectives/` 目录存在。
-  - 新增一份 v0.1 Sprint Review / Retrospective 文档。
-  - 文档记录已完成项、未完成项、验收结果、已知风险、是否允许进入 v0.2。
-  - 若存在超出范围的实现，必须标记并给出回退或延期建议。
-- **Dependencies**: SP-001 至 SP-007。
-
-## Risks
-
-- **R-001: 模板残留风险**  
-  当前 README 与前端页面仍是模板内容，若不优先清理，会影响项目目标表达和验收判断。
-
-- **R-002: 范围膨胀风险**  
-  音乐播放器天然容易滑向真实播放、媒体库、封面、歌词、插件等功能；本轮必须把这些能力放入 Out of Scope 或后续版本。
-
-- **R-003: Tauri 调用链路不确定性**  
-  当前 Rust 侧尚无 command，前后端通信未验证；SP-005 是本轮核心地基任务。
-
-- **R-004: 质量门禁尚未跑通**  
-  虽然脚本已存在，但需要实际验证 `npm run lint`、`npm run build`、`cargo check` 和 `npm run tauri dev`。
-
-- **R-005: UI 过早复杂化**  
-  v0.1 只需要静态播放器壳和 UI 状态，不应引入复杂设计系统、动画体系或主题编辑能力。
-
-## Definition of Done
-
-- `docs/requirements.md`、`docs/roadmap.md`、`docs/release-plan.md`、`docs/sprint-plan.md` 均存在并互相一致。
-- README 已从模板说明更新为 SpMusic 项目说明。
-- 应用启动后首屏为 SpMusic 播放器界面，不再是 Vite/React 默认页面。
-- 前端能够展示假歌曲队列，并支持播放 / 暂停 / 上一首 / 下一首的 UI 状态切换。
-- 前端能够成功调用至少一个 Tauri command，并展示连接结果。
+- `docs/requirements/v0-1-foundation.md` 存在，并由 Requirements Agent 明确 v0.1 需求、非目标和验收标准。
+- `docs/requirements.md`、`docs/roadmap.md`、`docs/sprint-plan.md`、`docs/release-plan.md` 存在并相互一致。
+- `docs/tasks/` 中存在首批任务卡，且每张卡包含负责 Agent、目标、非目标和验收标准。
+- 应用首屏不再是 Vite / React 模板页面。
+- 应用展示 SpMusic 静态播放器主界面和至少 5 条假歌曲。
+- 播放 / 暂停 / 上一首 / 下一首能改变 UI 状态。
+- 空队列存在可渲染 Empty State 分支。
+- 前端能调用最小 Tauri command 并展示结果或连接状态。
 - `npm run lint` 通过。
 - `npm run build` 通过。
-- 在 `src-tauri/` 下执行 `cargo check` 通过。
-- `npm run tauri dev` 能启动桌面应用。
-- 未实现真实音频播放、媒体库、数据库、插件系统或在线服务。
-- 完成 v0.1 Sprint Review，并由 PM Agent 明确是否进入 v0.2。
+- `cargo check` 在 `src-tauri/` 下通过。
+- `npm run tauri dev` 能启动应用。
+- v0.1 没有实现真实音频播放、媒体库、数据库、网络存储或插件系统。

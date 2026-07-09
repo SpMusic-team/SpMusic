@@ -4,8 +4,8 @@
   "purpose": "Registry of available project agents for PM task assignment and cross-agent collaboration.",
   "assignmentRules": {
     "defaultPool": "core",
-    "earlyStageRule": "During early foundation stages, PM Agent should assign tasks only to core agents unless a deferred capability is explicitly approved.",
-    "scopeRule": "If a task exceeds the current approved stage scope, PM Agent should mark it as P3 or Deferred instead of assigning it for implementation.",
+    "coreAssignmentRule": "PM Agent should assign tasks to core agents by default unless a specialized capability is explicitly approved.",
+    "scopeRule": "If a task exceeds the approved scope, PM Agent should mark it as P3 or Deferred instead of assigning it for implementation.",
     "fallbackRule": "If no agent clearly owns a task, assign it to PM Agent for clarification or to Architecture Agent for boundary assessment."
   },
   "agents": [
@@ -17,8 +17,8 @@
       "promptFile": "agent-prompt/PM_Agent.md",
       "role": "Project and product owner",
       "responsibilities": [
-        "Define project stage goals",
-        "Control current stage scope",
+        "Define project and version goals",
+        "Control approved scope",
         "Prioritize requirements and tasks",
         "Break approved requirements into task cards",
         "Assign tasks to suitable agents",
@@ -178,7 +178,7 @@
       "responsibilities": [
         "Define test and verification strategy",
         "Create test cases from acceptance criteria",
-        "Run or specify stage-appropriate verification commands",
+        "Run or specify appropriate verification commands",
         "Check regressions and edge cases",
         "Report residual risks"
       ],
@@ -202,7 +202,7 @@
       "role": "Project documentation owner",
       "responsibilities": [
         "Maintain user, developer, and collaboration documentation",
-        "Update README, setup instructions, and current capability notes",
+        "Update README, setup instructions, and capability notes",
         "Document Tauri commands and project conventions",
         "Keep documentation aligned with approved requirements and implementation",
         "Check document links, paths, and commands"
@@ -230,7 +230,7 @@
         "Define track metadata ingestion",
         "Handle library indexing strategy"
       ],
-      "activationCondition": "Only after PM Agent approves local library work for the current target stage.",
+      "activationCondition": "Only after PM Agent explicitly approves local library work.",
       "notResponsibleFor": [
         "Core player shell unless media library work is explicitly approved",
         "Online music services"
@@ -298,7 +298,7 @@
         "Define plugin lifecycle and extension points",
         "Assess plugin security and compatibility"
       ],
-      "activationCondition": "Only after explicit PM approval; never during early foundation work.",
+      "activationCondition": "Only after explicit PM approval.",
       "notResponsibleFor": [
         "Core player shell",
         "Basic frontend UI"

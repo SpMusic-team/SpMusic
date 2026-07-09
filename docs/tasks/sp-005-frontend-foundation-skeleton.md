@@ -2,11 +2,11 @@
 doc_id: "TASK-SP-005"
 title: "前端基础骨架与实现约束"
 doc_type: "task"
-status: "blocked"
+status: "ready"
 owner_agent: "Frontend Agent"
 version_scope: "v0.1"
 created: "2026-07-09"
-updated: "2026-07-09"
+updated: "2026-07-10"
 source_documents:
   - "docs/tasks/sp-004-overall-architecture-and-player-state.md"
   - "docs/sprint-plan.md"

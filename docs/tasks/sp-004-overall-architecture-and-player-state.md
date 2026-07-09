@@ -2,11 +2,11 @@
 doc_id: "TASK-SP-004"
 title: "总体架构蓝图与播放器状态结构"
 doc_type: "task"
-status: "ready"
+status: "done"
 owner_agent: "Architecture Agent"
 version_scope: "v0.1"
 created: "2026-07-09"
-updated: "2026-07-09"
+updated: "2026-07-10"
 source_documents:
   - "docs/requirements/v0-1-foundation.md"
   - "docs/sprint-plan.md"

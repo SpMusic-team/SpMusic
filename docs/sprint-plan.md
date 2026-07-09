@@ -23,7 +23,8 @@ source_documents:
 - 由 PM Agent 基于版本需求建立需求索引、路线图、发布计划和首批任务卡。
 - 设计播放界面说明。
 - 建立总体架构蓝图，定义模块边界、v0.1 架构限制、最小播放器状态与假歌曲结构。
-- 将模板页面替换为 SpMusic 播放器界面。
+- 将模板页面替换为 SpMusic 最小播放界面。
+- 在 UI/UX 规格完成后，对播放界面做视觉与交互修正。
 - 实现播放 / 暂停 / 上一首 / 下一首的 UI 状态切换。
 - 建立验证清单：`npm run lint`、`npm run build`、`npm run tauri dev`。
 - 更新 README。
@@ -47,10 +48,11 @@ source_documents:
 | SP-002 | 需求索引、路线图与发布边界 | P0 | PM Agent | Done | SP-001 |
 | SP-003 | 播放界面 UI 规格 | P1 | UI/UX Agent | Ready | SP-001 |
 | SP-004 | 总体架构蓝图与播放器状态结构 | P1 | Architecture Agent | Ready | SP-001 |
-| SP-005 | 播放界面原型实现 | P1 | Frontend Agent | Blocked | SP-003, SP-004 |
+| SP-005A | 最小播放界面实现 | P1 | Frontend Agent | Blocked | SP-004 |
+| SP-005B | 播放界面视觉与交互修正 | P1 | Frontend Agent | Blocked | SP-003, SP-005A |
 | SP-006 | v0.2 虚构播放列表管理 UI 预研边界 | P2 | PM Agent | Ready | SP-001 |
-| SP-007 | README 当前能力与限制更新 | P1 | Documentation Agent | Blocked | SP-001, SP-002, SP-005 |
-| SP-008 | 验证清单与测试报告 | P1 | Test Agent | Blocked | SP-005 |
+| SP-007 | README 当前能力与限制更新 | P1 | Documentation Agent | Blocked | SP-001, SP-002, SP-005B |
+| SP-008 | 验证清单与测试报告 | P1 | Test Agent | Blocked | SP-005B |
 | SP-009 | README 与开发文档 | P1 | Documentation Agent | Ready | SP-001, SP-002 |
 | SP-010 | Sprint 复盘与范围闸门 | P0 | PM Agent | Blocked | SP-001 至 SP-009 |
 

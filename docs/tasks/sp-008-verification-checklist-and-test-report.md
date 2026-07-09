@@ -44,4 +44,4 @@ Test Agent
 
 ## 备注
 
-该任务应在 SP-005、SP-006、SP-007 后执行。
+该任务应在 SP-005B 后执行。v0.1 不验证 SP-006 和 SP-007 中延期的 Tauri command 相关能力。

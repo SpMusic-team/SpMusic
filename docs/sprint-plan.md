@@ -1,3 +1,16 @@
+---
+doc_id: "SPRINT-V0-1"
+title: "v0.1 Sprint 计划"
+doc_type: "sprint-plan"
+status: "active"
+owner_agent: "PM Agent"
+version_scope: "v0.1"
+created: "2026-07-09"
+updated: "2026-07-09"
+source_documents:
+  - "docs/requirements/v0-1-foundation.md"
+  - "docs/requirements.md"
+---
 # Sprint 计划
 
 ## Sprint 目标
@@ -9,7 +22,7 @@
 - 由 Requirements Agent 从总需求中切出 v0.1 版本需求和验收边界。
 - 由 PM Agent 基于版本需求建立需求索引、路线图、发布计划和首批任务卡。
 - 设计播放界面说明。
-- 定义最小播放器状态与假歌曲结构。
+- 建立总体架构蓝图，定义模块边界、v0.1 架构限制、最小播放器状态与假歌曲结构。
 - 将模板页面替换为 SpMusic 播放器界面。
 - 实现播放 / 暂停 / 上一首 / 下一首的 UI 状态切换。
 - 建立验证清单：`npm run lint`、`npm run build`、`npm run tauri dev`。
@@ -28,18 +41,18 @@
 
 ## 任务
 
-| 任务 ID | 标题 | 优先级 | 负责 Agent | 依赖 |
-| --- | --- | --- | --- | --- |
-| SP-001 | v0.1 版本需求分析与验收边界 | P0 | Requirements Agent | `docs/requirements/总需求分析.md` |
-| SP-002 | 需求索引、路线图与发布边界 | P0 | PM Agent | SP-001 |
-| SP-003 | 播放界面 UI 规格 | P1 | UI/UX Agent | SP-001 |
-| SP-004 | 播放器状态与假歌曲结构 | P1 | Architecture Agent | SP-001 |
-| SP-005 | 播放界面原型实现 | P1 | Frontend Agent | SP-003, SP-004 |
-| SP-006 | v0.2 虚构播放列表管理 UI 预研边界 | P2 | PM Agent | SP-001 |
-| SP-007 | README 当前能力与限制更新 | P1 | Documentation Agent | SP-001, SP-002, SP-005 |
-| SP-008 | 验证清单与测试报告 | P1 | Test Agent | SP-005 |
-| SP-009 | README 与开发文档 | P1 | Documentation Agent | SP-001, SP-002 |
-| SP-010 | Sprint 复盘与范围闸门 | P0 | PM Agent | SP-001 至 SP-009 |
+| 任务 ID | 标题 | 优先级 | 负责 Agent | 状态 | 依赖 |
+| --- | --- | --- | --- | --- | --- |
+| SP-001 | v0.1 版本需求分析与验收边界 | P0 | Requirements Agent | Done | `docs/requirements/总需求分析.md` |
+| SP-002 | 需求索引、路线图与发布边界 | P0 | PM Agent | Done | SP-001 |
+| SP-003 | 播放界面 UI 规格 | P1 | UI/UX Agent | Ready | SP-001 |
+| SP-004 | 总体架构蓝图与播放器状态结构 | P1 | Architecture Agent | Ready | SP-001 |
+| SP-005 | 播放界面原型实现 | P1 | Frontend Agent | Blocked | SP-003, SP-004 |
+| SP-006 | v0.2 虚构播放列表管理 UI 预研边界 | P2 | PM Agent | Ready | SP-001 |
+| SP-007 | README 当前能力与限制更新 | P1 | Documentation Agent | Blocked | SP-001, SP-002, SP-005 |
+| SP-008 | 验证清单与测试报告 | P1 | Test Agent | Blocked | SP-005 |
+| SP-009 | README 与开发文档 | P1 | Documentation Agent | Ready | SP-001, SP-002 |
+| SP-010 | Sprint 复盘与范围闸门 | P0 | PM Agent | Blocked | SP-001 至 SP-009 |
 
 ## 风险
 
@@ -54,6 +67,7 @@
 - `docs/requirements/v0-1-foundation.md` 存在，并由 Requirements Agent 明确 v0.1 需求、非目标和验收标准。
 - `docs/requirements.md`、`docs/roadmap.md`、`docs/sprint-plan.md`、`docs/release-plan.md` 存在并相互一致。
 - `docs/tasks/` 中存在首批任务卡，且每张卡包含负责 Agent、目标、非目标和验收标准。
+- `docs/architecture/overall-architecture.md` 存在，并明确总体模块边界与 v0.1 不实现的架构能力。
 - 应用首屏不再是 Vite / React 模板页面。
 - 应用展示 SpMusic 播放界面。
 - 系统存在至少 5 条假歌曲数据用于状态验证。

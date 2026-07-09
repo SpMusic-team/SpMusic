@@ -1,3 +1,16 @@
+---
+doc_id: "TASK-SP-005"
+title: "播放界面原型实现"
+doc_type: "task"
+status: "ready"
+owner_agent: "Frontend Agent"
+version_scope: "v0.1"
+created: "2026-07-09"
+updated: "2026-07-09"
+source_documents:
+  - "docs/tasks/sp-003-player-shell-ui-spec.md"
+  - "docs/tasks/sp-004-overall-architecture-and-player-state.md"
+---
 # 任务：播放界面原型实现
 
 ## 背景

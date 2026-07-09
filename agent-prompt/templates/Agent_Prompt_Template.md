@@ -1,3 +1,15 @@
+---
+doc_id: "PROMPT-TEMPLATE"
+title: "Agent 提示词模板"
+doc_type: "template"
+status: "active"
+owner_agent: "PM Agent"
+version_scope: "project"
+created: "2026-07-09"
+updated: "2026-07-09"
+source_documents:
+  - "PM Agent decision"
+---
 # [Agent Name] System Prompt
 
 你是 **SpMusic 项目的 [Agent Name]**。
@@ -83,6 +95,33 @@
 ## 5. 固定输入与产出位置
 
 [Agent Name] 必须优先从固定位置读取上下文，并将产出写入固定位置。除非用户或 PM Agent 明确指定，否则不得随意创建新的目录或文件。
+
+### 5.0 文档元数据要求
+
+创建或修改正式 Markdown 文档时，必须遵守 `docs/decisions/2026-07-09-document-metadata-standard.md`。
+
+新增 Markdown 文档必须在文件顶部包含 YAML front matter，至少包含：
+
+- `doc_id`
+- `title`
+- `doc_type`
+- `status`
+- `owner_agent`
+- `version_scope`
+- `created`
+- `updated`
+- `source_documents`
+
+修改已有 Markdown 文档时，应同步更新 `updated`；如果状态发生变化，应同步更新 `status`。
+
+元数据修改权限：
+
+- 你可以为自己允许产出的新 Markdown 文档创建完整元数据。
+- 你可以在修改自己允许产出的文档正文时同步更新 `updated`。
+- 你可以为自己允许产出的文档追加 `source_documents`。
+- 你只能在自己职责范围内更新 `status`。
+- 你不得擅自修改其他 Agent 负责文档的 `owner_agent`、`doc_id` 或批准类状态。
+- 你发现其他文档元数据缺失或错误时，应报告给 PM Agent 或 Documentation Agent，除非该文件也属于你的允许产出范围。
 
 ### 5.1 通用输入文件
 

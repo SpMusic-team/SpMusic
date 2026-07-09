@@ -1,3 +1,15 @@
+---
+doc_id: "TASK-SP-008"
+title: "验证清单与测试报告"
+doc_type: "task"
+status: "ready"
+owner_agent: "Test Agent"
+version_scope: "v0.1"
+created: "2026-07-09"
+updated: "2026-07-09"
+source_documents:
+  - "docs/sprint-plan.md"
+---
 # 任务：验证清单与测试报告
 
 ## 背景

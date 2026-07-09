@@ -1,3 +1,15 @@
+---
+doc_id: "TASK-SP-010"
+title: "Sprint 复盘与范围闸门"
+doc_type: "task"
+status: "ready"
+owner_agent: "PM Agent"
+version_scope: "v0.1"
+created: "2026-07-09"
+updated: "2026-07-09"
+source_documents:
+  - "docs/sprint-plan.md"
+---
 # 任务：Sprint 复盘与范围闸门
 
 ## 背景

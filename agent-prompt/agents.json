@@ -1,6 +1,20 @@
 {
   "schemaVersion": 1,
   "project": "SpMusic",
+  "metadata": {
+    "doc_id": "AGENT-REGISTRY",
+    "title": "Agent 注册表",
+    "doc_type": "agent-registry",
+    "status": "active",
+    "owner_agent": "PM Agent",
+    "version_scope": "project",
+    "created": "2026-07-09",
+    "updated": "2026-07-09",
+    "source_documents": [
+      "agent-prompt/PM_Agent.md",
+      "agent-prompt/templates/Agent_Prompt_Template.md"
+    ]
+  },
   "purpose": "Registry of available project agents for PM task assignment and cross-agent collaboration.",
   "assignmentRules": {
     "defaultPool": "core",

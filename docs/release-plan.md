@@ -1,3 +1,15 @@
+---
+doc_id: "RELEASE-V0-1"
+title: "v0.1 发布计划"
+doc_type: "release-plan"
+status: "draft"
+owner_agent: "PM Agent"
+version_scope: "v0.1"
+created: "2026-07-09"
+updated: "2026-07-09"
+source_documents:
+  - "docs/sprint-plan.md"
+---
 # 发布计划
 
 ## 发布版本

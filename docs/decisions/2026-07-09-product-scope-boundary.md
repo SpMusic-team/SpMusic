@@ -1,3 +1,15 @@
+---
+doc_id: "DEC-2026-07-09-SCOPE-BOUNDARY"
+title: "产品范围边界"
+doc_type: "decision"
+status: "accepted"
+owner_agent: "PM Agent"
+version_scope: "project"
+created: "2026-07-09"
+updated: "2026-07-09"
+source_documents:
+  - "docs/requirements/总需求分析.md"
+---
 # 决策：产品范围边界
 
 ## 状态

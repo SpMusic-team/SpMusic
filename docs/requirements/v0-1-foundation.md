@@ -1,3 +1,15 @@
+---
+doc_id: "REQ-V0-1-FOUNDATION"
+title: "v0.1 项目地基版本需求分析"
+doc_type: "requirements"
+status: "approved"
+owner_agent: "Requirements Agent"
+version_scope: "v0.1"
+created: "2026-07-09"
+updated: "2026-07-09"
+source_documents:
+  - "docs/requirements/总需求分析.md"
+---
 # 需求分析：v0.1 播放界面
 
 ## 摘要

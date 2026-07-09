@@ -1,3 +1,16 @@
+---
+doc_id: "TASK-SP-009"
+title: "README 与开发文档"
+doc_type: "task"
+status: "ready"
+owner_agent: "Documentation Agent"
+version_scope: "v0.1"
+created: "2026-07-09"
+updated: "2026-07-09"
+source_documents:
+  - "docs/sprint-plan.md"
+  - "docs/release-plan.md"
+---
 # 任务：README 与开发文档
 
 ## 背景

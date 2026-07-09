@@ -1,3 +1,15 @@
+---
+doc_id: "TASK-SP-001"
+title: "v0.1 版本需求分析与验收边界"
+doc_type: "task"
+status: "done"
+owner_agent: "Requirements Agent"
+version_scope: "v0.1"
+created: "2026-07-09"
+updated: "2026-07-09"
+source_documents:
+  - "docs/requirements/总需求分析.md"
+---
 # 任务：v0.1 版本需求分析与验收边界
 
 ## 背景
@@ -35,3 +47,11 @@ Requirements Agent
 ## 备注
 
 该任务必须先于 PM Agent 的计划拆分任务完成。
+
+## 完成记录
+
+- 完成日期：2026-07-09
+- 验收人：PM Agent
+- 验收结论：通过
+- 产出文件：`docs/requirements/v0-1-foundation.md`
+- 说明：版本需求文档已覆盖 v0.1 范围、非目标、功能需求、非功能需求、边界情况、风险和验收标准，可交付给 PM Agent 用于后续 Sprint 计划和任务拆分。

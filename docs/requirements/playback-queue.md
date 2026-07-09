@@ -1,3 +1,15 @@
+---
+doc_id: "REQ-PLAYBACK-QUEUE"
+title: "播放队列需求分析"
+doc_type: "requirements"
+status: "in-review"
+owner_agent: "Requirements Agent"
+version_scope: "future"
+created: "2026-07-09"
+updated: "2026-07-09"
+source_documents:
+  - "docs/requirements/总需求分析.md"
+---
 # 需求分析：内置播放队列
 
 ## 摘要

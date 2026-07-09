@@ -1,3 +1,16 @@
+---
+doc_id: "DEC-2026-07-09-V0-1-UI-SCOPE"
+title: "v0.1 UI 原型范围"
+doc_type: "decision"
+status: "accepted"
+owner_agent: "PM Agent"
+version_scope: "v0.1"
+created: "2026-07-09"
+updated: "2026-07-09"
+source_documents:
+  - "docs/requirements/v0-1-foundation.md"
+  - "docs/sprint-plan.md"
+---
 # 决策：v0.1 只做播放界面，虚构播放列表管理 UI 顺延到 v0.2
 
 ## 背景

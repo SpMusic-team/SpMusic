@@ -1,3 +1,16 @@
+---
+doc_id: "TASK-SP-003"
+title: "播放界面 UI 规格"
+doc_type: "task"
+status: "ready"
+owner_agent: "UI/UX Agent"
+version_scope: "v0.1"
+created: "2026-07-09"
+updated: "2026-07-09"
+source_documents:
+  - "docs/requirements/v0-1-foundation.md"
+  - "docs/sprint-plan.md"
+---
 # 任务：播放界面 UI 规格
 
 ## 背景

@@ -1,3 +1,16 @@
+---
+doc_id: "ROADMAP"
+title: "SpMusic 路线图"
+doc_type: "roadmap"
+status: "active"
+owner_agent: "PM Agent"
+version_scope: "project"
+created: "2026-07-09"
+updated: "2026-07-09"
+source_documents:
+  - "docs/requirements/总需求分析.md"
+  - "docs/requirements.md"
+---
 # SpMusic 路线图
 
 ## 摘要

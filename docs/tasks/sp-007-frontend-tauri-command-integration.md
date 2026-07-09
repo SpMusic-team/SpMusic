@@ -1,3 +1,15 @@
+---
+doc_id: "TASK-SP-007"
+title: "前端 Tauri command 集成"
+doc_type: "task"
+status: "deferred"
+owner_agent: "Frontend Agent"
+version_scope: "deferred"
+created: "2026-07-09"
+updated: "2026-07-09"
+source_documents:
+  - "docs/sprint-plan.md"
+---
 # 任务：README 当前能力与限制更新
 
 ## 背景

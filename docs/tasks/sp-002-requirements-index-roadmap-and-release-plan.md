@@ -1,3 +1,15 @@
+---
+doc_id: "TASK-SP-002"
+title: "需求索引、路线图与发布边界"
+doc_type: "task"
+status: "done"
+owner_agent: "PM Agent"
+version_scope: "v0.1"
+created: "2026-07-09"
+updated: "2026-07-09"
+source_documents:
+  - "docs/requirements/v0-1-foundation.md"
+---
 # 任务：需求索引、路线图与发布边界
 
 ## 背景
@@ -37,3 +49,16 @@ PM Agent
 ## 备注
 
 该任务由 PM Agent 基于 Requirements Agent 的输出完成。
+
+## 完成记录
+
+- 完成日期：2026-07-09
+- 执行人：PM Agent
+- 验收结论：通过
+- 产出文件：
+  - `docs/requirements.md`
+  - `docs/roadmap.md`
+  - `docs/sprint-plan.md`
+  - `docs/release-plan.md`
+  - `docs/decisions/2026-07-09-product-scope-boundary.md`
+- 说明：需求索引、路线图、Sprint 计划和发布计划已基于 `docs/requirements/v0-1-foundation.md` 对齐；v0.1 明确延期真实播放、本地文件读取、媒体库、真实播放列表、网络存储和插件系统。

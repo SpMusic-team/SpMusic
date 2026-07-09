@@ -1,14 +1,16 @@
 ---
 doc_id: "TASK-SP-006"
-title: "最小 Tauri 健康检查命令"
+title: "v0.2 虚构播放列表管理 UI 预研边界"
 doc_type: "task"
-status: "deferred"
-owner_agent: "Rust/Tauri Agent"
-version_scope: "deferred"
+status: "ready"
+owner_agent: "PM Agent"
+version_scope: "v0.2-candidate"
 created: "2026-07-09"
 updated: "2026-07-09"
 source_documents:
   - "docs/sprint-plan.md"
+  - "docs/requirements/v0-2-playlist-ui-prototype.md"
+  - "docs/roadmap.md"
 ---
 # 任务：v0.2 虚构播放列表管理 UI 预研边界
 

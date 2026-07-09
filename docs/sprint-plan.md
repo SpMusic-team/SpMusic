@@ -26,6 +26,7 @@ source_documents:
 - 将模板页面替换为 SpMusic 最小播放界面。
 - 在 UI/UX 规格完成后，对播放界面做视觉与交互修正。
 - 实现播放 / 暂停 / 上一首 / 下一首的 UI 状态切换。
+- 前端实现保留轻量护栏：集中 CSS token、集中用户可见文案、稳定状态枚举。
 - 建立验证清单：`npm run lint`、`npm run build`、`npm run tauri dev`。
 - 更新 README。
 
@@ -34,6 +35,7 @@ source_documents:
 - 真实音频播放、音量、进度拖动、音频解码。
 - 本地文件读取、文件夹扫描、媒体库、数据库、元数据、封面、歌词。
 - 最小 Tauri command 或 React 到 Rust 通信验证。
+- 可导入主题、主题编辑器、主题持久化、完整国际化框架和语言切换。
 - 虚构播放列表管理 UI。
 - 播放列表真实创建、编辑、删除、导入导出与 `m3u8` 实现。
 - FTP、SMB、WebDAV 网络存储播放。
@@ -75,6 +77,8 @@ source_documents:
 - 系统存在至少 5 条假歌曲数据用于状态验证。
 - 播放 / 暂停 / 上一首 / 下一首能改变 UI 状态。
 - 空歌曲列表存在可渲染 Empty State 分支。
+- 主要视觉值使用集中 CSS token 或等价方式管理。
+- 用户可见文案集中管理，业务状态不依赖中文展示文案。
 - `npm run lint` 通过。
 - `npm run build` 通过。
 - `npm run tauri dev` 能启动应用。

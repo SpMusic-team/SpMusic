@@ -1,14 +1,16 @@
 ---
 doc_id: "TASK-SP-007"
-title: "前端 Tauri command 集成"
+title: "README 当前能力与限制更新"
 doc_type: "task"
-status: "deferred"
-owner_agent: "Frontend Agent"
-version_scope: "deferred"
+status: "blocked"
+owner_agent: "Documentation Agent"
+version_scope: "v0.1"
 created: "2026-07-09"
 updated: "2026-07-09"
 source_documents:
   - "docs/sprint-plan.md"
+  - "docs/release-plan.md"
+  - "docs/tasks/sp-005b-player-shell-ux-refinement.md"
 ---
 # 任务：README 当前能力与限制更新
 

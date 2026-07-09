@@ -10,6 +10,8 @@ updated: "2026-07-09"
 source_documents:
   - "docs/tasks/sp-004-overall-architecture-and-player-state.md"
   - "docs/requirements/v0-1-foundation.md"
+  - "docs/architecture/overall-architecture.md"
+  - "docs/architecture/player-state-and-fake-track.md"
 ---
 # 任务：最小播放界面实现
 
@@ -29,6 +31,7 @@ source_documents:
 - 不读取本地文件。
 - 不实现虚构播放列表管理 UI。
 - 不添加媒体库、数据库、真实播放列表管理、网络存储或插件系统。
+- 不实现可导入主题、主题编辑器、完整国际化框架或语言切换。
 
 ## 负责 Agent
 
@@ -39,6 +42,7 @@ Frontend Agent
 - `src/App.tsx`
 - `src/App.css`
 - `src/index.css`
+- 可选前端文案或假数据模块
 
 ## 验收标准
 
@@ -50,7 +54,11 @@ Frontend Agent
 - 上一首 / 下一首能切换当前假歌曲。
 - 当前歌曲在播放界面中可识别。
 - 代码中存在可渲染的空歌曲列表分支。
+- 基础颜色、间距、圆角等样式值优先使用集中 CSS 变量或等价 token，不把主要视觉值散落在组件逻辑中。
+- 用户可见文案集中在前端 `copy`、`texts`、`messages` 等对象或简单模块中。
+- 播放状态使用 `paused`、`playing` 等稳定枚举，不使用中文展示文案作为业务状态。
 - 不引入真实音频播放、本地文件读取、媒体库、Tauri command 或插件能力。
+- 不引入主题导入、主题持久化、语言包加载或语言切换能力。
 - `npm run lint` 通过。
 - `npm run build` 通过。
 

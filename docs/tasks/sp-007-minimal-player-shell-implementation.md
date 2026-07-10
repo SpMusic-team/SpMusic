@@ -2,11 +2,11 @@
 doc_id: "TASK-SP-007"
 title: "最小播放界面实现"
 doc_type: "task"
-status: "ready"
+status: "done"
 owner_agent: "Frontend Agent"
 version_scope: "v0.1"
 created: "2026-07-09"
-updated: "2026-07-10"
+updated: "2026-07-11"
 source_documents:
   - "docs/tasks/sp-005-frontend-foundation-skeleton.md"
   - "docs/tasks/sp-006-shadcn-ui-frontend-baseline.md"
@@ -76,3 +76,12 @@ Frontend Agent
 ## 备注
 
 该任务依赖 SP-005 和 SP-006。UI/UX Agent 的完整视觉和交互规格由 SP-008 后续修正吸收。
+
+## 验收记录
+
+- 验收人：PM Agent
+- 验收日期：2026-07-11
+- 验收结论：通过
+- 验收依据：`npx shadcn@latest info --json` 已确认项目为 Vite、Tailwind v4、base library 为 `base`、icon library 为 `lucide`，已安装 `badge`、`button`、`card` 组件；`npm run lint` 通过；`npm run build` 通过。
+- 范围检查：页面已替换模板 starter，展示 SpMusic 身份、至少 5 条假歌曲、当前歌曲信息、播放/暂停、上一首/下一首、UI-only 进度条、演示频谱和空歌曲分支；播放状态继续使用 `paused` / `playing` 稳定枚举；未发现真实音频播放、本地文件读取、媒体库、Tauri command、插件能力、主题导入、语言切换或本任务新增 UI 框架/组件配置。
+- 后续状态：SP-008 仍依赖 SP-003 与 SP-007；本任务完成后 SP-008 只解除 SP-007 侧阻塞，仍需等待 SP-003 完成。

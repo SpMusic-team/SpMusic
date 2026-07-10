@@ -6,7 +6,7 @@ status: "active"
 owner_agent: "Documentation Agent"
 version_scope: "project"
 created: "2026-07-08"
-updated: "2026-07-10"
+updated: "2026-07-11"
 source_documents:
   - "docs/requirements.md"
   - "docs/roadmap.md"
@@ -16,6 +16,7 @@ source_documents:
   - "package.json"
   - "src/App.tsx"
   - "src-tauri/Cargo.toml"
+  - "tools/docs-manager/server.mjs"
 ---
 # SpMusic
 
@@ -69,6 +70,33 @@ npm run build
 ```bash
 npm run preview
 ```
+
+## 本地文档工作台
+
+仓库内置独立的本地文档工作台，用于集中浏览、全文搜索、筛选、预览、编辑、新建、移动、重命名、删除和检查 Markdown 文档。它使用单独端口，不依赖 SpMusic 播放器前端或 Tauri 进程。
+
+开发模式启动：
+
+```bash
+npm run docs
+```
+
+浏览器访问 `http://127.0.0.1:4175`。可通过环境变量 `DOCS_MANAGER_PORT` 修改端口。
+
+构建并运行独立产物：
+
+```bash
+npm run docs:build
+npm run docs:start
+```
+
+执行文档服务的边界测试：
+
+```bash
+npm run docs:test
+```
+
+工作台会扫描仓库中的 Markdown 文件，并监听磁盘变更。`docs/`、`README.md` 和 `GIT_WORKFLOW.md` 可编辑；Agent 提示词与内部配置文档可按需显示，但保持只读。所有写操作均限制在仓库内的项目文档路径，并使用内容版本检查避免覆盖外部编辑器中的新修改。
 
 ## v0.1 范围
 

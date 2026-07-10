@@ -10,6 +10,7 @@ updated: "2026-07-10"
 source_documents:
   - "docs/requirements/总需求分析.md"
   - "docs/requirements.md"
+  - "docs/decisions/2026-07-10-visual-customization-boundary.md"
 ---
 # SpMusic 路线图
 
@@ -26,6 +27,7 @@ source_documents:
 范围：
 
 - SpMusic 项目身份和 README。
+- shadcn/ui 前端基底和内部样式 token 基线。
 - 播放界面：当前歌曲信息和基础播放控制。
 - 假歌曲数据。
 - UI-only 播放状态。
@@ -46,6 +48,7 @@ source_documents:
 - 虚构播放列表管理 UI。
 - 播放列表真实创建、编辑、删除、导入导出。
 - 插件系统。
+- 用户导入 Tailwind class、外部 CSS token / 主题文件或运行时自定义样式。
 
 ### v0.2 虚构播放列表管理 UI
 
@@ -141,8 +144,9 @@ source_documents:
 
 - 明暗模式。
 - 基础主题切换。
+- CSS token 白名单式视觉自定义预研。
 - 多语言适配基础。
-- 动画和视觉性能档位。
+- 动画、动效 token 和视觉性能档位。
 - 触控友好的关键交互。
 
 ### 后续高级能力
@@ -169,3 +173,5 @@ source_documents:
 - 插件只作为增强能力，不作为核心能力前提。
 - SpMusic 不做在线音乐平台、在线曲库搜索、内容推荐或版权音乐服务。
 - 每个版本必须有可验证的完成定义，不能以最终愿景替代当前版本范围。
+- v0.1 的 Tailwind class、CSS token 和动效 token 是内部实现基线，不等同于用户主题导入或任意样式执行。
+- 用户自定义样式与动效能力必须先通过独立需求、架构、安全和测试任务，再进入实现。

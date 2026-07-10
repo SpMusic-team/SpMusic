@@ -10,6 +10,7 @@ updated: "2026-07-10"
 source_documents:
   - "docs/requirements/总需求分析.md"
   - "docs/requirements/v0-1-foundation.md"
+  - "docs/decisions/2026-07-10-visual-customization-boundary.md"
 ---
 # SpMusic 需求索引
 
@@ -78,6 +79,7 @@ v0.1 的目标不是实现完整播放器，也不验证真实音频链路，而
 - 虚构播放列表管理 UI。
 - 播放列表真实创建、编辑、删除、导入导出。
 - 插件系统、插件市场、扩展运行时。
+- 用户导入 Tailwind class、外部 CSS token / 主题文件、运行时加载自定义样式或自定义动效系统。
 - Last.fm、Pano Scrobbler、云同步、自定义功能区。
 
 ## 需求状态
@@ -96,6 +98,7 @@ v0.1 的目标不是实现完整播放器，也不验证真实音频链路，而
 | REQ-PLAYLIST-001 | 播放列表与 `m3u8` 支持 | P1 | Deferred | `docs/requirements/总需求分析.md` |
 | REQ-NETWORK-001 | FTP / SMB / WebDAV 网络存储播放 | P2 | Deferred | `docs/requirements/总需求分析.md` |
 | REQ-PLUGIN-001 | 插件增强体系 | P3 | Deferred | `docs/requirements/总需求分析.md` |
+| REQ-UI-CUSTOMIZATION-001 | 用户视觉自定义与动效配置 | P3 | Deferred | `docs/requirements/总需求分析.md`, `docs/decisions/2026-07-10-visual-customization-boundary.md` |
 
 ## 待路由问题
 
@@ -104,4 +107,5 @@ v0.1 的目标不是实现完整播放器，也不验证真实音频链路，而
 - 网络存储播放是否和本地音乐库共享来源抽象，应由 Architecture Agent 评估。
 - `m3u8` 扩展信息保存位置应由 Requirements Agent 与 Architecture Agent 单独分析。
 - 同人音声长音频、章节、作品维度和社团维度是否进入早期版本，应由 Requirements Agent 单独分析。
+- 视觉自定义和动效扩展应先定义 CSS token 白名单、校验、回退、持久化、性能档位和 reduced-motion 边界。
 - 自定义功能区、置顶窗口和插件 API 的边界应延期到基础能力稳定后再评估。

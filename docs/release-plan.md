@@ -9,6 +9,7 @@ created: "2026-07-09"
 updated: "2026-07-10"
 source_documents:
   - "docs/sprint-plan.md"
+  - "docs/decisions/2026-07-10-visual-customization-boundary.md"
 ---
 # 发布计划
 
@@ -23,7 +24,7 @@ v0.1 播放界面
 ## 发布内容
 
 - SpMusic 项目身份和基础文档。
-- shadcn/ui 前端基底和样式基线。
+- shadcn/ui 前端基底和内部样式基线。
 - 播放界面。
 - 假歌曲数据。
 - UI-only 播放状态切换。
@@ -45,6 +46,7 @@ v0.1 播放界面
 - 虚构播放列表管理 UI。
 - 播放列表真实创建、编辑、删除、导入导出。
 - 最小 Tauri command 通信验证。
+- 用户导入 Tailwind class、外部 CSS token / 主题文件、运行时加载自定义样式或自定义动效系统。
 - 插件系统。
 - 在线服务或账号系统。
 
@@ -54,6 +56,7 @@ v0.1 播放界面
 - `npm run build` 通过。
 - `npm run tauri dev` 能启动桌面应用。
 - shadcn/ui 基础配置和最小组件目录存在。
+- v0.1 不开放用户导入 Tailwind class、CSS token 或运行时样式加载。
 - 主界面显示 SpMusic，而不是模板 starter 内容。
 - 播放界面展示当前假歌曲。
 - 系统存在至少 5 条假歌曲数据用于状态验证。

@@ -10,6 +10,7 @@ updated: "2026-07-10"
 source_documents:
   - "docs/requirements/v0-1-foundation.md"
   - "docs/requirements.md"
+  - "docs/decisions/2026-07-10-visual-customization-boundary.md"
 ---
 # Sprint 计划
 
@@ -24,7 +25,7 @@ source_documents:
 - 设计播放界面说明。
 - 建立总体架构蓝图，定义模块边界、v0.1 架构限制、最小播放器状态与假歌曲结构。
 - 在最小播放界面实现前建立前端基础骨架，集中类型、假数据、文案、CSS token 和播放状态约束。
-- 在最小播放界面实现前接入 shadcn/ui 前端基底和样式基线。
+- 在最小播放界面实现前接入 shadcn/ui 前端基底，并使用内部 Tailwind class、CSS token 和动效 token 建立样式基线。
 - 将模板页面替换为 SpMusic 最小播放界面。
 - 在 UI/UX 规格完成后，对播放界面做视觉与交互修正。
 - 实现播放 / 暂停 / 上一首 / 下一首的 UI 状态切换。
@@ -40,6 +41,7 @@ source_documents:
 - 本地文件读取、文件夹扫描、媒体库、数据库、元数据、封面、歌词。
 - 最小 Tauri command 或 React 到 Rust 通信验证。
 - 可导入主题、主题编辑器、主题持久化、完整国际化框架和语言切换。
+- 用户导入 Tailwind class、外部 CSS token / 主题文件、运行时加载自定义 CSS 或自定义动效系统。
 - 虚构播放列表管理 UI。
 - 播放列表真实创建、编辑、删除、导入导出与 `m3u8` 实现。
 - FTP、SMB、WebDAV 网络存储播放。
@@ -67,8 +69,8 @@ source_documents:
 ## 风险
 
 - 总需求覆盖面很大，若不先做版本需求切分，容易把最终愿景误当作当前开发范围。
-- 当前项目仍有模板页面和模板 README，项目身份尚未落地。
-- `shadcn/ui` 已被确认为前端基底，但当前仓库尚未安装；最小播放界面实现必须等待 SP-006 完成。
+- README 与当前前端状态仍需在文档任务中持续收敛，避免残留模板说明。
+- `shadcn/ui` 已被确认为前端基底；后续任务必须避免把内部 Tailwind class、CSS token 和动效 token 误解为用户可导入样式能力。
 - 虚构播放列表管理 UI 已移出 v0.1，v0.2 需要单独定义列表、详情、新增、编辑、删除、排序、多选歌曲、跨列表加入歌曲和 Empty State。
 - 前后端通信验证已移出 v0.1，v0.3 做真实播放技术验证时需要重新纳入。
 - 真实播放、媒体库、网络存储和插件系统都很有吸引力，但进入 v0.1 会显著扩大风险。
@@ -81,6 +83,7 @@ source_documents:
 - `docs/architecture/overall-architecture.md` 存在，并明确总体模块边界与 v0.1 不实现的架构能力。
 - 前端存在最小 `Track` / `PlayerState` 类型、假歌曲 fixture、集中用户可见文案和基础 CSS token。
 - 前端存在 shadcn/ui 所需的基础配置和最小组件目录。
+- Tailwind class、CSS token 和动效 token 仅作为 v0.1 内部实现手段，不开放用户导入样式能力。
 - 应用首屏不再是 Vite / React 模板页面。
 - 应用展示 SpMusic 播放界面。
 - 系统存在至少 5 条假歌曲数据用于状态验证。
@@ -93,4 +96,4 @@ source_documents:
 - `npm run lint` 通过。
 - `npm run build` 通过。
 - `npm run tauri dev` 能启动应用。
-- v0.1 没有实现虚构播放列表管理 UI、真实音频播放、本地文件读取、媒体库、数据库、真实播放列表、网络存储或插件系统。
+- v0.1 没有实现虚构播放列表管理 UI、真实音频播放、本地文件读取、媒体库、数据库、真实播放列表、网络存储、插件系统或用户导入样式能力。

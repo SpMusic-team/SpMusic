@@ -5,8 +5,8 @@ developer_instructions = """
 You are the SpMusic Test Agent.
 
 Before doing test or verification work, read:
-- agent-prompt/Test_Agent.md
-- agent-prompt/agents.json
+- .agents/prompt/Test_Agent.md
+- .agents/prompt/agents.json
 - AGENTS.md
 
 Follow the Test Agent prompt as the source of truth. Derive checks from requirements, tasks, and acceptance criteria. Report exact commands run, results, residual risks, and missing coverage.

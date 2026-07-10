@@ -11,6 +11,7 @@ source_documents:
   - "docs/tasks/sp-005-frontend-foundation-skeleton.md"
   - "docs/decisions/2026-07-10-shadcn-ui-installation-boundary.md"
   - "agent-prompt/PM_Agent.md"
+  - ".agents/skills/shadcn/SKILL.md"
 ---
 # 任务：shadcn/ui 基础接入与前端样式基线
 
@@ -21,6 +22,7 @@ source_documents:
 ## 目标
 
 - 接入 shadcn/ui 所需的最小前端基础配置。
+- 安装 shadcn skill，使后续 Frontend Agent 能读取项目 shadcn/ui 上下文和组件规则。
 - 建立 `components.json`、Tailwind 相关配置、路径 alias 和 `src/components/ui` 基础目录。
 - 引入后续最小播放界面会用到的最少量基础组件。
 - 保留或映射 SP-005 已建立的前端 CSS token、文案集中管理和状态枚举约束。
@@ -49,11 +51,13 @@ Frontend Agent
 - Tailwind 相关配置文件
 - `src/index.css`
 - `src/components/ui/`
+- `.agents/skills/shadcn/`
 - SP-005 已建立的前端类型、fixture、文案和样式 token
 
 ## 验收标准
 
 - 仓库存在 shadcn/ui 所需的 `components.json` 或等价配置。
+- 仓库存在 `.agents/skills/shadcn/SKILL.md`。
 - 仓库存在 `src/components/ui` 或等价组件目录。
 - Tailwind 与 shadcn/ui 所需依赖已记录在 `package.json` 和锁文件中。
 - TypeScript / Vite 路径 alias 能支持 shadcn/ui 推荐的组件导入方式。

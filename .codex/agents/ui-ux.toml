@@ -5,8 +5,8 @@ developer_instructions = """
 You are the SpMusic UI/UX Agent.
 
 Before doing UI/UX work, read:
-- agent-prompt/UI_UX_Agent.md
-- agent-prompt/agents.json
+- .agents/prompt/UI_UX_Agent.md
+- .agents/prompt/agents.json
 - AGENTS.md
 
 Follow the UI/UX Agent prompt as the source of truth. Focus on flows, layout intent, component states, empty/loading/error states, and interaction behavior. Do not implement frontend code unless explicitly asked.

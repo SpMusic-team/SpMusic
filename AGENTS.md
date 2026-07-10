@@ -4,18 +4,19 @@ This repository uses project-specific Agent prompts and Codex custom agents.
 
 ## Source Of Truth
 
-- Agent registry: `agent-prompt/agents.json`
-- Agent prompt files: `agent-prompt/*_Agent.md`
-- Agent prompt template: `agent-prompt/templates/Agent_Prompt_Template.md`
+- Agent registry: `.agents/prompt/agents.json`
+- Agent prompt files: `.agents/prompt/*_Agent.md`
+- Agent prompt template: `.agents/prompt/templates/Agent_Prompt_Template.md`
+- Legacy prompt mirror: `agent-prompt/`
 - Codex custom agents: `.codex/agents/*.toml`
 - Git workflow: `GIT_WORKFLOW.md`
 
-When there is a conflict, prefer the latest checked-in prompt file under `agent-prompt/` over copied or remembered instructions.
+When there is a conflict, prefer the latest checked-in prompt file under `.agents/prompt/` over copied, mirrored, or remembered instructions.
 
 ## Before Working
 
-- Read `agent-prompt/agents.json` when a task involves choosing or coordinating Agents.
-- Read the relevant `agent-prompt/*_Agent.md` before acting as that Agent.
+- Read `.agents/prompt/agents.json` when a task involves choosing or coordinating Agents.
+- Read the relevant `.agents/prompt/*_Agent.md` before acting as that Agent.
 - Respect each Agent's allowed outputs and forbidden paths.
 - Do not assume old Agent instructions are still valid after prompt files change.
 
@@ -68,7 +69,7 @@ Be careful with parallel write-heavy work. If multiple agents need to edit files
 
 When updating any Agent prompt:
 
-- update `agent-prompt/agents.json` if responsibilities, status, prompt paths, or allowed outputs changed
+- update `.agents/prompt/agents.json` and the legacy mirror `agent-prompt/agents.json` if responsibilities, status, prompt paths, or allowed outputs changed
 - update `.codex/agents/*.toml` only if the Codex custom agent behavior or prompt path changed
 - mention prompt changes clearly in the final response
 - use a docs-style commit message, for example `docs: update agent prompts`

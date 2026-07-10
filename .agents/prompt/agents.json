@@ -9,10 +9,10 @@
     "owner_agent": "PM Agent",
     "version_scope": "project",
     "created": "2026-07-09",
-    "updated": "2026-07-09",
+    "updated": "2026-07-10",
     "source_documents": [
-      "agent-prompt/PM_Agent.md",
-      "agent-prompt/templates/Agent_Prompt_Template.md"
+      ".agents/prompt/PM_Agent.md",
+      ".agents/prompt/templates/Agent_Prompt_Template.md"
     ]
   },
   "purpose": "Registry of available project agents for PM task assignment and cross-agent collaboration.",
@@ -28,7 +28,7 @@
       "name": "PM Agent",
       "pool": "core",
       "status": "active",
-      "promptFile": "agent-prompt/PM_Agent.md",
+      "promptFile": ".agents/prompt/PM_Agent.md",
       "role": "Project and product owner",
       "responsibilities": [
         "Define project and version goals",
@@ -58,7 +58,7 @@
       "name": "Requirements Agent",
       "pool": "core",
       "status": "active",
-      "promptFile": "agent-prompt/Requirements_Agent.md",
+      "promptFile": ".agents/prompt/Requirements_Agent.md",
       "role": "Requirement analysis owner",
       "responsibilities": [
         "Clarify user problems",
@@ -86,7 +86,7 @@
       "name": "Architecture Agent",
       "pool": "core",
       "status": "active",
-      "promptFile": "agent-prompt/Architecture_Agent.md",
+      "promptFile": ".agents/prompt/Architecture_Agent.md",
       "role": "Architecture and module boundary owner",
       "responsibilities": [
         "Define frontend, Tauri, Rust, and local capability module boundaries",
@@ -112,7 +112,7 @@
       "name": "UI/UX Agent",
       "pool": "core",
       "status": "active",
-      "promptFile": "agent-prompt/UI_UX_Agent.md",
+      "promptFile": ".agents/prompt/UI_UX_Agent.md",
       "role": "Interface and interaction design owner",
       "responsibilities": [
         "Design user flows and screen structure",
@@ -136,7 +136,7 @@
       "name": "Frontend Agent",
       "pool": "core",
       "status": "active",
-      "promptFile": "agent-prompt/Frontend_Agent.md",
+      "promptFile": ".agents/prompt/Frontend_Agent.md",
       "role": "React and TypeScript implementation owner",
       "responsibilities": [
         "Implement approved React UI and interaction behavior",
@@ -161,7 +161,7 @@
       "name": "Rust/Tauri Agent",
       "pool": "core",
       "status": "active",
-      "promptFile": "agent-prompt/Rust_Tauri_Agent.md",
+      "promptFile": ".agents/prompt/Rust_Tauri_Agent.md",
       "role": "Rust backend and Tauri command implementation owner",
       "responsibilities": [
         "Implement approved Rust commands",
@@ -187,7 +187,7 @@
       "name": "Test Agent",
       "pool": "core",
       "status": "active",
-      "promptFile": "agent-prompt/Test_Agent.md",
+      "promptFile": ".agents/prompt/Test_Agent.md",
       "role": "Verification and quality owner",
       "responsibilities": [
         "Define test and verification strategy",
@@ -212,7 +212,7 @@
       "name": "Documentation Agent",
       "pool": "core",
       "status": "active",
-      "promptFile": "agent-prompt/Documentation_Agent.md",
+      "promptFile": ".agents/prompt/Documentation_Agent.md",
       "role": "Project documentation owner",
       "responsibilities": [
         "Maintain user, developer, and collaboration documentation",
@@ -237,7 +237,7 @@
       "name": "Media Library Agent",
       "pool": "extension",
       "status": "deferred",
-      "promptFile": "agent-prompt/Media_Library_Agent.md",
+      "promptFile": ".agents/prompt/Media_Library_Agent.md",
       "role": "Local media library capability owner",
       "responsibilities": [
         "Design and implement local media scanning when approved",
@@ -260,7 +260,7 @@
       "name": "Audio Engine Agent",
       "pool": "extension",
       "status": "deferred",
-      "promptFile": "agent-prompt/Audio_Engine_Agent.md",
+      "promptFile": ".agents/prompt/Audio_Engine_Agent.md",
       "role": "Real audio playback capability owner",
       "responsibilities": [
         "Design real audio playback integration when approved",
@@ -283,7 +283,7 @@
       "name": "Data Layer Agent",
       "pool": "extension",
       "status": "deferred",
-      "promptFile": "agent-prompt/Data_Layer_Agent.md",
+      "promptFile": ".agents/prompt/Data_Layer_Agent.md",
       "role": "Persistence and database capability owner",
       "responsibilities": [
         "Design persistence only after approval",
@@ -305,7 +305,7 @@
       "name": "Plugin System Agent",
       "pool": "extension",
       "status": "deferred",
-      "promptFile": "agent-prompt/Plugin_System_Agent.md",
+      "promptFile": ".agents/prompt/Plugin_System_Agent.md",
       "role": "Plugin architecture capability owner",
       "responsibilities": [
         "Design plugin boundaries after explicit approval",
@@ -327,7 +327,7 @@
       "name": "Code Review Agent",
       "pool": "extension",
       "status": "deferred",
-      "promptFile": "agent-prompt/Code_Review_Agent.md",
+      "promptFile": ".agents/prompt/Code_Review_Agent.md",
       "role": "Code review and regression risk owner",
       "responsibilities": [
         "Review code changes for bugs, regressions, and missing tests",
@@ -349,7 +349,7 @@
       "name": "Security Agent",
       "pool": "extension",
       "status": "deferred",
-      "promptFile": "agent-prompt/Security_Agent.md",
+      "promptFile": ".agents/prompt/Security_Agent.md",
       "role": "Security and permission review owner",
       "responsibilities": [
         "Review Tauri permissions",

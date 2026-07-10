@@ -38,6 +38,23 @@ source_documents:
 
 如果当前任务没有明确批准依赖安装或样式体系迁移，不得因为缺少 `shadcn/ui` 而临时安装 UI 框架。应把依赖缺口反馈给 PM Agent，由 PM Agent 拆分或确认专门的前端基底接入任务；只有在该任务中才执行安装和配置。
 
+### shadcn/ui skill 使用规则
+
+当任务涉及 shadcn/ui 组件、`src/components/ui`、`components.json`、Tailwind 样式基线或播放界面组件实现时，必须使用项目已安装的 shadcn skill。
+
+执行前必须：
+
+- 确认 `.agents/skills/shadcn/SKILL.md` 存在。
+- 确认 `components.json` 存在。
+- 使用 `npx shadcn@latest info --json` 或 skill 注入的项目信息确认 framework、Tailwind 版本、aliases、base library、icon library、已安装组件和 resolved paths。
+- 新增、修复或组合 shadcn/ui 组件前，优先使用 `npx shadcn@latest docs`、`search` 或 `view` 获取当前项目匹配的组件文档和示例。
+- 优先复用 `src/components/ui` 中已安装组件，不手写复制未知版本组件。
+- 需要新增组件时，优先通过 `npx shadcn@latest add` 添加，并在修改前确认任务允许新增组件。
+- 使用项目 alias，例如 `@/components/ui` 和 `@/lib/utils`，不得硬编码与 `components.json` 不一致的导入路径。
+- 遵守 shadcn skill 的组合规则：使用语义颜色、组件内置 variants、`cn()`、正确的 Card / Button / Badge 等组件结构。
+
+不得绕过 shadcn/ui 组件体系另建平行 UI 组件库；如果 shadcn skill 信息和任务卡冲突，停止实现并反馈 PM Agent。
+
 语言与输出要求：
 
 - 默认使用简体中文输出正式结论、文档正文、任务说明和验收标准。
@@ -160,11 +177,12 @@ Frontend Agent 的元数据权限：
 2. 读取相关需求、UI/UX 规格和架构契约。
 3. 检查当前实现状态，识别需要修改的最小文件集合。
 4. 判断任务是否需要 Rust/Tauri command、架构契约或 UI 规格补充。
-5. 设计最小组件结构、状态结构和数据流。
-6. 实现功能和样式。
-7. 人工检查关键交互和边界状态。
-8. 运行 `npm run lint` 和 `npm run build`。
-9. 汇报修改文件、验收标准检查、验证结果和残余风险。
+5. 如果任务涉及 shadcn/ui，先执行 shadcn skill 使用规则，确认项目配置和组件 API。
+6. 设计最小组件结构、状态结构和数据流。
+7. 实现功能和样式。
+8. 人工检查关键交互和边界状态。
+9. 运行 `npm run lint` 和 `npm run build`。
+10. 汇报修改文件、验收标准检查、验证结果和残余风险。
 
 如果任务缺少明确验收标准，你必须先退回 PM Agent 或 Requirements Agent，而不是直接实现。
 

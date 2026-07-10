@@ -14,6 +14,7 @@ source_documents:
   - "docs/requirements/v0-1-foundation.md"
   - "docs/architecture/overall-architecture.md"
   - "docs/architecture/player-state-and-fake-track.md"
+  - ".agents/skills/shadcn/SKILL.md"
 ---
 # 任务：最小播放界面实现
 
@@ -47,10 +48,12 @@ Frontend Agent
 - `src/App.css`
 - `src/index.css`
 - SP-005 已建立的前端类型、fixture 或文案模块
+- `.agents/skills/shadcn/SKILL.md`
 
 ## 验收标准
 
 - 页面不再显示 Vite / React starter 文案或链接。
+- Frontend Agent 在实现前使用 shadcn skill 或 `npx shadcn@latest info --json` 确认项目 shadcn/ui 配置、aliases、base library、icon library 和已安装组件。
 - 页面清晰展示 SpMusic 应用身份。
 - 界面使用 SP-005 已建立的至少 5 条假歌曲数据。
 - 当前歌曲展示歌曲名、艺术家、专辑、时长中的至少 3 类信息。
@@ -66,6 +69,7 @@ Frontend Agent
 - 不引入真实音频播放、真实音频进度同步、真实频谱分析、本地文件读取、媒体库、Tauri command 或插件能力。
 - 不引入主题导入、主题持久化、语言包加载或语言切换能力。
 - 不新增 UI 框架、Tailwind 配置、`components.json` 或 `src/components/ui` 组件目录；只使用 SP-006 已接入的前端基底。
+- 新增或使用 shadcn/ui 组件时遵守 `.agents/skills/shadcn/SKILL.md` 的组件组合、语义颜色、variant 和导入路径规则。
 - `npm run lint` 通过。
 - `npm run build` 通过。
 

@@ -5,8 +5,8 @@ developer_instructions = """
 You are the SpMusic Documentation Agent.
 
 Before doing documentation work, read:
-- agent-prompt/Documentation_Agent.md
-- agent-prompt/agents.json
+- .agents/prompt/Documentation_Agent.md
+- .agents/prompt/agents.json
 - AGENTS.md
 
 Follow the Documentation Agent prompt as the source of truth. Keep documentation aligned with approved requirements, PM plans, architecture decisions, and implemented behavior. Do not make product priority or architecture decisions.

@@ -1,5 +1,5 @@
 ---
-doc_id: "TASK-SP-008"
+doc_id: "TASK-SP-009"
 title: "v0.2 虚构播放列表管理 UI 预研边界"
 doc_type: "task"
 status: "ready"

@@ -1,5 +1,5 @@
 ---
-doc_id: "TASK-SP-006"
+doc_id: "TASK-SP-007"
 title: "最小播放界面实现"
 doc_type: "task"
 status: "ready"
@@ -9,6 +9,7 @@ created: "2026-07-09"
 updated: "2026-07-10"
 source_documents:
   - "docs/tasks/sp-005-frontend-foundation-skeleton.md"
+  - "docs/tasks/sp-006-shadcn-ui-frontend-baseline.md"
   - "docs/tasks/sp-004-overall-architecture-and-player-state.md"
   - "docs/requirements/v0-1-foundation.md"
   - "docs/architecture/overall-architecture.md"
@@ -18,11 +19,11 @@ source_documents:
 
 ## 背景
 
-前端基础骨架已经由 SP-005 先行收敛类型、假歌曲数据、用户可见文案、CSS token、UI-only 播放进度、演示频谱和播放状态约束。为了让项目尽快脱离模板状态，v0.1 允许 Frontend Agent 在完整 UI/UX 规格完成前，基于该骨架实现一个简易播放界面，只满足核心验收。
+前端基础骨架已经由 SP-005 先行收敛类型、假歌曲数据、用户可见文案、CSS token、UI-only 播放进度、演示频谱和播放状态约束；shadcn/ui 前端基底由 SP-006 单独接入。为了让项目尽快脱离模板状态，v0.1 允许 Frontend Agent 在完整 UI/UX 规格完成前，基于这些基础实现一个简易播放界面，只满足核心验收。
 
 ## 目标
 
-使用 SP-005 提供的假歌曲数据、文案、CSS token、UI-only 播放状态、UI-only 播放进度和演示频谱数据，将模板页面替换为 SpMusic 最小播放界面。
+使用 SP-005 提供的假歌曲数据、文案、CSS token、UI-only 播放状态、UI-only 播放进度和演示频谱数据，并基于 SP-006 接入的 shadcn/ui 前端基底，将模板页面替换为 SpMusic 最小播放界面。
 
 ## 非目标
 
@@ -34,6 +35,7 @@ source_documents:
 - 不实现虚构播放列表管理 UI。
 - 不添加媒体库、数据库、真实播放列表管理、网络存储或插件系统。
 - 不实现可导入主题、主题编辑器、完整国际化框架或语言切换。
+- 不在本任务中安装或迁移 `shadcn/ui`、Tailwind、Radix、class-variance-authority 或新的组件库依赖；这些必须由 SP-006 完成。
 
 ## 负责 Agent
 
@@ -63,9 +65,10 @@ Frontend Agent
 - 播放状态继续使用 `paused`、`playing` 等稳定枚举，不使用中文展示文案作为业务状态。
 - 不引入真实音频播放、真实音频进度同步、真实频谱分析、本地文件读取、媒体库、Tauri command 或插件能力。
 - 不引入主题导入、主题持久化、语言包加载或语言切换能力。
+- 不新增 UI 框架、Tailwind 配置、`components.json` 或 `src/components/ui` 组件目录；只使用 SP-006 已接入的前端基底。
 - `npm run lint` 通过。
 - `npm run build` 通过。
 
 ## 备注
 
-该任务依赖 SP-005。UI/UX Agent 的完整视觉和交互规格由 SP-007 后续修正吸收。
+该任务依赖 SP-005 和 SP-006。UI/UX Agent 的完整视觉和交互规格由 SP-008 后续修正吸收。

@@ -1,5 +1,5 @@
 ---
-doc_id: "TASK-SP-011"
+doc_id: "TASK-SP-012"
 title: "README 与开发文档"
 doc_type: "task"
 status: "ready"

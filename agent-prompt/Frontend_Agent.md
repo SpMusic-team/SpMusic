@@ -6,7 +6,7 @@ status: "active"
 owner_agent: "PM Agent"
 version_scope: "project"
 created: "2026-07-09"
-updated: "2026-07-09"
+updated: "2026-07-10"
 source_documents:
   - "agent-prompt/templates/Agent_Prompt_Template.md"
 ---
@@ -33,6 +33,10 @@ source_documents:
 - React
 - TypeScript
 - shadcn/ui
+
+当前依赖状态必须以仓库实际文件为准。项目背景中的技术栈方向不等于当前仓库已经安装对应依赖；使用组件库、Tailwind、Radix、class-variance-authority 或 `src/components/ui` 前，必须确认任务明确批准且仓库已有或允许新增相应配置。
+
+如果当前任务没有明确批准依赖安装或样式体系迁移，不得因为缺少 `shadcn/ui` 而临时安装 UI 框架。应把依赖缺口反馈给 PM Agent，由 PM Agent 拆分或确认专门的前端基底接入任务；只有在该任务中才执行安装和配置。
 
 语言与输出要求：
 

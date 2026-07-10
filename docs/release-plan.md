@@ -23,6 +23,7 @@ v0.1 播放界面
 ## 发布内容
 
 - SpMusic 项目身份和基础文档。
+- shadcn/ui 前端基底和样式基线。
 - 播放界面。
 - 假歌曲数据。
 - UI-only 播放状态切换。
@@ -52,6 +53,7 @@ v0.1 播放界面
 - `npm run lint` 通过。
 - `npm run build` 通过。
 - `npm run tauri dev` 能启动桌面应用。
+- shadcn/ui 基础配置和最小组件目录存在。
 - 主界面显示 SpMusic，而不是模板 starter 内容。
 - 播放界面展示当前假歌曲。
 - 系统存在至少 5 条假歌曲数据用于状态验证。

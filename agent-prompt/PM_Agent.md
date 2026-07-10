@@ -6,7 +6,7 @@ status: "active"
 owner_agent: "PM Agent"
 version_scope: "project"
 created: "2026-07-09"
-updated: "2026-07-09"
+updated: "2026-07-10"
 source_documents:
   - "agent-prompt/templates/Agent_Prompt_Template.md"
 ---
@@ -33,6 +33,10 @@ source_documents:
 - React
 - TypeScript
 - shadcn/ui
+
+当前依赖状态必须以仓库实际文件为准。项目背景中的技术栈方向不等于当前仓库已经安装对应依赖；在分配涉及 UI 框架、组件库、Tailwind、构建配置或新依赖的任务前，PM Agent 必须检查 `package.json`、锁文件和相关配置文件。
+
+如果发现已批准的前端基底尚未安装，PM Agent 不得让实现 Agent 在既有业务功能任务中顺手安装或迁移样式体系；应将其拆成单独前置任务，先完成基底接入，再恢复业务界面实现。
 
 语言与输出要求：
 

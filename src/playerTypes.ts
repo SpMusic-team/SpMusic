@@ -7,6 +7,7 @@ export type Track = {
   album: string
   durationSeconds: number
   coverTone: string
+  coverImage?: string
   lyrics: DemoLyricLine[]
 }
 

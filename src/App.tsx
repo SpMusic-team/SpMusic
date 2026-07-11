@@ -10,6 +10,8 @@ import type { PlayerState, Track } from '@/playerTypes'
 
 type Direction = -1 | 1
 type ProgressStyle = CSSProperties & { '--progress-percent': string }
+type PlayerBackgroundStyle = CSSProperties & { '--player-background-art'?: string }
+type CoverStyle = CSSProperties & { '--cover-art'?: string }
 
 const tickMs = 1000
 
@@ -49,6 +51,9 @@ function App() {
   const progress = Math.min(Math.max(state.progressSeconds, 0), duration)
   const activeLyric = track?.lyrics.reduce((active, line) => line.timeSeconds <= progress ? line : active, track.lyrics[0])
   const progressStyle: ProgressStyle = { '--progress-percent': `${duration ? progress / duration * 100 : 0}%` }
+  const albumArt = track?.coverImage ? `url("${track.coverImage}") center / cover no-repeat` : undefined
+  const playerBackgroundStyle: PlayerBackgroundStyle | undefined = albumArt ? { '--player-background-art': albumArt } : undefined
+  const coverStyle: CoverStyle | undefined = albumArt ? { '--cover-art': albumArt } : undefined
 
   const changeTrack = useCallback((direction: Direction, automatic = false) => {
     setState((previous) => {
@@ -91,7 +96,9 @@ function App() {
   }, [activeLyric])
 
   function setProgress(event: ChangeEvent<HTMLInputElement>) {
-    setState((previous) => ({ ...previous, progressSeconds: Number(event.currentTarget.value) }))
+    const nextProgress = Number(event.currentTarget.value)
+
+    setState((previous) => ({ ...previous, progressSeconds: nextProgress }))
   }
 
   const LikeIcon = likedId === track?.id ? systemIcons.likeSelected : systemIcons.like
@@ -99,7 +106,7 @@ function App() {
 
   return (
     <TooltipProvider>
-      <main className="player-shell" data-cover={track?.coverTone ?? 'empty'} aria-labelledby="app-title">
+      <main className="player-shell" data-cover={track?.coverTone ?? 'empty'} style={playerBackgroundStyle} aria-labelledby="app-title">
         <div className="ambient-cover" aria-hidden="true" />
         <header className="window-bar">
           <IconButton icon={systemIcons.collapse} label={appCopy.controls.collapse} />
@@ -115,8 +122,8 @@ function App() {
         {track ? (
           <section className="player-stage" aria-label={appCopy.shellLabel}>
             <article className="cover-column">
-              <div className="cover-art" data-tone={track.coverTone}>
-                <div className="cover-mark"><systemIcons.music /><strong>{appCopy.productName}</strong><span>LOCAL LISTENING</span></div>
+              <div className="cover-art" data-tone={track.coverTone} data-has-image={Boolean(track.coverImage)} style={coverStyle}>
+                {!track.coverImage ? <div className="cover-mark"><systemIcons.music /><strong>{appCopy.productName}</strong><span>LOCAL LISTENING</span></div> : null}
                 <div className="cover-feedback">
                   <IconButton icon={LikeIcon} label={appCopy.controls.like} selected={likedId === track.id} onClick={() => { setLikedId((id) => id === track.id ? null : track.id); setDislikedId(null) }} />
                   <IconButton icon={DislikeIcon} label={appCopy.controls.dislike} selected={dislikedId === track.id} onClick={() => { setDislikedId((id) => id === track.id ? null : track.id); setLikedId(null) }} />
@@ -128,7 +135,7 @@ function App() {
               </div>
               <div className="track-pills" aria-live="polite">
                 <span className="title-pill">{track.title}</span>
-                <span className="artist-pill">{track.artist} · {track.album}</span>
+                <span className="artist-pill">{track.artist} - {track.album}</span>
               </div>
             </article>
 
@@ -142,8 +149,9 @@ function App() {
         <footer className="control-dock" style={progressStyle}>
           <div className="progress-row"><time>{formatDuration(progress)}</time><input aria-label={appCopy.progress.label} disabled={!track || duration <= 0} max={duration} min="0" onChange={setProgress} type="range" value={progress} /><time>{formatDuration(duration)}</time></div>
           <div className="control-row">
-            <div className="control-side"><IconButton icon={systemIcons.shuffle} label={appCopy.controls.shuffle} selected={shuffle} disabled={!track} onClick={() => setShuffle((value) => !value)} /></div>
+            <div className="control-side"><IconButton icon={systemIcons.audioWave} label={appCopy.shellLabel} disabled={!track} /></div>
             <div className="transport">
+              <IconButton icon={systemIcons.shuffle} label={appCopy.controls.shuffle} selected={shuffle} disabled={!track} onClick={() => setShuffle((value) => !value)} />
               <IconButton icon={systemIcons.previous} label={appCopy.controls.previous} disabled={!track} onClick={() => changeTrack(-1)} />
               <Button className="play-button" aria-label={playing ? appCopy.controls.pause : appCopy.controls.play} aria-pressed={playing} disabled={!track} size="icon-lg" onClick={() => setState((previous) => ({ ...previous, playbackStatus: previous.playbackStatus === 'playing' ? 'paused' : 'playing', progressSeconds: previous.progressSeconds >= duration ? 0 : previous.progressSeconds }))}>{playing ? <systemIcons.pause /> : <systemIcons.play />}</Button>
               <IconButton icon={systemIcons.next} label={appCopy.controls.next} disabled={!track} onClick={() => changeTrack(1)} />

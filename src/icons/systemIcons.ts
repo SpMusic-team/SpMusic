@@ -14,6 +14,7 @@ import {
   Play24Filled,
   Previous24Regular,
   Speaker224Regular,
+  SoundWaveCircle24Regular,
   Square24Regular,
   Subtract24Regular,
   ThumbDislike24Filled,
@@ -43,6 +44,7 @@ export type SystemIconProvider = {
   repeat: SystemIcon
   captions: SystemIcon
   volume: SystemIcon
+  audioWave: SystemIcon
   queue: SystemIcon
   music: SystemIcon
 }
@@ -68,6 +70,7 @@ const fluentSystemIcons: SystemIconProvider = {
   repeat: ArrowRepeatAll24Regular,
   captions: ClosedCaption24Regular,
   volume: Speaker224Regular,
+  audioWave: SoundWaveCircle24Regular,
   queue: List24Regular,
   music: MusicNote224Regular,
 }

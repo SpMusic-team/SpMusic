@@ -9,7 +9,7 @@
     "owner_agent": "PM Agent",
     "version_scope": "project",
     "created": "2026-07-09",
-    "updated": "2026-07-10",
+    "updated": "2026-07-11",
     "source_documents": [
       ".agents/prompt/PM_Agent.md",
       ".agents/prompt/templates/Agent_Prompt_Template.md"
@@ -115,15 +115,17 @@
       "promptFile": ".agents/prompt/UI_UX_Agent.md",
       "role": "Interface and interaction design owner",
       "responsibilities": [
-        "Design user flows and screen structure",
-        "Define interaction states and feedback",
-        "Specify component behavior and UI state coverage",
-        "Define empty, loading, error, and disabled states",
-        "Review UI consistency against project goals"
+        "Design information architecture, user flows, and screen structure",
+        "Define visual hierarchy, layout density, responsive behavior, and desktop interaction ergonomics",
+        "Specify component behavior, shadcn/ui component mapping, and UI state coverage",
+        "Define empty, loading, error, disabled, accessibility, and copy states",
+        "Produce implementable and verifiable UI specifications for Frontend Agent and Test Agent"
       ],
       "notResponsibleFor": [
         "Product priority decisions",
         "Architecture ownership",
+        "Frontend implementation",
+        "Dependency installation or UI framework migration",
         "Rust/Tauri implementation"
       ],
       "allowedOutputs": [

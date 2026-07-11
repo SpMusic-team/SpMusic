@@ -7,6 +7,14 @@ export const demoTracks: Track[] = [
     artist: 'Lin Chen',
     album: 'Desk Light Sessions',
     durationSeconds: 214,
+    coverTone: 'lagoon',
+    lyrics: [
+      { id: 'm1', timeSeconds: 0, original: 'Morning light is moving through the room.', translation: '晨光正缓缓穿过房间' },
+      { id: 'm2', timeSeconds: 38, original: 'Every quiet signal leads me home.', translation: '每个安静的信号都带我回家' },
+      { id: 'm3', timeSeconds: 82, original: 'Side by side, we let the city fade.', translation: '并肩看着城市慢慢隐去' },
+      { id: 'm4', timeSeconds: 128, original: 'Keep this little rhythm close tonight.', translation: '今夜把这段节奏留在身边' },
+      { id: 'm5', timeSeconds: 176, original: 'The morning signal starts again.', translation: '晨间讯号再次响起' },
+    ],
   },
   {
     id: 'glass-station',
@@ -14,6 +22,13 @@ export const demoTracks: Track[] = [
     artist: 'North Arcade',
     album: 'Transit Notes',
     durationSeconds: 188,
+    coverTone: 'violet',
+    lyrics: [
+      { id: 'g1', timeSeconds: 0, original: 'Waiting where the glass trains meet.', translation: '在玻璃列车交汇处等待' },
+      { id: 'g2', timeSeconds: 42, original: 'Neon names drift under our feet.', translation: '霓虹名字从脚下流过' },
+      { id: 'g3', timeSeconds: 91, original: 'No destination, only tonight.', translation: '没有终点，只有今夜' },
+      { id: 'g4', timeSeconds: 142, original: 'The station disappears in light.', translation: '车站消失在光里' },
+    ],
   },
   {
     id: 'quiet-magnet',
@@ -21,6 +36,13 @@ export const demoTracks: Track[] = [
     artist: 'Mira Vale',
     album: 'Small Room Weather',
     durationSeconds: 241,
+    coverTone: 'rose',
+    lyrics: [
+      { id: 'q1', timeSeconds: 0, original: 'A quiet magnet pulls the rain.', translation: '安静的磁场牵引着雨' },
+      { id: 'q2', timeSeconds: 57, original: 'Small room weather knows my name.', translation: '小房间的天气记得我的名字' },
+      { id: 'q3', timeSeconds: 119, original: 'Stay until the window turns to blue.', translation: '留下直到窗外变成蓝色' },
+      { id: 'q4', timeSeconds: 183, original: 'Every compass points to you.', translation: '每只罗盘都指向你' },
+    ],
   },
   {
     id: 'silver-courtyard',
@@ -28,6 +50,13 @@ export const demoTracks: Track[] = [
     artist: 'The Window Maps',
     album: 'Late Geometry',
     durationSeconds: 263,
+    coverTone: 'amber',
+    lyrics: [
+      { id: 's1', timeSeconds: 0, original: 'Silver shadows cross the courtyard.', translation: '银色影子穿过庭院' },
+      { id: 's2', timeSeconds: 66, original: 'Late geometry holds the stars.', translation: '迟来的几何托住星光' },
+      { id: 's3', timeSeconds: 132, original: 'Count the windows, count the hours.', translation: '数着窗户，也数着时光' },
+      { id: 's4', timeSeconds: 205, original: 'We are never very far.', translation: '我们从未相距太远' },
+    ],
   },
   {
     id: 'afterimage-loop',
@@ -35,5 +64,12 @@ export const demoTracks: Track[] = [
     artist: 'Yun River',
     album: 'Soft Circuit',
     durationSeconds: 197,
+    coverTone: 'blue',
+    lyrics: [
+      { id: 'a1', timeSeconds: 0, original: 'Afterimages circle in the dark.', translation: '残像在黑暗里回旋' },
+      { id: 'a2', timeSeconds: 48, original: 'Soft circuits flicker into sparks.', translation: '柔软电路闪成火花' },
+      { id: 'a3', timeSeconds: 96, original: 'Let the loop remember us.', translation: '让循环记住我们' },
+      { id: 'a4', timeSeconds: 151, original: 'Begin again without a rush.', translation: '不慌不忙，再次开始' },
+    ],
   },
 ]

@@ -6,6 +6,15 @@ export type Track = {
   artist: string
   album: string
   durationSeconds: number
+  coverTone: string
+  lyrics: DemoLyricLine[]
+}
+
+export type DemoLyricLine = {
+  id: string
+  timeSeconds: number
+  original: string
+  translation: string
 }
 
 export type SpectrumBar = {

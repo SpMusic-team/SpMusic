@@ -6,6 +6,9 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
+  --player-blue: #5c9dd8;
+  --player-ink: #17212b;
+  --player-muted: #687583;
   --color-bg: #f7f8f4;
   --color-surface: #ffffff;
   --color-surface-muted: #eef3ec;
@@ -117,6 +120,7 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100svh;
+  overflow: hidden;
 }
 
 h1,

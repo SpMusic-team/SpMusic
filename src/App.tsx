@@ -9,11 +9,17 @@ import { initialPlayerState } from '@/playerState'
 import type { PlayerState, Track } from '@/playerTypes'
 
 type Direction = -1 | 1
+type RepeatMode = 'repeat-all' | 'repeat-one' | 'sequential'
 type ProgressStyle = CSSProperties & { '--progress-percent': string }
 type PlayerBackgroundStyle = CSSProperties & { '--player-background-art'?: string }
 type CoverStyle = CSSProperties & { '--cover-art'?: string }
 
 const tickMs = 1000
+const nextRepeatMode: Record<RepeatMode, RepeatMode> = {
+  'repeat-all': 'repeat-one',
+  'repeat-one': 'sequential',
+  sequential: 'repeat-all',
+}
 
 function formatDuration(value: number) {
   const seconds = Math.max(0, Math.floor(value))
@@ -40,7 +46,7 @@ function App() {
   const [likedId, setLikedId] = useState<string | null>(null)
   const [dislikedId, setDislikedId] = useState<string | null>(null)
   const [shuffle, setShuffle] = useState(false)
-  const [repeat, setRepeat] = useState(false)
+  const [repeatMode, setRepeatMode] = useState<RepeatMode>('repeat-all')
   const [captions, setCaptions] = useState(true)
   const [muted, setMuted] = useState(false)
   const lyricListRef = useRef<HTMLOListElement>(null)
@@ -58,13 +64,19 @@ function App() {
   const changeTrack = useCallback((direction: Direction, automatic = false) => {
     setState((previous) => {
       if (!previous.tracks.length) return { ...previous, playbackStatus: 'paused', progressSeconds: 0 }
-      if (automatic && repeat) return { ...previous, progressSeconds: 0 }
       const currentIndex = Math.max(0, previous.tracks.findIndex((item) => item.id === previous.currentTrackId))
+      const currentTrack = previous.tracks[currentIndex] ?? previous.tracks[0]
+
+      if (automatic && repeatMode === 'repeat-one') return { ...previous, playbackStatus: 'playing', progressSeconds: 0 }
+      if (automatic && repeatMode === 'sequential' && currentIndex >= previous.tracks.length - 1) {
+        return { ...previous, playbackStatus: 'paused', progressSeconds: currentTrack.durationSeconds }
+      }
+
       let nextIndex = (currentIndex + direction + previous.tracks.length) % previous.tracks.length
       if (direction === 1 && shuffle && previous.tracks.length > 1) nextIndex = (currentIndex + 1 + Math.floor(Math.random() * (previous.tracks.length - 1))) % previous.tracks.length
       return { ...previous, currentTrackId: previous.tracks[nextIndex].id, playbackStatus: automatic ? 'playing' : 'paused', progressSeconds: 0 }
     })
-  }, [repeat, shuffle])
+  }, [repeatMode, shuffle])
 
   useEffect(() => {
     if (!playing || !track) return
@@ -103,6 +115,10 @@ function App() {
 
   const LikeIcon = likedId === track?.id ? systemIcons.likeSelected : systemIcons.like
   const DislikeIcon = dislikedId === track?.id ? systemIcons.dislikeSelected : systemIcons.dislike
+  const ShuffleIcon = shuffle ? systemIcons.shuffleOff : systemIcons.shuffle
+  const shuffleLabel = shuffle ? appCopy.controls.shuffleOff : appCopy.controls.shuffle
+  const RepeatIcon = repeatMode === 'repeat-one' ? systemIcons.repeatOne : repeatMode === 'sequential' ? systemIcons.sequential : systemIcons.repeat
+  const repeatLabel = repeatMode === 'repeat-one' ? appCopy.controls.repeatOne : repeatMode === 'sequential' ? appCopy.controls.sequential : appCopy.controls.repeat
 
   return (
     <TooltipProvider>
@@ -151,11 +167,11 @@ function App() {
           <div className="control-row">
             <div className="control-side"><IconButton icon={systemIcons.audioWave} label={appCopy.spectrum.title} disabled={!track} /></div>
             <div className="transport">
-              <IconButton icon={systemIcons.shuffle} label={appCopy.controls.shuffle} selected={shuffle} disabled={!track} onClick={() => setShuffle((value) => !value)} />
+              <IconButton icon={ShuffleIcon} label={shuffleLabel} selected={shuffle} disabled={!track} onClick={() => setShuffle((value) => !value)} />
               <IconButton icon={systemIcons.previous} label={appCopy.controls.previous} disabled={!track} onClick={() => changeTrack(-1)} />
               <Button className="play-button" aria-label={playing ? appCopy.controls.pause : appCopy.controls.play} aria-pressed={playing} disabled={!track} size="icon-lg" onClick={() => setState((previous) => ({ ...previous, playbackStatus: previous.playbackStatus === 'playing' ? 'paused' : 'playing', progressSeconds: previous.progressSeconds >= duration ? 0 : previous.progressSeconds }))}>{playing ? <systemIcons.pause /> : <systemIcons.play />}</Button>
               <IconButton icon={systemIcons.next} label={appCopy.controls.next} disabled={!track} onClick={() => changeTrack(1)} />
-              <IconButton icon={systemIcons.repeat} label={appCopy.controls.repeat} selected={repeat} disabled={!track} onClick={() => setRepeat((value) => !value)} />
+              <IconButton icon={RepeatIcon} label={repeatLabel} selected={repeatMode !== 'repeat-all'} disabled={!track} onClick={() => setRepeatMode((value) => nextRepeatMode[value])} />
             </div>
             <div className="control-side control-side-end">
               <IconButton icon={systemIcons.captions} label={appCopy.controls.captions} selected={captions} onClick={() => setCaptions((value) => !value)} />

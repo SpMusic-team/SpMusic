@@ -1,0 +1,66 @@
+import { createElement, type SVGProps } from 'react'
+import {
+  ArrowRepeatAll24Regular,
+  ArrowRepeat124Regular,
+  ArrowShuffleOff24Regular,
+  ArrowShuffle24Regular,
+  ChevronDown24Regular,
+  ClosedCaption24Regular,
+  Dismiss24Regular,
+  FullScreenMaximize24Regular,
+  List24Regular,
+  MoreVertical24Regular,
+  MusicNote224Regular,
+  Next24Regular,
+  Pause24Filled,
+  Play24Filled,
+  Previous24Regular,
+  Speaker224Regular,
+  SoundWaveCircle24Regular,
+  Square24Regular,
+  Subtract24Regular,
+  ThumbDislike24Filled,
+  ThumbDislike24Regular,
+  ThumbLike24Filled,
+  ThumbLike24Regular,
+} from '@fluentui/react-icons'
+import type { SystemIconProvider } from '@/icons/types'
+
+function SequentialIcon(props: SVGProps<SVGSVGElement>) {
+  return createElement('svg', { width: 48, height: 48, viewBox: '0 0 48 48', fill: 'none', xmlns: 'http://www.w3.org/2000/svg', ...props },
+    createElement('path', {
+      d: 'M8.5 15H39.5M33.5 21L39.5 15L33.5 9M8.5 33H39.5M33.5 39L39.5 33L33.5 27',
+      stroke: 'currentColor',
+      strokeWidth: 3,
+      strokeLinecap: 'round',
+      strokeLinejoin: 'round',
+    }),
+  )
+}
+
+export const fluentSystemIcons: SystemIconProvider = {
+  collapse: ChevronDown24Regular,
+  fullscreen: FullScreenMaximize24Regular,
+  minimize: Subtract24Regular,
+  maximize: Square24Regular,
+  close: Dismiss24Regular,
+  play: Play24Filled,
+  pause: Pause24Filled,
+  previous: Previous24Regular,
+  next: Next24Regular,
+  like: ThumbLike24Regular,
+  likeSelected: ThumbLike24Filled,
+  dislike: ThumbDislike24Regular,
+  dislikeSelected: ThumbDislike24Filled,
+  more: MoreVertical24Regular,
+  shuffle: ArrowShuffle24Regular,
+  shuffleOff: ArrowShuffleOff24Regular,
+  repeat: ArrowRepeatAll24Regular,
+  repeatOne: ArrowRepeat124Regular,
+  sequential: SequentialIcon,
+  captions: ClosedCaption24Regular,
+  volume: Speaker224Regular,
+  audioWave: SoundWaveCircle24Regular,
+  queue: List24Regular,
+  music: MusicNote224Regular,
+}

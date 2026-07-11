@@ -149,7 +149,7 @@ function App() {
         <footer className="control-dock" style={progressStyle}>
           <div className="progress-row"><time>{formatDuration(progress)}</time><input aria-label={appCopy.progress.label} disabled={!track || duration <= 0} max={duration} min="0" onChange={setProgress} type="range" value={progress} /><time>{formatDuration(duration)}</time></div>
           <div className="control-row">
-            <div className="control-side"><IconButton icon={systemIcons.audioWave} label={appCopy.shellLabel} disabled={!track} /></div>
+            <div className="control-side"><IconButton icon={systemIcons.audioWave} label={appCopy.spectrum.title} disabled={!track} /></div>
             <div className="transport">
               <IconButton icon={systemIcons.shuffle} label={appCopy.controls.shuffle} selected={shuffle} disabled={!track} onClick={() => setShuffle((value) => !value)} />
               <IconButton icon={systemIcons.previous} label={appCopy.controls.previous} disabled={!track} onClick={() => changeTrack(-1)} />

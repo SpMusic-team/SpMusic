@@ -1,5 +1,7 @@
 import type { Track } from './playerTypes'
 
+const demoCoverImage = '/covers/album-cover.png'
+
 export const demoTracks: Track[] = [
   {
     id: 'morning-signal',
@@ -8,7 +10,7 @@ export const demoTracks: Track[] = [
     album: 'Desk Light Sessions',
     durationSeconds: 214,
     coverTone: 'lagoon',
-    coverImage: '/covers/album-cover.png',
+    coverImage: demoCoverImage,
     lyrics: [
       { id: 'm1', timeSeconds: 0, original: 'Morning light is moving through the room.', translation: '晨光正缓缓穿过房间' },
       { id: 'm2', timeSeconds: 28, original: 'Every quiet signal leads me home.', translation: '每个安静的信号都带我回家' },
@@ -26,6 +28,7 @@ export const demoTracks: Track[] = [
     album: 'Transit Notes',
     durationSeconds: 188,
     coverTone: 'violet',
+    coverImage: demoCoverImage,
     lyrics: [
       { id: 'g1', timeSeconds: 0, original: 'Waiting where the glass trains meet.', translation: '在玻璃列车交汇处等待' },
       { id: 'g2', timeSeconds: 26, original: 'Neon names drift under our feet.', translation: '霓虹名字从脚下流过' },
@@ -43,6 +46,7 @@ export const demoTracks: Track[] = [
     album: 'Small Room Weather',
     durationSeconds: 241,
     coverTone: 'rose',
+    coverImage: demoCoverImage,
     lyrics: [
       { id: 'q1', timeSeconds: 0, original: 'A quiet magnet pulls the rain.', translation: '安静的磁场牵引着雨' },
       { id: 'q2', timeSeconds: 34, original: 'Small room weather knows my name.', translation: '小房间的天气记得我的名字' },
@@ -60,6 +64,7 @@ export const demoTracks: Track[] = [
     album: 'Late Geometry',
     durationSeconds: 263,
     coverTone: 'amber',
+    coverImage: demoCoverImage,
     lyrics: [
       { id: 's1', timeSeconds: 0, original: 'Silver shadows cross the courtyard.', translation: '银色影子穿过庭院' },
       { id: 's2', timeSeconds: 38, original: 'Late geometry holds the stars.', translation: '迟来的几何托住星光' },
@@ -77,6 +82,7 @@ export const demoTracks: Track[] = [
     album: 'Soft Circuit',
     durationSeconds: 197,
     coverTone: 'blue',
+    coverImage: demoCoverImage,
     lyrics: [
       { id: 'a1', timeSeconds: 0, original: 'Afterimages circle in the dark.', translation: '残像在黑暗里回旋' },
       { id: 'a2', timeSeconds: 28, original: 'Soft circuits flicker into sparks.', translation: '柔软电路闪成火花' },

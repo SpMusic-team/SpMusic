@@ -2,11 +2,11 @@
 doc_id: "TASK-SP-008"
 title: "播放界面视觉与交互修正"
 doc_type: "task"
-status: "blocked"
+status: "ready"
 owner_agent: "Frontend Agent"
 version_scope: "v0.1"
 created: "2026-07-09"
-updated: "2026-07-09"
+updated: "2026-07-11"
 source_documents:
   - "docs/tasks/sp-003-player-shell-ui-spec.md"
   - "docs/tasks/sp-007-minimal-player-shell-implementation.md"

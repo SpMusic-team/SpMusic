@@ -2,11 +2,11 @@
 doc_id: "TASK-SP-003"
 title: "播放界面 UI 规格"
 doc_type: "task"
-status: "ready"
+status: "done"
 owner_agent: "UI/UX Agent"
 version_scope: "v0.1"
 created: "2026-07-09"
-updated: "2026-07-09"
+updated: "2026-07-11"
 source_documents:
   - "docs/requirements/v0-1-foundation.md"
   - "docs/sprint-plan.md"
@@ -50,3 +50,12 @@ UI/UX Agent
 ## 备注
 
 该任务可与 SP-006 并行；SP-007 基于前端基底实现最小播放界面，SP-008 应吸收本任务产出的视觉、文案和交互修正。
+
+## 验收记录
+
+- 验收人：PM Agent
+- 验收日期：2026-07-11
+- 验收结论：通过
+- 验收依据：`docs/ui/player-shell.md` 已存在，并包含播放界面 UI 规格、原型图引用、界面结构、视觉层级与布局、组件映射、前端演示数据建议、交互状态矩阵、空 / 加载 / 错误 / 禁用状态、可访问性要求、文案和验收标准。
+- 范围检查：规格覆盖应用身份、当前歌曲、播放控制区、状态展示区、播放 / 暂停、上一首 / 下一首、当前歌曲、空歌曲列表状态、桌面布局方向、基础视觉 token、用户可见文案和范围排除项；未要求实现真实音频播放、本地文件读取、媒体库、真实播放列表、真实歌词、封面抓取、插件或主题导入能力。
+- 后续状态：SP-003 与 SP-007 均已完成，SP-008 可进入 Ready。

@@ -54,12 +54,12 @@ source_documents:
 | --- | --- | --- | --- | --- | --- |
 | SP-001 | v0.1 版本需求分析与验收边界 | P0 | Requirements Agent | Done | `docs/requirements/总需求分析.md` |
 | SP-002 | 需求索引、路线图与发布边界 | P0 | PM Agent | Done | SP-001 |
-| SP-003 | 播放界面 UI 规格 | P1 | UI/UX Agent | Ready | SP-001 |
+| SP-003 | 播放界面 UI 规格 | P1 | UI/UX Agent | Done | SP-001 |
 | SP-004 | 总体架构蓝图与播放器状态结构 | P1 | Architecture Agent | Done | SP-001 |
 | SP-005 | 前端基础骨架与实现约束 | P1 | Frontend Agent | Done | SP-004 |
 | SP-006 | shadcn/ui 基础接入与前端样式基线 | P1 | Frontend Agent | Done | SP-005 |
 | SP-007 | 最小播放界面实现 | P1 | Frontend Agent | Done | SP-005, SP-006 |
-| SP-008 | 播放界面视觉与交互修正 | P1 | Frontend Agent | Blocked | SP-003, SP-007 |
+| SP-008 | 播放界面视觉与交互修正 | P1 | Frontend Agent | Ready | SP-003, SP-007 |
 | SP-009 | v0.2 虚构播放列表管理 UI 预研边界 | P2 | PM Agent | Ready | SP-001 |
 | SP-010 | README 当前能力与限制更新 | P1 | Documentation Agent | Blocked | SP-001, SP-002, SP-008 |
 | SP-011 | 验证清单与测试报告 | P1 | Test Agent | Blocked | SP-008 |

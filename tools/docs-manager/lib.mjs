@@ -27,6 +27,19 @@ const EXCLUDED_DIRECTORIES = new Set([
 
 const EDITABLE_ROOT_FILES = new Set(["README.md", "GIT_WORKFLOW.md"])
 const INTERNAL_PREFIXES = [".agents/", ".codex/", "agent-prompt/"]
+const PM_MANAGED_INTERNAL_DOC_TYPES = new Set(["agent-prompt", "template"])
+const ASSET_CONTENT_TYPES = new Map([
+  [".apng", "image/apng"],
+  [".avif", "image/avif"],
+  [".bmp", "image/bmp"],
+  [".gif", "image/gif"],
+  [".ico", "image/x-icon"],
+  [".jpeg", "image/jpeg"],
+  [".jpg", "image/jpeg"],
+  [".png", "image/png"],
+  [".svg", "image/svg+xml"],
+  [".webp", "image/webp"],
+])
 
 export class DocsManagerError extends Error {
   constructor(status, code, message) {
@@ -62,7 +75,9 @@ export function isInternalPath(relativePath) {
 
 export function isEditablePath(relativePath) {
   const normalized = normalizeRepoPath(relativePath)
-  return normalized.startsWith("docs/") || EDITABLE_ROOT_FILES.has(normalized)
+  return normalized.startsWith("docs/")
+    || normalized.startsWith(".agents/prompt/")
+    || EDITABLE_ROOT_FILES.has(normalized)
 }
 
 export function resolveManagedPath(repositoryRoot, input, { write = false } = {}) {
@@ -77,6 +92,43 @@ export function resolveManagedPath(repositoryRoot, input, { write = false } = {}
     throw new DocsManagerError(403, "PATH_OUTSIDE_REPOSITORY", "不能访问仓库以外的路径")
   }
   return { absolutePath, relativePath }
+}
+
+function normalizeAssetSource(input) {
+  if (typeof input !== "string" || input.trim() === "") {
+    throw new DocsManagerError(400, "INVALID_ASSET_PATH", "图片路径不能为空")
+  }
+
+  const source = input.trim().replace(/^<|>$/g, "").split("#")[0].split("?")[0].replaceAll("\\", "/")
+  if (!source || source.startsWith("//") || source.includes("\0") || /^[a-z][a-z0-9+.-]*:/i.test(source) || /^[a-z]:/i.test(source)) {
+    throw new DocsManagerError(400, "INVALID_ASSET_PATH", "图片路径必须是仓库内的相对路径")
+  }
+  return source
+}
+
+export function resolveDocumentAssetPath(repositoryRoot, documentInput, sourceInput) {
+  const documentPath = normalizeRepoPath(documentInput)
+  const source = normalizeAssetSource(sourceInput)
+  const contentType = ASSET_CONTENT_TYPES.get(path.extname(source).toLowerCase())
+  if (!contentType) {
+    throw new DocsManagerError(400, "IMAGE_ASSET_ONLY", "文档预览只允许加载图片资源")
+  }
+
+  const relativePath = path.posix.normalize(
+    source.startsWith("/")
+      ? source.slice(1)
+      : path.posix.join(path.posix.dirname(documentPath), source),
+  )
+  if (relativePath === ".." || relativePath.startsWith("../") || relativePath.includes("/../")) {
+    throw new DocsManagerError(403, "ASSET_OUTSIDE_REPOSITORY", "不能访问仓库以外的图片")
+  }
+
+  const root = path.resolve(repositoryRoot)
+  const absolutePath = path.resolve(root, ...relativePath.split("/"))
+  if (absolutePath !== root && !absolutePath.startsWith(`${root}${path.sep}`)) {
+    throw new DocsManagerError(403, "ASSET_OUTSIDE_REPOSITORY", "不能访问仓库以外的图片")
+  }
+  return { absolutePath, relativePath, contentType }
 }
 
 export function contentVersion(content) {
@@ -262,8 +314,19 @@ function facetValues(documents, field) {
   return [...new Set(documents.map((document) => document.metadata[field]).filter((value) => typeof value === "string" && value))].sort()
 }
 
+function isPmManagedInternalDocument(document) {
+  return document.internal
+    && document.metadata.owner_agent === "PM Agent"
+    && PM_MANAGED_INTERNAL_DOC_TYPES.has(document.metadata.doc_type)
+}
+
+function isVisibleDocument(document, filters) {
+  if (filters.includeInternal || !document.internal) return true
+  return filters.owner === "PM Agent" && isPmManagedInternalDocument(document)
+}
+
 export function buildDocumentIndex(documents, filters = {}) {
-  const visibleDocuments = documents.filter((document) => filters.includeInternal || !document.internal)
+  const visibleDocuments = documents.filter((document) => isVisibleDocument(document, filters))
   const normalizedQuery = String(filters.query ?? "").trim().toLocaleLowerCase()
   const filtered = visibleDocuments.filter((document) => {
     const matchesQuery = !normalizedQuery || [

@@ -36,6 +36,14 @@ function mutation(method: string, body?: unknown): RequestInit {
   }
 }
 
+export function documentAssetUrl(documentPath: string, source?: string) {
+  const src = source?.trim()
+  if (!src || src.startsWith("//") || /^(?:[a-z][a-z0-9+.-]*:|#)/i.test(src)) return src ?? ""
+
+  const query = new URLSearchParams({ document: documentPath, src })
+  return `/api/assets?${query}`
+}
+
 export function listDocuments(filters: DocumentFilters) {
   const query = new URLSearchParams()
   if (filters.query) query.set("q", filters.query)

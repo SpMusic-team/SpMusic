@@ -12,6 +12,7 @@ import {
   DocsManagerError,
   loadAllDocuments,
   parseDocument,
+  resolveDocumentAssetPath,
   resolveManagedPath,
 } from "./lib.mjs"
 
@@ -101,6 +102,19 @@ app.get("/api/documents/content", async (request, response, next) => {
   }
 })
 
+app.get("/api/assets", async (request, response, next) => {
+  try {
+    const { absolutePath, contentType } = resolveDocumentAssetPath(repositoryRoot, request.query.document, request.query.src)
+    await stat(absolutePath)
+    response.setHeader("Content-Type", contentType)
+    response.setHeader("Cache-Control", "no-cache")
+    response.setHeader("X-Content-Type-Options", "nosniff")
+    response.sendFile(absolutePath)
+  } catch (error) {
+    next(error)
+  }
+})
+
 app.post("/api/documents", requireMutationHeader, async (request, response, next) => {
   try {
     validateContent(request.body.content)
@@ -137,6 +151,9 @@ app.patch("/api/documents/move", requireMutationHeader, async (request, response
   try {
     const source = resolveManagedPath(repositoryRoot, request.body.path, { write: true })
     const target = resolveManagedPath(repositoryRoot, request.body.newPath, { write: true })
+    if (!source.relativePath.startsWith("docs/")) {
+      throw new DocsManagerError(403, "MOVE_DOCS_ONLY", "只有 docs 目录中的文档可以移动或重命名")
+    }
     if (!target.relativePath.startsWith("docs/")) {
       throw new DocsManagerError(403, "MOVE_IN_DOCS_ONLY", "文档只能移动到 docs 目录中")
     }
@@ -160,6 +177,9 @@ app.patch("/api/documents/move", requireMutationHeader, async (request, response
 app.delete("/api/documents", requireMutationHeader, async (request, response, next) => {
   try {
     const { absolutePath, relativePath } = resolveManagedPath(repositoryRoot, request.query.path, { write: true })
+    if (!relativePath.startsWith("docs/")) {
+      throw new DocsManagerError(403, "DELETE_DOCS_ONLY", "只有 docs 目录中的文档可以删除")
+    }
     await verifyVersion(absolutePath, request.query.expectedVersion)
     await rm(absolutePath)
     cachedDocuments = null

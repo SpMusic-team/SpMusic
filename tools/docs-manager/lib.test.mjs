@@ -6,6 +6,7 @@ import {
   contentVersion,
   isEditablePath,
   normalizeRepoPath,
+  resolveDocumentAssetPath,
   validateMetadata,
 } from "./lib.mjs"
 
@@ -18,7 +19,8 @@ test("normalizeRepoPath normalizes separators and blocks traversal", () => {
 test("editable paths are limited to project documentation", () => {
   assert.equal(isEditablePath("docs/tasks/sp-001.md"), true)
   assert.equal(isEditablePath("README.md"), true)
-  assert.equal(isEditablePath(".agents/prompt/PM_Agent.md"), false)
+  assert.equal(isEditablePath(".agents/prompt/PM_Agent.md"), true)
+  assert.equal(isEditablePath(".agents/skills/shadcn/SKILL.md"), false)
 })
 
 test("metadata validation reports missing fields", () => {
@@ -50,4 +52,61 @@ test("document index applies query and metadata filters", () => {
   })
   assert.equal(index.documents.length, 1)
   assert.equal(index.documents[0].title, "Alpha")
+})
+
+test("PM owner filter includes PM-managed internal agent prompts", () => {
+  const base = {
+    path: "docs/tasks/sp-001.md",
+    title: "Task",
+    excerpt: "planning",
+    content: "planning",
+    modifiedAt: "2026-01-01T00:00:00.000Z",
+    metadata: { doc_type: "task", status: "ready", owner_agent: "PM Agent", version_scope: "v1" },
+    editable: true,
+    internal: false,
+    issues: [],
+  }
+  const pmPrompt = {
+    ...base,
+    path: ".agents/prompt/PM_Agent.md",
+    title: "PM Agent 系统提示词",
+    metadata: { doc_type: "agent-prompt", status: "active", owner_agent: "PM Agent", version_scope: "project" },
+    internal: true,
+  }
+  const frontendPrompt = {
+    ...pmPrompt,
+    path: ".agents/prompt/Frontend_Agent.md",
+    title: "Frontend Agent 系统提示词",
+    metadata: { ...pmPrompt.metadata, owner_agent: "Frontend Agent" },
+  }
+
+  const pmIndex = buildDocumentIndex([base, pmPrompt, frontendPrompt], { owner: "PM Agent" })
+  assert.deepEqual(pmIndex.documents.map((document) => document.path).sort(), [
+    ".agents/prompt/PM_Agent.md",
+    "docs/tasks/sp-001.md",
+  ])
+
+  const frontendIndex = buildDocumentIndex([base, pmPrompt, frontendPrompt], { owner: "Frontend Agent" })
+  assert.equal(frontendIndex.documents.length, 0)
+})
+
+test("document image assets resolve relative to the markdown document", () => {
+  const asset = resolveDocumentAssetPath(
+    process.cwd(),
+    "docs/ui/player-shell.md",
+    "assets/player-shell-prototype.png",
+  )
+  assert.equal(asset.relativePath, "docs/ui/assets/player-shell-prototype.png")
+  assert.equal(asset.contentType, "image/png")
+})
+
+test("document image assets reject unsupported and outside paths", () => {
+  assert.throws(
+    () => resolveDocumentAssetPath(process.cwd(), "docs/ui/player-shell.md", "assets/data.json"),
+    (error) => error.code === "IMAGE_ASSET_ONLY",
+  )
+  assert.throws(
+    () => resolveDocumentAssetPath(process.cwd(), "docs/ui/player-shell.md", "../../../secret.png"),
+    (error) => error.code === "ASSET_OUTSIDE_REPOSITORY",
+  )
 })

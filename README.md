@@ -96,7 +96,7 @@ npm run docs:start
 npm run docs:test
 ```
 
-工作台会扫描仓库中的 Markdown 文件，并监听磁盘变更。`docs/`、`README.md` 和 `GIT_WORKFLOW.md` 可编辑；Agent 提示词与内部配置文档可按需显示，但保持只读。所有写操作均限制在仓库内的项目文档路径，并使用内容版本检查避免覆盖外部编辑器中的新修改。
+工作台会扫描仓库中的 Markdown 文件，并监听磁盘变更。`docs/`、`README.md`、`GIT_WORKFLOW.md` 和 PM Agent 管理的 `.agents/prompt/*.md` / `.agents/prompt/templates/*.md` 可编辑；选择 `PM Agent` 时会自动显示 PM 管理的 Agent 提示词和模板。其他内部 Markdown 可按需显示，但默认不进入普通文档列表。新建、移动和重命名仍限制在 `docs/` 目录，保存使用内容版本检查避免覆盖外部编辑器中的新修改。
 
 ## v0.1 范围
 
@@ -149,7 +149,7 @@ v0.1 的目标是把模板项目收敛为可运行、可验证、边界清晰的
 
 ```text
 .
-├── agent-prompt/       # 项目协作 Agent 提示词
+├── .agents/prompt/     # 项目协作 Agent 注册表、提示词和模板
 ├── docs/               # 需求、路线图、计划、任务和架构文档
 ├── public/             # 前端静态资源
 ├── src/                # React 前端源码

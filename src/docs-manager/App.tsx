@@ -75,6 +75,7 @@ import { cn } from "@/lib/utils"
 import {
   createDocument,
   deleteDocument,
+  documentAssetUrl,
   getDocument,
   listDocuments,
   moveDocument,
@@ -557,7 +558,7 @@ export function App() {
                         <DropdownMenuItem onClick={() => void openDocument(activeDocument.path, true)}><FolderOpenIcon />在资源管理器中显示</DropdownMenuItem>
                         <DropdownMenuItem onClick={() => void navigator.clipboard.writeText(activeDocument.path).then(() => toast.success("路径已复制"))}><ClipboardIcon />复制仓库路径</DropdownMenuItem>
                       </DropdownMenuGroup>
-                      {activeDocument.editable && (
+                      {activeDocument.editable && activeDocument.path.startsWith("docs/") && (
                         <>
                           <DropdownMenuSeparator />
                           <DropdownMenuGroup>
@@ -579,7 +580,25 @@ export function App() {
                   </TabsList>
                   <TabsContent value="preview" className="mt-3 h-[calc(100%-2.75rem)] overflow-auto rounded-lg border bg-background p-6">
                     <article className="document-preview">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{previewSource}</ReactMarkdown>
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                          img(props) {
+                            const { node, src, alt, ...imageProps } = props
+                            void node
+                            return (
+                              <img
+                                {...imageProps}
+                                src={documentAssetUrl(activeDocument.path, src)}
+                                alt={alt ?? ""}
+                                loading="lazy"
+                              />
+                            )
+                          },
+                        }}
+                      >
+                        {previewSource}
+                      </ReactMarkdown>
                     </article>
                   </TabsContent>
                   <TabsContent value="source" className="mt-3 h-[calc(100%-2.75rem)]">

@@ -1,20 +1,24 @@
 .player-shell {
   --prototype-unit: min(0.0390625vw, 0.0694444svh);
+  --control-dock-bottom: calc(59 * var(--prototype-unit));
+  --control-dock-height: calc(180 * var(--prototype-unit));
+  --control-dock-gap: calc(24 * var(--prototype-unit));
   position: relative;
   isolation: isolate;
   min-height: 100svh;
   overflow: hidden;
+  background: var(--player-background-art);
   color: var(--player-ink);
 }
 
 .ambient-cover {
   position: absolute;
-  inset: -12.5%;
+  inset: 0;
   z-index: -2;
   background: var(--player-background-art);
-  filter: blur(calc(180 * var(--prototype-unit)));
-  transform: scale(1.18);
-  opacity: 0.82;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: cover;
 }
 
 .player-shell::after {
@@ -151,10 +155,10 @@
 .control-dock {
   position: fixed;
   left: 50%;
-  bottom: calc(59 * var(--prototype-unit));
+  bottom: var(--control-dock-bottom);
   z-index: 4;
   width: calc(2222 * var(--prototype-unit));
-  height: calc(180 * var(--prototype-unit));
+  height: var(--control-dock-height);
   padding: calc(23 * var(--prototype-unit)) 0;
   transform: translateX(-50%);
   overflow: hidden;
@@ -190,11 +194,11 @@
 .debug-queue-panel {
   position: absolute;
   right: calc(120 * var(--prototype-unit));
-  bottom: calc(95 * var(--prototype-unit));
+  bottom: calc(var(--control-dock-bottom) + var(--control-dock-height) + var(--control-dock-gap));
   z-index: 3;
   width: calc(520 * var(--prototype-unit));
   max-height: calc(320 * var(--prototype-unit));
-  overflow: hidden;
+  overflow: hidden auto;
   border-radius: calc(18 * var(--prototype-unit));
   background: rgba(247, 249, 255, .78);
   box-shadow: 0 calc(8 * var(--prototype-unit)) calc(24 * var(--prototype-unit)) rgba(16, 33, 48, .16);
@@ -202,6 +206,8 @@
 }
 
 .debug-queue-panel ol { margin: 0; padding: calc(12 * var(--prototype-unit)); display: flex; flex-direction: column; gap: calc(4 * var(--prototype-unit)); list-style: none; }
+.debug-queue-panel::-webkit-scrollbar { width: calc(6 * var(--prototype-unit)); }
+.debug-queue-panel::-webkit-scrollbar-thumb { border-radius: 999px; background: rgba(16, 74, 115, .24); }
 .debug-queue-panel li { min-width: 0; display: grid; grid-template-columns: calc(40 * var(--prototype-unit)) 1fr auto; gap: calc(10 * var(--prototype-unit)); align-items: center; padding: calc(8 * var(--prototype-unit)) calc(12 * var(--prototype-unit)); border-radius: calc(12 * var(--prototype-unit)); color: var(--player-muted); font-size: calc(18 * var(--prototype-unit)); line-height: calc(24 * var(--prototype-unit)); }
 .debug-queue-panel li[data-current="true"] { background: var(--player-blue-soft); color: var(--player-blue-ink); }
 .debug-queue-panel strong, .debug-queue-panel small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

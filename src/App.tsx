@@ -120,6 +120,7 @@ function App() {
   const [queueOpen, setQueueOpen] = useState(false)
   const lyricListRef = useRef<HTMLOListElement>(null)
   const lyricRefs = useRef(new Map<string, HTMLLIElement>())
+  const lyricScrollFrameRef = useRef<number | null>(null)
   const lastFrameTimeRef = useRef<number | null>(null)
   const endingTrackRef = useRef<string | null>(null)
   const track = useMemo(() => resolveTrack(state.tracks, state.currentTrackId), [state.currentTrackId, state.tracks])
@@ -194,17 +195,60 @@ function App() {
   }, [changeTrack, playing, track])
 
   useEffect(() => {
-    if (activeLyricId) {
-      const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-      const activeLine = lyricRefs.current.get(activeLyricId)
-      const lyricList = lyricListRef.current
+    if (lyricScrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(lyricScrollFrameRef.current)
+      lyricScrollFrameRef.current = null
+    }
 
-      if (!activeLine || !lyricList) return
+    if (!activeLyricId) return
 
-      lyricList.scrollTo({
-        top: activeLine.offsetTop - lyricList.clientHeight / 2 + activeLine.clientHeight / 2,
-        behavior: reduceMotion ? 'auto' : 'smooth',
-      })
+    const activeLine = lyricRefs.current.get(activeLyricId)
+    const lyricList = lyricListRef.current
+
+    if (!activeLine || !lyricList) return
+
+    const targetTop = Math.min(
+      Math.max(
+        activeLine.offsetTop - lyricList.clientHeight / 2 + activeLine.clientHeight / 2,
+        0,
+      ),
+      lyricList.scrollHeight - lyricList.clientHeight,
+    )
+    const startTop = lyricList.scrollTop
+    const distance = targetTop - startTop
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+
+    if (reduceMotion || Math.abs(distance) < 0.5) {
+      lyricList.scrollTop = targetTop
+      return
+    }
+
+    const durationMs = 820
+    const startTime = performance.now()
+    const easeInOutCubic = (progressValue: number) =>
+      progressValue < 0.5
+        ? 4 * progressValue ** 3
+        : 1 - (-2 * progressValue + 2) ** 3 / 2
+
+    const animateScroll = (now: number) => {
+      const elapsed = Math.min((now - startTime) / durationMs, 1)
+
+      lyricList.scrollTop = startTop + distance * easeInOutCubic(elapsed)
+
+      if (elapsed < 1) {
+        lyricScrollFrameRef.current = window.requestAnimationFrame(animateScroll)
+      } else {
+        lyricScrollFrameRef.current = null
+      }
+    }
+
+    lyricScrollFrameRef.current = window.requestAnimationFrame(animateScroll)
+
+    return () => {
+      if (lyricScrollFrameRef.current !== null) {
+        window.cancelAnimationFrame(lyricScrollFrameRef.current)
+        lyricScrollFrameRef.current = null
+      }
     }
   }, [activeLyricId])
 

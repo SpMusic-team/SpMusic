@@ -1,4 +1,4 @@
-import type { Track } from './playerTypes'
+import type { Track } from '@/features/player/model/playerTypes'
 
 const demoCoverImage = '/covers/album-cover.png'
 

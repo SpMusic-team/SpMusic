@@ -12,4 +12,6 @@ export const iconProviders = {
   fallback: fluentSystemIcons,
 } as const
 
+export type IconProviderId = keyof typeof iconProviders
+
 export const systemIcons = iconProviders.default

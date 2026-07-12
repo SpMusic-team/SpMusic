@@ -6,21 +6,40 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
+  --app-bg: #f7f8f4;
+  --app-surface: #ffffff;
+  --app-surface-muted: #eef3ec;
+  --app-text: #4f5661;
+  --app-text-muted: #707985;
+  --app-text-strong: #101317;
+  --app-border: #d9ded6;
+  --app-accent: #0f8b7f;
+  --app-accent-soft: #dff3ee;
+  --app-accent-contrast: #ffffff;
+  --app-radius-sm: 6px;
+  --app-radius-md: 8px;
+  --app-radius-lg: 12px;
+  --app-radius-pill: 999px;
+  --app-motion-fast: 160ms;
+  --app-motion-standard: 240ms;
+  --app-motion-slow: 820ms;
+  --app-motion-duration-scale: 1;
+  --app-motion-easing: cubic-bezier(.65, 0, .35, 1);
   --player-blue: #276389;
   --player-blue-soft: #cae6ff;
   --player-blue-ink: #276389;
   --player-ink: #17212b;
   --player-muted: #72777f;
-  --color-bg: #f7f8f4;
-  --color-surface: #ffffff;
-  --color-surface-muted: #eef3ec;
-  --color-text: #4f5661;
-  --color-text-muted: #707985;
-  --color-text-strong: #101317;
-  --color-border: #d9ded6;
-  --color-accent: #0f8b7f;
-  --color-accent-soft: #dff3ee;
-  --color-accent-contrast: #ffffff;
+  --color-bg: var(--app-bg);
+  --color-surface: var(--app-surface);
+  --color-surface-muted: var(--app-surface-muted);
+  --color-text: var(--app-text);
+  --color-text-muted: var(--app-text-muted);
+  --color-text-strong: var(--app-text-strong);
+  --color-border: var(--app-border);
+  --color-accent: var(--app-accent);
+  --color-accent-soft: var(--app-accent-soft);
+  --color-accent-contrast: var(--app-accent-contrast);
   --color-focus-ring: rgba(15, 139, 127, 0.28);
   --color-progress-bg: #d9e2da;
   --color-state-paused: #a15c10;
@@ -36,10 +55,10 @@
   --space-6: 32px;
   --space-8: 48px;
 
-  --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  --radius-pill: 999px;
+  --radius-sm: var(--app-radius-sm);
+  --radius-md: var(--app-radius-md);
+  --radius-lg: var(--app-radius-lg);
+  --radius-pill: var(--app-radius-pill);
 
   --shadow-soft: 0 18px 48px rgba(31, 41, 55, 0.08);
   --font-sans:
@@ -85,6 +104,27 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
+}
+
+.spmusic-app {
+  min-width: 320px;
+  min-height: 100svh;
+  color: var(--app-text);
+  background: var(--app-bg);
+  isolation: isolate;
+}
+
+.spmusic-app[data-motion="off"],
+.spmusic-app[data-motion="off"] * {
+  scroll-behavior: auto !important;
+}
+
+.spmusic-app[data-motion="off"] *,
+.spmusic-app[data-motion="off"] *::before,
+.spmusic-app[data-motion="off"] *::after {
+  animation-duration: 1ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 1ms !important;
 }
 
 @media (prefers-color-scheme: dark) {

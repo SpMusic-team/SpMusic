@@ -1,5 +1,5 @@
-import { demoTracks } from './demoTracks'
-import { demoSpectrumBars } from './demoSpectrum'
+import { demoSpectrumBars } from '@/features/player/data/demoSpectrum'
+import { demoTracks } from '@/features/player/data/demoTracks'
 import type { PlayerState } from './playerTypes'
 
 export const initialPlayerState: PlayerState = {

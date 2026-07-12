@@ -1,4 +1,4 @@
-import type { SpectrumBar } from './playerTypes'
+import type { SpectrumBar } from '@/features/player/model/playerTypes'
 
 export const demoSpectrumBars: SpectrumBar[] = [
   { id: 'low-1', level: 0.28 },

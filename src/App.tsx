@@ -115,13 +115,11 @@ function App() {
   const [dislikedId, setDislikedId] = useState<string | null>(null)
   const [shuffleMode, setShuffleMode] = useState<ShuffleMode>('none')
   const [repeatMode, setRepeatMode] = useState<RepeatMode>('list-loop')
-  const [lyricTransition, setLyricTransition] = useState<{ from: string | null; to: string | null }>({ from: null, to: null })
   const [showTranslations, setShowTranslations] = useState(false)
   const [muted, setMuted] = useState(false)
   const [queueOpen, setQueueOpen] = useState(false)
   const lyricListRef = useRef<HTMLOListElement>(null)
   const lyricRefs = useRef(new Map<string, HTMLLIElement>())
-  const activeLyricIdRef = useRef<string | null>(null)
   const lastFrameTimeRef = useRef<number | null>(null)
   const endingTrackRef = useRef<string | null>(null)
   const track = useMemo(() => resolveTrack(state.tracks, state.currentTrackId), [state.currentTrackId, state.tracks])
@@ -129,7 +127,8 @@ function App() {
   const duration = track?.durationSeconds ?? 0
   const progress = Math.min(Math.max(state.progressSeconds, 0), duration)
   const activeLyric = track?.lyrics.reduce((active, line) => line.timeSeconds <= progress ? line : active, track.lyrics[0])
-  const activeLyricIndex = track?.lyrics.findIndex((line) => line.id === activeLyric?.id) ?? -1
+  const activeLyricId = activeLyric?.id
+  const activeLyricIndex = track?.lyrics.findIndex((line) => line.id === activeLyricId) ?? -1
   const progressStyle: ProgressStyle = { '--progress-percent': `${duration ? progress / duration * 100 : 0}%` }
   const albumArt = track?.coverImage ? `url("${track.coverImage}") center / cover no-repeat` : undefined
   const playerBackgroundStyle: PlayerBackgroundStyle | undefined = albumArt ? { '--player-background-art': albumArt } : undefined
@@ -195,9 +194,9 @@ function App() {
   }, [changeTrack, playing, track])
 
   useEffect(() => {
-    if (activeLyric) {
+    if (activeLyricId) {
       const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-      const activeLine = lyricRefs.current.get(activeLyric.id)
+      const activeLine = lyricRefs.current.get(activeLyricId)
       const lyricList = lyricListRef.current
 
       if (!activeLine || !lyricList) return
@@ -207,23 +206,7 @@ function App() {
         behavior: reduceMotion ? 'auto' : 'smooth',
       })
     }
-  }, [activeLyric])
-
-  useEffect(() => {
-    const nextActiveLyricId = activeLyric?.id ?? null
-    const previousActiveLyricId = activeLyricIdRef.current
-
-    if (previousActiveLyricId !== nextActiveLyricId) {
-      activeLyricIdRef.current = nextActiveLyricId
-      setLyricTransition({ from: previousActiveLyricId, to: nextActiveLyricId })
-
-      const timer = window.setTimeout(() => {
-        setLyricTransition((current) => current.to === nextActiveLyricId ? { from: null, to: null } : current)
-      }, 560)
-
-      return () => window.clearTimeout(timer)
-    }
-  }, [activeLyric?.id])
+  }, [activeLyricId])
 
   function setProgress(event: ChangeEvent<HTMLInputElement>) {
     const nextProgress = Number(event.currentTarget.value)
@@ -287,7 +270,7 @@ function App() {
 
             <section className="lyrics-panel" aria-labelledby="lyrics-title">
               <h2 id="lyrics-title" className="sr-only">{appCopy.lyrics.title}</h2>
-              {track.lyrics.length ? <ol ref={lyricListRef}>{track.lyrics.map((line, index) => <li key={line.id} ref={(node) => { if (node) lyricRefs.current.set(line.id, node) }} data-active={line.id === activeLyric?.id} data-entering={line.id === lyricTransition.to} data-leaving={line.id === lyricTransition.from} data-position={index < activeLyricIndex ? 'past' : index === activeLyricIndex ? 'active' : 'future'}><span>{line.original}</span>{showTranslations ? <span className="translation-line" lang="zh-CN">{line.translation}</span> : null}</li>)}</ol> : <p>{appCopy.lyrics.empty}</p>}
+              {track.lyrics.length ? <ol ref={lyricListRef}>{track.lyrics.map((line, index) => <li key={line.id} ref={(node) => { if (node) lyricRefs.current.set(line.id, node) }} data-active={line.id === activeLyricId} data-position={index < activeLyricIndex ? 'past' : index === activeLyricIndex ? 'active' : 'future'}><span>{line.original}</span>{showTranslations ? <span className="translation-line" lang="zh-CN">{line.translation}</span> : null}</li>)}</ol> : <p>{appCopy.lyrics.empty}</p>}
             </section>
 
             {queueOpen ? (

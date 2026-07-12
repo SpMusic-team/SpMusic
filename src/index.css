@@ -6,9 +6,9 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
-  --player-blue: #81afde;
-  --player-blue-soft: #cfe5ff;
-  --player-blue-ink: #104a73;
+  --player-blue: #276389;
+  --player-blue-soft: #cae6ff;
+  --player-blue-ink: #276389;
   --player-ink: #17212b;
   --player-muted: #72777f;
   --color-bg: #f7f8f4;

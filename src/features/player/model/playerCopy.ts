@@ -43,6 +43,7 @@ export const appCopy = {
     fullscreen: '全屏',
     minimize: '最小化',
     maximize: '最大化',
+    restore: '还原',
     close: '关闭',
   },
   lyrics: { title: '演示歌词', empty: '暂无演示歌词' },

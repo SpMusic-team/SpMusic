@@ -29,6 +29,10 @@ const fill = { fill: 'currentColor' }
 
 const MinimizeIcon = pathIcon([{ ...stroke, d: 'M13 24h22' }])
 const SquareIcon = pathIcon([{ ...stroke, d: 'M15 15h18v18H15z' }])
+const RestoreIcon = pathIcon([
+  { ...stroke, d: 'M13 19h16v16H13z' },
+  { ...stroke, d: 'M19 13h16v16' },
+])
 const FullscreenIcon = pathIcon([
   { ...stroke, d: 'M17 13h-4v4M13 13l9 9M31 35h4v-4M35 35l-9-9M31 13h4v4M35 13l-9 9M17 35h-4v-4M13 35l9-9' },
 ])
@@ -99,6 +103,7 @@ export const iosSystemIcons: SystemIconProvider = {
   fullscreen: FullscreenIcon,
   minimize: MinimizeIcon,
   maximize: SquareIcon,
+  restore: RestoreIcon,
   close: libraryIcon(XMark as ComponentType<AnyIconProps>),
   play: libraryIcon(Play as ComponentType<AnyIconProps>, { filled: true }),
   pause: PauseIcon,

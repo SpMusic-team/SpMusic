@@ -7,6 +7,7 @@ export type SystemIconProvider = {
   fullscreen: SystemIcon
   minimize: SystemIcon
   maximize: SystemIcon
+  restore: SystemIcon
   close: SystemIcon
   play: SystemIcon
   pause: SystemIcon

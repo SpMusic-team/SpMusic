@@ -42,6 +42,7 @@ export const defaultSystemIcons: SystemIconProvider = {
   fullscreen: FigmaFullscreenIcon,
   minimize: FigmaSubtractIcon,
   maximize: FigmaMaximizeIcon,
+  restore: fluentSystemIcons.restore,
   close: FigmaDismissIcon,
   pause: FigmaPauseIcon,
   previous: FigmaPreviousIcon,

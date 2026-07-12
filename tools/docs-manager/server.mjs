@@ -78,7 +78,7 @@ app.get("/api/health", (_request, response) => {
 
 app.get("/api/documents", async (request, response, next) => {
   try {
-    const index = buildDocumentIndex(await documents(), {
+    const index = buildDocumentIndex(await refreshDocuments(), {
       query: request.query.q,
       docType: request.query.docType,
       status: request.query.status,

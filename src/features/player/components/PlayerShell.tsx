@@ -18,12 +18,12 @@ import { resolveTrack } from '@/features/player/model/trackUtils'
 type ProgressStyle = CSSProperties & { '--progress-percent': string }
 type PlayerBackgroundStyle = CSSProperties & { '--player-background-art'?: string }
 type CoverStyle = CSSProperties & { '--cover-art'?: string }
+type TrackFeedback = 'liked' | 'disliked'
 
 export function PlayerShell() {
   const systemIcons = useSystemIcons()
   const [state, setState] = useState<PlayerState>(initialPlayerState)
-  const [likedId, setLikedId] = useState<string | null>(null)
-  const [dislikedId, setDislikedId] = useState<string | null>(null)
+  const [feedbackByTrackId, setFeedbackByTrackId] = useState<Record<string, TrackFeedback>>({})
   const [shuffleMode, setShuffleMode] = useState<ShuffleMode>('none')
   const [repeatMode, setRepeatMode] = useState<RepeatMode>('list-loop')
   const [showTranslations, setShowTranslations] = useState(false)
@@ -127,8 +127,19 @@ export function PlayerShell() {
     setRepeatMode((value) => nextRepeatMode[value])
   }
 
-  const LikeIcon = likedId === track?.id ? systemIcons.likeSelected : systemIcons.like
-  const DislikeIcon = dislikedId === track?.id ? systemIcons.dislikeSelected : systemIcons.dislike
+  function toggleTrackFeedback(trackId: string, feedback: TrackFeedback) {
+    setFeedbackByTrackId((previous) => {
+      if (previous[trackId] !== feedback) return { ...previous, [trackId]: feedback }
+
+      const next = { ...previous }
+      delete next[trackId]
+      return next
+    })
+  }
+
+  const currentFeedback = track ? feedbackByTrackId[track.id] : undefined
+  const LikeIcon = currentFeedback === 'liked' ? systemIcons.likeSelected : systemIcons.like
+  const DislikeIcon = currentFeedback === 'disliked' ? systemIcons.dislikeSelected : systemIcons.dislike
   const ShuffleIcon = shuffleMode === 'shuffle-all' ? systemIcons.shuffleOff : shuffleMode === 'shuffle-category-order' ? systemIcons.shuffleCategoryOrder : shuffleMode === 'shuffle-category-random' ? systemIcons.shuffleCategoryRandom : systemIcons.shuffle
   const shuffleLabel = shuffleMode === 'shuffle-all' ? appCopy.controls.shuffleOff : shuffleMode === 'shuffle-category-order' ? appCopy.controls.shuffleCategoryOrder : shuffleMode === 'shuffle-category-random' ? appCopy.controls.shuffleCategoryRandom : appCopy.controls.shuffle
   const RepeatIcon = repeatMode === 'repeat-one' ? systemIcons.repeatOne : repeatMode === 'sequential' ? systemIcons.sequential : repeatMode === 'all-categories-until-stop' ? systemIcons.playAllCategories : systemIcons.repeat
@@ -150,10 +161,10 @@ export function PlayerShell() {
               coverStyle={coverStyle}
               likeIcon={LikeIcon}
               dislikeIcon={DislikeIcon}
-              liked={likedId === track.id}
-              disliked={dislikedId === track.id}
-              onLike={() => { setLikedId((id) => id === track.id ? null : track.id); setDislikedId(null) }}
-              onDislike={() => { setDislikedId((id) => id === track.id ? null : track.id); setLikedId(null) }}
+              liked={currentFeedback === 'liked'}
+              disliked={currentFeedback === 'disliked'}
+              onLike={() => toggleTrackFeedback(track.id, 'liked')}
+              onDislike={() => toggleTrackFeedback(track.id, 'disliked')}
             />
 
             <LyricsPanel

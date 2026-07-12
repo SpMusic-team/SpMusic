@@ -19,9 +19,12 @@ export type SystemIconProvider = {
   more: SystemIcon
   shuffle: SystemIcon
   shuffleOff: SystemIcon
+  shuffleCategoryOrder: SystemIcon
+  shuffleCategoryRandom: SystemIcon
   repeat: SystemIcon
   repeatOne: SystemIcon
   sequential: SystemIcon
+  playAllCategories: SystemIcon
   captions: SystemIcon
   captionsSelected: SystemIcon
   volume: SystemIcon

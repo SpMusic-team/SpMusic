@@ -5,6 +5,7 @@ export type Track = {
   title: string
   artist: string
   album: string
+  category?: string
   durationSeconds: number
   coverTone: string
   coverImage?: string

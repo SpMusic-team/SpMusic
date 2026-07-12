@@ -73,6 +73,10 @@ const CaptionsIcon = pathIcon([
   { ...stroke, d: 'M10 14c0-2.2 1.8-4 4-4h20c2.2 0 4 1.8 4 4v20c0 2.2-1.8 4-4 4H14c-2.2 0-4-1.8-4-4V14Z' },
   { ...stroke, strokeWidth: 2.4, d: 'M22 20.5c-1-1-2.3-1.5-3.8-1.5-3 0-5.2 2.2-5.2 5s2.2 5 5.2 5c1.5 0 2.8-.5 3.8-1.5M35 20.5c-1-1-2.3-1.5-3.8-1.5-3 0-5.2 2.2-5.2 5s2.2 5 5.2 5c1.5 0 2.8-.5 3.8-1.5' },
 ])
+const CaptionsFilledIcon = pathIcon([
+  { ...fill, d: 'M14 10h20c2.2 0 4 1.8 4 4v20c0 2.2-1.8 4-4 4H14c-2.2 0-4-1.8-4-4V14c0-2.2 1.8-4 4-4Z' },
+  { d: 'M22 20.5c-1-1-2.3-1.5-3.8-1.5-3 0-5.2 2.2-5.2 5s2.2 5 5.2 5c1.5 0 2.8-.5 3.8-1.5M35 20.5c-1-1-2.3-1.5-3.8-1.5-3 0-5.2 2.2-5.2 5s2.2 5 5.2 5c1.5 0 2.8-.5 3.8-1.5', stroke: 'Canvas', strokeWidth: 2.4, strokeLinecap: 'round', strokeLinejoin: 'round' },
+])
 const AudioWaveIcon = pathIcon([
   { ...stroke, d: 'M24 8c8.84 0 16 7.16 16 16s-7.16 16-16 16S8 32.84 8 24 15.16 8 24 8ZM18 21v6M22 17v14M26 20v8M30 15v18' },
 ])
@@ -101,6 +105,7 @@ export const iosSystemIcons: SystemIconProvider = {
   repeatOne: RepeatOneIcon,
   sequential: SequentialIcon,
   captions: CaptionsIcon,
+  captionsSelected: CaptionsFilledIcon,
   volume: libraryIcon(Speaker as ComponentType<AnyIconProps>, { pitch: 'normal' }),
   audioWave: AudioWaveIcon,
   queue: libraryIcon(Checklist as ComponentType<AnyIconProps>),

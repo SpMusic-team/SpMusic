@@ -14,7 +14,6 @@ type ProgressStyle = CSSProperties & { '--progress-percent': string }
 type PlayerBackgroundStyle = CSSProperties & { '--player-background-art'?: string }
 type CoverStyle = CSSProperties & { '--cover-art'?: string }
 
-const tickMs = 1000
 const nextRepeatMode: Record<RepeatMode, RepeatMode> = {
   'repeat-all': 'repeat-one',
   'repeat-one': 'sequential',
@@ -47,10 +46,13 @@ function App() {
   const [dislikedId, setDislikedId] = useState<string | null>(null)
   const [shuffle, setShuffle] = useState(false)
   const [repeatMode, setRepeatMode] = useState<RepeatMode>('repeat-all')
-  const [captions, setCaptions] = useState(true)
+  const [showTranslations, setShowTranslations] = useState(false)
   const [muted, setMuted] = useState(false)
+  const [queueOpen, setQueueOpen] = useState(false)
   const lyricListRef = useRef<HTMLOListElement>(null)
   const lyricRefs = useRef(new Map<string, HTMLLIElement>())
+  const lastFrameTimeRef = useRef<number | null>(null)
+  const endingTrackRef = useRef<string | null>(null)
   const track = useMemo(() => resolveTrack(state.tracks, state.currentTrackId), [state.currentTrackId, state.tracks])
   const playing = state.playbackStatus === 'playing'
   const duration = track?.durationSeconds ?? 0
@@ -62,6 +64,7 @@ function App() {
   const coverStyle: CoverStyle | undefined = albumArt ? { '--cover-art': albumArt } : undefined
 
   const changeTrack = useCallback((direction: Direction, automatic = false) => {
+    endingTrackRef.current = null
     setState((previous) => {
       if (!previous.tracks.length) return { ...previous, playbackStatus: 'paused', progressSeconds: 0 }
       const currentIndex = Math.max(0, previous.tracks.findIndex((item) => item.id === previous.currentTrackId))
@@ -74,22 +77,50 @@ function App() {
 
       let nextIndex = (currentIndex + direction + previous.tracks.length) % previous.tracks.length
       if (direction === 1 && shuffle && previous.tracks.length > 1) nextIndex = (currentIndex + 1 + Math.floor(Math.random() * (previous.tracks.length - 1))) % previous.tracks.length
-      return { ...previous, currentTrackId: previous.tracks[nextIndex].id, playbackStatus: automatic ? 'playing' : 'paused', progressSeconds: 0 }
+      return { ...previous, currentTrackId: previous.tracks[nextIndex].id, playbackStatus: automatic ? 'playing' : previous.playbackStatus, progressSeconds: 0 }
     })
   }, [repeatMode, shuffle])
 
   useEffect(() => {
     if (!playing || !track) return
-    const timer = window.setInterval(() => setState((previous) => {
-      const current = resolveTrack(previous.tracks, previous.currentTrackId)
-      if (!current) return { ...previous, playbackStatus: 'paused', progressSeconds: 0 }
-      if (previous.progressSeconds + 1 >= current.durationSeconds) {
-        window.setTimeout(() => changeTrack(1, true), 0)
-        return previous
-      }
-      return { ...previous, progressSeconds: previous.progressSeconds + 1 }
-    }), tickMs)
-    return () => window.clearInterval(timer)
+
+    let frameId = 0
+
+    function step(timestamp: number) {
+      const lastFrameTime = lastFrameTimeRef.current ?? timestamp
+      const elapsedSeconds = (timestamp - lastFrameTime) / 1000
+
+      lastFrameTimeRef.current = timestamp
+
+      setState((previous) => {
+        const current = resolveTrack(previous.tracks, previous.currentTrackId)
+        if (!current) return { ...previous, playbackStatus: 'paused', progressSeconds: 0 }
+        const nextProgress = previous.progressSeconds + elapsedSeconds
+
+        if (nextProgress >= current.durationSeconds) {
+          if (endingTrackRef.current !== current.id) {
+            endingTrackRef.current = current.id
+            window.setTimeout(() => {
+              endingTrackRef.current = null
+              changeTrack(1, true)
+            }, 0)
+          }
+
+          return { ...previous, progressSeconds: current.durationSeconds }
+        }
+
+        return { ...previous, progressSeconds: nextProgress }
+      })
+
+      frameId = window.requestAnimationFrame(step)
+    }
+
+    frameId = window.requestAnimationFrame(step)
+
+    return () => {
+      window.cancelAnimationFrame(frameId)
+      lastFrameTimeRef.current = null
+    }
   }, [changeTrack, playing, track])
 
   useEffect(() => {
@@ -110,6 +141,7 @@ function App() {
   function setProgress(event: ChangeEvent<HTMLInputElement>) {
     const nextProgress = Number(event.currentTarget.value)
 
+    endingTrackRef.current = null
     setState((previous) => ({ ...previous, progressSeconds: nextProgress }))
   }
 
@@ -119,6 +151,7 @@ function App() {
   const shuffleLabel = shuffle ? appCopy.controls.shuffleOff : appCopy.controls.shuffle
   const RepeatIcon = repeatMode === 'repeat-one' ? systemIcons.repeatOne : repeatMode === 'sequential' ? systemIcons.sequential : systemIcons.repeat
   const repeatLabel = repeatMode === 'repeat-one' ? appCopy.controls.repeatOne : repeatMode === 'sequential' ? appCopy.controls.sequential : appCopy.controls.repeat
+  const CaptionsIcon = showTranslations ? systemIcons.captionsSelected : systemIcons.captions
 
   return (
     <TooltipProvider>
@@ -157,13 +190,27 @@ function App() {
 
             <section className="lyrics-panel" aria-labelledby="lyrics-title">
               <h2 id="lyrics-title" className="sr-only">{appCopy.lyrics.title}</h2>
-              {track.lyrics.length ? <ol ref={lyricListRef}>{track.lyrics.map((line) => <li key={line.id} ref={(node) => { if (node) lyricRefs.current.set(line.id, node) }} data-active={line.id === activeLyric?.id}><span>{line.original}</span><span lang="zh-CN">{line.translation}</span></li>)}</ol> : <p>{appCopy.lyrics.empty}</p>}
+              {track.lyrics.length ? <ol ref={lyricListRef}>{track.lyrics.map((line) => <li key={line.id} ref={(node) => { if (node) lyricRefs.current.set(line.id, node) }} data-active={line.id === activeLyric?.id}><span>{line.original}</span>{showTranslations ? <span className="translation-line" lang="zh-CN">{line.translation}</span> : null}</li>)}</ol> : <p>{appCopy.lyrics.empty}</p>}
             </section>
+
+            {queueOpen ? (
+              <section className="debug-queue-panel" aria-label={appCopy.queue.title}>
+                <ol>
+                  {state.tracks.map((item, index) => (
+                    <li key={item.id} data-current={item.id === track.id}>
+                      <span>{index + 1}</span>
+                      <strong>{item.title}</strong>
+                      <small>{item.artist}</small>
+                    </li>
+                  ))}
+                </ol>
+              </section>
+            ) : null}
           </section>
         ) : <section className="empty-state"><systemIcons.queue /><h2>{appCopy.queue.emptyTitle}</h2><p>{appCopy.queue.emptyDescription}</p></section>}
 
         <footer className="control-dock" style={progressStyle}>
-          <div className="progress-row"><time>{formatDuration(progress)}</time><input aria-label={appCopy.progress.label} disabled={!track || duration <= 0} max={duration} min="0" onChange={setProgress} type="range" value={progress} /><time>{formatDuration(duration)}</time></div>
+          <div className="progress-row"><time>{formatDuration(progress)}</time><input aria-label={appCopy.progress.label} disabled={!track || duration <= 0} max={duration} min="0" onChange={setProgress} step="0.01" type="range" value={progress} /><time>{formatDuration(duration)}</time></div>
           <div className="control-row">
             <div className="control-side"><IconButton icon={systemIcons.audioWave} label={appCopy.spectrum.title} disabled={!track} /></div>
             <div className="transport">
@@ -174,9 +221,9 @@ function App() {
               <IconButton icon={RepeatIcon} label={repeatLabel} selected={repeatMode !== 'repeat-all'} disabled={!track} onClick={() => setRepeatMode((value) => nextRepeatMode[value])} />
             </div>
             <div className="control-side control-side-end">
-              <IconButton icon={systemIcons.captions} label={appCopy.controls.captions} selected={captions} onClick={() => setCaptions((value) => !value)} />
+              <IconButton icon={CaptionsIcon} label={appCopy.controls.captions} selected={showTranslations} onClick={() => setShowTranslations((value) => !value)} />
               <IconButton icon={systemIcons.volume} label={appCopy.controls.volume} selected={muted} onClick={() => setMuted((value) => !value)} />
-              <IconButton icon={systemIcons.queue} label={appCopy.controls.queue} />
+              <IconButton icon={systemIcons.queue} label={appCopy.controls.queue} selected={queueOpen} onClick={() => setQueueOpen((value) => !value)} />
             </div>
           </div>
         </footer>

@@ -23,6 +23,7 @@ export type SystemIconProvider = {
   repeatOne: SystemIcon
   sequential: SystemIcon
   captions: SystemIcon
+  captionsSelected: SystemIcon
   volume: SystemIcon
   audioWave: SystemIcon
   queue: SystemIcon

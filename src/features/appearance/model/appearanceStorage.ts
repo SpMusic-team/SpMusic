@@ -1,20 +1,22 @@
 import { builtinAppearanceIds } from './builtinAppearances'
 import { createAppearanceThemeDocument, deserializeAppearanceTheme } from './appearanceThemeCodec'
 import { defaultAppearance } from './defaultAppearance'
-import type { AppearancePreset } from './appearanceTypes'
+import type { AppearancePreset, ColorSchemePreference } from './appearanceTypes'
 
 export const APPEARANCE_STORAGE_KEY = 'spmusic.appearance.v2'
-const STORAGE_SCHEMA_VERSION = 1
+const STORAGE_SCHEMA_VERSION = 2
+const colorSchemePreferences: ColorSchemePreference[] = ['system', 'light', 'dark']
 
 export type AppearanceStorageState = {
   currentThemeId: string
+  colorSchemePreference: ColorSchemePreference
   userThemes: AppearancePreset[]
 }
 
 export type AppearanceStorageLoadResult = AppearanceStorageState & { warning?: string }
 
 export function defaultAppearanceStorage(): AppearanceStorageState {
-  return { currentThemeId: defaultAppearance.id, userThemes: [] }
+  return { currentThemeId: defaultAppearance.id, colorSchemePreference: 'system', userThemes: [] }
 }
 
 export function parseAppearanceStorage(source: string): AppearanceStorageLoadResult {
@@ -30,7 +32,7 @@ export function parseAppearanceStorage(source: string): AppearanceStorageLoadRes
   }
 
   const record = parsed as Record<string, unknown>
-  if (record.schemaVersion !== STORAGE_SCHEMA_VERSION || !Array.isArray(record.userThemes)) {
+  if ((record.schemaVersion !== 1 && record.schemaVersion !== STORAGE_SCHEMA_VERSION) || !Array.isArray(record.userThemes)) {
     return { ...defaultAppearanceStorage(), warning: '主题存储版本不受支持，已恢复默认主题' }
   }
 
@@ -43,7 +45,13 @@ export function parseAppearanceStorage(source: string): AppearanceStorageLoadRes
     ? requestedId
     : defaultAppearance.id
 
-  return { currentThemeId, userThemes }
+  const colorSchemePreference = record.schemaVersion === STORAGE_SCHEMA_VERSION
+    && typeof record.colorSchemePreference === 'string'
+    && colorSchemePreferences.includes(record.colorSchemePreference as ColorSchemePreference)
+    ? record.colorSchemePreference as ColorSchemePreference
+    : 'system'
+
+  return { currentThemeId, colorSchemePreference, userThemes }
 }
 
 export function loadAppearanceStorage(): AppearanceStorageLoadResult {
@@ -61,6 +69,7 @@ export function saveAppearanceStorage(state: AppearanceStorageState) {
   const payload = {
     schemaVersion: STORAGE_SCHEMA_VERSION,
     currentThemeId: state.currentThemeId,
+    colorSchemePreference: state.colorSchemePreference,
     userThemes: state.userThemes.map(createAppearanceThemeDocument),
   }
   window.localStorage.setItem(APPEARANCE_STORAGE_KEY, JSON.stringify(payload))

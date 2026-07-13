@@ -119,17 +119,20 @@ src/features/appearance/
 Appearance 模块负责应用级外观能力，包括：
 
 - 主题 token
+- 跟随系统、固定浅色和固定深色三种配色偏好
+- 每个主题成对的浅色与深色 token
 - 动效等级
 - 图标 provider
 - 版本化主题导入、导出和迁移
 - 用户主题持久化与运行时预览
 - 普通、高级和实验三级主题能力
 
-当前 `AppearanceProvider` 负责把选中的 `AppearancePreset` 交给 runtime。runtime 会把 CSS variables 和 `data-*` 属性同步到应用根、`documentElement` 和 `body`，保证播放器以及 Base UI Portal 弹窗使用同一套语义 token；高级主题还会复用单一 `<style>` 节点注入 CSS，并在切换或卸载时清理。
+当前 `AppearanceProvider` 负责把选中的 `AppearancePreset` 和解析后的配色模式交给 runtime。Provider 监听 `prefers-color-scheme: dark`；仅当偏好为 `system` 时，系统外观变化会实时改变 `resolvedColorScheme`。runtime 会把当前色板的 CSS variables、`data-color-scheme`、兼容 `.dark` 类和 CSS `color-scheme` 同步到应用根、`documentElement` 和 `body`，保证播放器以及挂在 `body` 下的 Base UI Portal 弹窗使用同一套语义 token；高级主题还会复用单一 `<style>` 节点注入 CSS，并在切换或卸载时清理。
 
 ```tsx
 <div
   className="spmusic-app"
+  data-color-scheme={resolvedColorScheme}
   data-theme={appearance.id}
   data-theme-tier={appearance.metadata.tier}
   data-motion={appearance.motion.level}
@@ -146,7 +149,7 @@ Appearance 模块负责应用级外观能力，包括：
 
 核心类型是 `AppearancePreset`，当前包含：
 
-- `colors`：应用颜色和播放器关键颜色
+- `colorSchemes.light/dark`：成对的应用颜色和播放器关键颜色
 - `radii`：圆角 token
 - `motion`：动效等级、时长倍率、缓动曲线
 - `typography`：字体和字号倍率
@@ -158,7 +161,9 @@ Appearance 模块负责应用级外观能力，包括：
 
 默认配置位于 `defaultAppearance.ts`。默认主题不是一套脱离主题系统的硬编码特例，而是完整、可序列化、可校验的标准级 `AppearancePreset`。内置主题和用户主题都经过同一套类型、runtime 和 CSS token 管线。
 
-导入文件必须先经过 `appearanceThemeCodec.ts` 的版本检查、迁移和白名单校验，再转换成 `AppearancePreset`。业务组件不得直接读取任意导入对象，也不得自行解析主题 JSON。
+配色偏好不是主题文件的一部分，而是用户运行时设置：`colorSchemePreference` 保存 `system | light | dark`，`resolvedColorScheme` 保存当前实际生效的 `light | dark`。偏好与主题 id 一起写入版本化 localStorage，并通过 `storage` 事件跨窗口同步；预览取消时会同时恢复已保存的主题和配色偏好。
+
+导入文件必须先经过 `appearanceThemeCodec.ts` 的版本检查、迁移和白名单校验，再转换成 `AppearancePreset`。当前导出 schema 为 v3；旧 v1/v2 文档中的单份 `colors` 会迁移为浅色和深色两份相同色板，以保持旧主题的原始视觉。v3 导入也允许用户只提供 `theme.colors` 单色板，或只提供 `colorSchemes.light` / `colorSchemes.dark` 其中一份，codec 会复制补齐为内部标准的 `colorSchemes.light/dark`。两份色板完全相同时，导出与本地存储使用较简洁的 `theme.colors`。局部缺失或非法 token 会按当前基准色板逐字段回退。业务组件不得直接读取任意导入对象，也不得自行解析主题 JSON。
 
 ### 主题系统开发模式
 
@@ -376,6 +381,8 @@ src/features/<feature-name>/
 ### 普通主题
 
 普通主题只使用 `AppearancePreset` 中结构化字段，包括颜色、字体、字号倍率、圆角、动效、图标包、窗口按钮和组件变体。这一级是官方默认主题、内置主题以及常规用户主题的首选模式，能够获得完整校验、迁移、编辑、预览、持久化和 reduced-motion 支持。
+
+每个普通主题在运行时都会拥有标准的 `light` 与 `dark` 色板。用户导入主题时可以只写一份单色板；导入边界会自动复制补齐，之后仍可在主题工作室分别编辑浅色与深色。新增官方内置主题时应提供真实的双模式色板，不得用静态 `.dark` 覆盖代替主题数据；Portal 和应用根的配色一致性由 runtime 统一保证。
 
 ### 高级主题
 

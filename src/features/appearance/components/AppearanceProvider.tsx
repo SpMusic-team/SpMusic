@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { iconProviders } from '@/icons/systemIcons'
+import { cn } from '@/lib/utils'
 import { applyAppearanceRuntime } from '../model/appearanceRuntime'
 import { AppearanceContext, type AppearanceContextValue } from '../model/appearanceContext'
 import { builtinAppearanceIds, builtinAppearances, findBuiltinAppearance } from '../model/builtinAppearances'
@@ -12,7 +13,7 @@ import {
   saveAppearanceStorage,
   type AppearanceStorageState,
 } from '../model/appearanceStorage'
-import type { AppearancePreset } from '../model/appearanceTypes'
+import type { AppearancePreset, ColorSchemePreference } from '../model/appearanceTypes'
 
 type AppearanceProviderProps = {
   children: ReactNode
@@ -33,8 +34,12 @@ function uniqueThemeId(baseId: string, themes: AppearancePreset[]) {
 export function AppearanceProvider({ children }: AppearanceProviderProps) {
   const [library, setLibrary] = useState(() => loadAppearanceStorage())
   const [appearance, setAppearance] = useState(() => cloneAppearance(resolveAppearance(library, library.currentThemeId)))
+  const [colorSchemePreference, setRuntimeColorSchemePreference] = useState<ColorSchemePreference>(library.colorSchemePreference)
   const [storageWarning, setStorageWarning] = useState(library.warning)
   const [systemReducedMotion, setSystemReducedMotion] = useState(false)
+  const [systemDark, setSystemDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches)
+  const appRootRef = useRef<HTMLDivElement>(null)
+  const resolvedColorScheme = colorSchemePreference === 'system' ? (systemDark ? 'dark' : 'light') : colorSchemePreference
   const icons = iconProviders[appearance.icons.provider] ?? iconProviders.default
   const themes = useMemo(() => [
     ...builtinAppearances.map((theme) => ({ appearance: theme, builtin: true })),
@@ -49,7 +54,18 @@ export function AppearanceProvider({ children }: AppearanceProviderProps) {
     return () => media.removeEventListener('change', update)
   }, [])
 
-  useEffect(() => applyAppearanceRuntime(appearance, systemReducedMotion), [appearance, systemReducedMotion])
+  useEffect(() => {
+    const media = window.matchMedia('(prefers-color-scheme: dark)')
+    const update = () => setSystemDark(media.matches)
+    update()
+    media.addEventListener('change', update)
+    return () => media.removeEventListener('change', update)
+  }, [])
+
+  useEffect(
+    () => applyAppearanceRuntime(appearance, systemReducedMotion, resolvedColorScheme, appRootRef.current),
+    [appearance, systemReducedMotion, resolvedColorScheme],
+  )
 
   useEffect(() => {
     let warningTimer: number | undefined
@@ -69,6 +85,7 @@ export function AppearanceProvider({ children }: AppearanceProviderProps) {
       const next = event.newValue ? parseAppearanceStorage(event.newValue) : loadAppearanceStorage()
       setLibrary(next)
       setAppearance(cloneAppearance(resolveAppearance(next, next.currentThemeId)))
+      setRuntimeColorSchemePreference(next.colorSchemePreference)
       setStorageWarning(next.warning)
     }
     window.addEventListener('storage', syncStorage)
@@ -77,7 +94,13 @@ export function AppearanceProvider({ children }: AppearanceProviderProps) {
 
   const cancelPreview = useCallback(() => {
     setAppearance(cloneAppearance(resolveAppearance(library, library.currentThemeId)))
+    setRuntimeColorSchemePreference(library.colorSchemePreference)
   }, [library])
+
+  const setColorSchemePreference = useCallback((preference: ColorSchemePreference) => {
+    setRuntimeColorSchemePreference(preference)
+    setLibrary((previous) => ({ ...previous, colorSchemePreference: preference }))
+  }, [])
 
   const selectTheme = useCallback((id: string) => {
     const selected = resolveAppearance(library, id)
@@ -97,6 +120,7 @@ export function AppearanceProvider({ children }: AppearanceProviderProps) {
       }
     }
     setLibrary((previous) => ({
+      ...previous,
       currentThemeId: saved.id,
       userThemes: [...previous.userThemes.filter((theme) => theme.id !== saved.id), saved],
     }))
@@ -107,6 +131,7 @@ export function AppearanceProvider({ children }: AppearanceProviderProps) {
   const deleteAppearance = useCallback((id: string) => {
     if (builtinAppearanceIds.has(id) || !library.userThemes.some((theme) => theme.id === id)) return false
     const nextLibrary = {
+      ...library,
       currentThemeId: library.currentThemeId === id ? defaultAppearance.id : library.currentThemeId,
       userThemes: library.userThemes.filter((theme) => theme.id !== id),
     }
@@ -125,20 +150,26 @@ export function AppearanceProvider({ children }: AppearanceProviderProps) {
     icons,
     themes,
     activeThemeId: library.currentThemeId,
+    colorSchemePreference,
+    resolvedColorScheme,
     storageWarning,
     previewAppearance: (next) => setAppearance(cloneAppearance(next)),
+    previewColorSchemePreference: setRuntimeColorSchemePreference,
     cancelPreview,
+    setColorSchemePreference,
     selectTheme,
     saveAndApplyAppearance,
     deleteAppearance,
     resetDefault,
-  }), [appearance, icons, themes, library.currentThemeId, storageWarning, cancelPreview, selectTheme, saveAndApplyAppearance, deleteAppearance, resetDefault])
+  }), [appearance, icons, themes, library.currentThemeId, colorSchemePreference, resolvedColorScheme, storageWarning, cancelPreview, setColorSchemePreference, selectTheme, saveAndApplyAppearance, deleteAppearance, resetDefault])
 
   return (
     <AppearanceContext.Provider value={value}>
       <div
-        className="spmusic-app"
+        ref={appRootRef}
+        className={cn('spmusic-app', resolvedColorScheme === 'dark' && 'dark')}
         data-button-variant={appearance.components.buttons}
+        data-color-scheme={resolvedColorScheme}
         data-icon-pack={appearance.icons.provider}
         data-motion={appearance.motion.level}
         data-surface-variant={appearance.components.surface}

@@ -39,15 +39,17 @@ import {
 } from '../model/appearanceThemeCodec'
 import { defaultAppearance } from '../model/defaultAppearance'
 import type {
+  AppearanceColors,
   AppearanceComponents,
   AppearancePreset,
   AppearanceResource,
   AppearanceThemeMetadata,
   AppearanceTypography,
+  ColorSchemePreference,
 } from '../model/appearanceTypes'
 import { IconButton } from '@/features/player/components/IconButton'
 
-const colorLabels: Record<keyof AppearancePreset['colors'], string> = {
+const colorLabels: Record<keyof AppearanceColors, string> = {
   background: '应用背景',
   surface: '表面',
   surfaceMuted: '次级表面',
@@ -105,6 +107,11 @@ const easingOptions = [
 const iconOptions = [
   { label: 'SpMusic', value: 'default' }, { label: 'Fluent', value: 'fluent' }, { label: 'iOS', value: 'ios' },
 ] as const
+const colorSchemeOptions = [
+  { label: '跟随系统', value: 'system' },
+  { label: '浅色', value: 'light' },
+  { label: '深色', value: 'dark' },
+] as const
 
 type Option = { label: string; value: string }
 
@@ -138,6 +145,7 @@ export function ThemeManager() {
   const [open, setOpen] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [draft, setDraft] = useState(() => cloneAppearance(appearanceContext.appearance))
+  const [draftColorSchemePreference, setDraftColorSchemePreference] = useState<ColorSchemePreference>(appearanceContext.colorSchemePreference)
   const [selectedThemeId, setSelectedThemeId] = useState(appearanceContext.activeThemeId)
   const [riskConfirmed, setRiskConfirmed] = useState(false)
   const [resourcesText, setResourcesText] = useState(() => JSON.stringify(appearanceContext.appearance.experimental.resources, null, 2))
@@ -177,6 +185,7 @@ export function ThemeManager() {
     setResourcesText(JSON.stringify(active.experimental.resources, null, 2))
     setSelectedThemeId(active.id)
     setRiskConfirmed(active.metadata.tier === 'standard' || active.metadata.riskAcknowledged)
+    setDraftColorSchemePreference(appearanceContext.colorSchemePreference)
     setStatus(appearanceContext.storageWarning ?? null)
     setOpen(true)
   }
@@ -242,6 +251,7 @@ export function ThemeManager() {
     } else {
       appearanceContext.saveAndApplyAppearance(validated.appearance)
     }
+    appearanceContext.setColorSchemePreference(draftColorSchemePreference)
     if (validated.warnings.length) toast.warning(`主题已应用，含 ${validated.warnings.length} 条回退提示`)
     else toast.success('主题已应用')
     setOpen(false)
@@ -373,6 +383,25 @@ export function ThemeManager() {
               <TabsContent value="general">
                 <div className="flex flex-col gap-4 py-2">
                   <Card>
+                    <CardHeader><CardTitle>配色模式</CardTitle><CardDescription>可固定浅色或深色，也可实时跟随操作系统外观。</CardDescription></CardHeader>
+                    <CardContent>
+                      <FieldGroup>
+                        <OptionField
+                          id="color-scheme-preference"
+                          label="应用配色"
+                          value={draftColorSchemePreference}
+                          options={colorSchemeOptions}
+                          onChange={(value) => {
+                            const preference = value as ColorSchemePreference
+                            setDraftColorSchemePreference(preference)
+                            appearanceContext.previewColorSchemePreference(preference)
+                          }}
+                        />
+                        <FieldDescription>当前预览解析为{appearanceContext.resolvedColorScheme === 'dark' ? '深色' : '浅色'}；系统外观变化会立即更新。</FieldDescription>
+                      </FieldGroup>
+                    </CardContent>
+                  </Card>
+                  <Card>
                     <CardHeader><CardTitle>主题信息</CardTitle><CardDescription>名称、作者和能力等级会完整写入导出文件。</CardDescription></CardHeader>
                     <CardContent>
                       <FieldGroup>
@@ -404,10 +433,12 @@ export function ThemeManager() {
 
               <TabsContent value="tokens">
                 <div className="flex flex-col gap-4 py-2">
-                  <Card>
-                    <CardHeader><CardTitle>颜色</CardTitle><CardDescription>仅接受 #RRGGBB 或 #RRGGBBAA，非法值预览和应用时会回退。</CardDescription></CardHeader>
-                    <CardContent><FieldGroup>{(Object.keys(colorLabels) as Array<keyof AppearancePreset['colors']>).map((key) => <Field key={key}><FieldLabel htmlFor={`color-${key}`}>{colorLabels[key]}</FieldLabel><Input id={`color-${key}`} value={draft.colors[key]} onChange={(event) => updateDraft((next) => { next.colors[key] = event.target.value })} /></Field>)}</FieldGroup></CardContent>
-                  </Card>
+                  {(['light', 'dark'] as const).map((scheme) => (
+                    <Card key={scheme}>
+                      <CardHeader><CardTitle>{scheme === 'light' ? '浅色' : '深色'}颜色</CardTitle><CardDescription>仅接受 #RRGGBB 或 #RRGGBBAA，非法值预览和应用时会回退。</CardDescription></CardHeader>
+                      <CardContent><FieldGroup>{(Object.keys(colorLabels) as Array<keyof AppearanceColors>).map((key) => <Field key={key}><FieldLabel htmlFor={`color-${scheme}-${key}`}>{colorLabels[key]}</FieldLabel><Input id={`color-${scheme}-${key}`} value={draft.colorSchemes[scheme][key]} onChange={(event) => updateDraft((next) => { next.colorSchemes[scheme][key] = event.target.value })} /></Field>)}</FieldGroup></CardContent>
+                    </Card>
+                  ))}
                   <Card>
                     <CardHeader><CardTitle>圆角</CardTitle><CardDescription>使用 0–999px 的受控长度。</CardDescription></CardHeader>
                     <CardContent><FieldGroup>{(Object.keys(radiusLabels) as Array<keyof AppearancePreset['radii']>).map((key) => <Field key={key}><FieldLabel htmlFor={`radius-${key}`}>{radiusLabels[key]}</FieldLabel><Input id={`radius-${key}`} value={draft.radii[key]} onChange={(event) => updateDraft((next) => { next.radii[key] = event.target.value })} /></Field>)}</FieldGroup></CardContent>

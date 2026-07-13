@@ -2,6 +2,8 @@ import type { CSSProperties } from 'react'
 import type { IconProviderId } from '@/icons/systemIcons'
 
 export type AppearanceThemeId = string
+export type ColorSchemePreference = 'system' | 'light' | 'dark'
+export type ResolvedColorScheme = Exclude<ColorSchemePreference, 'system'>
 export type MotionLevel = 'off' | 'subtle' | 'expressive'
 export type AppearanceEasing = 'linear' | 'ease' | 'ease-in' | 'ease-out' | 'ease-in-out' | 'cubic-bezier(.65, 0, .35, 1)'
 export type AppearanceTier = 'standard' | 'advanced' | 'experimental'
@@ -28,6 +30,8 @@ export type AppearanceColors = {
   playerOverlay: string
   playerDock: string
 }
+
+export type AppearanceColorSchemes = Record<ResolvedColorScheme, AppearanceColors>
 
 export type AppearanceRadii = {
   sm: string
@@ -70,7 +74,7 @@ export type AppearanceThemeMetadata = {
 export type AppearancePreset = {
   id: AppearanceThemeId
   name: string
-  colors: AppearanceColors
+  colorSchemes: AppearanceColorSchemes
   radii: AppearanceRadii
   motion: AppearanceMotion
   typography: AppearanceTypography

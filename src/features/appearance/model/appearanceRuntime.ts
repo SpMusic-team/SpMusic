@@ -1,10 +1,11 @@
 import { createAppearanceCssVars } from './appearanceCss'
-import type { AppearancePreset } from './appearanceTypes'
+import type { AppearancePreset, ResolvedColorScheme } from './appearanceTypes'
 
 const CUSTOM_STYLE_ID = 'spmusic-custom-theme-style'
 
 const dataAttributes = [
   'data-theme',
+  'data-color-scheme',
   'data-theme-tier',
   'data-icon-pack',
   'data-motion',
@@ -14,9 +15,15 @@ const dataAttributes = [
   'data-spmusic-theme-scope',
 ] as const
 
-export function applyAppearanceRuntime(appearance: AppearancePreset, systemReducedMotion: boolean) {
-  const targets = [document.documentElement, document.body]
-  const cssVariables = createAppearanceCssVars(appearance) as unknown as Record<string, string | number>
+export function applyAppearanceRuntime(
+  appearance: AppearancePreset,
+  systemReducedMotion: boolean,
+  resolvedColorScheme: ResolvedColorScheme,
+  appRoot?: HTMLElement | null,
+) {
+  const targets = [document.documentElement, document.body, ...(appRoot ? [appRoot] : [])]
+  const cssVariables = createAppearanceCssVars(appearance, resolvedColorScheme) as unknown as Record<string, string | number>
+  cssVariables['color-scheme'] = resolvedColorScheme
   if (systemReducedMotion || appearance.motion.level === 'off') {
     cssVariables['--app-motion-fast'] = '0ms'
     cssVariables['--app-motion-standard'] = '0ms'
@@ -30,8 +37,10 @@ export function applyAppearanceRuntime(appearance: AppearancePreset, systemReduc
 
   const previousStyles = targets.map((target) => new Map(Object.keys(cssVariables).map((key) => [key, target.style.getPropertyValue(key)])))
   const previousAttributes = targets.map((target) => new Map(dataAttributes.map((name) => [name, target.getAttribute(name)])))
+  const previousDarkClasses = targets.map((target) => target.classList.contains('dark'))
   const attributes: Record<(typeof dataAttributes)[number], string> = {
     'data-theme': appearance.id,
+    'data-color-scheme': resolvedColorScheme,
     'data-theme-tier': appearance.metadata.tier,
     'data-icon-pack': appearance.icons.provider,
     'data-motion': appearance.motion.level,
@@ -44,6 +53,7 @@ export function applyAppearanceRuntime(appearance: AppearancePreset, systemReduc
   targets.forEach((target) => {
     Object.entries(cssVariables).forEach(([key, value]) => target.style.setProperty(key, String(value)))
     Object.entries(attributes).forEach(([name, value]) => target.setAttribute(name, value))
+    target.classList.toggle('dark', resolvedColorScheme === 'dark')
   })
 
   let styleElement = document.getElementById(CUSTOM_STYLE_ID) as HTMLStyleElement | null
@@ -62,6 +72,7 @@ export function applyAppearanceRuntime(appearance: AppearancePreset, systemReduc
     targets.forEach((target, index) => {
       previousStyles[index].forEach((value, key) => value ? target.style.setProperty(key, value) : target.style.removeProperty(key))
       previousAttributes[index].forEach((value, name) => value === null ? target.removeAttribute(name) : target.setAttribute(name, value))
+      target.classList.toggle('dark', previousDarkClasses[index])
     })
     if (styleElement?.parentNode) styleElement.remove()
   }

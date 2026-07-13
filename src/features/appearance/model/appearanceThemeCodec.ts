@@ -2,6 +2,7 @@ import { iconProviders, type IconProviderId } from '@/icons/systemIcons'
 import { defaultAppearance } from './defaultAppearance'
 import type {
   AppearanceColors,
+  AppearanceColorSchemes,
   AppearanceComponents,
   AppearanceEasing,
   AppearancePreset,
@@ -12,7 +13,7 @@ import type {
   MotionLevel,
 } from './appearanceTypes'
 
-export const APPEARANCE_THEME_SCHEMA_VERSION = 2 as const
+export const APPEARANCE_THEME_SCHEMA_VERSION = 3 as const
 
 export type AppearanceThemeDocumentV1 = {
   schemaVersion: 1
@@ -20,13 +21,29 @@ export type AppearanceThemeDocumentV1 = {
 }
 
 export type AppearanceThemeDocumentV2 = {
+  schemaVersion: 2
+  format: 'spmusic-theme'
+  exportedAt: string
+  theme: Record<string, unknown>
+}
+
+export type AppearanceThemeColorSchemesV3 =
+  | { light: AppearanceColors; dark?: AppearanceColors }
+  | { light?: AppearanceColors; dark: AppearanceColors }
+
+export type AppearanceThemePayloadV3 = Omit<AppearancePreset, 'colorSchemes'> & (
+  | { colors: AppearanceColors; colorSchemes?: never }
+  | { colors?: never; colorSchemes: AppearanceThemeColorSchemesV3 }
+)
+
+export type AppearanceThemeDocumentV3 = {
   schemaVersion: typeof APPEARANCE_THEME_SCHEMA_VERSION
   format: 'spmusic-theme'
   exportedAt: string
-  theme: AppearancePreset
+  theme: AppearanceThemePayloadV3
 }
 
-export type AppearanceThemeDocument = AppearanceThemeDocumentV2
+export type AppearanceThemeDocument = AppearanceThemeDocumentV3
 
 export type AppearanceThemeParseResult =
   | { ok: true; appearance: AppearancePreset; warnings: string[]; migratedFrom?: number }
@@ -49,7 +66,7 @@ const windowControlVariants = ['standard', 'compact', 'traffic-lights'] as const
 const tiers = ['standard', 'advanced', 'experimental'] as const
 const capabilities = ['tokens', 'custom-css', 'layout-overrides', 'local-resources'] as const
 const resourceKinds = ['font', 'image'] as const
-const themeKeys = ['id', 'name', 'colors', 'radii', 'motion', 'typography', 'components', 'icons', 'advanced', 'experimental', 'metadata'] as const
+const themeKeys = ['id', 'name', 'colors', 'colorSchemes', 'radii', 'motion', 'typography', 'components', 'icons', 'advanced', 'experimental', 'metadata'] as const
 const hexColorPattern = /^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/i
 const lengthPattern = /^(?:0|(?:\d|[1-9]\d|[1-8]\d{2}|9\d{2})(?:\.\d{1,3})?)px$/
 const themeIdPattern = /^[a-z0-9][a-z0-9_-]{0,63}$/
@@ -64,7 +81,10 @@ function isObject(value: unknown): value is JsonObject {
 export function cloneAppearance(appearance: AppearancePreset): AppearancePreset {
   return {
     ...appearance,
-    colors: { ...appearance.colors },
+    colorSchemes: {
+      light: { ...appearance.colorSchemes.light },
+      dark: { ...appearance.colorSchemes.dark },
+    },
     radii: { ...appearance.radii },
     motion: { ...appearance.motion },
     typography: { ...appearance.typography },
@@ -124,13 +144,56 @@ function cssText(input: unknown, fallback: string, path: string, warnings: strin
   return fallback
 }
 
-function parseColors(input: JsonObject, fallback: AppearanceColors, warnings: string[]): AppearanceColors {
-  reportUnknownKeys(input, colorKeys, 'theme.colors', warnings)
+function parseColors(input: JsonObject, fallback: AppearanceColors, path: string, warnings: string[]): AppearanceColors {
+  reportUnknownKeys(input, colorKeys, path, warnings)
   const result = { ...fallback }
   colorKeys.forEach((key) => {
-    result[key] = text(input, key, fallback[key], (value) => hexColorPattern.test(value), 'theme.colors', warnings)
+    result[key] = text(input, key, fallback[key], (value) => hexColorPattern.test(value), path, warnings)
   })
   return result
+}
+
+function optionalObject(root: JsonObject, key: string, path: string, warnings: string[]) {
+  if (root[key] === undefined) return undefined
+  if (isObject(root[key])) return root[key]
+  warnings.push(`${path} 必须是对象，已忽略`)
+  return undefined
+}
+
+function parseThemeColorSchemes(theme: JsonObject, fallback: AppearanceColorSchemes, warnings: string[]): AppearanceColorSchemes {
+  const singleColorsInput = optionalObject(theme, 'colors', 'theme.colors', warnings)
+  const colorSchemesInput = optionalObject(theme, 'colorSchemes', 'theme.colorSchemes', warnings)
+  if (colorSchemesInput) reportUnknownKeys(colorSchemesInput, ['light', 'dark'], 'theme.colorSchemes', warnings)
+
+  const sharedColors = singleColorsInput
+    ? parseColors(singleColorsInput, fallback.light, 'theme.colors', warnings)
+    : undefined
+  const lightInput = colorSchemesInput
+    ? optionalObject(colorSchemesInput, 'light', 'theme.colorSchemes.light', warnings)
+    : undefined
+  const darkInput = colorSchemesInput
+    ? optionalObject(colorSchemesInput, 'dark', 'theme.colorSchemes.dark', warnings)
+    : undefined
+
+  if (sharedColors) {
+    return {
+      light: lightInput ? parseColors(lightInput, sharedColors, 'theme.colorSchemes.light', warnings) : { ...sharedColors },
+      dark: darkInput ? parseColors(darkInput, sharedColors, 'theme.colorSchemes.dark', warnings) : { ...sharedColors },
+    }
+  }
+  if (lightInput && !darkInput) {
+    const light = parseColors(lightInput, fallback.light, 'theme.colorSchemes.light', warnings)
+    return { light, dark: { ...light } }
+  }
+  if (darkInput && !lightInput) {
+    const dark = parseColors(darkInput, fallback.dark, 'theme.colorSchemes.dark', warnings)
+    return { light: { ...dark }, dark }
+  }
+
+  return {
+    light: lightInput ? parseColors(lightInput, fallback.light, 'theme.colorSchemes.light', warnings) : { ...fallback.light },
+    dark: darkInput ? parseColors(darkInput, fallback.dark, 'theme.colorSchemes.dark', warnings) : { ...fallback.dark },
+  }
 }
 
 function parseRadii(input: JsonObject, fallback: AppearanceRadii, warnings: string[]): AppearanceRadii {
@@ -204,22 +267,40 @@ function parseMetadata(input: JsonObject, fallback: AppearanceThemeMetadata, war
 
 function migrateDocument(input: JsonObject): { document: JsonObject; migratedFrom?: number } | null {
   if (input.schemaVersion === APPEARANCE_THEME_SCHEMA_VERSION) return { document: input }
-  if (input.schemaVersion === 1 && isObject(input.theme)) {
+  if ((input.schemaVersion === 1 || input.schemaVersion === 2) && isObject(input.theme)) {
+    const legacyTheme = { ...input.theme }
+    if (!isObject(legacyTheme.colorSchemes) && isObject(legacyTheme.colors)) {
+      legacyTheme.colorSchemes = {
+        light: { ...legacyTheme.colors },
+        dark: { ...legacyTheme.colors },
+      }
+    }
+    delete legacyTheme.colors
     return {
-      migratedFrom: 1,
-      document: { schemaVersion: 2, format: 'spmusic-theme', exportedAt: new Date(0).toISOString(), theme: input.theme },
+      migratedFrom: input.schemaVersion,
+      document: {
+        schemaVersion: APPEARANCE_THEME_SCHEMA_VERSION,
+        format: input.schemaVersion === 1 ? 'spmusic-theme' : input.format,
+        exportedAt: typeof input.exportedAt === 'string' ? input.exportedAt : new Date(0).toISOString(),
+        theme: legacyTheme,
+      },
     }
   }
   // Future migrations are added here in ascending, one-version-at-a-time order.
   return null
 }
 
-export function createAppearanceThemeDocument(appearance: AppearancePreset): AppearanceThemeDocumentV2 {
+export function createAppearanceThemeDocument(appearance: AppearancePreset): AppearanceThemeDocumentV3 {
+  const cloned = cloneAppearance(appearance)
+  const { colorSchemes, ...theme } = cloned
+  const usesSinglePalette = colorKeys.every((key) => colorSchemes.light[key] === colorSchemes.dark[key])
   return {
     schemaVersion: APPEARANCE_THEME_SCHEMA_VERSION,
     format: 'spmusic-theme',
     exportedAt: new Date().toISOString(),
-    theme: cloneAppearance(appearance),
+    theme: usesSinglePalette
+      ? { ...theme, colors: { ...colorSchemes.light } }
+      : { ...theme, colorSchemes },
   }
 }
 
@@ -267,7 +348,7 @@ export function deserializeAppearanceTheme(source: string, fallback: AppearanceP
   const appearance: AppearancePreset = {
     id: text(theme, 'id', fallback.id, (value) => themeIdPattern.test(value), 'theme', warnings),
     name: text(theme, 'name', fallback.name, (value) => value.trim().length > 0 && value.length <= 80, 'theme', warnings),
-    colors: parseColors(section(theme, 'colors', warnings), fallback.colors, warnings),
+    colorSchemes: parseThemeColorSchemes(theme, fallback.colorSchemes, warnings),
     radii: parseRadii(section(theme, 'radii', warnings), fallback.radii, warnings),
     motion: {
       level: enumValue(motionInput.level, motionLevels, fallback.motion.level, 'theme.motion.level', warnings),

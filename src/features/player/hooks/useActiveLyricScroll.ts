@@ -37,7 +37,8 @@ export function useActiveLyricScroll(
     )
     const startTop = lyricList.scrollTop
     const distance = targetTop - startTop
-    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    const appMotionOff = (document.querySelector('.spmusic-app') ?? document.documentElement).getAttribute('data-motion') === 'off'
+    const reduceMotion = appMotionOff || window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
     if (reduceMotion || Math.abs(distance) < 0.5) {
       lyricList.scrollTop = targetTop
@@ -45,6 +46,11 @@ export function useActiveLyricScroll(
     }
 
     const durationMs = getAppMotionDuration('--app-motion-slow', 820)
+    if (durationMs <= 0) {
+      lyricList.scrollTop = targetTop
+      return
+    }
+
     const startTime = performance.now()
     const easeInOutCubic = (progressValue: number) =>
       progressValue < 0.5

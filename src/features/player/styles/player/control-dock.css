@@ -36,3 +36,4 @@
 .transport button:nth-child(2) svg, .transport button:nth-child(4) svg { width: calc(32 * var(--prototype-unit)); height: calc(32 * var(--prototype-unit)); }
 .transport .play-button { width: calc(96 * var(--prototype-unit)); height: calc(96 * var(--prototype-unit)); background: var(--player-blue); color: var(--app-accent-contrast); box-shadow: 0 calc(2 * var(--prototype-unit)) calc(2 * var(--prototype-unit)) rgba(0,0,0,.25); }
 .transport .play-button svg { width: calc(48 * var(--prototype-unit)); height: calc(48 * var(--prototype-unit)); }
+.play-icon-motion { display: grid; place-items: center; }

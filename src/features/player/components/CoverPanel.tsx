@@ -1,5 +1,6 @@
 import type { CSSProperties } from 'react'
-import { useSystemIcons } from '@/features/appearance/hooks/useAppearance'
+import { motion } from 'motion/react'
+import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { appCopy } from '@/features/player/model/playerCopy'
 import type { Track } from '@/features/player/model/playerTypes'
 import type { SystemIcon } from '@/icons/systemIcons'
@@ -21,10 +22,20 @@ type CoverPanelProps = {
 
 export function CoverPanel({ track, coverStyle, likeIcon, dislikeIcon, liked, disliked, onLike, onDislike }: CoverPanelProps) {
   const systemIcons = useSystemIcons()
+  const appearanceMotion = useAppearanceMotion()
 
   return (
     <article className="cover-column">
-      <div className="cover-art" data-tone={track.coverTone} data-has-image={Boolean(track.coverImage)} style={coverStyle}>
+      <motion.div
+        className="cover-art"
+        data-tone={track.coverTone}
+        data-has-image={Boolean(track.coverImage)}
+        style={coverStyle}
+        variants={appearanceMotion.variants.track}
+        initial="initial"
+        animate="animate"
+        exit="exit"
+      >
         {!track.coverImage ? <div className="cover-mark"><systemIcons.music /><strong>{appCopy.productName}</strong><span>LOCAL LISTENING</span></div> : null}
         <div className="cover-feedback">
           <IconButton icon={likeIcon} label={appCopy.controls.like} selected={liked} onClick={onLike} />
@@ -40,11 +51,18 @@ export function CoverPanel({ track, coverStyle, likeIcon, dislikeIcon, liked, di
           onLike={onLike}
           onDislike={onDislike}
         />
-      </div>
-      <div className="track-pills" aria-live="polite">
+      </motion.div>
+      <motion.div
+        className="track-pills"
+        variants={appearanceMotion.variants.track}
+        initial="initial"
+        animate="animate"
+        exit="exit"
+        aria-live="polite"
+      >
         <span className="title-pill">{track.title}</span>
         <span className="artist-pill">{track.artist} - {track.album}</span>
-      </div>
+      </motion.div>
     </article>
   )
 }

@@ -1,6 +1,7 @@
 import type { ChangeEvent, CSSProperties } from 'react'
+import { AnimatePresence, motion } from 'motion/react'
 import { Button } from '@/components/ui/button'
-import { useSystemIcons } from '@/features/appearance/hooks/useAppearance'
+import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { appCopy } from '@/features/player/model/playerCopy'
 import { formatDuration } from '@/features/player/model/trackUtils'
 import type { SystemIcon } from '@/icons/systemIcons'
@@ -63,6 +64,7 @@ export function ControlDock({
   onQueueToggle,
 }: ControlDockProps) {
   const systemIcons = useSystemIcons()
+  const appearanceMotion = useAppearanceMotion()
 
   function handleProgressChange(event: ChangeEvent<HTMLInputElement>) {
     onProgressChange(Number(event.currentTarget.value))
@@ -80,7 +82,21 @@ export function ControlDock({
         <div className="transport">
           <IconButton icon={shuffleIcon} label={shuffleLabel} selected={shuffleSelected} disabled={disabled} onClick={onShuffleCycle} />
           <IconButton icon={systemIcons.previous} label={appCopy.controls.previous} disabled={disabled} onClick={onPrevious} />
-          <Button className="play-button" aria-label={playing ? appCopy.controls.pause : appCopy.controls.play} aria-pressed={playing} disabled={disabled} size="icon-lg" onClick={onPlayToggle}>{playing ? <systemIcons.pause /> : <systemIcons.play />}</Button>
+          <Button className="play-button" aria-label={playing ? appCopy.controls.pause : appCopy.controls.play} aria-pressed={playing} disabled={disabled} size="icon-lg" onClick={onPlayToggle}>
+            <AnimatePresence initial={false} mode="popLayout">
+              <motion.span
+                key={playing ? 'pause' : 'play'}
+                className="play-icon-motion"
+                variants={appearanceMotion.variants.glyph}
+                initial="initial"
+                animate="animate"
+                exit="exit"
+                aria-hidden="true"
+              >
+                {playing ? <systemIcons.pause /> : <systemIcons.play />}
+              </motion.span>
+            </AnimatePresence>
+          </Button>
           <IconButton icon={systemIcons.next} label={appCopy.controls.next} disabled={disabled} onClick={onNext} />
           <IconButton icon={repeatIcon} label={repeatLabel} selected={repeatSelected} disabled={disabled} onClick={onRepeatCycle} />
         </div>

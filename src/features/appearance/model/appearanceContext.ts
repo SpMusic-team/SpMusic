@@ -1,5 +1,6 @@
 import { createContext } from 'react'
 import type { SystemIconProvider } from '@/icons/systemIcons'
+import type { AppearanceMotionRuntime } from './appearanceMotion'
 import type { AppearancePreset, ColorSchemePreference, ResolvedColorScheme } from './appearanceTypes'
 
 export type AppearanceContextValue = {
@@ -9,6 +10,7 @@ export type AppearanceContextValue = {
   activeThemeId: string
   colorSchemePreference: ColorSchemePreference
   resolvedColorScheme: ResolvedColorScheme
+  motion: AppearanceMotionRuntime
   storageWarning?: string
   previewAppearance: (appearance: AppearancePreset) => void
   previewColorSchemePreference: (preference: ColorSchemePreference) => void

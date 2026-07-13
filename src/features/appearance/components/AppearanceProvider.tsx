@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { MotionConfig } from 'motion/react'
 import { iconProviders } from '@/icons/systemIcons'
 import { cn } from '@/lib/utils'
 import { applyAppearanceRuntime } from '../model/appearanceRuntime'
+import { createAppearanceMotionRuntime } from '../model/appearanceMotion'
 import { AppearanceContext, type AppearanceContextValue } from '../model/appearanceContext'
 import { builtinAppearanceIds, builtinAppearances, findBuiltinAppearance } from '../model/builtinAppearances'
 import { cloneAppearance } from '../model/appearanceThemeCodec'
@@ -36,11 +38,15 @@ export function AppearanceProvider({ children }: AppearanceProviderProps) {
   const [appearance, setAppearance] = useState(() => cloneAppearance(resolveAppearance(library, library.currentThemeId)))
   const [colorSchemePreference, setRuntimeColorSchemePreference] = useState<ColorSchemePreference>(library.colorSchemePreference)
   const [storageWarning, setStorageWarning] = useState(library.warning)
-  const [systemReducedMotion, setSystemReducedMotion] = useState(false)
+  const [systemReducedMotion, setSystemReducedMotion] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches)
   const [systemDark, setSystemDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches)
   const appRootRef = useRef<HTMLDivElement>(null)
   const resolvedColorScheme = colorSchemePreference === 'system' ? (systemDark ? 'dark' : 'light') : colorSchemePreference
   const icons = iconProviders[appearance.icons.provider] ?? iconProviders.default
+  const motion = useMemo(
+    () => createAppearanceMotionRuntime(appearance.motion, systemReducedMotion),
+    [appearance.motion, systemReducedMotion],
+  )
   const themes = useMemo(() => [
     ...builtinAppearances.map((theme) => ({ appearance: theme, builtin: true })),
     ...library.userThemes.map((theme) => ({ appearance: theme, builtin: false })),
@@ -152,6 +158,7 @@ export function AppearanceProvider({ children }: AppearanceProviderProps) {
     activeThemeId: library.currentThemeId,
     colorSchemePreference,
     resolvedColorScheme,
+    motion,
     storageWarning,
     previewAppearance: (next) => setAppearance(cloneAppearance(next)),
     previewColorSchemePreference: setRuntimeColorSchemePreference,
@@ -161,24 +168,26 @@ export function AppearanceProvider({ children }: AppearanceProviderProps) {
     saveAndApplyAppearance,
     deleteAppearance,
     resetDefault,
-  }), [appearance, icons, themes, library.currentThemeId, colorSchemePreference, resolvedColorScheme, storageWarning, cancelPreview, setColorSchemePreference, selectTheme, saveAndApplyAppearance, deleteAppearance, resetDefault])
+  }), [appearance, icons, themes, library.currentThemeId, colorSchemePreference, resolvedColorScheme, motion, storageWarning, cancelPreview, setColorSchemePreference, selectTheme, saveAndApplyAppearance, deleteAppearance, resetDefault])
 
   return (
-    <AppearanceContext.Provider value={value}>
-      <div
-        ref={appRootRef}
-        className={cn('spmusic-app', resolvedColorScheme === 'dark' && 'dark')}
-        data-button-variant={appearance.components.buttons}
-        data-color-scheme={resolvedColorScheme}
-        data-icon-pack={appearance.icons.provider}
-        data-motion={appearance.motion.level}
-        data-surface-variant={appearance.components.surface}
-        data-theme={appearance.id}
-        data-theme-tier={appearance.metadata.tier}
-        data-window-controls={appearance.components.windowControls}
-      >
-        {children}
-      </div>
-    </AppearanceContext.Provider>
+    <MotionConfig reducedMotion={motion.reducedMotion} transition={motion.transition}>
+      <AppearanceContext.Provider value={value}>
+        <div
+          ref={appRootRef}
+          className={cn('spmusic-app', resolvedColorScheme === 'dark' && 'dark')}
+          data-button-variant={appearance.components.buttons}
+          data-color-scheme={resolvedColorScheme}
+          data-icon-pack={appearance.icons.provider}
+          data-motion={appearance.motion.level}
+          data-surface-variant={appearance.components.surface}
+          data-theme={appearance.id}
+          data-theme-tier={appearance.metadata.tier}
+          data-window-controls={appearance.components.windowControls}
+        >
+          {children}
+        </div>
+      </AppearanceContext.Provider>
+    </MotionConfig>
   )
 }

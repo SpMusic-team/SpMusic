@@ -1,3 +1,5 @@
+import { motion } from 'motion/react'
+import { useAppearanceMotion } from '@/features/appearance/hooks/useAppearance'
 import { appCopy } from '@/features/player/model/playerCopy'
 import type { Track } from '@/features/player/model/playerTypes'
 
@@ -7,8 +9,17 @@ type QueuePanelProps = {
 }
 
 export function QueuePanel({ tracks, currentTrackId }: QueuePanelProps) {
+  const appearanceMotion = useAppearanceMotion()
+
   return (
-    <section className="debug-queue-panel" aria-label={appCopy.queue.title}>
+    <motion.section
+      className="debug-queue-panel"
+      aria-label={appCopy.queue.title}
+      variants={appearanceMotion.variants.panel}
+      initial="initial"
+      animate="animate"
+      exit="exit"
+    >
       <ol>
         {tracks.map((item, index) => (
           <li key={item.id} data-current={item.id === currentTrackId}>
@@ -18,6 +29,6 @@ export function QueuePanel({ tracks, currentTrackId }: QueuePanelProps) {
           </li>
         ))}
       </ol>
-    </section>
+    </motion.section>
   )
 }

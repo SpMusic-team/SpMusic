@@ -1,5 +1,6 @@
 import '@/features/player/styles/player.css'
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { AnimatePresence, motion } from 'motion/react'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { ControlDock } from '@/features/player/components/ControlDock'
 import { CoverPanel } from '@/features/player/components/CoverPanel'
@@ -7,7 +8,7 @@ import { EmptyPlayerState } from '@/features/player/components/EmptyPlayerState'
 import { LyricsPanel } from '@/features/player/components/LyricsPanel'
 import { QueuePanel } from '@/features/player/components/QueuePanel'
 import { WindowBar } from '@/features/player/components/WindowBar'
-import { useSystemIcons } from '@/features/appearance/hooks/useAppearance'
+import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { useActiveLyricScroll } from '@/features/player/hooks/useActiveLyricScroll'
 import { nextRepeatMode, nextShuffleMode, resolveNextTrackIndex, type Direction, type RepeatMode, type ShuffleMode } from '@/features/player/model/playbackModes'
 import { appCopy } from '@/features/player/model/playerCopy'
@@ -22,6 +23,7 @@ type TrackFeedback = 'liked' | 'disliked'
 
 export function PlayerShell() {
   const systemIcons = useSystemIcons()
+  const appearanceMotion = useAppearanceMotion()
   const [state, setState] = useState<PlayerState>(initialPlayerState)
   const [feedbackByTrackId, setFeedbackByTrackId] = useState<Record<string, TrackFeedback>>({})
   const [shuffleMode, setShuffleMode] = useState<ShuffleMode>('none')
@@ -155,22 +157,39 @@ export function PlayerShell() {
 
   return (
     <TooltipProvider>
-      <main className="player-shell" data-cover={track?.coverTone ?? 'empty'} style={playerBackgroundStyle} aria-labelledby="app-title">
-        <div className="ambient-cover" aria-hidden="true" />
+      <main className="player-shell" data-cover={track?.coverTone ?? 'empty'} aria-labelledby="app-title">
+        <AnimatePresence initial={false}>
+          {track ? (
+            <motion.div
+              key={track.id}
+              className="ambient-cover"
+              data-tone={track.coverTone}
+              style={playerBackgroundStyle}
+              variants={appearanceMotion.variants.backdrop}
+              initial="initial"
+              animate="animate"
+              exit="exit"
+              aria-hidden="true"
+            />
+          ) : null}
+        </AnimatePresence>
         <WindowBar />
 
         {track ? (
           <section className="player-stage" aria-label={appCopy.shellLabel}>
-            <CoverPanel
-              track={track}
-              coverStyle={coverStyle}
-              likeIcon={LikeIcon}
-              dislikeIcon={DislikeIcon}
-              liked={currentFeedback === 'liked'}
-              disliked={currentFeedback === 'disliked'}
-              onLike={() => toggleTrackFeedback(track.id, 'liked')}
-              onDislike={() => toggleTrackFeedback(track.id, 'disliked')}
-            />
+            <AnimatePresence initial={false}>
+              <CoverPanel
+                key={track.id}
+                track={track}
+                coverStyle={coverStyle}
+                likeIcon={LikeIcon}
+                dislikeIcon={DislikeIcon}
+                liked={currentFeedback === 'liked'}
+                disliked={currentFeedback === 'disliked'}
+                onLike={() => toggleTrackFeedback(track.id, 'liked')}
+                onDislike={() => toggleTrackFeedback(track.id, 'disliked')}
+              />
+            </AnimatePresence>
 
             <LyricsPanel
               track={track}
@@ -181,7 +200,9 @@ export function PlayerShell() {
               lyricRefs={lyricRefs}
             />
 
-            {queueOpen ? <QueuePanel tracks={state.tracks} currentTrackId={track.id} /> : null}
+            <AnimatePresence initial={false}>
+              {queueOpen ? <QueuePanel tracks={state.tracks} currentTrackId={track.id} /> : null}
+            </AnimatePresence>
           </section>
         ) : <EmptyPlayerState />}
 

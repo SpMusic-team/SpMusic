@@ -14,3 +14,7 @@ export function useAppearance() {
 export function useSystemIcons() {
   return useAppearance().icons
 }
+
+export function useAppearanceMotion() {
+  return useAppearance().motion
+}

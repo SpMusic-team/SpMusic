@@ -27,7 +27,7 @@ export function PlayerShell() {
   const [shuffleMode, setShuffleMode] = useState<ShuffleMode>('none')
   const [repeatMode, setRepeatMode] = useState<RepeatMode>('list-loop')
   const [showTranslations, setShowTranslations] = useState(false)
-  const [muted, setMuted] = useState(false)
+  const [volume, setVolume] = useState(72)
   const [queueOpen, setQueueOpen] = useState(false)
   const lyricListRef = useRef<HTMLOListElement>(null)
   const lyricRefs = useRef(new Map<string, HTMLLIElement>())
@@ -137,6 +137,11 @@ export function PlayerShell() {
     })
   }
 
+  function changeVolume(nextVolume: number) {
+    const safeVolume = Math.min(100, Math.max(0, Math.round(nextVolume)))
+    setVolume(safeVolume)
+  }
+
   const currentFeedback = track ? feedbackByTrackId[track.id] : undefined
   const LikeIcon = currentFeedback === 'liked' ? systemIcons.likeSelected : systemIcons.like
   const DislikeIcon = currentFeedback === 'disliked' ? systemIcons.dislikeSelected : systemIcons.dislike
@@ -194,7 +199,7 @@ export function PlayerShell() {
           repeatSelected={repeatSelected}
           captionsIcon={CaptionsIcon}
           showTranslations={showTranslations}
-          muted={muted}
+          volume={volume}
           queueOpen={queueOpen}
           onProgressChange={setProgress}
           onPrevious={() => changeTrack(-1)}
@@ -203,7 +208,7 @@ export function PlayerShell() {
           onShuffleCycle={cycleShuffleMode}
           onRepeatCycle={cycleRepeatMode}
           onCaptionsToggle={() => setShowTranslations((value) => !value)}
-          onMutedToggle={() => setMuted((value) => !value)}
+          onVolumeChange={changeVolume}
           onQueueToggle={() => setQueueOpen((value) => !value)}
         />
       </main>

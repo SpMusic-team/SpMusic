@@ -5,6 +5,7 @@ import { appCopy } from '@/features/player/model/playerCopy'
 import { formatDuration } from '@/features/player/model/trackUtils'
 import type { SystemIcon } from '@/icons/systemIcons'
 import { IconButton } from './IconButton'
+import { VolumeControl } from './VolumeControl'
 
 type ProgressStyle = CSSProperties & { '--progress-percent': string }
 
@@ -22,7 +23,7 @@ type ControlDockProps = {
   repeatSelected: boolean
   captionsIcon: SystemIcon
   showTranslations: boolean
-  muted: boolean
+  volume: number
   queueOpen: boolean
   onProgressChange: (progress: number) => void
   onPrevious: () => void
@@ -31,7 +32,7 @@ type ControlDockProps = {
   onShuffleCycle: () => void
   onRepeatCycle: () => void
   onCaptionsToggle: () => void
-  onMutedToggle: () => void
+  onVolumeChange: (volume: number) => void
   onQueueToggle: () => void
 }
 
@@ -49,7 +50,7 @@ export function ControlDock({
   repeatSelected,
   captionsIcon,
   showTranslations,
-  muted,
+  volume,
   queueOpen,
   onProgressChange,
   onPrevious,
@@ -58,7 +59,7 @@ export function ControlDock({
   onShuffleCycle,
   onRepeatCycle,
   onCaptionsToggle,
-  onMutedToggle,
+  onVolumeChange,
   onQueueToggle,
 }: ControlDockProps) {
   const systemIcons = useSystemIcons()
@@ -85,7 +86,7 @@ export function ControlDock({
         </div>
         <div className="control-side control-side-end">
           <IconButton icon={captionsIcon} label={appCopy.controls.captions} selected={showTranslations} onClick={onCaptionsToggle} />
-          <IconButton icon={systemIcons.volume} label={appCopy.controls.volume} selected={muted} onClick={onMutedToggle} />
+          <VolumeControl volume={volume} disabled={disabled} onVolumeChange={onVolumeChange} />
           <IconButton icon={systemIcons.queue} label={appCopy.controls.queue} selected={queueOpen} onClick={onQueueToggle} />
         </div>
       </div>

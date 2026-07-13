@@ -1,0 +1,2 @@
+.empty-state { min-height: 60vh; display: grid; place-content: center; text-align: center; }
+.empty-state svg { width: 64px; height: 64px; margin: auto; }

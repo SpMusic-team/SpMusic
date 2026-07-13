@@ -1,0 +1,83 @@
+@media (max-width: 1020px) {
+  .player-shell { padding: 52px 28px 198px; }
+  .window-bar { left: 0; width: 100%; height: 40px; padding: 0 16px; transform: none; }
+  .window-actions { gap: 20px; }
+  .window-bar button { width: 20px; height: 40px; }
+  .window-bar button svg { width: 20px; height: 20px; }
+  .player-stage { position: relative; top: 0; left: auto; width: min(100%, 620px); height: auto; margin: 0 auto; transform: none; }
+  .cover-column { position: relative; inset: auto; width: min(100%, calc(100svh - 220px)); margin: 0 auto; }
+  .cover-art { position: relative; top: auto; left: auto; width: 100%; height: auto; aspect-ratio: 1; border-radius: 24px; box-shadow: -6px 6px 4px rgba(0,0,0,.25); }
+  .cover-feedback { left: 12px; bottom: 12px; gap: 8px; }
+  .cover-art button svg { width: 36px; height: 36px; }
+  .cover-feedback button { width: 78px; height: 56px; }
+  .cover-art .more-button { right: 12px; bottom: 12px; width: 56px; height: 56px; }
+  .track-pills { top: 18px; left: 18px; gap: 10px; z-index: 2; }
+  .track-pills span { max-width: 280px; height: auto; padding: 8px 16px; border-radius: 24px; font-size: 16px; line-height: 24px; }
+  .track-pills .title-pill { font-size: 18px; }
+  .lyrics-panel { display: none; }
+  .debug-queue-panel { display: none; }
+  .control-dock { bottom: 12px; width: calc(100% - 24px); height: auto; padding: 14px 16px 16px; border-radius: 28px; }
+  .progress-row { grid-template-columns: 54px 1fr 54px; gap: 12px; height: 28px; font-size: 12px; line-height: 20px; }
+  .progress-row input { width: 100%; height: 28px; }
+  .progress-row input::-webkit-slider-runnable-track { height: 4px; }
+  .progress-row input::-webkit-slider-thumb { width: 16px; height: 16px; margin-top: -6px; }
+  .control-row { height: 72px; margin-top: 6px; padding: 0; grid-template-columns: 42px 1fr auto; }
+  .control-side { width: auto; padding: 0; }
+  .transport { gap: 8px; }
+  .control-side-end { width: auto; padding: 0; gap: 4px; }
+  .transport button, .control-side button { width: 42px; height: 42px; }
+  .transport button svg, .control-side button svg { width: 34px; height: 34px; }
+  .transport button:nth-child(2), .transport button:nth-child(4) { width: 58px; height: 58px; border-width: 1px; }
+  .transport button:nth-child(2) svg, .transport button:nth-child(4) svg { width: 28px; height: 28px; }
+  .transport .play-button { width: 72px; height: 72px; }
+  .transport .play-button svg { width: 38px; height: 38px; }
+}
+
+@media (max-width: 700px) {
+  .player-shell { padding: 52px 14px 168px; }
+  .track-pills .artist-pill { display: none; }
+  .track-pills .title-pill { max-width: 240px; font-size: 16px; }
+  .control-side:first-child, .control-side-end > button:first-child { display: none; }
+  .control-dock { bottom: 10px; border-radius: 24px; }
+  .progress-row { grid-template-columns: 48px 1fr 48px; gap: 8px; }
+  .control-row { height: 56px; grid-template-columns: 1fr auto 1fr; }
+  .transport { grid-column: 2; gap: 2px; }
+  .transport button:first-child, .transport button:last-child { display: none; }
+  .control-side-end { gap: 0; }
+  .control-side-end { grid-column: 3; justify-self: end; }
+  .transport button, .control-side button { width: 36px; height: 36px; }
+  .transport button svg, .control-side button svg { width: 28px; height: 28px; }
+  .transport button:nth-child(2), .transport button:nth-child(4) { width: 46px; height: 46px; }
+  .transport button:nth-child(2) svg, .transport button:nth-child(4) svg { width: 24px; height: 24px; }
+  .transport .play-button { width: 56px; height: 56px; }
+  .transport .play-button svg { width: 32px; height: 32px; }
+  .cover-feedback { left: 10px; bottom: 10px; }
+  .cover-feedback button { width: 64px; height: 48px; }
+  .cover-art .more-button { right: 10px; bottom: 10px; width: 48px; height: 48px; }
+  .cover-art button svg { width: 30px; height: 30px; }
+
+  .more-actions-menu[data-slot="dropdown-menu-content"] { --more-unit: 1px; width: min(360px, calc(100vw - 16px)); height: min(520px, calc(100svh - 16px)); max-height: calc(100svh - 16px); padding: 14px; border-radius: 20px; }
+  .more-track-summary { grid-template-columns: 88px minmax(0, 1fr); gap: 12px; padding: 8px 0 14px; }
+  .more-menu-cover { width: 88px; border-radius: 16px; }
+  .more-track-details { gap: 6px; }
+  .more-track-title { font-size: 14px; line-height: 20px; }
+  .more-track-byline { font-size: 12px; line-height: 18px; }
+  .more-track-meta { gap: 8px; font-size: 11px; }
+  .more-track-meta > span { gap: 3px; }
+  .more-track-meta > span svg { width: 14px; height: 14px; }
+  .more-copy-action[data-slot="dropdown-menu-item"] { width: 28px; height: 28px; }
+  .more-feedback-actions { gap: 6px; }
+  .more-feedback-action[data-slot="dropdown-menu-item"] { width: 48px; height: 34px; }
+  .more-feedback-action svg { width: 22px; height: 22px; }
+  .more-action-grid { gap: 6px 12px; padding: 10px 0; }
+  .more-action[data-slot="dropdown-menu-item"] { min-height: 42px; }
+  .more-action[data-slot="dropdown-menu-item"] > svg { width: 24px; height: 24px; }
+  .more-action-copy strong { font-size: 13px; line-height: 18px; }
+  .more-action-copy small { font-size: 10px; line-height: 14px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lyrics-panel li { transition: none; }
+  .lyrics-panel li[data-active="true"], .lyrics-panel li .translation-line { animation: none; filter: none; }
+  .lyrics-panel ol { scroll-behavior: auto; }
+}

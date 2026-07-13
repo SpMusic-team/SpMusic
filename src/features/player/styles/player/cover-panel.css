@@ -1,0 +1,25 @@
+.cover-art {
+  position: absolute;
+  top: calc(87 * var(--prototype-unit));
+  left: calc(120 * var(--prototype-unit));
+  width: calc(980 * var(--prototype-unit));
+  height: calc(980 * var(--prototype-unit));
+  overflow: hidden;
+  border-radius: calc(30 * var(--prototype-unit));
+  background: transparent;
+  box-shadow: calc(-6 * var(--prototype-unit)) calc(6 * var(--prototype-unit)) calc(4 * var(--prototype-unit)) rgba(0, 0, 0, 0.25);
+}
+
+.cover-art::before { content: ""; position: absolute; inset: 0; background: var(--cover-art); background-position: center; background-repeat: no-repeat; background-size: 108% 108%; pointer-events: none; }
+.cover-art::after { content: ""; position: absolute; z-index: 1; inset: 0; background: linear-gradient(transparent 70%, rgba(7, 22, 30, 0.08)); pointer-events: none; }
+.cover-mark { position: absolute; z-index: 2; left: 10%; top: 28%; display: grid; color: white; text-shadow: 0 2px 20px rgba(0,0,0,.24); }
+.cover-mark svg { width: calc(72 * var(--prototype-unit)); height: calc(72 * var(--prototype-unit)); }
+.cover-mark strong { font-size: calc(62 * var(--prototype-unit)); letter-spacing: -.06em; }
+.cover-mark span { font-size: calc(12 * var(--prototype-unit)); font-weight: 700; letter-spacing: .22em; }
+
+.cover-feedback { position: absolute; z-index: 3; left: calc(11 * var(--prototype-unit)); bottom: calc(23 * var(--prototype-unit)); display: flex; gap: calc(9 * var(--prototype-unit)); }
+.cover-art button { min-width: 0; padding: 0; border-radius: 999px; background: var(--player-blue-soft); color: var(--player-blue-ink); box-shadow: 0 calc(4 * var(--prototype-unit)) calc(4 * var(--prototype-unit)) rgba(0,0,0,.25); }
+.cover-art button svg { width: calc(48 * var(--prototype-unit)); height: calc(48 * var(--prototype-unit)); }
+.cover-feedback button { width: calc(100 * var(--prototype-unit)); height: calc(72 * var(--prototype-unit)); }
+.cover-art button[data-selected="true"] { background: var(--player-blue-soft); color: var(--player-blue-ink); }
+.cover-art .more-button { position: absolute; z-index: 3; right: calc(13 * var(--prototype-unit)); bottom: calc(24 * var(--prototype-unit)); width: calc(72 * var(--prototype-unit)); height: calc(72 * var(--prototype-unit)); }

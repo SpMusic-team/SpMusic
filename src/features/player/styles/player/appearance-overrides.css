@@ -1,0 +1,9 @@
+body[data-surface-variant="solid"] .player-shell::after,
+body[data-surface-variant="solid"] .control-dock,
+body[data-surface-variant="solid"] .volume-panel,
+body[data-surface-variant="solid"] .debug-queue-panel { backdrop-filter: none; }
+
+body[data-surface-variant="flat"] .control-dock,
+body[data-surface-variant="flat"] .volume-panel,
+body[data-surface-variant="flat"] .debug-queue-panel,
+body[data-surface-variant="flat"] .track-pills span { box-shadow: none; backdrop-filter: none; }

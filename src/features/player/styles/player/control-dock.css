@@ -1,0 +1,38 @@
+.control-dock {
+  position: fixed;
+  left: 50%;
+  bottom: var(--control-dock-bottom);
+  z-index: 4;
+  width: calc(2222 * var(--prototype-unit));
+  height: var(--control-dock-height);
+  padding: calc(23 * var(--prototype-unit)) 0;
+  transform: translateX(-50%);
+  overflow: visible;
+  border: 0;
+  border-radius: calc(30 * var(--prototype-unit));
+  background: var(--player-dock);
+  box-shadow: 0 calc(4 * var(--prototype-unit)) calc(4 * var(--prototype-unit)) rgba(0,0,0,.25);
+}
+
+.progress-row { display: grid; grid-template-columns: auto calc(1740 * var(--prototype-unit)) auto; gap: calc(88 * var(--prototype-unit)); align-items: center; justify-content: center; height: calc(28 * var(--prototype-unit)); color: var(--player-muted); font-size: calc(22 * var(--prototype-unit)); line-height: calc(28 * var(--prototype-unit)); font-variant-numeric: tabular-nums; }
+.progress-row time { white-space: nowrap; }
+.progress-row input { width: calc(1740 * var(--prototype-unit)); height: calc(28 * var(--prototype-unit)); margin: 0; background: transparent; accent-color: var(--player-blue); appearance: none; }
+.progress-row input::-webkit-slider-runnable-track { height: calc(6 * var(--prototype-unit)); border-radius: 50px; background: linear-gradient(90deg,var(--player-blue) var(--progress-percent),#c1c7ce 0); }
+.progress-row input::-webkit-slider-thumb { width: calc(27 * var(--prototype-unit)); height: calc(27 * var(--prototype-unit)); margin-top: calc(-10.5 * var(--prototype-unit)); border: 0; border-radius: 50%; background: var(--player-blue); appearance: none; }
+.progress-row input::-moz-range-track { height: calc(6 * var(--prototype-unit)); border: 0; border-radius: 50px; background: #c1c7ce; }
+.progress-row input::-moz-range-progress { height: calc(6 * var(--prototype-unit)); border-radius: 50px; background: var(--player-blue); }
+.progress-row input::-moz-range-thumb { width: calc(27 * var(--prototype-unit)); border: 0; border-radius: 50%; background: var(--player-blue); height: calc(27 * var(--prototype-unit)); }
+
+.control-row { height: calc(96 * var(--prototype-unit)); margin-top: calc(8 * var(--prototype-unit)); padding: 0 calc(59 * var(--prototype-unit)); display: grid; grid-template-columns: calc(211 * var(--prototype-unit)) 1fr calc(212 * var(--prototype-unit)); align-items: center; }
+.transport, .control-side { display: flex; align-items: center; }
+.transport { justify-content: center; gap: calc(36 * var(--prototype-unit)); }
+.control-side { width: calc(211 * var(--prototype-unit)); padding: 0 calc(16 * var(--prototype-unit)); }
+.control-side-end { width: calc(212 * var(--prototype-unit)); padding: 0 calc(18 * var(--prototype-unit)); justify-content: flex-end; gap: calc(16 * var(--prototype-unit)); }
+.transport button, .control-side button { width: calc(48 * var(--prototype-unit)); height: calc(48 * var(--prototype-unit)); min-width: 0; padding: 0; color: var(--player-blue); border-radius: 999px; }
+.transport button svg, .control-side button svg { width: calc(48 * var(--prototype-unit)); height: calc(48 * var(--prototype-unit)); }
+.transport button:not(.play-button), .control-side button { background: transparent; }
+.transport button:not(.play-button):hover, .transport button:not(.play-button):focus-visible, .transport button:not(.play-button):active, .transport button:not(.play-button)[data-selected="true"], .control-side button:hover, .control-side button:focus-visible, .control-side button:active, .control-side button[data-selected="true"] { background: transparent; }
+.transport button:nth-child(2), .transport button:nth-child(4) { width: calc(72 * var(--prototype-unit)); height: calc(72 * var(--prototype-unit)); border: calc(1 * var(--prototype-unit)) solid var(--player-blue); box-shadow: 0 calc(2 * var(--prototype-unit)) calc(4 * var(--prototype-unit)) rgba(0,0,0,.25); }
+.transport button:nth-child(2) svg, .transport button:nth-child(4) svg { width: calc(32 * var(--prototype-unit)); height: calc(32 * var(--prototype-unit)); }
+.transport .play-button { width: calc(96 * var(--prototype-unit)); height: calc(96 * var(--prototype-unit)); background: var(--player-blue); color: var(--app-accent-contrast); box-shadow: 0 calc(2 * var(--prototype-unit)) calc(2 * var(--prototype-unit)) rgba(0,0,0,.25); }
+.transport .play-button svg { width: calc(48 * var(--prototype-unit)); height: calc(48 * var(--prototype-unit)); }

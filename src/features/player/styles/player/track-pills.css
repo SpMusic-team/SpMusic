@@ -1,0 +1,27 @@
+.track-pills {
+  position: absolute;
+  top: calc(87 * var(--prototype-unit));
+  left: calc(1124 * var(--prototype-unit));
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: calc(29 * var(--prototype-unit));
+}
+
+.track-pills span {
+  max-width: calc(420 * var(--prototype-unit));
+  height: calc(60 * var(--prototype-unit));
+  padding: calc(10 * var(--prototype-unit)) calc(20 * var(--prototype-unit));
+  overflow: hidden;
+  border-radius: calc(30 * var(--prototype-unit));
+  background: var(--player-blue-soft);
+  box-shadow: calc(-2 * var(--prototype-unit)) calc(4 * var(--prototype-unit)) calc(4 * var(--prototype-unit)) rgba(0,0,0,.25);
+  color: var(--player-blue-ink);
+  font-size: calc(28 * var(--prototype-unit));
+  font-weight: 500;
+  line-height: calc(40 * var(--prototype-unit));
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.track-pills .title-pill { font-size: calc(32 * var(--prototype-unit)); }

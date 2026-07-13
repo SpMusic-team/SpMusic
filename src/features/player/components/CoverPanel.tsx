@@ -1,11 +1,10 @@
 import type { CSSProperties } from 'react'
-import { Button } from '@/components/ui/button'
-import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { appCopy } from '@/features/player/model/playerCopy'
 import type { Track } from '@/features/player/model/playerTypes'
 import type { SystemIcon } from '@/icons/systemIcons'
 import { IconButton } from './IconButton'
+import { MoreActionsMenu } from './MoreActionsMenu'
 
 type CoverStyle = CSSProperties & { '--cover-art'?: string }
 
@@ -31,15 +30,16 @@ export function CoverPanel({ track, coverStyle, likeIcon, dislikeIcon, liked, di
           <IconButton icon={likeIcon} label={appCopy.controls.like} selected={liked} onClick={onLike} />
           <IconButton icon={dislikeIcon} label={appCopy.controls.dislike} selected={disliked} onClick={onDislike} />
         </div>
-        <DropdownMenu>
-          <DropdownMenuTrigger render={<Button className="more-button" aria-label={appCopy.controls.more} size="icon" variant="ghost" />}><systemIcons.more /></DropdownMenuTrigger>
-          <DropdownMenuContent align="end" side="top">
-            <DropdownMenuGroup>
-              <DropdownMenuLabel>{appCopy.moreMenu.info}</DropdownMenuLabel>
-              <DropdownMenuItem onClick={() => void navigator.clipboard?.writeText(track.title)}>{appCopy.moreMenu.copyTitle}</DropdownMenuItem>
-            </DropdownMenuGroup>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <MoreActionsMenu
+          track={track}
+          coverStyle={coverStyle}
+          likeIcon={likeIcon}
+          dislikeIcon={dislikeIcon}
+          liked={liked}
+          disliked={disliked}
+          onLike={onLike}
+          onDislike={onDislike}
+        />
       </div>
       <div className="track-pills" aria-live="polite">
         <span className="title-pill">{track.title}</span>

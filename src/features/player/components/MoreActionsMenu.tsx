@@ -17,13 +17,13 @@ import {
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog'
+import { Separator } from '@/components/ui/separator'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { appCopy } from '@/features/player/model/playerCopy'
@@ -53,7 +53,8 @@ type UnavailableActionProps = {
 
 function UnavailableAction({ icon: Icon, label, wide = false }: UnavailableActionProps) {
   return (
-    <DropdownMenuItem
+    <button
+      type="button"
       className={cn('more-action', wide && 'more-action-wide')}
       aria-label={`${label}，${appCopy.moreMenu.unavailable}`}
       disabled
@@ -63,7 +64,7 @@ function UnavailableAction({ icon: Icon, label, wide = false }: UnavailableActio
         <strong>{label}</strong>
         <small>{appCopy.moreMenu.unavailable}</small>
       </span>
-    </DropdownMenuItem>
+    </button>
   )
 }
 
@@ -94,15 +95,19 @@ export function MoreActionsMenu({
   }
 
   return (
-    <DropdownMenu>
+    <Dialog>
       <Tooltip>
-        <TooltipTrigger render={<DropdownMenuTrigger render={<Button className="more-button" aria-label={appCopy.controls.more} size="icon" variant="ghost" />} />}>
+        <TooltipTrigger render={<DialogTrigger render={<Button className="more-button" aria-label={appCopy.controls.more} size="icon" variant="ghost" />} />}>
           <systemIcons.more />
         </TooltipTrigger>
         <TooltipContent>{appCopy.controls.more}</TooltipContent>
       </Tooltip>
-      <DropdownMenuContent className="more-actions-menu" aria-label={appCopy.moreMenu.title} align="end" side="top" sideOffset={16}>
-        <DropdownMenuGroup className="more-track-group">
+
+      <DialogContent className="more-actions-menu" overlayClassName="more-actions-overlay" showCloseButton={false}>
+        <DialogTitle className="sr-only">{appCopy.moreMenu.title}</DialogTitle>
+        <DialogDescription className="sr-only">{track.title}</DialogDescription>
+
+        <section className="more-track-group" aria-label={appCopy.moreMenu.title}>
           <div className="more-track-summary">
             <div className="more-menu-cover" data-tone={track.coverTone} style={coverStyle}>
               {track.coverImage
@@ -114,43 +119,43 @@ export function MoreActionsMenu({
               <span className="more-track-byline">{track.artist} - {track.album}</span>
               <div className="more-track-meta">
                 <span><Music2Icon />{formatDuration(track.durationSeconds)}</span>
-                <DropdownMenuItem className="more-copy-action" aria-label={appCopy.moreMenu.copyTitle} onClick={() => void copyTrackTitle()}>
+                <button type="button" className="more-copy-action" aria-label={appCopy.moreMenu.copyTitle} onClick={() => void copyTrackTitle()}>
                   <CopyIcon />
                   <span className="sr-only">{appCopy.moreMenu.copyTitle}</span>
-                </DropdownMenuItem>
+                </button>
               </div>
               <div className="more-feedback-actions">
-                <DropdownMenuItem className="more-feedback-action" closeOnClick={false} data-selected={liked} aria-label={appCopy.controls.like} onClick={onLike}>
+                <button type="button" className="more-feedback-action" data-selected={liked} aria-label={appCopy.controls.like} aria-pressed={liked} onClick={onLike}>
                   <LikeIcon />
-                </DropdownMenuItem>
-                <DropdownMenuItem className="more-feedback-action" closeOnClick={false} data-selected={disliked} aria-label={appCopy.controls.dislike} onClick={onDislike}>
+                </button>
+                <button type="button" className="more-feedback-action" data-selected={disliked} aria-label={appCopy.controls.dislike} aria-pressed={disliked} onClick={onDislike}>
                   <DislikeIcon />
-                </DropdownMenuItem>
+                </button>
               </div>
             </div>
           </div>
-        </DropdownMenuGroup>
+        </section>
 
-        <DropdownMenuSeparator />
+        <Separator />
 
-        <DropdownMenuGroup className="more-action-grid">
+        <section className="more-action-grid" aria-label={appCopy.moreMenu.title}>
           <UnavailableAction icon={Trash2Icon} label={appCopy.moreMenu.delete} wide />
           <UnavailableAction icon={ListPlusIcon} label={appCopy.moreMenu.playlist} />
           <UnavailableAction icon={BookmarkIcon} label={appCopy.moreMenu.bookmark} />
           <UnavailableAction icon={ImageIcon} label={appCopy.moreMenu.cover} wide />
           <UnavailableAction icon={InfoIcon} label={appCopy.moreMenu.info} />
           <UnavailableAction icon={BarChart3Icon} label={appCopy.moreMenu.listeningHistory} />
-        </DropdownMenuGroup>
+        </section>
 
-        <DropdownMenuSeparator />
+        <Separator />
 
-        <DropdownMenuGroup className="more-action-grid more-action-grid-secondary">
+        <section className="more-action-grid more-action-grid-secondary" aria-label={appCopy.moreMenu.title}>
           <UnavailableAction icon={Mic2Icon} label={appCopy.moreMenu.artist} />
           <UnavailableAction icon={AlbumIcon} label={appCopy.moreMenu.album} />
           <UnavailableAction icon={FolderIcon} label={appCopy.moreMenu.folder} />
           <UnavailableAction icon={GuitarIcon} label={appCopy.moreMenu.genre} />
-        </DropdownMenuGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
+        </section>
+      </DialogContent>
+    </Dialog>
   )
 }

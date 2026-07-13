@@ -1,18 +1,17 @@
 .window-bar {
   position: absolute;
   top: 0;
-  left: 50%;
+  left: 0;
   z-index: 5;
-  width: calc(2560 * var(--prototype-unit));
+  width: 100%;
   height: calc(40 * var(--prototype-unit));
   padding: 0 calc(20 * var(--prototype-unit));
-  transform: translateX(-50%);
   display: flex;
   align-items: center;
   justify-content: space-between;
 }
 
-.window-actions { display: flex; gap: 20px; }
+.window-actions { display: flex; gap: calc(31 * var(--prototype-unit)); }
 .window-bar button { width: 20px; height: 40px; min-width: 0; padding: 0; border-radius: 0; color: var(--player-muted); background: transparent; transition: color var(--app-motion-fast) ease, transform var(--app-motion-fast) ease; transform-origin: center; }
 .window-bar button:hover, .window-bar button:focus-visible, .window-bar button:active { background: transparent; color: var(--player-ink); transform: scale(1.16); }
 .window-bar button svg { width: 20px; height: 20px; }

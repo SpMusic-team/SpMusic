@@ -56,7 +56,7 @@
   .cover-art .more-button { right: 10px; bottom: 10px; width: 48px; height: 48px; }
   .cover-art button svg { width: 30px; height: 30px; }
 
-  .more-actions-menu[data-slot="dropdown-menu-content"] { --more-unit: 1px; width: min(360px, calc(100vw - 16px)); height: min(520px, calc(100svh - 16px)); max-height: calc(100svh - 16px); padding: 14px; border-radius: 20px; }
+  .more-actions-menu[data-slot="dialog-content"] { --more-unit: 1px; width: min(360px, calc(100vw - 16px)); height: min(520px, calc(100svh - 16px)); max-width: calc(100vw - 16px); max-height: calc(100svh - 16px); padding: 14px; border-radius: 20px; }
   .more-track-summary { grid-template-columns: 88px minmax(0, 1fr); gap: 12px; padding: 8px 0 14px; }
   .more-menu-cover { width: 88px; border-radius: 16px; }
   .more-track-details { gap: 6px; }
@@ -65,13 +65,13 @@
   .more-track-meta { gap: 8px; font-size: 11px; }
   .more-track-meta > span { gap: 3px; }
   .more-track-meta > span svg { width: 14px; height: 14px; }
-  .more-copy-action[data-slot="dropdown-menu-item"] { width: 28px; height: 28px; }
+  .more-copy-action { width: 28px; height: 28px; }
   .more-feedback-actions { gap: 6px; }
-  .more-feedback-action[data-slot="dropdown-menu-item"] { width: 48px; height: 34px; }
+  .more-feedback-action { width: 48px; height: 34px; }
   .more-feedback-action svg { width: 22px; height: 22px; }
   .more-action-grid { gap: 6px 12px; padding: 10px 0; }
-  .more-action[data-slot="dropdown-menu-item"] { min-height: 42px; }
-  .more-action[data-slot="dropdown-menu-item"] > svg { width: 24px; height: 24px; }
+  .more-action { min-height: 42px; }
+  .more-action > svg { width: 24px; height: 24px; }
   .more-action-copy strong { font-size: 13px; line-height: 18px; }
   .more-action-copy small { font-size: 10px; line-height: 14px; }
 }

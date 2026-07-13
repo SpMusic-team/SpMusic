@@ -25,11 +25,15 @@
   --app-motion-slow: 820ms;
   --app-motion-duration-scale: 1;
   --app-motion-easing: cubic-bezier(.65, 0, .35, 1);
+  --app-font-family: 'Geist Variable', sans-serif;
+  --app-font-scale: 1;
   --player-blue: #276389;
   --player-blue-soft: #cae6ff;
   --player-blue-ink: #276389;
   --player-ink: #17212b;
   --player-muted: #72777f;
+  --player-overlay: #ffffff99;
+  --player-dock: #f7f9ff99;
   --color-bg: var(--app-bg);
   --color-surface: var(--app-surface);
   --color-surface-muted: var(--app-surface-muted);
@@ -112,7 +116,37 @@
   color: var(--app-text);
   background: var(--app-bg);
   isolation: isolate;
+  font-family: var(--app-font-family);
+  font-size: calc(1rem * var(--app-font-scale));
 }
+
+body {
+  font-family: var(--app-font-family);
+  font-size: calc(1rem * var(--app-font-scale));
+}
+
+body[data-button-variant="outline"] [data-slot="button"] {
+  border-color: var(--app-border);
+  background: transparent;
+}
+
+body[data-button-variant="minimal"] [data-slot="button"] {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+body[data-window-controls="compact"] .window-actions {
+  gap: 12px;
+}
+
+body[data-window-controls="traffic-lights"] .window-actions > button:nth-last-child(-n+3) {
+  border-radius: 999px;
+}
+
+body[data-window-controls="traffic-lights"] .window-actions > button:nth-last-child(3) { background: #f6c344; }
+body[data-window-controls="traffic-lights"] .window-actions > button:nth-last-child(2) { background: #61c454; }
+body[data-window-controls="traffic-lights"] .window-actions > button:nth-last-child(1) { background: #ee665a; }
 
 .spmusic-app[data-motion="off"],
 .spmusic-app[data-motion="off"] * {
@@ -179,7 +213,7 @@ h2 {
 
 @theme inline {
   --font-heading: var(--font-sans);
-  --font-sans: 'Geist Variable', sans-serif;
+  --font-sans: var(--app-font-family);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);

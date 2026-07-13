@@ -1,6 +1,7 @@
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useEffect, useState } from 'react'
 import { useSystemIcons } from '@/features/appearance/hooks/useAppearance'
+import { ThemeManager } from '@/features/appearance/components/ThemeManager'
 import { appCopy } from '@/features/player/model/playerCopy'
 import { IconButton } from './IconButton'
 
@@ -72,6 +73,7 @@ export function WindowBar() {
       <IconButton icon={systemIcons.collapse} label={appCopy.controls.collapse} />
       <h1 id="app-title" className="sr-only">{appCopy.appTitle}</h1>
       <div className="window-actions">
+        <ThemeManager />
         <IconButton
           icon={systemIcons.fullscreen}
           label={appCopy.controls.fullscreen}

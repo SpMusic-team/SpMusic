@@ -9,7 +9,7 @@
     "owner_agent": "PM Agent",
     "version_scope": "project",
     "created": "2026-07-09",
-    "updated": "2026-07-11",
+    "updated": "2026-07-13",
     "source_documents": [
       ".agents/prompt/PM_Agent.md",
       ".agents/prompt/templates/Agent_Prompt_Template.md"
@@ -145,6 +145,7 @@
         "Manage frontend state, TypeScript types, and component structure",
         "Integrate approved Tauri commands from the frontend",
         "Implement styling and layout behavior",
+        "Maintain the theme-first frontend customization model for appearance, motion, icon, and component variant work",
         "Maintain TypeScript correctness"
       ],
       "notResponsibleFor": [

@@ -88,6 +88,7 @@ src/
 ```tsx
 <AppearanceProvider>
   <PlayerShell />
+  <Toaster />
 </AppearanceProvider>
 ```
 
@@ -101,12 +102,17 @@ src/
 src/features/appearance/
   components/
     AppearanceProvider.tsx
+    ThemeManager.tsx
   hooks/
     useAppearance.ts
   model/
     appearanceContext.ts
     appearanceCss.ts
+    appearanceRuntime.ts
+    appearanceStorage.ts
+    appearanceThemeCodec.ts
     appearanceTypes.ts
+    builtinAppearances.ts
     defaultAppearance.ts
 ```
 
@@ -115,17 +121,22 @@ Appearance 模块负责应用级外观能力，包括：
 - 主题 token
 - 动效等级
 - 图标 provider
-- 后续用户主题导入的统一入口
+- 版本化主题导入、导出和迁移
+- 用户主题持久化与运行时预览
+- 普通、高级和实验三级主题能力
 
-当前 `AppearanceProvider` 会在应用根节点输出：
+当前 `AppearanceProvider` 负责把选中的 `AppearancePreset` 交给 runtime。runtime 会把 CSS variables 和 `data-*` 属性同步到应用根、`documentElement` 和 `body`，保证播放器以及 Base UI Portal 弹窗使用同一套语义 token；高级主题还会复用单一 `<style>` 节点注入 CSS，并在切换或卸载时清理。
 
 ```tsx
 <div
   className="spmusic-app"
   data-theme={appearance.id}
+  data-theme-tier={appearance.metadata.tier}
   data-motion={appearance.motion.level}
   data-icon-pack={appearance.icons.provider}
-  style={style}
+  data-surface-variant={appearance.components.surface}
+  data-button-variant={appearance.components.buttons}
+  data-window-controls={appearance.components.windowControls}
 >
   {children}
 </div>
@@ -138,9 +149,38 @@ Appearance 模块负责应用级外观能力，包括：
 - `colors`：应用颜色和播放器关键颜色
 - `radii`：圆角 token
 - `motion`：动效等级、时长倍率、缓动曲线
+- `typography`：字体和字号倍率
+- `components`：表面、按钮和窗口控制变体
 - `icons`：图标 provider id
+- `advanced.customCss`：高级主题的作用域 CSS
+- `experimental.layoutCss/resources`：实验布局覆盖和资源声明
+- `metadata`：主题等级、能力、作者、说明和风险确认状态
 
-当前默认配置在 `defaultAppearance.ts`。后续如果支持用户导入主题 JSON，应该优先转换成 `AppearancePreset`，再交给 `AppearanceProvider`，不要让业务组件直接读取任意用户配置对象。
+默认配置位于 `defaultAppearance.ts`。默认主题不是一套脱离主题系统的硬编码特例，而是完整、可序列化、可校验的标准级 `AppearancePreset`。内置主题和用户主题都经过同一套类型、runtime 和 CSS token 管线。
+
+导入文件必须先经过 `appearanceThemeCodec.ts` 的版本检查、迁移和白名单校验，再转换成 `AppearancePreset`。业务组件不得直接读取任意导入对象，也不得自行解析主题 JSON。
+
+### 主题系统开发模式
+
+新增官方 UI 样式或动效时，默认开发顺序是：
+
+1. 在 `AppearancePreset` 中增加结构化、可校验的主题字段；必要时同步升级主题 schema 和迁移函数。
+2. 在默认主题和所有内置主题中给出稳定默认值。默认效果必须由标准主题数据完整表达。
+3. 在 `appearanceCss.ts` 或 `appearanceRuntime.ts` 中把字段映射为 CSS variables 或受控 `data-*` 属性。
+4. 在 `src/index.css` 或 feature CSS 中消费这些变量和属性。
+5. 只有用户主动进入高级或实验主题时，才使用 `customCss` 或 `layoutCss`。
+
+官方默认效果不得塞进 `defaultAppearance.advanced.customCss`。否则默认视觉会绕过类型、schema、迁移、编辑 UI、reduced-motion 和回退机制，导致默认主题与普通主题的能力不对等。
+
+例如未来增加歌词弹性、逐字推进、模糊程度、位移距离或滚动跟随强度时，应先定义类似 `lyricsMotion` 的结构化字段，约束枚举和数值范围，再映射为 `--lyrics-*` 变量并暴露主题编辑控件。不要先在默认 CSS 或 `customCss` 中写死复杂效果，再补配置入口。
+
+结构化字段应满足：
+
+- 有明确类型、默认值和合法范围。
+- 能被主题 codec 序列化、反序列化和迁移。
+- 非法输入可逐字段回退，不污染当前已应用主题。
+- `off` 和系统 `prefers-reduced-motion` 能覆盖相关运动效果。
+- 普通主题编辑器可以安全暴露对应控件。
 
 ### CSS token 边界
 
@@ -329,25 +369,25 @@ src/features/<feature-name>/
 
 如果样式只是某个 feature 私有，应放在该 feature 的 `styles/`。如果样式是全应用 token，应进入 `index.css` 或 Appearance 模块，而不是散落到业务 CSS。
 
-## 后续用户自定义外观的推荐路径
+## 主题能力边界
 
-用户希望未来可以自定义整个应用的样式、动效和图标。推荐演进顺序：
+主题系统按风险分为三级：
 
-1. 设置页选择内置主题、动效等级、图标包。
-2. 支持导入受控 `AppearancePreset` JSON。
-3. 支持自定义 SVG 图标包，先转换成 `SystemIconProvider`。
-4. 最后再考虑高级 CSS 覆盖。
+### 普通主题
 
-高级 CSS 覆盖必须谨慎，建议至少满足：
+普通主题只使用 `AppearancePreset` 中结构化字段，包括颜色、字体、字号倍率、圆角、动效、图标包、窗口按钮和组件变体。这一级是官方默认主题、内置主题以及常规用户主题的首选模式，能够获得完整校验、迁移、编辑、预览、持久化和 reduced-motion 支持。
 
-- 限定作用域在 `.spmusic-app` 内。
-- 禁止远程 `@import`。
-- 禁止远程 `url(http...)`。
-- 提供恢复默认外观。
-- 保存前进行基础校验。
-- 出错时回退到默认主题。
+### 高级主题
 
-当前实现只搭建基础管线，没有开放任意 CSS 注入能力。
+高级主题允许 `advanced.customCss`。runtime 使用 `@scope` 把它限制在带 `data-spmusic-theme-scope` 的应用 body 内，因此能覆盖播放器和 Portal UI，但仍可能破坏可读性、可访问性和升级兼容性。应用前必须确认风险；代码会拒绝已知可执行式 CSS 语法，但不会把高级 CSS 当作官方结构化能力。
+
+当某项高级 CSS 用法变成稳定、常用的产品能力时，应把它提升为新的 `AppearancePreset` 字段，而不是继续要求用户复制 CSS 片段。
+
+### 实验主题
+
+实验主题允许 `experimental.layoutCss` 和 `experimental.resources`。`layoutCss` 可执行不加作用域的全局布局覆盖；资源声明支持受控的 `data:`、`blob:`、`http(s):` 和 `file:` 来源模型，实际加载仍受 WebView、CSP 和平台权限限制。实验能力适合探索布局和本地资源引用，不保证跨版本兼容，也绝不包含 JavaScript 或 DOM 插件执行。
+
+三级主题文档都使用版本化 JSON schema。导入发生致命错误时保持当前主题不变；未知字段和局部非法字段产生警告并回退；默认主题可随时恢复。
 
 ## Tauri 集成预留边界
 
@@ -420,9 +460,9 @@ src/components/
 
 - 播放器仍使用 demo 数据，不代表真实媒体库。
 - 播放进度是前端模拟，不代表真实音频引擎。
-- Appearance 当前只有默认 preset，尚未提供设置页、持久化或导入能力。
+- Appearance 已提供三个内置主题、主题管理 UI、版本化 JSON 导入导出和 localStorage 持久化；当前持久化仍受浏览器存储配额限制。
 - 图标 provider 已有基础切换管线，但尚未提供用户自定义 SVG 图标包加载。
-- 高级 CSS 自定义尚未开放。
+- 高级和实验 CSS 可能破坏布局或可访问性；实验资源是否可加载取决于 WebView、CSP 和平台权限。
 
 ## 验证方式
 
@@ -441,5 +481,6 @@ npm.cmd run build
 - 保持 feature 内聚，不把业务组件塞进全局 UI 基础层。
 - 保持 demo 能力和真实能力的表述边界。
 - 优先使用应用级 token，而不是散落硬编码颜色、圆角、动效时长。
+- 官方新增视觉和动效能力先扩展 `AppearancePreset`，再由 runtime 映射变量并由 CSS 消费；不要写进默认主题的 `customCss`。
 - 图标统一通过 `useSystemIcons()` 获取。
 - 后端能力未获批前，不提前实现真实文件、音频、数据库或插件能力。

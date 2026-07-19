@@ -6,10 +6,11 @@ status: "active"
 owner_agent: "PM Agent"
 version_scope: "project"
 created: "2026-07-09"
-updated: "2026-07-10"
+updated: "2026-07-19"
 source_documents:
   - "docs/requirements/总需求分析.md"
   - "docs/requirements/v0-1-foundation.md"
+  - "docs/requirements/v0-2-playlist-ui-prototype.md"
   - "docs/decisions/2026-07-10-visual-customization-boundary.md"
 ---
 # SpMusic 需求索引
@@ -27,7 +28,6 @@ SpMusic 的长期定位是：美观、高性能、有强大扩展能力的本地
 | `docs/requirements/总需求分析.md` | 已接受为产品方向 | 最终产品定位、能力分层、范围边界和开放问题 |
 | `docs/requirements/v0-1-foundation.md` | 已批准为 v0.1 版本需求 | 播放界面阶段的需求、非目标和验收标准 |
 | `docs/requirements/v0-2-playlist-ui-prototype.md` | 已批准为 v0.2 版本候选需求 | 虚构播放列表展示、增删改、排序、歌单内歌曲排序、跨列表加入歌曲、删除歌单内条目和详情联动的需求边界 |
-| `docs/requirements/playback-queue.md` | 已整合为总需求细化 | 内置播放队列、来源队列和下一首播放规则 |
 
 ## 长期产品边界
 
@@ -94,7 +94,7 @@ v0.1 的目标不是实现完整播放器，也不验证真实音频链路，而
 | REQ-PLAYLIST-UI-001 | 虚构播放列表管理 UI | P1 | Approved for v0.2 | `docs/requirements/v0-2-playlist-ui-prototype.md` |
 | REQ-AUDIO-001 | 真实本地音频播放 | P1 | Deferred | `docs/requirements/总需求分析.md` |
 | REQ-LIBRARY-001 | 本地音乐库与文件夹扫描 | P1 | Deferred | `docs/requirements/总需求分析.md` |
-| REQ-QUEUE-001 | 内置播放队列与下一首播放 | P1 | Integrated | `docs/requirements/总需求分析.md`, `docs/requirements/playback-queue.md` |
+| REQ-QUEUE-001 | 内置播放队列与下一首播放 | P1 | Integrated | `docs/requirements/总需求分析.md` |
 | REQ-PLAYLIST-001 | 播放列表与 `m3u8` 支持 | P1 | Deferred | `docs/requirements/总需求分析.md` |
 | REQ-NETWORK-001 | FTP / SMB / WebDAV 网络存储播放 | P2 | Deferred | `docs/requirements/总需求分析.md` |
 | REQ-PLUGIN-001 | 插件增强体系 | P3 | Deferred | `docs/requirements/总需求分析.md` |

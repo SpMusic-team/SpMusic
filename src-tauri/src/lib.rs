@@ -16,7 +16,17 @@ fn audio_open_file(
     state: State<'_, AudioController>,
     input: Option<AudioOpenFileInput>,
 ) -> Result<AudioTrackRef, AudioCommandError> {
-    state.open_file(input)
+    tracing::info!(
+        command = "audio_open_file",
+        filter_count = input
+            .as_ref()
+            .and_then(|input| input.filters.as_ref())
+            .map(Vec::len),
+        "Tauri command invoked",
+    );
+    let result = state.open_file(input);
+    log_track_command_result("audio_open_file", &result);
+    result
 }
 
 #[tauri::command]
@@ -24,7 +34,14 @@ fn audio_load_file(
     state: State<'_, AudioController>,
     input: AudioLoadFileInput,
 ) -> Result<AudioTrackRef, AudioCommandError> {
-    state.load_file(input)
+    tracing::info!(
+        command = "audio_load_file",
+        path = %input.path,
+        "Tauri command invoked",
+    );
+    let result = state.load_file(input);
+    log_track_command_result("audio_load_file", &result);
+    result
 }
 
 #[tauri::command]
@@ -32,17 +49,30 @@ fn audio_play(
     state: State<'_, AudioController>,
     input: Option<AudioPlayInput>,
 ) -> Result<AudioPlaybackState, AudioCommandError> {
-    state.play(input)
+    tracing::info!(
+        command = "audio_play",
+        restart = input.as_ref().and_then(|input| input.restart),
+        "Tauri command invoked",
+    );
+    let result = state.play(input);
+    log_state_command_result("audio_play", &result);
+    result
 }
 
 #[tauri::command]
 fn audio_pause(state: State<'_, AudioController>) -> Result<AudioPlaybackState, AudioCommandError> {
-    state.pause()
+    tracing::info!(command = "audio_pause", "Tauri command invoked");
+    let result = state.pause();
+    log_state_command_result("audio_pause", &result);
+    result
 }
 
 #[tauri::command]
 fn audio_stop(state: State<'_, AudioController>) -> Result<AudioPlaybackState, AudioCommandError> {
-    state.stop()
+    tracing::info!(command = "audio_stop", "Tauri command invoked");
+    let result = state.stop();
+    log_state_command_result("audio_stop", &result);
+    result
 }
 
 #[tauri::command]
@@ -50,16 +80,59 @@ fn audio_seek(
     state: State<'_, AudioController>,
     input: AudioSeekInput,
 ) -> Result<AudioPlaybackState, AudioCommandError> {
-    state.seek(input)
+    tracing::info!(
+        command = "audio_seek",
+        requested_ms = input.position_ms,
+        "Tauri command invoked",
+    );
+    let result = state.seek(input);
+    log_state_command_result("audio_seek", &result);
+    result
 }
 
 #[tauri::command]
 fn audio_get_state(state: State<'_, AudioController>) -> AudioPlaybackState {
-    state.get_state()
+    tracing::debug!(command = "audio_get_state", "Tauri command invoked");
+    let state = state.get_state();
+    tracing::debug!(
+        command = "audio_get_state",
+        phase = ?state.phase,
+        position_ms = state.position_ms,
+        duration_ms = state.duration_ms,
+        "Tauri command completed",
+    );
+    state
+}
+
+#[tauri::command]
+fn audio_get_current_track(
+    state: State<'_, AudioController>,
+) -> Result<Option<AudioTrackRef>, AudioCommandError> {
+    tracing::debug!(command = "audio_get_current_track", "Tauri command invoked");
+    let track = state.get_current_track();
+    tracing::debug!(
+        command = "audio_get_current_track",
+        track_id = track
+            .as_ref()
+            .ok()
+            .and_then(|track| track.as_ref())
+            .map(|track| track.id.as_str()),
+        success = track.is_ok(),
+        "Tauri command completed",
+    );
+    track
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    init_tracing();
+    tracing::info!(
+        operation = "app.start",
+        package_name = env!("CARGO_PKG_NAME"),
+        package_version = env!("CARGO_PKG_VERSION"),
+        debug_assertions = cfg!(debug_assertions),
+        "starting SpMusic Tauri backend",
+    );
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             audio_open_file,
@@ -69,11 +142,12 @@ pub fn run() {
             audio_stop,
             audio_seek,
             audio_get_state,
+            audio_get_current_track,
         ])
         .setup(|app| {
-            init_tracing();
             let app_paths = AppPaths::prepare()?;
             tracing::info!(
+                operation = "app.setup",
                 config_dir = %app_paths.config_dir.display(),
                 data_dir = %app_paths.data_dir.display(),
                 cache_dir = %app_paths.cache_dir.display(),
@@ -109,6 +183,56 @@ fn init_tracing() {
 
         if tracing::subscriber::set_global_default(subscriber).is_err() {
             eprintln!("tracing subscriber was already initialized");
+        } else {
+            tracing::info!(
+                operation = "app.tracing.init",
+                "initialized tracing subscriber",
+            );
         }
     });
+}
+
+fn log_track_command_result(
+    command: &'static str,
+    result: &Result<AudioTrackRef, AudioCommandError>,
+) {
+    match result {
+        Ok(track) => tracing::info!(
+            command,
+            track_id = %track.id,
+            file_name = %track.file_name,
+            duration_ms = track.duration_ms,
+            "Tauri command completed",
+        ),
+        Err(error) => tracing::warn!(
+            command,
+            error_code = ?error.code,
+            error = %error.message,
+            recoverable = error.recoverable,
+            "Tauri command failed",
+        ),
+    }
+}
+
+fn log_state_command_result(
+    command: &'static str,
+    result: &Result<AudioPlaybackState, AudioCommandError>,
+) {
+    match result {
+        Ok(state) => tracing::info!(
+            command,
+            phase = ?state.phase,
+            position_ms = state.position_ms,
+            duration_ms = state.duration_ms,
+            track_id = state.current_track_id.as_deref(),
+            "Tauri command completed",
+        ),
+        Err(error) => tracing::warn!(
+            command,
+            error_code = ?error.code,
+            error = %error.message,
+            recoverable = error.recoverable,
+            "Tauri command failed",
+        ),
+    }
 }

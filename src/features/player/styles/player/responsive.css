@@ -16,6 +16,11 @@
   .track-pills .title-pill { font-size: 18px; }
   .lyrics-panel { display: none; }
   .debug-queue-panel { display: none; }
+  .temporary-audio-control-bar { top: 48px; width: calc(100% - 24px); grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; padding: 10px 12px; border-radius: 18px; }
+  .temporary-audio-control-actions { grid-column: 1 / -1; justify-content: center; }
+  .temporary-audio-control-actions button { height: 32px; }
+  .temporary-audio-control-progress { grid-column: 1 / -1; }
+  .temporary-audio-control-phase { justify-self: end; }
   .control-dock { bottom: 12px; width: calc(100% - 24px); height: auto; padding: 14px 16px 16px; border-radius: 28px; }
   .progress-row { grid-template-columns: 54px 1fr 54px; gap: 12px; height: 28px; font-size: 12px; line-height: 20px; }
   .progress-row input { width: 100%; height: 28px; }
@@ -37,6 +42,9 @@
   .player-shell { padding: 52px 14px 168px; }
   .track-pills .artist-pill { display: none; }
   .track-pills .title-pill { max-width: 240px; font-size: 16px; }
+  .temporary-audio-control-bar { grid-template-columns: 1fr; }
+  .temporary-audio-control-actions { justify-content: flex-start; overflow-x: auto; }
+  .temporary-audio-control-progress, .temporary-audio-control-phase { justify-self: stretch; }
   .control-side:first-child, .control-side-end > button:first-child { display: none; }
   .control-dock { bottom: 10px; border-radius: 24px; }
   .progress-row { grid-template-columns: 48px 1fr 48px; gap: 8px; }

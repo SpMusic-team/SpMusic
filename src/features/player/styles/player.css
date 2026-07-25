@@ -4,6 +4,7 @@
 @import "./player/more-actions-menu.css";
 @import "./player/track-pills.css";
 @import "./player/lyrics-panel.css";
+@import "./player/temporary-audio-control-bar.css";
 @import "./player/control-dock.css";
 @import "./player/volume-control.css";
 @import "./player/queue-panel.css";

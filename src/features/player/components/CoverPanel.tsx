@@ -36,6 +36,7 @@ export function CoverPanel({ track, coverStyle, likeIcon, dislikeIcon, liked, di
         animate="animate"
         exit="exit"
       >
+        {track.coverImage ? <img className="cover-image" src={track.coverImage} alt={`${track.title} 封面`} /> : null}
         {!track.coverImage ? <div className="cover-mark"><systemIcons.music /><strong>{appCopy.productName}</strong><span>LOCAL LISTENING</span></div> : null}
         <div className="cover-feedback">
           <IconButton icon={likeIcon} label={appCopy.controls.like} selected={liked} onClick={onLike} />

@@ -3,6 +3,7 @@ mod device;
 mod error;
 mod runtime;
 mod source;
+mod symphonia_source;
 mod types;
 
 pub use controller::AudioController;

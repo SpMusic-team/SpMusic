@@ -26,6 +26,10 @@ pub enum AppPathsError {
 
 impl AppPaths {
     pub fn prepare() -> Result<Self, AppPathsError> {
+        tracing::info!(
+            operation = "app.paths.prepare",
+            "preparing platform app directories",
+        );
         let project_dirs =
             ProjectDirs::from("app", "SpMusic", "SpMusic").ok_or(AppPathsError::Unavailable)?;
         let paths = Self {
@@ -35,6 +39,13 @@ impl AppPaths {
         };
 
         paths.ensure_created()?;
+        tracing::info!(
+            operation = "app.paths.prepare",
+            config_dir = %paths.config_dir.display(),
+            data_dir = %paths.data_dir.display(),
+            cache_dir = %paths.cache_dir.display(),
+            "prepared platform app directories",
+        );
         Ok(paths)
     }
 
@@ -47,10 +58,31 @@ impl AppPaths {
 }
 
 fn ensure_dir(path: &Path) -> Result<(), AppPathsError> {
-    fs::create_dir_all(path).map_err(|source| AppPathsError::CreateDir {
-        path: path.to_path_buf(),
-        source,
-    })
+    tracing::debug!(
+        operation = "app.paths.ensure_dir",
+        path = %path.display(),
+        "ensuring app directory exists",
+    );
+    fs::create_dir_all(path)
+        .map(|_| {
+            tracing::debug!(
+                operation = "app.paths.ensure_dir",
+                path = %path.display(),
+                "app directory is ready",
+            );
+        })
+        .map_err(|source| {
+            tracing::warn!(
+                operation = "app.paths.ensure_dir",
+                path = %path.display(),
+                error = %source,
+                "failed to create app directory",
+            );
+            AppPathsError::CreateDir {
+                path: path.to_path_buf(),
+                source,
+            }
+        })
 }
 
 #[cfg(test)]

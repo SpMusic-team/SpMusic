@@ -198,6 +198,19 @@ type AudioSeekInput = {
 
 输出：`AudioPlaybackState`
 
+### `audio_get_current_track`
+
+用途：仅在前端重连或歌曲详情缓存缺失时查询当前完整歌曲详情。
+
+输入：无。
+
+输出：`AudioTrackRef | null`
+
+约束：
+
+- 不得用于播放进度轮询或每次控制 command 后的常规同步。
+- `AudioTrackRef` 可以包含封面、歌词、标签和本地路径，因此只能低频传输。
+
 ## 数据契约
 
 ```ts
@@ -213,7 +226,7 @@ type AudioPlaybackPhase =
 
 type AudioPlaybackState = {
   phase: AudioPlaybackPhase
-  currentTrack: AudioTrackRef | null
+  currentTrackId: string | null
   positionMs: number
   durationMs: number | null
   volume: number

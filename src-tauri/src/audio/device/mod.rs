@@ -10,8 +10,10 @@ use rodio::cpal::{
     traits::{DeviceTrait, HostTrait},
 };
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AudioDeviceEvent {
-    OutputDeviceChanged,
+    DefaultOutputChanged,
+    DefaultOutputUnavailable,
 }
 
 pub(crate) struct AudioDeviceWatcherHandle {
@@ -44,9 +46,18 @@ pub(crate) fn start_audio_device_watcher(tx: Sender<AudioDeviceEvent>) -> AudioD
     #[cfg(windows)]
     {
         match windows::start_audio_device_watcher(tx.clone()) {
-            Ok(handle) => return handle,
+            Ok(handle) => {
+                tracing::info!(
+                    operation = "audio.device.watcher.start",
+                    backend = "windows",
+                    "started Windows audio device watcher",
+                );
+                return handle;
+            }
             Err(error) => {
                 tracing::warn!(
+                    operation = "audio.device.watcher.start",
+                    backend = "windows",
                     error = %error,
                     "failed to start Windows audio device watcher, falling back to polling"
                 );
@@ -54,37 +65,22 @@ pub(crate) fn start_audio_device_watcher(tx: Sender<AudioDeviceEvent>) -> AudioD
         }
     }
 
+    tracing::info!(
+        operation = "audio.device.watcher.start",
+        backend = "polling",
+        "starting polling audio device watcher",
+    );
     polling::start_audio_device_watcher(tx)
 }
 
 pub(crate) fn current_output_device_signature() -> Option<String> {
     let host = cpal::default_host();
-    let default_output = host
-        .default_output_device()
-        .map(|device| {
-            let name = device.name().unwrap_or_else(|_| "unknown".to_string());
-            let config = device
-                .default_output_config()
-                .map(|config| format!("{config:?}"))
-                .unwrap_or_else(|_| "unknown-config".to_string());
+    let device = host.default_output_device()?;
+    let name = device.name().unwrap_or_else(|_| "unknown".to_string());
+    let config = device
+        .default_output_config()
+        .map(|config| format!("{config:?}"))
+        .unwrap_or_else(|_| "unknown-config".to_string());
 
-            format!("{name}|{config}")
-        })
-        .unwrap_or_else(|| "none".to_string());
-    let mut output_devices = host
-        .output_devices()
-        .ok()
-        .map(|devices| {
-            devices
-                .filter_map(|device| device.name().ok())
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-
-    output_devices.sort();
-
-    Some(format!(
-        "default={default_output};outputs={}",
-        output_devices.join("|")
-    ))
+    Some(format!("default={name}|{config}"))
 }

@@ -6,7 +6,7 @@ status: "active"
 owner_agent: "Rust/Tauri Agent"
 version_scope: "v0.1"
 created: "2026-07-24"
-updated: "2026-07-24"
+updated: "2026-07-25"
 source_documents:
   - "docs/architecture/real-audio-playback.md"
   - "docs/tasks/sp-016-rust-tauri-real-audio-backend.md"
@@ -40,6 +40,7 @@ Tauri managed state 保存 `AudioController`。`AudioController` 通过 channel 
 - `audio_stop() -> AudioPlaybackState`
 - `audio_seek(input: AudioSeekInput) -> AudioPlaybackState`
 - `audio_get_state() -> AudioPlaybackState`
+- `audio_get_current_track() -> AudioTrackRef | null`
 
 ## 状态事件
 
@@ -55,11 +56,15 @@ Tauri managed state 保存 `AudioController`。`AudioController` 通过 channel 
 后端返回 `AudioPlaybackState`，字段与 `docs/architecture/real-audio-playback.md` 保持一致：
 
 - `phase`
-- `currentTrack`
+- `currentTrackId`
 - `positionMs`
 - `durationMs`
 - `volume`
 - `error`
+
+`AudioPlaybackState` 是高频实时 DTO，只包含播放阶段、当前歌曲 ID、进度、时长、音量和错误。封面、歌词、标签和本地路径属于低频歌曲详情，不得放入 command 返回的实时状态、`audio_state_changed` 事件或进度轮询响应。
+
+`audio_open_file` / `audio_load_file` 在选歌时返回完整 `AudioTrackRef`。前端重连或丢失歌曲详情时，才调用一次 `audio_get_current_track` 恢复详情。控制 command 在线程内先回复轻量状态，再广播轻量事件，避免事件序列化阻塞 command round trip。
 
 `positionMs` 由已累计播放时间和当前播放起点实时计算；暂停时固定当前位置，继续播放时从当前位置恢复；停止时回到 `0`。
 

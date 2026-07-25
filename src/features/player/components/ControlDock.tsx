@@ -1,4 +1,4 @@
-import { useRef, type ChangeEvent, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react'
+import { useRef, type ChangeEvent, type CSSProperties, type FocusEvent, type FormEvent, type KeyboardEvent, type PointerEvent } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
 import { Button } from '@/components/ui/button'
 import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
@@ -28,6 +28,7 @@ type ControlDockProps = {
   queueOpen: boolean
   audioBusy: boolean
   audioStatusText: string
+  transportBusy: boolean
   onProgressChange: (progress: number) => void
   onProgressCommit: (progress: number) => void
   onOpenAudio: () => void
@@ -59,6 +60,7 @@ export function ControlDock({
   queueOpen,
   audioBusy,
   audioStatusText,
+  transportBusy,
   onProgressChange,
   onProgressCommit,
   onOpenAudio,
@@ -75,11 +77,15 @@ export function ControlDock({
   const appearanceMotion = useAppearanceMotion()
   const progressCommitRef = useRef<{ value: number; at: number } | null>(null)
 
-  function handleProgressChange(event: ChangeEvent<HTMLInputElement>) {
+  function handleProgressChange(event: ChangeEvent<HTMLInputElement> | FormEvent<HTMLInputElement>) {
     onProgressChange(Number(event.currentTarget.value))
   }
 
-  function handleProgressCommit(event: PointerEvent<HTMLInputElement> | KeyboardEvent<HTMLInputElement>) {
+  function handleProgressPointerDown(event: PointerEvent<HTMLInputElement>) {
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+
+  function handleProgressCommit(event: PointerEvent<HTMLInputElement> | KeyboardEvent<HTMLInputElement> | FocusEvent<HTMLInputElement>) {
     if ('key' in event && !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'Enter', ' '].includes(event.key)) {
       return
     }
@@ -103,11 +109,14 @@ export function ControlDock({
         <time>{formatDuration(progress)}</time>
         <input
           aria-label={appCopy.progress.label}
-          disabled={audioBusy || disabled || duration <= 0}
+          disabled={audioBusy || transportBusy || disabled || duration <= 0}
           max={duration}
           min="0"
           onChange={handleProgressChange}
+          onInput={handleProgressChange}
+          onBlur={handleProgressCommit}
           onKeyUp={handleProgressCommit}
+          onPointerDown={handleProgressPointerDown}
           onPointerUp={handleProgressCommit}
           step="0.01"
           type="range"
@@ -116,11 +125,11 @@ export function ControlDock({
         <time>{formatDuration(duration)}</time>
       </div>
       <div className="control-row">
-        <div className="control-side"><IconButton icon={systemIcons.audioWave} label={appCopy.controls.openAudio} disabled={audioBusy} onClick={onOpenAudio} /></div>
+        <div className="control-side"><IconButton icon={systemIcons.audioWave} label={appCopy.controls.openAudio} disabled={audioBusy || transportBusy} onClick={onOpenAudio} /></div>
         <div className="transport">
           <IconButton icon={shuffleIcon} label={shuffleLabel} selected={shuffleSelected} disabled={disabled} onClick={onShuffleCycle} />
-          <IconButton icon={systemIcons.previous} label={appCopy.controls.previous} disabled={disabled} onClick={onPrevious} />
-          <Button className="play-button" aria-label={playing ? appCopy.controls.pause : appCopy.controls.play} aria-pressed={playing} disabled={audioBusy || disabled} size="icon-lg" onClick={onPlayToggle}>
+          <IconButton icon={systemIcons.previous} label={appCopy.controls.previous} disabled={disabled || transportBusy} onClick={onPrevious} />
+          <Button className="play-button" aria-busy={transportBusy} aria-label={playing ? appCopy.controls.pause : appCopy.controls.play} aria-pressed={playing} disabled={audioBusy || disabled} size="icon-lg" onClick={onPlayToggle}>
             <AnimatePresence initial={false} mode="popLayout">
               <motion.span
                 key={playing ? 'pause' : 'play'}
@@ -135,7 +144,7 @@ export function ControlDock({
               </motion.span>
             </AnimatePresence>
           </Button>
-          <IconButton icon={systemIcons.next} label={appCopy.controls.next} disabled={disabled} onClick={onNext} />
+          <IconButton icon={systemIcons.next} label={appCopy.controls.next} disabled={disabled || transportBusy} onClick={onNext} />
           <IconButton icon={repeatIcon} label={repeatLabel} selected={repeatSelected} disabled={disabled} onClick={onRepeatCycle} />
         </div>
         <div className="control-side control-side-end">

@@ -337,6 +337,7 @@ src/features/player/
 - `audio_stop`
 - `audio_seek`
 - `audio_get_state`
+- `audio_get_current_track`
 - `audio_state_changed` 事件监听
 
 UI 不直接调用 `@tauri-apps/api/core`，而是通过 service 层消费稳定 DTO：`AudioTrackRef`、`AudioPlaybackState`、`AudioCommandError`。前端业务判断使用 `AudioCommandError.code`，不依赖后端 `message`。
@@ -431,6 +432,8 @@ src/features/<feature-name>/
 ```txt
 src/features/player/services/audioCommands.ts
 ```
+
+前端必须分离两类状态：`AudioTrackRef` 保存低频歌曲资源（元数据、歌词、封面），`AudioPlaybackState` 保存高频传输状态（`currentTrackId`、阶段、进度、时长、音量和错误）。播放/暂停、设备事件以及 500ms 进度同步只能消费轻量 `AudioPlaybackState`；仅在打开文件或恢复连接且歌曲详情缺失时获取 `AudioTrackRef`。
 
 播放键在未加载真实音频时会先调用 `audio_open_file`，用户选择文件后再调用 `audio_play`；已加载真实音频后，播放键在 `audio_play` 与 `audio_pause` 之间切换。真实音频播放中，前端每 500ms 调用 `audio_get_state` 刷新进度；进度条拖动调用 `audio_seek`。左侧波形按钮作为“打开音频”入口，可重新选择一个本地音频文件。
 

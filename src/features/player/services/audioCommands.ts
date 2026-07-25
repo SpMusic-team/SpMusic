@@ -30,6 +30,27 @@ export type AudioTrackRef = {
   sourcePath: string
   fileName: string
   durationMs: number | null
+  metadata: AudioTrackMetadata
+}
+
+export type AudioTrackMetadata = {
+  title: string | null
+  artist: string | null
+  album: string | null
+  albumArtist: string | null
+  genre: string | null
+  year: number | null
+  trackNumber: number | null
+  discNumber: number | null
+  comment: string | null
+  lyrics: string | null
+  coverArt: AudioCoverArt | null
+}
+
+export type AudioCoverArt = {
+  mimeType: string
+  dataUrl: string
+  byteLen: number
 }
 
 export type AudioCommandError = {
@@ -40,7 +61,7 @@ export type AudioCommandError = {
 
 export type AudioPlaybackState = {
   phase: AudioPlaybackPhase
-  currentTrack: AudioTrackRef | null
+  currentTrackId: string | null
   positionMs: number
   durationMs: number | null
   volume: number
@@ -77,6 +98,10 @@ export async function seekAudio(positionMs: number): Promise<AudioPlaybackState>
 
 export async function getAudioState(): Promise<AudioPlaybackState> {
   return invoke<AudioPlaybackState>('audio_get_state')
+}
+
+export async function getCurrentAudioTrack(): Promise<AudioTrackRef | null> {
+  return invoke<AudioTrackRef | null>('audio_get_current_track')
 }
 
 export async function listenAudioStateChanged(

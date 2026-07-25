@@ -7,15 +7,17 @@ import { CoverPanel } from '@/features/player/components/CoverPanel'
 import { EmptyPlayerState } from '@/features/player/components/EmptyPlayerState'
 import { LyricsPanel } from '@/features/player/components/LyricsPanel'
 import { QueuePanel } from '@/features/player/components/QueuePanel'
+import { TemporaryAudioControlBar } from '@/features/player/components/TemporaryAudioControlBar'
 import { WindowBar } from '@/features/player/components/WindowBar'
 import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { useActiveLyricScroll } from '@/features/player/hooks/useActiveLyricScroll'
 import { nextRepeatMode, nextShuffleMode, resolveNextTrackIndex, type Direction, type RepeatMode, type ShuffleMode } from '@/features/player/model/playbackModes'
 import { appCopy } from '@/features/player/model/playerCopy'
 import { initialPlayerState } from '@/features/player/model/playerState'
-import type { PlayerState, Track } from '@/features/player/model/playerTypes'
+import type { DemoLyricLine, PlayerState, Track } from '@/features/player/model/playerTypes'
 import {
   getAudioState,
+  getCurrentAudioTrack,
   isAudioCommandError,
   listenAudioStateChanged,
   openAudioFile,
@@ -33,19 +35,80 @@ type ProgressStyle = CSSProperties & { '--progress-percent': string }
 type PlayerBackgroundStyle = CSSProperties & { '--player-background-art'?: string }
 type CoverStyle = CSSProperties & { '--cover-art'?: string }
 type TrackFeedback = 'liked' | 'disliked'
+type TransportIntentPhase = 'playing' | 'paused'
+type TransportRequest = {
+  phase: TransportIntentPhase
+  restart: boolean
+}
+
+function nonEmptyText(value: string | null | undefined): string | undefined {
+  const trimmed = value?.trim()
+  return trimmed ? trimmed : undefined
+}
+
+function fileNameTitle(fileName: string): string {
+  return fileName.replace(/\.[^/.]+$/, '') || fileName
+}
+
+function parseLyricTimestamp(timestamp: string): number {
+  const [minutes = '0', seconds = '0'] = timestamp.split(':')
+  return Number(minutes) * 60 + Number(seconds)
+}
+
+function metadataLyricsToLines(track: AudioTrackRef, durationSeconds: number): DemoLyricLine[] {
+  const lyrics = nonEmptyText(track.metadata.lyrics)
+  if (!lyrics) return []
+
+  const rawLines = lyrics
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+
+  if (!rawLines.length) return []
+
+  const timedLines = rawLines.flatMap((line, lineIndex) => {
+    const matches = [...line.matchAll(/\[(\d{1,2}:\d{2}(?:\.\d{1,3})?)\]/g)]
+    const text = line.replace(/\[(\d{1,2}:\d{2}(?:\.\d{1,3})?)\]/g, '').trim()
+
+    if (!matches.length || !text) return []
+
+    return matches.map((match, matchIndex) => ({
+      id: `${track.id}-lyric-${lineIndex}-${matchIndex}`,
+      timeSeconds: parseLyricTimestamp(match[1]),
+      original: text,
+      translation: '',
+    }))
+  })
+
+  if (timedLines.length) {
+    return timedLines.sort((left, right) => left.timeSeconds - right.timeSeconds)
+  }
+
+  const step = durationSeconds > 0 ? durationSeconds / rawLines.length : 0
+  return rawLines.map((line, index) => ({
+    id: `${track.id}-lyric-${index}`,
+    timeSeconds: Math.max(0, index * step),
+    original: line,
+    translation: '',
+  }))
+}
 
 function audioTrackToTrack(track: AudioTrackRef): Track {
-  const title = track.fileName.replace(/\.[^/.]+$/, '') || track.fileName
+  const durationSeconds = track.durationMs ? track.durationMs / 1000 : 0
+  const title = nonEmptyText(track.metadata.title) ?? fileNameTitle(track.fileName)
+  const artist = nonEmptyText(track.metadata.artist) ?? nonEmptyText(track.metadata.albumArtist) ?? '本地音频'
+  const album = nonEmptyText(track.metadata.album) ?? '本地音频'
 
   return {
     id: track.id,
     title,
-    artist: '本地音频',
-    album: '真实播放后端',
+    artist,
+    album,
     category: 'local-audio',
-    durationSeconds: track.durationMs ? track.durationMs / 1000 : 0,
+    durationSeconds,
     coverTone: 'blue',
-    lyrics: [],
+    coverImage: track.metadata.coverArt?.dataUrl,
+    lyrics: metadataLyricsToLines(track, durationSeconds),
   }
 }
 
@@ -67,18 +130,58 @@ function upsertAudioTrack(state: PlayerState, track: AudioTrackRef, playbackStat
   }
 }
 
+function syncPlaybackState(
+  state: PlayerState,
+  playbackState: AudioPlaybackState,
+  audioTrack: AudioTrackRef | null,
+): PlayerState {
+  const trackId = playbackState.currentTrackId
+  const playbackStatus = playbackState.phase === 'playing' ? 'playing' : 'paused'
+  const progressSeconds = playbackState.positionMs / 1000
+
+  if (!trackId || audioTrack?.id !== trackId) {
+    return {
+      ...state,
+      playbackStatus,
+      progressSeconds,
+    }
+  }
+
+  const existingTrack = state.tracks.find((item) => item.id === trackId)
+  if (!existingTrack) return upsertAudioTrack(state, audioTrack, playbackState)
+
+  const durationSeconds = playbackState.durationMs != null
+    ? playbackState.durationMs / 1000
+    : existingTrack.durationSeconds
+  const tracks = durationSeconds === existingTrack.durationSeconds
+    ? state.tracks
+    : state.tracks.map((item) => item.id === trackId ? { ...item, durationSeconds } : item)
+
+  return {
+    ...state,
+    tracks,
+    currentTrackId: trackId,
+    playbackStatus,
+    progressSeconds,
+  }
+}
+
 function audioErrorText(error: AudioCommandError | null): string | null {
   if (!error) return null
   return appCopy.audio.errors[error.code] ?? error.message
 }
 
-function audioStatusText(state: AudioPlaybackState | null, error: AudioCommandError | null): string {
+function audioStatusText(
+  state: AudioPlaybackState | null,
+  error: AudioCommandError | null,
+  track: AudioTrackRef | null,
+): string {
   const errorText = audioErrorText(error ?? state?.error ?? null)
   if (errorText) return errorText
 
   if (!state) return appCopy.audio.idle
 
-  const fileName = state.currentTrack?.fileName ?? '本地音频'
+  const fileName = track?.fileName ?? '本地音频'
 
   switch (state.phase) {
     case 'loading':
@@ -112,8 +215,10 @@ export function PlayerShell() {
   const [volume, setVolume] = useState(72)
   const [queueOpen, setQueueOpen] = useState(false)
   const [audioState, setAudioState] = useState<AudioPlaybackState | null>(null)
+  const [audioTrack, setAudioTrack] = useState<AudioTrackRef | null>(null)
   const [audioError, setAudioError] = useState<AudioCommandError | null>(null)
   const [audioBusy, setAudioBusy] = useState(false)
+  const [transportBusy, setTransportBusy] = useState(false)
   const [seekPreviewSeconds, setSeekPreviewSeconds] = useState<number | null>(null)
   const lyricListRef = useRef<HTMLOListElement>(null)
   const lyricRefs = useRef(new Map<string, HTMLLIElement>())
@@ -121,8 +226,21 @@ export function PlayerShell() {
   const endingTrackRef = useRef<string | null>(null)
   const seekRequestIdRef = useRef(0)
   const lastSeekCommitRef = useRef<{ positionMs: number; at: number } | null>(null)
+  const audioStateRequestGenerationRef = useRef(0)
+  const transportIntentRef = useRef<TransportIntentPhase | null>(null)
+  const desiredTransportRequestRef = useRef<TransportRequest | null>(null)
+  const transportCommandRunningRef = useRef(false)
+  const transportRollbackStateRef = useRef<AudioPlaybackState | null>(null)
+  const audioTrackRef = useRef<AudioTrackRef | null>(null)
+  const audioTrackRequestIdRef = useRef(0)
+  const audioTrackRequestTrackIdRef = useRef<string | null>(null)
+  const audioSelectionInProgressRef = useRef(false)
+  const latestAudioStateRef = useRef<AudioPlaybackState | null>(null)
   const track = useMemo(() => resolveTrack(state.tracks, state.currentTrackId), [state.currentTrackId, state.tracks])
-  const realAudioTrackId = audioState?.currentTrack?.id ?? null
+  const realAudioTrackId = audioState?.currentTrackId ?? null
+  const currentAudioTrack = audioTrack?.id === realAudioTrackId ? audioTrack : null
+  const hasRealAudioTrack = Boolean(currentAudioTrack)
+  const realAudioPlaying = audioState?.phase === 'playing'
   const usingRealAudio = Boolean(track && realAudioTrackId && track.id === realAudioTrackId)
   const playing = usingRealAudio ? audioState?.phase === 'playing' : state.playbackStatus === 'playing'
   const realAudioDuration = audioState?.durationMs != null ? audioState.durationMs / 1000 : track?.durationSeconds ?? 0
@@ -133,28 +251,149 @@ export function PlayerShell() {
   const activeLyricId = activeLyric?.id
   const activeLyricIndex = track?.lyrics.findIndex((line) => line.id === activeLyricId) ?? -1
   const progressStyle: ProgressStyle = { '--progress-percent': `${duration ? progress / duration * 100 : 0}%` }
-  const realAudioStatusText = audioStatusText(audioState, audioError)
+  const realAudioStatusText = audioStatusText(audioState, audioError, currentAudioTrack)
+  const temporaryAudioFileName = currentAudioTrack?.fileName ?? null
+  const temporaryAudioTitle = currentAudioTrack
+    ? nonEmptyText(currentAudioTrack.metadata.title) ?? fileNameTitle(currentAudioTrack.fileName)
+    : null
+  const temporaryAudioDuration = audioState?.durationMs != null ? audioState.durationMs / 1000 : 0
+  const temporaryAudioBackendProgress = (audioState?.positionMs ?? 0) / 1000
+  const temporaryAudioProgress = Math.min(
+    Math.max(seekPreviewSeconds ?? temporaryAudioBackendProgress, 0),
+    temporaryAudioDuration,
+  )
   const albumArt = track?.coverImage ? `url("${track.coverImage}") center / cover no-repeat` : undefined
   const playerBackgroundStyle: PlayerBackgroundStyle | undefined = albumArt ? { '--player-background-art': albumArt } : undefined
   const coverStyle: CoverStyle | undefined = albumArt ? { '--cover-art': albumArt } : undefined
 
   useActiveLyricScroll(activeLyricId, lyricListRef, lyricRefs)
 
-  const applyAudioState = useCallback((nextAudioState: AudioPlaybackState) => {
-    setAudioState(nextAudioState)
-    setAudioError(nextAudioState.error)
-
-    if (!nextAudioState.currentTrack) {
-      setState((previous) => ({
-        ...previous,
-        playbackStatus: nextAudioState.phase === 'playing' ? 'playing' : 'paused',
-        progressSeconds: nextAudioState.positionMs / 1000,
-      }))
+  const hydrateCurrentAudioTrack = useCallback((trackId: string) => {
+    if (
+      audioTrackRef.current?.id === trackId
+      || audioTrackRequestTrackIdRef.current === trackId
+    ) {
       return
     }
 
-    setState((previous) => upsertAudioTrack(previous, nextAudioState.currentTrack!, nextAudioState))
+    const requestId = audioTrackRequestIdRef.current + 1
+    audioTrackRequestIdRef.current = requestId
+    audioTrackRequestTrackIdRef.current = trackId
+
+    void getCurrentAudioTrack()
+      .then((nextAudioTrack) => {
+        const latestAudioState = latestAudioStateRef.current
+        if (
+          audioTrackRequestIdRef.current !== requestId
+          || nextAudioTrack?.id !== trackId
+          || latestAudioState?.currentTrackId !== trackId
+        ) {
+          return
+        }
+
+        audioTrackRef.current = nextAudioTrack
+        setAudioTrack(nextAudioTrack)
+        setState((previous) => upsertAudioTrack(previous, nextAudioTrack, latestAudioState))
+      })
+      .catch((error: unknown) => {
+        if (audioTrackRequestIdRef.current !== requestId) return
+        setAudioError(isAudioCommandError(error) ? error : {
+          code: 'INTERNAL_ERROR',
+          message: appCopy.audio.unavailable,
+          recoverable: true,
+        })
+      })
+      .finally(() => {
+        if (audioTrackRequestIdRef.current === requestId) {
+          audioTrackRequestTrackIdRef.current = null
+        }
+      })
   }, [])
+
+  const applyAudioState = useCallback((nextAudioState: AudioPlaybackState, settleTransportIntent = false) => {
+    const transportIntent = transportIntentRef.current
+    const isConflictingTransportState = transportIntent !== null
+      && (nextAudioState.phase === 'playing' || nextAudioState.phase === 'paused')
+      && nextAudioState.phase !== transportIntent
+
+    if (!settleTransportIntent && isConflictingTransportState) return
+
+    latestAudioStateRef.current = nextAudioState
+    setAudioState(nextAudioState)
+    setAudioError(nextAudioState.error)
+    setState((previous) => syncPlaybackState(previous, nextAudioState, audioTrackRef.current))
+
+    if (
+      nextAudioState.currentTrackId
+      && audioTrackRef.current?.id !== nextAudioState.currentTrackId
+      && !audioSelectionInProgressRef.current
+    ) {
+      hydrateCurrentAudioTrack(nextAudioState.currentTrackId)
+    }
+  }, [hydrateCurrentAudioTrack])
+
+  function applyOptimisticTransportPhase(phase: TransportIntentPhase) {
+    transportIntentRef.current = phase
+    audioStateRequestGenerationRef.current += 1
+    setAudioState((previous) => {
+      if (!previous) return previous
+      const optimisticState = { ...previous, phase, error: null }
+      latestAudioStateRef.current = optimisticState
+      return optimisticState
+    })
+    setAudioError(null)
+    setState((previous) => ({ ...previous, playbackStatus: phase }))
+  }
+
+  function queueTransportRequest(request: TransportRequest) {
+    desiredTransportRequestRef.current = request
+    applyOptimisticTransportPhase(request.phase)
+
+    if (transportCommandRunningRef.current) return
+
+    transportRollbackStateRef.current = audioState
+    transportCommandRunningRef.current = true
+    setTransportBusy(true)
+    void runTransportCommandQueue()
+  }
+
+  async function runTransportCommandQueue() {
+    let lastConfirmedState = transportRollbackStateRef.current
+
+    try {
+      while (desiredTransportRequestRef.current) {
+        const request = desiredTransportRequestRef.current
+        desiredTransportRequestRef.current = null
+
+        const nextState = request.phase === 'paused'
+          ? await pauseAudio()
+          : await playAudio({ restart: request.restart })
+        lastConfirmedState = nextState
+
+        const queuedRequest = desiredTransportRequestRef.current as TransportRequest | null
+        if (queuedRequest?.phase === nextState.phase) {
+          desiredTransportRequestRef.current = null
+        }
+
+        if (!desiredTransportRequestRef.current) {
+          applyAudioState(nextState, true)
+        }
+      }
+    } catch (error) {
+      desiredTransportRequestRef.current = null
+      if (lastConfirmedState) applyAudioState(lastConfirmedState, true)
+      setAudioError(isAudioCommandError(error) ? error : {
+        code: 'INTERNAL_ERROR',
+        message: appCopy.audio.unavailable,
+        recoverable: true,
+      })
+    } finally {
+      transportIntentRef.current = null
+      transportRollbackStateRef.current = null
+      transportCommandRunningRef.current = false
+      setTransportBusy(false)
+    }
+  }
 
   useEffect(() => {
     let disposed = false
@@ -172,6 +411,19 @@ export function PlayerShell() {
         unlisten = nextUnlisten
       })
       .catch((error: unknown) => {
+        setAudioError(isAudioCommandError(error) ? error : {
+          code: 'INTERNAL_ERROR',
+          message: appCopy.audio.unavailable,
+          recoverable: true,
+        })
+      })
+
+    void getAudioState()
+      .then((nextAudioState) => {
+        if (!disposed) applyAudioState(nextAudioState)
+      })
+      .catch((error: unknown) => {
+        if (disposed) return
         setAudioError(isAudioCommandError(error) ? error : {
           code: 'INTERNAL_ERROR',
           message: appCopy.audio.unavailable,
@@ -248,9 +500,14 @@ export function PlayerShell() {
     if (!usingRealAudio || audioState?.phase !== 'playing' || seekPreviewSeconds !== null) return
 
     const intervalId = window.setInterval(() => {
+      const requestGeneration = audioStateRequestGenerationRef.current
       void getAudioState()
-        .then(applyAudioState)
+        .then((nextAudioState) => {
+          if (requestGeneration !== audioStateRequestGenerationRef.current) return
+          applyAudioState(nextAudioState)
+        })
         .catch((error: unknown) => {
+          if (requestGeneration !== audioStateRequestGenerationRef.current) return
           setAudioError(isAudioCommandError(error) ? error : {
             code: 'INTERNAL_ERROR',
             message: appCopy.audio.unavailable,
@@ -267,9 +524,14 @@ export function PlayerShell() {
 
     setAudioBusy(true)
     setAudioError(null)
+    audioSelectionInProgressRef.current = true
 
     try {
       const audioTrack = await openAudioFile()
+      audioTrackRequestIdRef.current += 1
+      audioTrackRequestTrackIdRef.current = null
+      audioTrackRef.current = audioTrack
+      setAudioTrack(audioTrack)
       setState((previous) => upsertAudioTrack(previous, audioTrack))
 
       if (autoplay) {
@@ -288,8 +550,51 @@ export function PlayerShell() {
         })
       }
     } finally {
+      audioSelectionInProgressRef.current = false
       setAudioBusy(false)
     }
+  }
+
+  function requestRealAudioSeek(nextProgress: number, targetDuration: number, targetBackendProgress: number) {
+    const clampedProgress = Math.min(Math.max(nextProgress, 0), targetDuration)
+    const positionMs = Math.round(clampedProgress * 1000)
+    const now = window.performance.now()
+    const previousCommit = lastSeekCommitRef.current
+
+    if (previousCommit && previousCommit.positionMs === positionMs && now - previousCommit.at < 360) {
+      return
+    }
+
+    lastSeekCommitRef.current = { positionMs, at: now }
+
+    if (Math.abs(clampedProgress - targetBackendProgress) < 0.08) {
+      setSeekPreviewSeconds(null)
+      return
+    }
+
+    const requestId = seekRequestIdRef.current + 1
+    seekRequestIdRef.current = requestId
+    setSeekPreviewSeconds(clampedProgress)
+    setAudioError(null)
+
+    void seekAudio(positionMs)
+      .then((nextAudioState) => {
+        if (seekRequestIdRef.current === requestId) {
+          applyAudioState(nextAudioState)
+        }
+      })
+      .catch((error: unknown) => {
+        setAudioError(isAudioCommandError(error) ? error : {
+          code: 'INTERNAL_ERROR',
+          message: appCopy.audio.unavailable,
+          recoverable: true,
+        })
+      })
+      .finally(() => {
+        if (seekRequestIdRef.current === requestId) {
+          setSeekPreviewSeconds(null)
+        }
+      })
   }
 
   function setProgress(nextProgress: number) {
@@ -307,67 +612,84 @@ export function PlayerShell() {
     endingTrackRef.current = null
 
     if (usingRealAudio) {
-      const clampedProgress = Math.min(Math.max(nextProgress, 0), duration)
-      const positionMs = Math.round(clampedProgress * 1000)
-      const now = window.performance.now()
-      const previousCommit = lastSeekCommitRef.current
-
-      if (previousCommit && previousCommit.positionMs === positionMs && now - previousCommit.at < 360) {
-        return
-      }
-
-      lastSeekCommitRef.current = { positionMs, at: now }
-
-      if (Math.abs(clampedProgress - backendProgress) < 0.08) {
-        setSeekPreviewSeconds(null)
-        return
-      }
-
-      const requestId = seekRequestIdRef.current + 1
-      seekRequestIdRef.current = requestId
-      setSeekPreviewSeconds(clampedProgress)
-      setAudioError(null)
-
-      void seekAudio(positionMs)
-        .then((nextAudioState) => {
-          if (seekRequestIdRef.current === requestId) {
-            applyAudioState(nextAudioState)
-          }
-        })
-        .catch((error: unknown) => {
-          setAudioError(isAudioCommandError(error) ? error : {
-            code: 'INTERNAL_ERROR',
-            message: appCopy.audio.unavailable,
-            recoverable: true,
-          })
-        })
-        .finally(() => {
-          if (seekRequestIdRef.current === requestId) {
-            setSeekPreviewSeconds(null)
-          }
-        })
+      requestRealAudioSeek(nextProgress, duration, backendProgress)
       return
     }
 
     setState((previous) => ({ ...previous, progressSeconds: nextProgress }))
   }
 
-  async function togglePlayback() {
+  function setTemporaryAudioProgress(nextProgress: number) {
+    if (!hasRealAudioTrack) return
+
+    endingTrackRef.current = null
+    setSeekPreviewSeconds(nextProgress)
+  }
+
+  function commitTemporaryAudioProgress(nextProgress: number) {
+    if (!hasRealAudioTrack) return
+
+    endingTrackRef.current = null
+    requestRealAudioSeek(nextProgress, temporaryAudioDuration, temporaryAudioBackendProgress)
+  }
+
+  function togglePlayback() {
     if (audioBusy) return
 
     if (!usingRealAudio) {
-      await openAndMaybePlay(true)
+      void openAndMaybePlay(true)
       return
     }
+
+    const targetPhase: TransportIntentPhase = playing ? 'paused' : 'playing'
+    queueTransportRequest({
+      phase: targetPhase,
+      restart: targetPhase === 'playing' && duration > 0 && progress >= duration,
+    })
+  }
+
+  function toggleRealAudioPlayback() {
+    if (audioBusy) return
+
+    if (!hasRealAudioTrack) {
+      void openAndMaybePlay(true)
+      return
+    }
+
+    const targetPhase: TransportIntentPhase = realAudioPlaying ? 'paused' : 'playing'
+    queueTransportRequest({
+      phase: targetPhase,
+      restart: targetPhase === 'playing' && audioState?.phase === 'ended',
+    })
+  }
+
+  async function stopRealAudioPlayback() {
+    if (audioBusy || !hasRealAudioTrack) return
 
     setAudioBusy(true)
     setAudioError(null)
 
     try {
-      const nextState = playing
-        ? await pauseAudio()
-        : await playAudio({ restart: duration > 0 && progress >= duration })
-      applyAudioState(nextState)
+      applyAudioState(await stopAudio())
+    } catch (error) {
+      setAudioError(isAudioCommandError(error) ? error : {
+        code: 'INTERNAL_ERROR',
+        message: appCopy.audio.unavailable,
+        recoverable: true,
+      })
+    } finally {
+      setAudioBusy(false)
+    }
+  }
+
+  async function refreshRealAudioState() {
+    if (audioBusy) return
+
+    setAudioBusy(true)
+    setAudioError(null)
+
+    try {
+      applyAudioState(await getAudioState())
     } catch (error) {
       setAudioError(isAudioCommandError(error) ? error : {
         code: 'INTERNAL_ERROR',
@@ -446,6 +768,25 @@ export function PlayerShell() {
           ) : null}
         </AnimatePresence>
         <WindowBar />
+        <TemporaryAudioControlBar
+          busy={audioBusy}
+          duration={temporaryAudioDuration}
+          fileName={temporaryAudioFileName}
+          hasTrack={hasRealAudioTrack}
+          phase={audioState?.phase ?? 'idle'}
+          playing={realAudioPlaying}
+          progress={temporaryAudioProgress}
+          statusText={realAudioStatusText}
+          title={temporaryAudioTitle}
+          transportBusy={transportBusy}
+          onOpen={() => void openAndMaybePlay(false)}
+          onOpenAndPlay={() => void openAndMaybePlay(true)}
+          onPlayToggle={() => void toggleRealAudioPlayback()}
+          onProgressChange={setTemporaryAudioProgress}
+          onProgressCommit={commitTemporaryAudioProgress}
+          onRefresh={() => void refreshRealAudioState()}
+          onStop={() => void stopRealAudioPlayback()}
+        />
 
         {track ? (
           <section className="player-stage" aria-label={appCopy.shellLabel}>
@@ -496,6 +837,7 @@ export function PlayerShell() {
           queueOpen={queueOpen}
           audioBusy={audioBusy}
           audioStatusText={realAudioStatusText}
+          transportBusy={transportBusy}
           onProgressChange={setProgress}
           onProgressCommit={commitProgress}
           onOpenAudio={() => void openAndMaybePlay(false)}

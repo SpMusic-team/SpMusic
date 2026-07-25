@@ -15,6 +15,7 @@
 }
 
 .progress-row { display: grid; grid-template-columns: auto calc(1740 * var(--prototype-unit)) auto; gap: calc(88 * var(--prototype-unit)); align-items: center; justify-content: center; height: calc(28 * var(--prototype-unit)); color: var(--player-muted); font-size: calc(22 * var(--prototype-unit)); line-height: calc(28 * var(--prototype-unit)); font-variant-numeric: tabular-nums; }
+.audio-status { position: absolute; left: 50%; bottom: calc(100% + (12 * var(--prototype-unit))); max-width: min(86vw, calc(1600 * var(--prototype-unit))); margin: 0; padding: calc(8 * var(--prototype-unit)) calc(18 * var(--prototype-unit)); transform: translateX(-50%); overflow: hidden; border-radius: 999px; background: color-mix(in srgb, var(--player-dock) 88%, transparent); color: var(--player-muted); font-size: calc(18 * var(--prototype-unit)); line-height: calc(24 * var(--prototype-unit)); text-overflow: ellipsis; white-space: nowrap; box-shadow: 0 calc(2 * var(--prototype-unit)) calc(8 * var(--prototype-unit)) rgba(0,0,0,.12); backdrop-filter: blur(10px); }
 .progress-row time { white-space: nowrap; }
 .progress-row input { width: calc(1740 * var(--prototype-unit)); height: calc(28 * var(--prototype-unit)); margin: 0; background: transparent; accent-color: var(--player-blue); appearance: none; }
 .progress-row input::-webkit-slider-runnable-track { height: calc(6 * var(--prototype-unit)); border-radius: 50px; background: linear-gradient(90deg,var(--player-blue) var(--progress-percent),#c1c7ce 0); }

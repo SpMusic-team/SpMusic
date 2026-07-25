@@ -1,0 +1,95 @@
+import { invoke } from '@tauri-apps/api/core'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+
+export const AUDIO_STATE_CHANGED_EVENT = 'audio_state_changed'
+
+export type AudioPlaybackPhase =
+  | 'idle'
+  | 'loading'
+  | 'ready'
+  | 'playing'
+  | 'paused'
+  | 'stopped'
+  | 'ended'
+  | 'error'
+
+export type AudioErrorCode =
+  | 'USER_CANCELLED'
+  | 'NO_TRACK_LOADED'
+  | 'INVALID_PATH'
+  | 'FILE_NOT_FOUND'
+  | 'UNREADABLE_FILE'
+  | 'UNSUPPORTED_FORMAT'
+  | 'PLAYBACK_INIT_FAILED'
+  | 'PLAYBACK_FAILED'
+  | 'UNSUPPORTED_OPERATION'
+  | 'INTERNAL_ERROR'
+
+export type AudioTrackRef = {
+  id: string
+  sourcePath: string
+  fileName: string
+  durationMs: number | null
+}
+
+export type AudioCommandError = {
+  code: AudioErrorCode
+  message: string
+  recoverable: boolean
+}
+
+export type AudioPlaybackState = {
+  phase: AudioPlaybackPhase
+  currentTrack: AudioTrackRef | null
+  positionMs: number
+  durationMs: number | null
+  volume: number
+  error: AudioCommandError | null
+}
+
+export type AudioOpenFileInput = {
+  filters?: Array<{ name: string; extensions: string[] }>
+}
+
+export type AudioPlayInput = {
+  restart?: boolean
+}
+
+export async function openAudioFile(input?: AudioOpenFileInput): Promise<AudioTrackRef> {
+  return invoke<AudioTrackRef>('audio_open_file', { input: input ?? null })
+}
+
+export async function playAudio(input?: AudioPlayInput): Promise<AudioPlaybackState> {
+  return invoke<AudioPlaybackState>('audio_play', { input: input ?? null })
+}
+
+export async function pauseAudio(): Promise<AudioPlaybackState> {
+  return invoke<AudioPlaybackState>('audio_pause')
+}
+
+export async function stopAudio(): Promise<AudioPlaybackState> {
+  return invoke<AudioPlaybackState>('audio_stop')
+}
+
+export async function seekAudio(positionMs: number): Promise<AudioPlaybackState> {
+  return invoke<AudioPlaybackState>('audio_seek', { input: { positionMs } })
+}
+
+export async function getAudioState(): Promise<AudioPlaybackState> {
+  return invoke<AudioPlaybackState>('audio_get_state')
+}
+
+export async function listenAudioStateChanged(
+  handler: (state: AudioPlaybackState) => void,
+): Promise<UnlistenFn> {
+  return listen<AudioPlaybackState>(AUDIO_STATE_CHANGED_EVENT, (event) => {
+    handler(event.payload)
+  })
+}
+
+export function isAudioCommandError(error: unknown): error is AudioCommandError {
+  if (!error || typeof error !== 'object') return false
+
+  const candidate = error as Partial<AudioCommandError>
+  return typeof candidate.code === 'string' && typeof candidate.message === 'string'
+}

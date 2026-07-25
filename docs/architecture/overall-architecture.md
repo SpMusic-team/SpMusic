@@ -2,11 +2,11 @@
 doc_id: "ARCH-OVERALL"
 title: "总体架构蓝图"
 doc_type: "architecture"
-status: "active"
+status: "superseded"
 owner_agent: "Architecture Agent"
 version_scope: "v0.1"
 created: "2026-07-09"
-updated: "2026-07-10"
+updated: "2026-07-24"
 source_documents:
   - "agent-prompt/Architecture_Agent.md"
   - "docs/requirements/总需求分析.md"
@@ -17,6 +17,8 @@ source_documents:
   - "docs/roadmap.md"
   - "docs/decisions/2026-07-09-product-scope-boundary.md"
   - "docs/decisions/2026-07-09-v0-1-ui-prototype-scope.md"
+  - "docs/decisions/2026-07-24-v0-1-real-audio-scope.md"
+  - "docs/architecture/real-audio-playback.md"
 ---
 # 架构说明：总体架构蓝图
 

@@ -2,16 +2,18 @@
 doc_id: "ARCH-PLAYER-STATE-FAKE-TRACK"
 title: "播放器状态与假歌曲契约"
 doc_type: "architecture"
-status: "active"
+status: "superseded"
 owner_agent: "Architecture Agent"
 version_scope: "v0.1"
 created: "2026-07-09"
-updated: "2026-07-10"
+updated: "2026-07-24"
 source_documents:
   - "agent-prompt/Architecture_Agent.md"
   - "docs/requirements/v0-1-foundation.md"
   - "docs/tasks/sp-004-overall-architecture-and-player-state.md"
   - "docs/architecture/overall-architecture.md"
+  - "docs/decisions/2026-07-24-v0-1-real-audio-scope.md"
+  - "docs/architecture/real-audio-playback.md"
 ---
 # 架构说明：播放器状态与假歌曲契约
 

@@ -1,5 +1,5 @@
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type PointerEvent } from 'react'
 import { useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { ThemeManager } from '@/features/appearance/components/ThemeManager'
 import { appCopy } from '@/features/player/model/playerCopy'
@@ -68,11 +68,33 @@ export function WindowBar() {
     })
   }
 
+  function startWindowDrag(event: PointerEvent<HTMLElement>) {
+    if (event.button !== 0 || event.isPrimary === false) return
+    if ((event.target as HTMLElement).closest('button, a, input, select, textarea, [role="button"]')) return
+
+    const appWindow = getTauriWindow()
+    if (!appWindow) return
+
+    event.preventDefault()
+    void appWindow.startDragging().catch((error: unknown) => {
+      console.error('Window drag failed', error)
+    })
+  }
+
+  function toggleMaximize() {
+    runWindowAction(async (windowRef) => {
+      await windowRef.toggleMaximize()
+      setMaximized(await windowRef.isMaximized())
+    })
+  }
+
   return (
-    <header className="window-bar" data-tauri-drag-region>
-      <IconButton icon={systemIcons.collapse} label={appCopy.controls.collapse} />
+    <header className="window-bar" data-tauri-drag-region onDoubleClick={toggleMaximize} onPointerDown={startWindowDrag}>
+      <div className="window-leading" onDoubleClick={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
+        <IconButton icon={systemIcons.collapse} label={appCopy.controls.collapse} />
+      </div>
       <h1 id="app-title" className="sr-only">{appCopy.appTitle}</h1>
-      <div className="window-actions">
+      <div className="window-actions" onDoubleClick={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
         <ThemeManager />
         <IconButton
           icon={systemIcons.fullscreen}
@@ -85,10 +107,7 @@ export function WindowBar() {
         <IconButton
           icon={maximized ? systemIcons.restore : systemIcons.maximize}
           label={maximized ? appCopy.controls.restore : appCopy.controls.maximize}
-          onClick={() => runWindowAction(async (windowRef) => {
-            await windowRef.toggleMaximize()
-            setMaximized(await windowRef.isMaximized())
-          })}
+          onClick={toggleMaximize}
         />
         <IconButton icon={systemIcons.close} label={appCopy.controls.close} onClick={() => runWindowAction((windowRef) => windowRef.close())} />
       </div>

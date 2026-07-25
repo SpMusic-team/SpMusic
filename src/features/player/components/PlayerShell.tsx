@@ -13,13 +13,93 @@ import { useActiveLyricScroll } from '@/features/player/hooks/useActiveLyricScro
 import { nextRepeatMode, nextShuffleMode, resolveNextTrackIndex, type Direction, type RepeatMode, type ShuffleMode } from '@/features/player/model/playbackModes'
 import { appCopy } from '@/features/player/model/playerCopy'
 import { initialPlayerState } from '@/features/player/model/playerState'
-import type { PlayerState } from '@/features/player/model/playerTypes'
+import type { PlayerState, Track } from '@/features/player/model/playerTypes'
+import {
+  getAudioState,
+  isAudioCommandError,
+  listenAudioStateChanged,
+  openAudioFile,
+  pauseAudio,
+  playAudio,
+  seekAudio,
+  stopAudio,
+  type AudioCommandError,
+  type AudioPlaybackState,
+  type AudioTrackRef,
+} from '@/features/player/services/audioCommands'
 import { resolveTrack } from '@/features/player/model/trackUtils'
 
 type ProgressStyle = CSSProperties & { '--progress-percent': string }
 type PlayerBackgroundStyle = CSSProperties & { '--player-background-art'?: string }
 type CoverStyle = CSSProperties & { '--cover-art'?: string }
 type TrackFeedback = 'liked' | 'disliked'
+
+function audioTrackToTrack(track: AudioTrackRef): Track {
+  const title = track.fileName.replace(/\.[^/.]+$/, '') || track.fileName
+
+  return {
+    id: track.id,
+    title,
+    artist: '本地音频',
+    album: '真实播放后端',
+    category: 'local-audio',
+    durationSeconds: track.durationMs ? track.durationMs / 1000 : 0,
+    coverTone: 'blue',
+    lyrics: [],
+  }
+}
+
+function upsertAudioTrack(state: PlayerState, track: AudioTrackRef, playbackState?: AudioPlaybackState): PlayerState {
+  const localTrack = audioTrackToTrack({
+    ...track,
+    durationMs: playbackState?.durationMs ?? track.durationMs,
+  })
+  const tracks = state.tracks.some((item) => item.id === localTrack.id)
+    ? state.tracks.map((item) => item.id === localTrack.id ? localTrack : item)
+    : [localTrack, ...state.tracks]
+
+  return {
+    ...state,
+    tracks,
+    currentTrackId: localTrack.id,
+    playbackStatus: playbackState?.phase === 'playing' ? 'playing' : 'paused',
+    progressSeconds: playbackState ? playbackState.positionMs / 1000 : 0,
+  }
+}
+
+function audioErrorText(error: AudioCommandError | null): string | null {
+  if (!error) return null
+  return appCopy.audio.errors[error.code] ?? error.message
+}
+
+function audioStatusText(state: AudioPlaybackState | null, error: AudioCommandError | null): string {
+  const errorText = audioErrorText(error ?? state?.error ?? null)
+  if (errorText) return errorText
+
+  if (!state) return appCopy.audio.idle
+
+  const fileName = state.currentTrack?.fileName ?? '本地音频'
+
+  switch (state.phase) {
+    case 'loading':
+      return appCopy.audio.loading
+    case 'ready':
+      return appCopy.audio.ready(fileName)
+    case 'playing':
+      return appCopy.audio.playing(fileName)
+    case 'paused':
+      return appCopy.audio.paused(fileName)
+    case 'stopped':
+      return appCopy.audio.stopped(fileName)
+    case 'ended':
+      return appCopy.audio.ended(fileName)
+    case 'error':
+      return appCopy.audio.unavailable
+    case 'idle':
+    default:
+      return appCopy.audio.idle
+  }
+}
 
 export function PlayerShell() {
   const systemIcons = useSystemIcons()
@@ -31,23 +111,79 @@ export function PlayerShell() {
   const [showTranslations, setShowTranslations] = useState(false)
   const [volume, setVolume] = useState(72)
   const [queueOpen, setQueueOpen] = useState(false)
+  const [audioState, setAudioState] = useState<AudioPlaybackState | null>(null)
+  const [audioError, setAudioError] = useState<AudioCommandError | null>(null)
+  const [audioBusy, setAudioBusy] = useState(false)
+  const [seekPreviewSeconds, setSeekPreviewSeconds] = useState<number | null>(null)
   const lyricListRef = useRef<HTMLOListElement>(null)
   const lyricRefs = useRef(new Map<string, HTMLLIElement>())
   const lastFrameTimeRef = useRef<number | null>(null)
   const endingTrackRef = useRef<string | null>(null)
+  const seekRequestIdRef = useRef(0)
+  const lastSeekCommitRef = useRef<{ positionMs: number; at: number } | null>(null)
   const track = useMemo(() => resolveTrack(state.tracks, state.currentTrackId), [state.currentTrackId, state.tracks])
-  const playing = state.playbackStatus === 'playing'
-  const duration = track?.durationSeconds ?? 0
-  const progress = Math.min(Math.max(state.progressSeconds, 0), duration)
+  const realAudioTrackId = audioState?.currentTrack?.id ?? null
+  const usingRealAudio = Boolean(track && realAudioTrackId && track.id === realAudioTrackId)
+  const playing = usingRealAudio ? audioState?.phase === 'playing' : state.playbackStatus === 'playing'
+  const realAudioDuration = audioState?.durationMs != null ? audioState.durationMs / 1000 : track?.durationSeconds ?? 0
+  const duration = usingRealAudio ? realAudioDuration : track?.durationSeconds ?? 0
+  const backendProgress = usingRealAudio ? (audioState?.positionMs ?? 0) / 1000 : state.progressSeconds
+  const progress = Math.min(Math.max(seekPreviewSeconds ?? backendProgress, 0), duration)
   const activeLyric = track?.lyrics.reduce((active, line) => line.timeSeconds <= progress ? line : active, track.lyrics[0])
   const activeLyricId = activeLyric?.id
   const activeLyricIndex = track?.lyrics.findIndex((line) => line.id === activeLyricId) ?? -1
   const progressStyle: ProgressStyle = { '--progress-percent': `${duration ? progress / duration * 100 : 0}%` }
+  const realAudioStatusText = audioStatusText(audioState, audioError)
   const albumArt = track?.coverImage ? `url("${track.coverImage}") center / cover no-repeat` : undefined
   const playerBackgroundStyle: PlayerBackgroundStyle | undefined = albumArt ? { '--player-background-art': albumArt } : undefined
   const coverStyle: CoverStyle | undefined = albumArt ? { '--cover-art': albumArt } : undefined
 
   useActiveLyricScroll(activeLyricId, lyricListRef, lyricRefs)
+
+  const applyAudioState = useCallback((nextAudioState: AudioPlaybackState) => {
+    setAudioState(nextAudioState)
+    setAudioError(nextAudioState.error)
+
+    if (!nextAudioState.currentTrack) {
+      setState((previous) => ({
+        ...previous,
+        playbackStatus: nextAudioState.phase === 'playing' ? 'playing' : 'paused',
+        progressSeconds: nextAudioState.positionMs / 1000,
+      }))
+      return
+    }
+
+    setState((previous) => upsertAudioTrack(previous, nextAudioState.currentTrack!, nextAudioState))
+  }, [])
+
+  useEffect(() => {
+    let disposed = false
+    let unlisten: (() => void) | undefined
+
+    void listenAudioStateChanged((nextAudioState) => {
+      applyAudioState(nextAudioState)
+    })
+      .then((nextUnlisten) => {
+        if (disposed) {
+          nextUnlisten()
+          return
+        }
+
+        unlisten = nextUnlisten
+      })
+      .catch((error: unknown) => {
+        setAudioError(isAudioCommandError(error) ? error : {
+          code: 'INTERNAL_ERROR',
+          message: appCopy.audio.unavailable,
+          recoverable: true,
+        })
+      })
+
+    return () => {
+      disposed = true
+      unlisten?.()
+    }
+  }, [applyAudioState])
 
   const changeTrack = useCallback((direction: Direction, automatic = false) => {
     endingTrackRef.current = null
@@ -67,7 +203,7 @@ export function PlayerShell() {
   }, [repeatMode, shuffleMode])
 
   useEffect(() => {
-    if (!playing || !track) return
+    if (!playing || !track || usingRealAudio) return
 
     let frameId = 0
 
@@ -106,19 +242,155 @@ export function PlayerShell() {
       window.cancelAnimationFrame(frameId)
       lastFrameTimeRef.current = null
     }
-  }, [changeTrack, playing, track])
+  }, [changeTrack, playing, track, usingRealAudio])
+
+  useEffect(() => {
+    if (!usingRealAudio || audioState?.phase !== 'playing' || seekPreviewSeconds !== null) return
+
+    const intervalId = window.setInterval(() => {
+      void getAudioState()
+        .then(applyAudioState)
+        .catch((error: unknown) => {
+          setAudioError(isAudioCommandError(error) ? error : {
+            code: 'INTERNAL_ERROR',
+            message: appCopy.audio.unavailable,
+            recoverable: true,
+          })
+        })
+    }, 500)
+
+    return () => window.clearInterval(intervalId)
+  }, [applyAudioState, audioState?.phase, seekPreviewSeconds, usingRealAudio])
+
+  async function openAndMaybePlay(autoplay: boolean) {
+    if (audioBusy) return
+
+    setAudioBusy(true)
+    setAudioError(null)
+
+    try {
+      const audioTrack = await openAudioFile()
+      setState((previous) => upsertAudioTrack(previous, audioTrack))
+
+      if (autoplay) {
+        applyAudioState(await playAudio({ restart: true }))
+      } else {
+        applyAudioState(await getAudioState())
+      }
+    } catch (error) {
+      if (isAudioCommandError(error)) {
+        setAudioError(error)
+      } else {
+        setAudioError({
+          code: 'INTERNAL_ERROR',
+          message: appCopy.audio.unavailable,
+          recoverable: true,
+        })
+      }
+    } finally {
+      setAudioBusy(false)
+    }
+  }
 
   function setProgress(nextProgress: number) {
     endingTrackRef.current = null
+
+    if (usingRealAudio) {
+      setSeekPreviewSeconds(nextProgress)
+      return
+    }
+
     setState((previous) => ({ ...previous, progressSeconds: nextProgress }))
   }
 
-  function togglePlayback() {
-    setState((previous) => ({
-      ...previous,
-      playbackStatus: previous.playbackStatus === 'playing' ? 'paused' : 'playing',
-      progressSeconds: previous.progressSeconds >= duration ? 0 : previous.progressSeconds,
-    }))
+  function commitProgress(nextProgress: number) {
+    endingTrackRef.current = null
+
+    if (usingRealAudio) {
+      const clampedProgress = Math.min(Math.max(nextProgress, 0), duration)
+      const positionMs = Math.round(clampedProgress * 1000)
+      const now = window.performance.now()
+      const previousCommit = lastSeekCommitRef.current
+
+      if (previousCommit && previousCommit.positionMs === positionMs && now - previousCommit.at < 360) {
+        return
+      }
+
+      lastSeekCommitRef.current = { positionMs, at: now }
+
+      if (Math.abs(clampedProgress - backendProgress) < 0.08) {
+        setSeekPreviewSeconds(null)
+        return
+      }
+
+      const requestId = seekRequestIdRef.current + 1
+      seekRequestIdRef.current = requestId
+      setSeekPreviewSeconds(clampedProgress)
+      setAudioError(null)
+
+      void seekAudio(positionMs)
+        .then((nextAudioState) => {
+          if (seekRequestIdRef.current === requestId) {
+            applyAudioState(nextAudioState)
+          }
+        })
+        .catch((error: unknown) => {
+          setAudioError(isAudioCommandError(error) ? error : {
+            code: 'INTERNAL_ERROR',
+            message: appCopy.audio.unavailable,
+            recoverable: true,
+          })
+        })
+        .finally(() => {
+          if (seekRequestIdRef.current === requestId) {
+            setSeekPreviewSeconds(null)
+          }
+        })
+      return
+    }
+
+    setState((previous) => ({ ...previous, progressSeconds: nextProgress }))
+  }
+
+  async function togglePlayback() {
+    if (audioBusy) return
+
+    if (!usingRealAudio) {
+      await openAndMaybePlay(true)
+      return
+    }
+
+    setAudioBusy(true)
+    setAudioError(null)
+
+    try {
+      const nextState = playing
+        ? await pauseAudio()
+        : await playAudio({ restart: duration > 0 && progress >= duration })
+      applyAudioState(nextState)
+    } catch (error) {
+      setAudioError(isAudioCommandError(error) ? error : {
+        code: 'INTERNAL_ERROR',
+        message: appCopy.audio.unavailable,
+        recoverable: true,
+      })
+    } finally {
+      setAudioBusy(false)
+    }
+  }
+
+  function stopRealAudioBeforeDemoNavigation() {
+    if (!usingRealAudio) return
+
+    void stopAudio()
+      .then(applyAudioState)
+      .catch((error: unknown) => {
+        setAudioError(isAudioCommandError(error) ? error : {
+          code: 'INTERNAL_ERROR',
+          message: appCopy.audio.unavailable,
+          recoverable: true,
+        })
+      })
   }
 
   function cycleShuffleMode() {
@@ -222,9 +494,19 @@ export function PlayerShell() {
           showTranslations={showTranslations}
           volume={volume}
           queueOpen={queueOpen}
+          audioBusy={audioBusy}
+          audioStatusText={realAudioStatusText}
           onProgressChange={setProgress}
-          onPrevious={() => changeTrack(-1)}
-          onNext={() => changeTrack(1)}
+          onProgressCommit={commitProgress}
+          onOpenAudio={() => void openAndMaybePlay(false)}
+          onPrevious={() => {
+            stopRealAudioBeforeDemoNavigation()
+            changeTrack(-1)
+          }}
+          onNext={() => {
+            stopRealAudioBeforeDemoNavigation()
+            changeTrack(1)
+          }}
           onPlayToggle={togglePlayback}
           onShuffleCycle={cycleShuffleMode}
           onRepeatCycle={cycleRepeatMode}

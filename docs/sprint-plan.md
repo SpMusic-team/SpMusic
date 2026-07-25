@@ -6,47 +6,34 @@ status: "active"
 owner_agent: "PM Agent"
 version_scope: "v0.1"
 created: "2026-07-09"
-updated: "2026-07-11"
+updated: "2026-07-24"
 source_documents:
   - "docs/requirements/v0-1-foundation.md"
   - "docs/requirements.md"
-  - "docs/decisions/2026-07-10-visual-customization-boundary.md"
+  - "docs/decisions/2026-07-24-v0-1-real-audio-scope.md"
 ---
 # Sprint 计划
 
 ## Sprint 目标
 
-完成 SpMusic v0.1「播放界面」：把当前 Tauri + React + TypeScript 模板项目收敛为有项目身份、有播放界面、有基础验收流程的 SpMusic 播放界面原型。
+完成 SpMusic v0.1“真实本地播放最小闭环”：在已完成播放器界面和主题基础上，把真实音乐播放提前纳入 v0.1，让桌面端具备可验证的本地音频播放、暂停、停止、进度同步和最小前后端通信能力。
 
 ## 范围
 
-- 由 Requirements Agent 从总需求中切出 v0.1 版本需求和验收边界。
-- 由 PM Agent 基于版本需求建立需求索引、路线图、发布计划和首批任务卡。
-- 设计播放界面说明。
-- 建立总体架构蓝图，定义模块边界、v0.1 架构限制、最小播放器状态与假歌曲结构。
-- 在最小播放界面实现前建立前端基础骨架，集中类型、假数据、文案、CSS token 和播放状态约束。
-- 在最小播放界面实现前接入 shadcn/ui 前端基底，并使用内部 Tailwind class、CSS token 和动效 token 建立样式基线。
-- 将模板页面替换为 SpMusic 最小播放界面。
-- 在 UI/UX 规格完成后，对播放界面做视觉与交互修正。
-- 实现播放 / 暂停 / 上一首 / 下一首的 UI 状态切换。
-- 展示 UI-only 播放进度条和演示频谱或等价音频视觉化区域。
-- 前端实现保留轻量护栏：集中 CSS token、集中用户可见文案、稳定状态枚举。
-- 建立验证清单：`npm run lint`、`npm run build`、`npm run tauri dev`。
-- 更新 README。
+- 保留已完成的 SpMusic 播放器界面、主题基础和窗口壳层能力。
+- 由 Architecture Agent 更新真实播放架构契约，明确 Tauri command、Rust 音频模块、前端播放状态和错误码边界。
+- 由 Rust/Tauri Agent 实现最小真实本地音频播放后端。
+- 由 Frontend Agent 接入已批准的 Tauri command，使播放 / 暂停 / 停止 / 进度展示来自真实后端状态。
+- 由 Test Agent 建立真实播放验证清单，覆盖构建、后端检查和人工播放闭环。
+- v0.1 只要求“选定或加载一个本地音频资源并播放”的最小闭环，不要求媒体库、扫描、数据库或真实播放列表。
 
 ## 不在范围内
 
-- 真实音频播放、音量、进度拖动、音频解码。
-- 与真实音频同步的播放进度和基于真实音频数据的频谱分析。
-- 本地文件读取、文件夹扫描、媒体库、数据库、元数据、封面、歌词。
-- 最小 Tauri command 或 React 到 Rust 通信验证。
-- 可导入主题、主题编辑器、主题持久化、完整国际化框架和语言切换。
-- 用户导入 Tailwind class、外部 CSS token / 主题文件、运行时加载自定义 CSS 或自定义动效系统。
-- 虚构播放列表管理 UI。
-- 播放列表真实创建、编辑、删除、导入导出与 `m3u8` 实现。
-- FTP、SMB、WebDAV 网络存储播放。
-- 插件系统、插件市场、扩展运行时。
-- Last.fm、Pano Scrobbler、云同步、自定义功能区。
+- 本地音乐库、文件夹扫描、增量索引、数据库、元数据批量解析。
+- 播放列表真实创建、编辑、删除、导入导出与 `m3u8` 支持。
+- 网络存储播放、在线音乐服务、账号系统、云同步。
+- 真实频谱分析、高级 DSP、独占输出、插件系统。
+- 完整跨平台音频策略；v0.1 只验证当前桌面开发环境的最小播放链路。
 
 ## 任务
 
@@ -59,41 +46,30 @@ source_documents:
 | SP-005 | 前端基础骨架与实现约束 | P1 | Frontend Agent | Done | SP-004 |
 | SP-006 | shadcn/ui 基础接入与前端样式基线 | P1 | Frontend Agent | Done | SP-005 |
 | SP-007 | 最小播放界面实现 | P1 | Frontend Agent | Done | SP-005, SP-006 |
-| SP-008 | 播放界面视觉与交互修正 | P1 | Frontend Agent | Ready | SP-003, SP-007 |
+| SP-008 | 播放界面视觉与交互修正 | P1 | Frontend Agent | Done | SP-003, SP-007 |
 | SP-009 | v0.2 虚构播放列表管理 UI 预研边界 | P2 | PM Agent | Ready | SP-001 |
-| SP-010 | README 当前能力与限制更新 | P1 | Documentation Agent | Blocked | SP-001, SP-002, SP-008 |
-| SP-011 | 验证清单与测试报告 | P1 | Test Agent | Blocked | SP-008 |
+| SP-010 | README 当前能力与限制更新 | P1 | Documentation Agent | Blocked | SP-016, SP-017 |
+| SP-011 | 验证清单与测试报告 | P1 | Test Agent | Blocked | SP-018 |
 | SP-012 | README 与开发文档 | P1 | Documentation Agent | Ready | SP-001, SP-002 |
-| SP-013 | Sprint 复盘与范围闸门 | P0 | PM Agent | Blocked | SP-001 至 SP-012 |
+| SP-013 | Sprint 复盘与范围闸门 | P0 | PM Agent | Blocked | SP-018 |
+| SP-014 | 视觉自定义与动效扩展预研边界 | P2 | PM Agent | Ready | SP-001 |
+| SP-015 | v0.1 真实播放架构契约 | P0 | Architecture Agent | Done | `docs/decisions/2026-07-24-v0-1-real-audio-scope.md` |
+| SP-016 | Rust/Tauri 最小真实音频播放后端 | P0 | Rust/Tauri Agent | Done | SP-015 |
+| SP-017 | 前端接入真实播放 command | P0 | Frontend Agent | Ready | SP-015, SP-016 |
+| SP-018 | v0.1 真实播放验证报告 | P0 | Test Agent | Blocked | SP-016, SP-017 |
 
 ## 风险
 
-- 总需求覆盖面很大，若不先做版本需求切分，容易把最终愿景误当作当前开发范围。
-- README 与当前前端状态仍需在文档任务中持续收敛，避免残留模板说明。
-- `shadcn/ui` 已被确认为前端基底；后续任务必须避免把内部 Tailwind class、CSS token 和动效 token 误解为用户可导入样式能力。
-- 虚构播放列表管理 UI 已移出 v0.1，v0.2 需要单独定义列表、详情、新增、编辑、删除、排序、多选歌曲、跨列表加入歌曲和 Empty State。
-- 前后端通信验证已移出 v0.1，v0.3 做真实播放技术验证时需要重新纳入。
-- 真实播放、媒体库、网络存储和插件系统都很有吸引力，但进入 v0.1 会显著扩大风险。
+- 真实播放提前进入 v0.1 会增加依赖、权限、平台差异和错误状态处理风险。
+- 如果架构契约不先完成，前端和后端容易在 command 命名、状态同步和错误码上反复返工。
+- v0.1 只做最小播放闭环；媒体库和真实播放列表必须继续挡在范围外，否则版本会失控。
+- 当前文档中仍存在旧 UI-only 架构说明；SP-015 必须先更新这些架构边界，再让后端实现。
 
 ## 完成定义
 
-- `docs/requirements/v0-1-foundation.md` 存在，并由 Requirements Agent 明确 v0.1 需求、非目标和验收标准。
-- `docs/requirements.md`、`docs/roadmap.md`、`docs/sprint-plan.md`、`docs/release-plan.md` 存在并相互一致。
-- `docs/tasks/` 中存在首批任务卡，且每张卡包含负责 Agent、目标、非目标和验收标准。
-- `docs/architecture/overall-architecture.md` 存在，并明确总体模块边界与 v0.1 不实现的架构能力。
-- 前端存在最小 `Track` / `PlayerState` 类型、假歌曲 fixture、集中用户可见文案和基础 CSS token。
-- 前端存在 shadcn/ui 所需的基础配置和最小组件目录。
-- Tailwind class、CSS token 和动效 token 仅作为 v0.1 内部实现手段，不开放用户导入样式能力。
-- 应用首屏不再是 Vite / React 模板页面。
-- 应用展示 SpMusic 播放界面。
-- 系统存在至少 5 条假歌曲数据用于状态验证。
-- 播放 / 暂停 / 上一首 / 下一首能改变 UI 状态。
-- 播放界面存在 UI-only 播放进度条。
-- 播放界面存在演示频谱或等价音频视觉化区域。
-- 空歌曲列表存在可渲染 Empty State 分支。
-- 主要视觉值使用集中 CSS token 或等价方式管理。
-- 用户可见文案集中管理，业务状态不依赖中文展示文案。
-- `npm run lint` 通过。
-- `npm run build` 通过。
-- `npm run tauri dev` 能启动应用。
-- v0.1 没有实现虚构播放列表管理 UI、真实音频播放、本地文件读取、媒体库、数据库、真实播放列表、网络存储、插件系统或用户导入样式能力。
+- 新的 v0.1 范围变更决策存在，并明确覆盖旧的 UI-only 范围决策。
+- `docs/architecture/` 中存在真实播放 command 契约和模块边界说明。
+- Rust/Tauri 后端提供已批准的最小播放 command，并通过 `cargo check`。
+- 前端播放 / 暂停 / 停止 / 进度展示使用真实后端状态，并通过 `npm.cmd run lint`、`npm.cmd run build`。
+- 手动验证能播放一个本地音频资源，且暂停、停止和错误状态可检查。
+- v0.1 未实现媒体库、文件夹扫描、数据库、真实播放列表、网络存储或插件系统。

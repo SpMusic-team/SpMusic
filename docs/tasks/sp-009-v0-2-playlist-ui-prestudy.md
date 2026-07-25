@@ -1,51 +1,48 @@
 ---
 doc_id: "TASK-SP-009"
-title: "v0.2 虚构播放列表管理 UI 预研边界"
+title: "v0.2 播放列表 UI 预研边界"
 doc_type: "task"
 status: "ready"
 owner_agent: "PM Agent"
-version_scope: "v0.2-candidate"
+version_scope: "v0.2"
 created: "2026-07-09"
-updated: "2026-07-09"
+updated: "2026-07-24"
 source_documents:
-  - "docs/sprint-plan.md"
   - "docs/requirements/v0-2-playlist-ui-prototype.md"
+  - "docs/decisions/2026-07-24-v0-1-real-audio-scope.md"
   - "docs/roadmap.md"
 ---
-# 任务：v0.2 虚构播放列表管理 UI 预研边界
+# 任务：v0.2 播放列表 UI 预研边界
 
 ## 背景
 
-v0.1 已收敛为播放界面。虚构播放列表管理 UI 延后到 v0.2，真实音频播放、本地文件读取和音频方案选择顺延到 v0.3，需要提前记录边界，避免 v0.1 实现时误引入播放列表管理或真实播放能力。
+v0.1 已调整为真实本地播放最小闭环。播放列表 UI 仍不进入 v0.1，应在真实播放稳定后作为 v0.2 候选范围继续预研。
 
 ## 目标
 
-明确 v0.2 虚构播放列表管理 UI 的候选范围、非目标和需要后续评估的问题。
+- 明确 v0.2 播放列表 UI 候选范围。
+- 说明播放列表 UI 如何消费 v0.1 真实播放状态。
+- 保持媒体库、数据库、真实播放列表持久化和 `m3u8` 在更后续版本。
 
 ## 非目标
 
-- 不在 v0.1 实现虚构播放列表管理 UI。
-- 不在 v0.1 实现真实音频播放。
-- 不在 v0.1 读取本地音乐文件。
-- 不在 v0.1 修改依赖或实现后端业务逻辑。
+- 不进入 v0.1。
+- 不实现真实播放列表持久化。
+- 不实现媒体库、数据库、文件夹扫描或 `m3u8`。
 
 ## 负责 Agent
 
 PM Agent
 
-## 涉及文件 / 模块
+## 后续路由建议
 
-- `docs/roadmap.md`
-- `docs/requirements.md`
-- `docs/decisions/`
+- Requirements Agent：确认 v0.2 播放列表 UI 的最小价值和非目标。
+- Architecture Agent：定义播放列表 UI 与 v0.1 真实播放状态的边界。
+- Frontend Agent：实现候选 UI。
+- Test Agent：验证播放列表 UI 和真实播放状态联动。
 
 ## 验收标准
 
-- 文档明确 v0.2 目标是虚构播放列表管理 UI。
-- 文档明确 v0.2 候选范围包含展示所有虚构播放列表、展示选中播放列表内歌曲、新增、编辑、删除、排序、多选歌曲、加入到其他播放列表、移除歌单内歌曲和 Empty State。
-- 文档明确 v0.2 不包含文件读取、真实播放、真实持久化、导入导出、`m3u8` 支持和删除真实歌曲文件。
-- 文档明确原本的本地播放技术验证顺延到 v0.3。
-
-## 备注
-
-该任务只维护范围边界，不产出业务代码。
+- 文档明确播放列表 UI 不进入 v0.1。
+- 文档不再把真实播放描述为 v0.3 前置目标。
+- 文档列出 v0.2 需要 Requirements、Architecture、Frontend 和 Test Agent 继续拆分的点。

@@ -1,17 +1,38 @@
 .window-bar {
-  position: absolute;
+  position: fixed;
   top: 0;
   left: 0;
-  z-index: 5;
+  z-index: 20;
   width: 100%;
-  height: calc(40 * var(--prototype-unit));
-  padding: 0 calc(20 * var(--prototype-unit));
+  height: 40px;
+  min-height: 40px;
+  padding: 0 16px;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  user-select: none;
+  -webkit-app-region: drag;
 }
 
-.window-actions { display: flex; gap: calc(31 * var(--prototype-unit)); }
-.window-bar button { width: 20px; height: 40px; min-width: 0; padding: 0; border-radius: 0; color: var(--player-muted); background: transparent; transition: color var(--app-motion-fast) ease, transform var(--app-motion-fast) ease; transform-origin: center; }
+.window-actions { display: flex; gap: 20px; }
+.window-leading, .window-actions {
+  flex: 0 0 auto;
+  cursor: default;
+  -webkit-app-region: no-drag;
+}
+.window-bar { cursor: grab; }
+.window-bar:active { cursor: grabbing; }
+.window-bar button {
+  width: 20px;
+  height: 40px;
+  min-width: 0;
+  padding: 0;
+  border-radius: 0;
+  color: var(--player-muted);
+  background: transparent;
+  transition: color var(--app-motion-fast) ease, transform var(--app-motion-fast) ease;
+  transform-origin: center;
+  -webkit-app-region: no-drag;
+}
 .window-bar button:hover, .window-bar button:focus-visible, .window-bar button:active { background: transparent; color: var(--player-ink); transform: scale(1.16); }
 .window-bar button svg { width: 20px; height: 20px; }

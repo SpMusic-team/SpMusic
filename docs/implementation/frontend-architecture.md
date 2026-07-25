@@ -6,7 +6,7 @@ status: "active"
 owner_agent: "Frontend Agent"
 version_scope: "project"
 created: "2026-07-13"
-updated: "2026-07-13"
+updated: "2026-07-24"
 source_documents:
   - "user request: @frontend 可以写一篇前端架构文档"
   - ".agents/prompt/Frontend_Agent.md"
@@ -14,6 +14,8 @@ source_documents:
   - "src/features/appearance"
   - "src/features/player"
   - "components.json"
+  - "docs/architecture/real-audio-playback.md"
+  - "docs/tasks/sp-017-frontend-real-audio-integration.md"
 ---
 
 # 前端架构实现说明
@@ -31,7 +33,7 @@ SpMusic 前端采用 React + TypeScript + Vite + Tailwind CSS v4 + shadcn/ui Bas
 - Vite
 - Tailwind CSS v4
 - shadcn/ui，当前配置为 Base UI 风格
-- Tauri CLI 已作为桌面壳工具存在，但当前前端播放器仍使用 demo 数据和前端模拟播放状态
+- Tauri CLI 已作为桌面壳工具存在，播放器 v0.1 已接入真实本地音频播放 command；demo 数据仍用于界面展示、歌词和队列占位
 
 ## 总体目录结构
 
@@ -279,6 +281,9 @@ src/features/player/
     playerTypes.ts
     trackUtils.ts
 
+  services/
+    audioCommands.ts
+
   styles/
     player.css
 ```
@@ -287,11 +292,12 @@ src/features/player/
 
 `PlayerShell.tsx` 是播放器 feature 的编排组件，负责：
 
-- 持有当前 demo 播放状态
+- 持有当前 demo 播放状态和真实音频播放状态
 - 派生当前曲目、播放进度、歌词激活行
 - 组合播放器 UI 区块
 - 调用播放模式算法
-- 处理当前前端模拟播放进度
+- 在 demo 曲目上处理前端模拟播放进度
+- 在真实音频曲目上调用 `audioCommands.ts`，消费后端返回的播放状态和进度
 
 `PlayerShell` 不应该继续膨胀成所有 UI 细节的容器。新增视觉区块时应优先拆到 `components/`；新增纯逻辑时应优先放入 `model/`；新增浏览器行为 hook 时应放入 `hooks/`。
 
@@ -320,6 +326,20 @@ src/features/player/
 - `playerCopy.ts`：播放器文案。
 
 后续接入真实后端数据时，应先由 Architecture Agent 或 Rust/Tauri Agent 明确 Tauri command 输入输出契约，再替换 `playerState` 或新增前端 command adapter。不要在前端自行假设本地文件系统、音频引擎或媒体库能力已经存在。
+
+### Services 层职责
+
+`services/audioCommands.ts` 是 v0.1 真实播放的前端 command adapter，负责封装：
+
+- `audio_open_file`
+- `audio_play`
+- `audio_pause`
+- `audio_stop`
+- `audio_seek`
+- `audio_get_state`
+- `audio_state_changed` 事件监听
+
+UI 不直接调用 `@tauri-apps/api/core`，而是通过 service 层消费稳定 DTO：`AudioTrackRef`、`AudioPlaybackState`、`AudioCommandError`。前端业务判断使用 `AudioCommandError.code`，不依赖后端 `message`。
 
 ### Data 层职责
 
@@ -396,9 +416,9 @@ src/features/<feature-name>/
 
 三级主题文档都使用版本化 JSON schema。导入发生致命错误时保持当前主题不变；未知字段和局部非法字段产生警告并回退；默认主题可随时恢复。
 
-## Tauri 集成预留边界
+## Tauri 集成边界
 
-当前前端尚未接入真实音频播放、媒体库扫描或持久化。后续如果需要接入 Tauri command，应遵守：
+当前前端已接入 v0.1 真实本地音频播放 command，仍未接入媒体库扫描、数据库、真实播放列表或持久化。接入 Tauri command 时应遵守：
 
 - command 名称、输入、输出来自 Architecture Agent 或 Rust/Tauri Agent 的契约。
 - 前端 adapter 应单独放在对应 feature 的 service 或 api 文件中。
@@ -406,10 +426,19 @@ src/features/<feature-name>/
 - 后端不可用时，界面不能崩溃。
 - 不在前端硬编码未批准的系统路径、文件协议、数据库结构或音频引擎行为。
 
-建议未来新增：
+当前真实播放接入采用：
 
 ```txt
-src/features/player/services/playerCommands.ts
+src/features/player/services/audioCommands.ts
+```
+
+播放键在未加载真实音频时会先调用 `audio_open_file`，用户选择文件后再调用 `audio_play`；已加载真实音频后，播放键在 `audio_play` 与 `audio_pause` 之间切换。真实音频播放中，前端每 500ms 调用 `audio_get_state` 刷新进度；进度条拖动调用 `audio_seek`。左侧波形按钮作为“打开音频”入口，可重新选择一个本地音频文件。
+
+后端检测到输出设备变化时会发送 `audio_state_changed` 事件，payload 为 `AudioPlaybackState`。`PlayerShell` 在挂载时注册监听，收到事件后立即应用后端状态；轮询仍作为播放进度和事件漏收时的兜底同步。
+
+后续如果需要媒体库 command，可新增：
+
+```txt
 src/features/media-library/services/libraryCommands.ts
 ```
 
@@ -465,8 +494,8 @@ src/components/
 
 ## 当前已知限制
 
-- 播放器仍使用 demo 数据，不代表真实媒体库。
-- 播放进度是前端模拟，不代表真实音频引擎。
+- 播放器仍保留 demo 数据用于界面展示、歌词和队列占位，不代表真实媒体库。
+- 已接入单个本地音频资源的真实播放、暂停、seek 和状态查询；尚未实现媒体库、真实播放列表或歌词与真实音频文件同步。
 - Appearance 已提供三个内置主题、主题管理 UI、版本化 JSON 导入导出和 localStorage 持久化；当前持久化仍受浏览器存储配额限制。
 - 图标 provider 已有基础切换管线，但尚未提供用户自定义 SVG 图标包加载。
 - 高级和实验 CSS 可能破坏布局或可访问性；实验资源是否可加载取决于 WebView、CSP 和平台权限。

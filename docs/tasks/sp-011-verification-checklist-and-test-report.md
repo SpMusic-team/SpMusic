@@ -2,28 +2,29 @@
 doc_id: "TASK-SP-011"
 title: "验证清单与测试报告"
 doc_type: "task"
-status: "ready"
+status: "blocked"
 owner_agent: "Test Agent"
 version_scope: "v0.1"
 created: "2026-07-09"
-updated: "2026-07-10"
+updated: "2026-07-24"
 source_documents:
   - "docs/sprint-plan.md"
+  - "docs/decisions/2026-07-24-v0-1-real-audio-scope.md"
 ---
 # 任务：验证清单与测试报告
 
 ## 背景
 
-v0.1 必须能被客观验证，PM 才能关闭 Sprint。
+v0.1 已纳入真实本地播放，旧 UI-only 验证清单不再足够。最终验证应以 SP-018 的真实播放报告为准。
 
 ## 目标
 
-为 v0.1 播放界面范围创建并执行验证清单。
+维护 v0.1 总体验证入口，汇总前端、后端和人工真实播放结果。
 
 ## 非目标
 
-- 不在未批准的情况下引入大型测试框架。
-- 不验证延期能力。
+- 不实现功能修复。
+- 不验证媒体库、数据库、播放列表、网络存储或插件系统。
 
 ## 负责 Agent
 
@@ -31,21 +32,20 @@ Test Agent
 
 ## 涉及文件 / 模块
 
-- `docs/test/v0-1-verification.md`
+- `docs/test/v0-1-real-audio-verification.md`
 - `package.json`
 - `src-tauri/Cargo.toml`
-- `docs/architecture/overall-architecture.md`
-- `docs/architecture/player-state-and-fake-track.md`
+- `src/**/*`
+- `src-tauri/**/*`
 
 ## 验收标准
 
-- 测试报告记录 `npm run lint`、`npm run build` 和 `npm run tauri dev` 的结果。
-- 人工检查覆盖播放界面、假歌曲列表、播放 / 暂停、上一首 / 下一首、UI-only 播放进度条、演示频谱和空状态。
-- 人工检查覆盖 v0.1 范围禁区：未实现真实音频、真实音频进度同步、真实频谱分析、本地文件读取、Tauri command、媒体库、播放列表、网络存储和插件入口。
-- 人工检查覆盖前端轻量护栏：主要样式使用集中 token，用户可见文案集中管理，播放状态不使用中文展示文案作为业务状态。
+- 报告引用 SP-018 的真实播放验证结果。
+- 报告记录 `cargo check`、`npm.cmd run lint`、`npm.cmd run build` 和桌面启动验证。
+- 报告确认播放、暂停、停止和进度状态可验证。
+- 报告确认 v0.1 未实现媒体库、数据库、真实播放列表、网络存储或插件系统。
 - 失败项包含命令、错误摘要和建议退回的负责 Agent。
-- 报告说明 v0.1 是否可以进入 PM 评审。
 
 ## 备注
 
-该任务应在 SP-008 后执行。v0.1 不验证延期的 Tauri command 或真实音频能力。
+本任务依赖 SP-018。

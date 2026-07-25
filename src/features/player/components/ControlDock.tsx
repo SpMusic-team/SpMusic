@@ -1,4 +1,4 @@
-import type { ChangeEvent, CSSProperties } from 'react'
+import { useRef, type ChangeEvent, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
 import { Button } from '@/components/ui/button'
 import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
@@ -26,7 +26,11 @@ type ControlDockProps = {
   showTranslations: boolean
   volume: number
   queueOpen: boolean
+  audioBusy: boolean
+  audioStatusText: string
   onProgressChange: (progress: number) => void
+  onProgressCommit: (progress: number) => void
+  onOpenAudio: () => void
   onPrevious: () => void
   onNext: () => void
   onPlayToggle: () => void
@@ -53,7 +57,11 @@ export function ControlDock({
   showTranslations,
   volume,
   queueOpen,
+  audioBusy,
+  audioStatusText,
   onProgressChange,
+  onProgressCommit,
+  onOpenAudio,
   onPrevious,
   onNext,
   onPlayToggle,
@@ -65,24 +73,54 @@ export function ControlDock({
 }: ControlDockProps) {
   const systemIcons = useSystemIcons()
   const appearanceMotion = useAppearanceMotion()
+  const progressCommitRef = useRef<{ value: number; at: number } | null>(null)
 
   function handleProgressChange(event: ChangeEvent<HTMLInputElement>) {
     onProgressChange(Number(event.currentTarget.value))
   }
 
+  function handleProgressCommit(event: PointerEvent<HTMLInputElement> | KeyboardEvent<HTMLInputElement>) {
+    if ('key' in event && !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'Enter', ' '].includes(event.key)) {
+      return
+    }
+
+    const value = Number(event.currentTarget.value)
+    const now = window.performance.now()
+    const previous = progressCommitRef.current
+
+    if (previous && Math.abs(previous.value - value) < 0.01 && now - previous.at < 240) {
+      return
+    }
+
+    progressCommitRef.current = { value, at: now }
+    onProgressCommit(value)
+  }
+
   return (
     <footer className="control-dock" style={progressStyle}>
+      <p className="audio-status" aria-live="polite">{audioStatusText}</p>
       <div className="progress-row">
         <time>{formatDuration(progress)}</time>
-        <input aria-label={appCopy.progress.label} disabled={disabled || duration <= 0} max={duration} min="0" onChange={handleProgressChange} step="0.01" type="range" value={progress} />
+        <input
+          aria-label={appCopy.progress.label}
+          disabled={audioBusy || disabled || duration <= 0}
+          max={duration}
+          min="0"
+          onChange={handleProgressChange}
+          onKeyUp={handleProgressCommit}
+          onPointerUp={handleProgressCommit}
+          step="0.01"
+          type="range"
+          value={progress}
+        />
         <time>{formatDuration(duration)}</time>
       </div>
       <div className="control-row">
-        <div className="control-side"><IconButton icon={systemIcons.audioWave} label={appCopy.spectrum.title} disabled={disabled} /></div>
+        <div className="control-side"><IconButton icon={systemIcons.audioWave} label={appCopy.controls.openAudio} disabled={audioBusy} onClick={onOpenAudio} /></div>
         <div className="transport">
           <IconButton icon={shuffleIcon} label={shuffleLabel} selected={shuffleSelected} disabled={disabled} onClick={onShuffleCycle} />
           <IconButton icon={systemIcons.previous} label={appCopy.controls.previous} disabled={disabled} onClick={onPrevious} />
-          <Button className="play-button" aria-label={playing ? appCopy.controls.pause : appCopy.controls.play} aria-pressed={playing} disabled={disabled} size="icon-lg" onClick={onPlayToggle}>
+          <Button className="play-button" aria-label={playing ? appCopy.controls.pause : appCopy.controls.play} aria-pressed={playing} disabled={audioBusy || disabled} size="icon-lg" onClick={onPlayToggle}>
             <AnimatePresence initial={false} mode="popLayout">
               <motion.span
                 key={playing ? 'pause' : 'play'}

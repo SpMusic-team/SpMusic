@@ -72,12 +72,35 @@ export type AudioOpenFileInput = {
   filters?: Array<{ name: string; extensions: string[] }>
 }
 
+export type AudioFolderTrackRef = {
+  id: string
+  sourcePath: string
+  fileName: string
+}
+
+export type AudioFolderPlaylist = {
+  directoryPath: string
+  directoryName: string
+  selectedIndex: number
+  tracks: AudioFolderTrackRef[]
+}
+
 export type AudioPlayInput = {
   restart?: boolean
 }
 
 export async function openAudioFile(input?: AudioOpenFileInput): Promise<AudioTrackRef> {
   return invoke<AudioTrackRef>('audio_open_file', { input: input ?? null })
+}
+
+export async function loadAudioFile(path: string): Promise<AudioTrackRef> {
+  return invoke<AudioTrackRef>('audio_load_file', { input: { path } })
+}
+
+export async function listAudioFolderTracks(selectedPath: string): Promise<AudioFolderPlaylist> {
+  return invoke<AudioFolderPlaylist>('audio_list_folder_tracks', {
+    input: { selectedPath },
+  })
 }
 
 export async function playAudio(input?: AudioPlayInput): Promise<AudioPlaybackState> {

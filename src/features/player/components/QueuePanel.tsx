@@ -1,4 +1,5 @@
 import { motion } from 'motion/react'
+import { Button } from '@/components/ui/button'
 import { useAppearanceMotion } from '@/features/appearance/hooks/useAppearance'
 import { appCopy } from '@/features/player/model/playerCopy'
 import type { Track } from '@/features/player/model/playerTypes'
@@ -6,9 +7,16 @@ import type { Track } from '@/features/player/model/playerTypes'
 type QueuePanelProps = {
   tracks: Track[]
   currentTrackId: string
+  playlistName?: string
+  onTrackSelect?: (trackId: string) => void
 }
 
-export function QueuePanel({ tracks, currentTrackId }: QueuePanelProps) {
+export function QueuePanel({
+  tracks,
+  currentTrackId,
+  playlistName,
+  onTrackSelect,
+}: QueuePanelProps) {
   const appearanceMotion = useAppearanceMotion()
 
   return (
@@ -20,12 +28,26 @@ export function QueuePanel({ tracks, currentTrackId }: QueuePanelProps) {
       animate="animate"
       exit="exit"
     >
+      {playlistName ? (
+        <header>
+          <strong>{playlistName}</strong>
+          <small>{tracks.length} 首音频</small>
+        </header>
+      ) : null}
       <ol>
         {tracks.map((item, index) => (
           <li key={item.id} data-current={item.id === currentTrackId}>
-            <span>{index + 1}</span>
-            <strong>{item.title}</strong>
-            <small>{item.artist}</small>
+            <Button
+              variant="ghost"
+              type="button"
+              aria-current={item.id === currentTrackId ? 'true' : undefined}
+              disabled={!onTrackSelect}
+              onClick={() => onTrackSelect?.(item.id)}
+            >
+              <span>{index + 1}</span>
+              <strong>{item.title}</strong>
+              <small>{item.artist}</small>
+            </Button>
           </li>
         ))}
       </ol>

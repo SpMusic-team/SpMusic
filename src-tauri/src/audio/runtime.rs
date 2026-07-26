@@ -25,6 +25,22 @@ trait RebuiltSink {
     fn start_playback(&self);
 }
 
+trait StoppableSink {
+    fn stop_sink(&self);
+}
+
+impl StoppableSink for Sink {
+    fn stop_sink(&self) {
+        self.stop();
+    }
+}
+
+fn stop_and_take_sink<S: StoppableSink>(slot: &mut Option<S>) {
+    if let Some(sink) = slot.take() {
+        sink.stop_sink();
+    }
+}
+
 impl RebuiltSink for Sink {
     fn pause_for_preparation(&self) {
         self.pause();
@@ -118,6 +134,10 @@ impl AudioRuntime {
             "loading audio path",
         );
         self.clear_error();
+        // Selecting a new path is a replacement operation, not a speculative
+        // probe. Invalidate the previous source before any fallible parsing so
+        // a rejected file can never resume the old sink on a later Play call.
+        self.invalidate_loaded_audio();
         self.phase = AudioPlaybackPhase::Loading;
 
         let track = match load_track_ref(&path) {
@@ -136,9 +156,6 @@ impl AudioRuntime {
             }
         };
 
-        if let Some(sink) = self.sink.take() {
-            sink.stop();
-        }
         self.current_path = Some(path);
         self.current_track = Some(track.clone());
         self.phase = AudioPlaybackPhase::Ready;
@@ -367,6 +384,14 @@ impl AudioRuntime {
 
     pub(crate) fn get_current_track(&self) -> Option<AudioTrackRef> {
         self.current_track.clone()
+    }
+
+    fn invalidate_loaded_audio(&mut self) {
+        stop_and_take_sink(&mut self.sink);
+        self.current_path = None;
+        self.current_track = None;
+        self.accumulated = Duration::ZERO;
+        self.started_at = None;
     }
 
     pub(crate) fn handle_output_device_interruption(&mut self) -> AudioPlaybackState {
@@ -719,7 +744,11 @@ fn clamp_position_ms(position_ms: u64, duration_ms: Option<u64>) -> Duration {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
+    use std::{
+        cell::{Cell, RefCell},
+        rc::Rc,
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     use rodio::source::Zero;
 
@@ -762,6 +791,24 @@ mod tests {
         Box::new(Zero::<i16>::new_samples(2, 44_100, 2))
     }
 
+    struct RecordingStopSink(Rc<Cell<bool>>);
+
+    impl StoppableSink for RecordingStopSink {
+        fn stop_sink(&self) {
+            self.0.set(true);
+        }
+    }
+
+    fn loaded_test_track() -> AudioTrackRef {
+        AudioTrackRef {
+            id: "old-track".to_string(),
+            source_path: "old.flac".to_string(),
+            file_name: "old.flac".to_string(),
+            duration_ms: Some(60_000),
+            metadata: crate::audio::types::AudioTrackMetadata::default(),
+        }
+    }
+
     #[test]
     fn paused_seek_prepares_sink_without_starting_audio_output() {
         let sink = RecordingSink::default();
@@ -797,6 +844,65 @@ mod tests {
                 SinkAction::Play,
             ]
         );
+    }
+
+    #[test]
+    fn stop_and_take_sink_stops_before_discarding_the_slot() {
+        let stopped = Rc::new(Cell::new(false));
+        let mut slot = Some(RecordingStopSink(Rc::clone(&stopped)));
+
+        stop_and_take_sink(&mut slot);
+
+        assert!(stopped.get());
+        assert!(slot.is_none());
+    }
+
+    #[test]
+    fn failed_replacement_invalidates_playing_and_paused_tracks() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be valid")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "spmusic-failed-load-state-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).expect("test directory should be created");
+
+        for phase in [AudioPlaybackPhase::Playing, AudioPlaybackPhase::Paused] {
+            let path = root.join(format!("unsupported-{phase:?}.mp3"));
+            std::fs::write(&path, b"not an audio stream")
+                .expect("unsupported fixture should be written");
+            let mut runtime = AudioRuntime {
+                current_path: Some(PathBuf::from("old.flac")),
+                current_track: Some(loaded_test_track()),
+                phase,
+                accumulated: Duration::from_secs(12),
+                started_at: matches!(phase, AudioPlaybackPhase::Playing).then(Instant::now),
+                ..AudioRuntime::default()
+            };
+
+            let load_error = runtime
+                .load_path(path)
+                .expect_err("unsupported replacement must fail");
+            assert_eq!(load_error.code, AudioErrorCode::UnsupportedFormat);
+            assert_eq!(runtime.phase, AudioPlaybackPhase::Error);
+            assert!(runtime.sink.is_none());
+            assert!(runtime.current_path.is_none());
+            assert!(runtime.current_track.is_none());
+            assert_eq!(runtime.accumulated, Duration::ZERO);
+            assert!(runtime.started_at.is_none());
+
+            let play_error = runtime
+                .play(None)
+                .expect_err("failed replacement must leave no playable track");
+            assert_eq!(play_error.code, AudioErrorCode::NoTrackLoaded);
+            assert!(runtime.sink.is_none());
+            assert!(runtime.current_path.is_none());
+            assert!(runtime.current_track.is_none());
+        }
+
+        std::fs::remove_dir_all(root).expect("test directory should be removed");
     }
 
     #[test]

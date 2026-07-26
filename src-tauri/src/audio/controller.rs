@@ -17,10 +17,10 @@ use super::{
     },
     error::{audio_error, unavailable_state, AudioCommandError, AudioErrorCode},
     runtime::{AudioRuntime, AudioRuntimeRequest},
-    source::{default_filters, input_path},
+    source::{default_filters, input_path, load_folder_playlist},
     types::{
-        AudioLoadFileInput, AudioOpenFileInput, AudioPlayInput, AudioPlaybackState, AudioSeekInput,
-        AudioTrackRef,
+        AudioFolderPlaylist, AudioFolderPlaylistInput, AudioLoadFileInput, AudioOpenFileInput,
+        AudioPlayInput, AudioPlaybackState, AudioSeekInput, AudioTrackRef,
     },
     AUDIO_STATE_CHANGED_EVENT,
 };
@@ -223,6 +223,18 @@ impl AudioController {
             "load file command received",
         );
         self.load_file_path(input_path(&input.path)?)
+    }
+
+    pub fn list_folder_tracks(
+        &self,
+        input: AudioFolderPlaylistInput,
+    ) -> Result<AudioFolderPlaylist, AudioCommandError> {
+        tracing::info!(
+            operation = "audio.list_folder_tracks_command",
+            selected_path = %input.selected_path,
+            "folder playlist command received",
+        );
+        load_folder_playlist(&input_path(&input.selected_path)?)
     }
 
     pub fn play(

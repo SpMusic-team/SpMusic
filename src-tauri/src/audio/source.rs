@@ -20,10 +20,18 @@ use symphonia::core::{
 use super::{
     error::{audio_error, AudioCommandError, AudioErrorCode},
     symphonia_source::SymphoniaAudioSource,
-    types::{AudioCoverArt, AudioFileFilter, AudioTrackMetadata, AudioTrackRef},
+    types::{
+        AudioCoverArt, AudioFileFilter, AudioFolderPlaylist, AudioFolderTrackRef,
+        AudioTrackMetadata, AudioTrackRef,
+    },
 };
 
 pub(crate) type AudioSource = Box<dyn Source<Item = i16> + Send>;
+
+const SUPPORTED_AUDIO_EXTENSIONS: &[&str] = &[
+    "mp3", "wav", "flac", "ogg", "oga", "opus", "aac", "m4a", "m4b", "mp4", "aif", "aiff", "caf",
+    "mka", "mkv", "webm", "weba",
+];
 
 struct StereoDownmixSource {
     inner: SymphoniaAudioSource,
@@ -140,25 +148,10 @@ fn downmix_frame_to_stereo(frame: &[i16]) -> [i16; 2] {
 pub(crate) fn default_filters() -> Vec<AudioFileFilter> {
     vec![AudioFileFilter {
         name: "Audio".to_string(),
-        extensions: vec![
-            "mp3".to_string(),
-            "wav".to_string(),
-            "flac".to_string(),
-            "ogg".to_string(),
-            "oga".to_string(),
-            "opus".to_string(),
-            "aac".to_string(),
-            "m4a".to_string(),
-            "m4b".to_string(),
-            "mp4".to_string(),
-            "aif".to_string(),
-            "aiff".to_string(),
-            "caf".to_string(),
-            "mka".to_string(),
-            "mkv".to_string(),
-            "webm".to_string(),
-            "weba".to_string(),
-        ],
+        extensions: SUPPORTED_AUDIO_EXTENSIONS
+            .iter()
+            .map(|extension| (*extension).to_string())
+            .collect(),
     }]
 }
 
@@ -187,7 +180,12 @@ pub(crate) fn load_track_ref(path: &Path) -> Result<AudioTrackRef, AudioCommandE
     );
 
     validate_existing_file(path)?;
-    let duration = decode_duration(path)?;
+    // A container header or metadata tag alone is not enough to enter the
+    // playlist as playable. Decode the first audio buffer now so unsupported
+    // codecs and structurally damaged streams fail during Load rather than
+    // leaving a track that only fails after the user presses Play.
+    let playback_duration = open_source(path)?.total_duration();
+    let duration = decode_duration(path)?.or(playback_duration);
     let metadata = read_metadata_or_default(path);
     let track_id = track_id(path);
     let file_name = path
@@ -220,6 +218,104 @@ pub(crate) fn load_track_ref(path: &Path) -> Result<AudioTrackRef, AudioCommandE
         duration_ms: duration.map(duration_ms),
         metadata,
     })
+}
+
+pub(crate) fn load_folder_playlist(
+    selected_path: &Path,
+) -> Result<AudioFolderPlaylist, AudioCommandError> {
+    validate_existing_file(selected_path)?;
+    let directory = selected_path.parent().ok_or_else(|| {
+        audio_error(
+            AudioErrorCode::InvalidPath,
+            "Audio file does not have a parent directory",
+            true,
+        )
+    })?;
+    let directory = directory
+        .canonicalize()
+        .unwrap_or_else(|_| directory.to_path_buf());
+    let entries = fs::read_dir(&directory).map_err(|error| {
+        tracing::warn!(
+            operation = "audio.source.folder_playlist",
+            path = %directory.display(),
+            error = %error,
+            "audio folder could not be read",
+        );
+        audio_error(
+            AudioErrorCode::UnreadableFile,
+            "Audio folder could not be read",
+            true,
+        )
+    })?;
+
+    let mut tracks = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file() && has_supported_audio_extension(path))
+        .map(|path| {
+            let path = path.canonicalize().unwrap_or(path);
+            let file_name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("audio")
+                .to_string();
+            AudioFolderTrackRef {
+                id: track_id(&path),
+                source_path: path.to_string_lossy().into_owned(),
+                file_name,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    tracks.sort_by(|left, right| {
+        left.file_name
+            .to_lowercase()
+            .cmp(&right.file_name.to_lowercase())
+            .then_with(|| left.file_name.cmp(&right.file_name))
+            .then_with(|| left.source_path.cmp(&right.source_path))
+    });
+
+    let selected_id = track_id(selected_path);
+    let selected_index = tracks
+        .iter()
+        .position(|track| track.id == selected_id)
+        .ok_or_else(|| {
+            audio_error(
+                AudioErrorCode::UnsupportedFormat,
+                "Selected audio file is not in the supported folder playlist",
+                true,
+            )
+        })?;
+    let directory_name = directory
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_owned)
+        .unwrap_or_else(|| directory.to_string_lossy().into_owned());
+
+    tracing::info!(
+        operation = "audio.source.folder_playlist",
+        path = %directory.display(),
+        track_count = tracks.len(),
+        selected_index,
+        "temporary folder playlist loaded",
+    );
+
+    Ok(AudioFolderPlaylist {
+        directory_path: directory.to_string_lossy().into_owned(),
+        directory_name,
+        selected_index,
+        tracks,
+    })
+}
+
+fn has_supported_audio_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            SUPPORTED_AUDIO_EXTENSIONS
+                .iter()
+                .any(|supported| extension.eq_ignore_ascii_case(supported))
+        })
 }
 
 pub(crate) fn open_source(path: &Path) -> Result<AudioSource, AudioCommandError> {
@@ -1023,6 +1119,72 @@ mod tests {
     }
 
     #[test]
+    fn folder_playlist_lists_supported_sibling_audio_in_stable_order() {
+        let test_dir = std::env::temp_dir().join(format!(
+            "spmusic-folder-playlist-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let nested_dir = test_dir.join("nested");
+        std::fs::create_dir_all(&nested_dir).expect("test directories should be created");
+
+        let selected_path = test_dir.join("02 Selected.FLAC");
+        for path in [
+            test_dir.join("10 Outro.opus"),
+            test_dir.join("01 Intro.mp3"),
+            selected_path.clone(),
+            test_dir.join("03 Notes.txt"),
+            nested_dir.join("00 Nested.mp3"),
+        ] {
+            std::fs::write(path, []).expect("test file should be written");
+        }
+
+        let playlist =
+            load_folder_playlist(&selected_path).expect("folder playlist should be created");
+        let file_names = playlist
+            .tracks
+            .iter()
+            .map(|track| track.file_name.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            file_names,
+            vec!["01 Intro.mp3", "02 Selected.FLAC", "10 Outro.opus"]
+        );
+        assert_eq!(playlist.selected_index, 1);
+        assert_eq!(playlist.tracks[1].id, track_id(&selected_path));
+        assert_eq!(
+            playlist.directory_name,
+            test_dir
+                .file_name()
+                .and_then(|name| name.to_str())
+                .expect("test directory should have a name")
+        );
+
+        std::fs::remove_dir_all(test_dir).expect("test directory should be removed");
+    }
+
+    #[test]
+    fn folder_playlist_rejects_selected_file_with_unsupported_extension() {
+        let test_dir = std::env::temp_dir().join(format!(
+            "spmusic-folder-playlist-unsupported-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&test_dir).expect("test directory should be created");
+        let selected_path = test_dir.join("notes.txt");
+        std::fs::write(&selected_path, []).expect("test file should be written");
+
+        let error = load_folder_playlist(&selected_path)
+            .expect_err("unsupported selected file should not create a playlist");
+
+        assert_eq!(error.code, AudioErrorCode::UnsupportedFormat);
+        assert!(error.recoverable);
+
+        std::fs::remove_dir_all(test_dir).expect("test directory should be removed");
+    }
+
+    #[test]
     fn production_source_decodes_and_seeks_extended_formats() {
         let Some(corpus_root) = generate_ffmpeg_corpus() else {
             return;
@@ -1464,6 +1626,30 @@ mod tests {
 
         assert_eq!(error.code, AudioErrorCode::FileNotFound);
         assert!(error.recoverable);
+    }
+
+    #[test]
+    fn load_track_ref_rejects_header_only_damaged_audio() {
+        let root = std::env::temp_dir().join(format!(
+            "spmusic-damaged-load-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&root).expect("test directory should be created");
+        let path = root.join("damaged.wav");
+        write_silent_wav(&path);
+        let bytes = std::fs::read(&path).expect("WAV should be readable");
+        std::fs::write(&path, &bytes[..44]).expect("WAV should be truncated to its header");
+
+        let result = std::panic::catch_unwind(|| load_track_ref(&path));
+        assert!(result.is_ok(), "damaged audio load must not panic");
+        let error = result
+            .expect("damaged audio load should return normally")
+            .expect_err("header-only audio must not enter the playable state");
+        assert_eq!(error.code, AudioErrorCode::UnsupportedFormat);
+        assert!(error.recoverable);
+
+        std::fs::remove_dir_all(root).expect("test directory should be removed");
     }
 
     #[test]

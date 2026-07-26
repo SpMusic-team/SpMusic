@@ -5,8 +5,9 @@ use std::sync::Once;
 
 use app_paths::AppPaths;
 use audio::{
-    AudioCommandError, AudioController, AudioLoadFileInput, AudioOpenFileInput, AudioPlayInput,
-    AudioPlaybackState, AudioSeekInput, AudioTrackRef,
+    AudioCommandError, AudioController, AudioFolderPlaylist, AudioFolderPlaylistInput,
+    AudioLoadFileInput, AudioOpenFileInput, AudioPlayInput, AudioPlaybackState, AudioSeekInput,
+    AudioTrackRef,
 };
 use tauri::{Manager, State};
 use tracing_subscriber::EnvFilter;
@@ -42,6 +43,19 @@ fn audio_load_file(
     let result = state.load_file(input);
     log_track_command_result("audio_load_file", &result);
     result
+}
+
+#[tauri::command]
+fn audio_list_folder_tracks(
+    state: State<'_, AudioController>,
+    input: AudioFolderPlaylistInput,
+) -> Result<AudioFolderPlaylist, AudioCommandError> {
+    tracing::info!(
+        command = "audio_list_folder_tracks",
+        selected_path = %input.selected_path,
+        "Tauri command invoked",
+    );
+    state.list_folder_tracks(input)
 }
 
 #[tauri::command]
@@ -137,6 +151,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             audio_open_file,
             audio_load_file,
+            audio_list_folder_tracks,
             audio_play,
             audio_pause,
             audio_stop,

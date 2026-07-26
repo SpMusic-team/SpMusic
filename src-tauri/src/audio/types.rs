@@ -86,6 +86,30 @@ pub struct AudioLoadFileInput {
 
 #[derive(Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+pub struct AudioFolderPlaylistInput {
+    pub selected_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioFolderPlaylist {
+    pub directory_path: String,
+    pub directory_name: String,
+    #[ts(type = "number")]
+    pub selected_index: usize,
+    pub tracks: Vec<AudioFolderTrackRef>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioFolderTrackRef {
+    pub id: String,
+    pub source_path: String,
+    pub file_name: String,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
 pub struct AudioPlayInput {
     pub restart: Option<bool>,
 }

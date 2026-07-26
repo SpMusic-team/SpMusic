@@ -12,11 +12,36 @@ use rodio::{
 use super::{
     device::current_output_device_signature,
     error::{audio_error, AudioCommandError, AudioErrorCode},
-    source::{duration_ms, load_track_ref, open_source},
+    source::{duration_ms, load_track_ref, open_source, AudioSource},
     types::{
         AudioPlayInput, AudioPlaybackPhase, AudioPlaybackState, AudioSeekInput, AudioTrackRef,
     },
 };
+
+trait RebuiltSink {
+    fn pause_for_preparation(&self);
+    fn append_source(&self, source: AudioSource);
+    fn seek_to(&self, position: Duration) -> Result<(), rodio::source::SeekError>;
+    fn start_playback(&self);
+}
+
+impl RebuiltSink for Sink {
+    fn pause_for_preparation(&self) {
+        self.pause();
+    }
+
+    fn append_source(&self, source: AudioSource) {
+        self.append(source);
+    }
+
+    fn seek_to(&self, position: Duration) -> Result<(), rodio::source::SeekError> {
+        self.try_seek(position)
+    }
+
+    fn start_playback(&self) {
+        self.play();
+    }
+}
 
 pub(crate) enum AudioRuntimeRequest {
     LoadFile {
@@ -563,26 +588,20 @@ impl AudioRuntime {
             previous.stop();
         }
         sink.set_volume(self.volume);
-        sink.append(source);
-        if !position.is_zero() {
-            sink.try_seek(position).map_err(|error| {
-                tracing::warn!(
-                    operation = "audio.runtime.rebuild_sink",
-                    path = %path.display(),
-                    position_ms = duration_ms(position),
-                    error = %error,
-                    "failed to seek rebuilt audio sink",
-                );
-                audio_error(
-                    AudioErrorCode::UnsupportedOperation,
-                    format!("Audio source does not support seeking: {error}"),
-                    true,
-                )
-            })?;
-        }
-        if !play {
-            sink.pause();
-        }
+        configure_rebuilt_sink(&sink, source, position, play).map_err(|error| {
+            tracing::warn!(
+                operation = "audio.runtime.rebuild_sink",
+                path = %path.display(),
+                position_ms = duration_ms(position),
+                error = %error,
+                "failed to seek rebuilt audio sink",
+            );
+            audio_error(
+                AudioErrorCode::UnsupportedOperation,
+                format!("Audio source does not support seeking: {error}"),
+                true,
+            )
+        })?;
         self.sink = Some(sink);
         tracing::info!(
             operation = "audio.runtime.rebuild_sink",
@@ -670,6 +689,27 @@ impl AudioRuntime {
     }
 }
 
+fn configure_rebuilt_sink(
+    sink: &impl RebuiltSink,
+    source: AudioSource,
+    position: Duration,
+    play: bool,
+) -> Result<(), rodio::source::SeekError> {
+    // `rodio::Sink::try_new` starts in the playing state. Pause before
+    // appending the source so a paused seek cannot leak samples while the
+    // decoder is being positioned. Playing seeks resume only after the seek
+    // has completed.
+    sink.pause_for_preparation();
+    sink.append_source(source);
+    if !position.is_zero() {
+        sink.seek_to(position)?;
+    }
+    if play {
+        sink.start_playback();
+    }
+    Ok(())
+}
+
 fn clamp_position_ms(position_ms: u64, duration_ms: Option<u64>) -> Duration {
     let target_ms = duration_ms
         .map(|duration_ms| position_ms.min(duration_ms))
@@ -679,7 +719,85 @@ fn clamp_position_ms(position_ms: u64, duration_ms: Option<u64>) -> Duration {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+
+    use rodio::source::Zero;
+
     use super::*;
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum SinkAction {
+        Pause,
+        Append,
+        Seek(Duration),
+        Play,
+    }
+
+    #[derive(Default)]
+    struct RecordingSink {
+        actions: RefCell<Vec<SinkAction>>,
+    }
+
+    impl RebuiltSink for RecordingSink {
+        fn pause_for_preparation(&self) {
+            self.actions.borrow_mut().push(SinkAction::Pause);
+        }
+
+        fn append_source(&self, source: AudioSource) {
+            drop(source);
+            self.actions.borrow_mut().push(SinkAction::Append);
+        }
+
+        fn seek_to(&self, position: Duration) -> Result<(), rodio::source::SeekError> {
+            self.actions.borrow_mut().push(SinkAction::Seek(position));
+            Ok(())
+        }
+
+        fn start_playback(&self) {
+            self.actions.borrow_mut().push(SinkAction::Play);
+        }
+    }
+
+    fn silent_test_source() -> AudioSource {
+        Box::new(Zero::<i16>::new_samples(2, 44_100, 2))
+    }
+
+    #[test]
+    fn paused_seek_prepares_sink_without_starting_audio_output() {
+        let sink = RecordingSink::default();
+        let position = Duration::from_secs(12);
+
+        configure_rebuilt_sink(&sink, silent_test_source(), position, false)
+            .expect("paused seek sink should be configured");
+
+        assert_eq!(
+            *sink.actions.borrow(),
+            vec![
+                SinkAction::Pause,
+                SinkAction::Append,
+                SinkAction::Seek(position),
+            ]
+        );
+    }
+
+    #[test]
+    fn playing_seek_starts_only_after_source_is_positioned() {
+        let sink = RecordingSink::default();
+        let position = Duration::from_secs(12);
+
+        configure_rebuilt_sink(&sink, silent_test_source(), position, true)
+            .expect("playing seek sink should be configured");
+
+        assert_eq!(
+            *sink.actions.borrow(),
+            vec![
+                SinkAction::Pause,
+                SinkAction::Append,
+                SinkAction::Seek(position),
+                SinkAction::Play,
+            ]
+        );
+    }
 
     #[test]
     fn clamp_position_ms_limits_seek_to_track_duration() {

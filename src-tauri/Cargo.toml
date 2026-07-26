@@ -6,7 +6,7 @@ authors = ["you"]
 license = ""
 repository = ""
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.89"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -40,13 +40,20 @@ ts-rs = { version = "12.0.1", features = ["serde-compat"] }
 lofty = "0.24.0"
 symphonia = { version = "0.5.5", default-features = false, features = [
   "aac",
+  "aiff",
+  "alac",
+  "caf",
   "flac",
   "isomp4",
+  "mkv",
   "mp3",
   "ogg",
+  "pcm",
   "vorbis",
   "wav",
 ] }
+symphonia-adapter-libopus = { version = "0.2.0", features = ["bundled"] }
+matroska-demuxer = { path = "vendor/matroska-demuxer", version = "=0.8.0" }
 blake3 = "1.8.5"
 base64 = "0.22.1"
 windows = { version = "0.54.0", features = [

@@ -1,8 +1,7 @@
 use std::{
     fs::{self, File},
-    io::BufReader,
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
@@ -12,7 +11,7 @@ use lofty::{
     picture::{Picture, PictureType},
     tag::{Accessor, ItemKey, Tag, TagType},
 };
-use rodio::{Decoder, Source};
+use rodio::Source;
 use symphonia::core::{
     codecs::CODEC_TYPE_NULL, errors::Error as SymphoniaError, formats::FormatOptions,
     io::MediaSourceStream, meta::MetadataOptions, probe::Hint,
@@ -26,6 +25,118 @@ use super::{
 
 pub(crate) type AudioSource = Box<dyn Source<Item = i16> + Send>;
 
+struct StereoDownmixSource {
+    inner: SymphoniaAudioSource,
+    input_channels: usize,
+    pending: [i16; 2],
+    pending_index: usize,
+}
+
+impl StereoDownmixSource {
+    fn new(inner: SymphoniaAudioSource) -> Self {
+        Self {
+            input_channels: inner.channels() as usize,
+            inner,
+            pending: [0; 2],
+            pending_index: 2,
+        }
+    }
+}
+
+impl Iterator for StereoDownmixSource {
+    type Item = i16;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.pending_index < 2 {
+            let sample = self.pending[self.pending_index];
+            self.pending_index += 1;
+            return Some(sample);
+        }
+        let mut frame = Vec::with_capacity(self.input_channels);
+        for _ in 0..self.input_channels {
+            frame.push(self.inner.next()?);
+        }
+        self.pending = downmix_frame_to_stereo(&frame);
+        self.pending_index = 1;
+        Some(self.pending[0])
+    }
+}
+
+impl Source for StereoDownmixSource {
+    fn current_frame_len(&self) -> Option<usize> {
+        self.inner.current_frame_len().map(|samples| {
+            samples / self.input_channels * 2 + 2_usize.saturating_sub(self.pending_index)
+        })
+    }
+
+    fn channels(&self) -> u16 {
+        2
+    }
+
+    fn sample_rate(&self) -> u32 {
+        self.inner.sample_rate()
+    }
+
+    fn total_duration(&self) -> Option<Duration> {
+        self.inner.total_duration()
+    }
+
+    fn try_seek(&mut self, pos: Duration) -> Result<(), rodio::source::SeekError> {
+        self.inner.try_seek(pos)?;
+        self.pending_index = 2;
+        Ok(())
+    }
+}
+
+fn downmix_frame_to_stereo(frame: &[i16]) -> [i16; 2] {
+    let sample = |index: usize| frame.get(index).copied().unwrap_or_default() as f32;
+    let (left, right) = match frame.len() {
+        0 => (0.0, 0.0),
+        1 => (sample(0), sample(0)),
+        2 => (sample(0), sample(1)),
+        3 => (
+            sample(0) + 0.707_106_77 * sample(2),
+            sample(1) + 0.707_106_77 * sample(2),
+        ),
+        4 => (
+            sample(0) + 0.707_106_77 * sample(2),
+            sample(1) + 0.707_106_77 * sample(3),
+        ),
+        5 => (
+            sample(0) + 0.707_106_77 * (sample(2) + sample(3)),
+            sample(1) + 0.707_106_77 * (sample(2) + sample(4)),
+        ),
+        6 => (
+            sample(0) + 0.707_106_77 * (sample(2) + sample(4)) + 0.316_227_76 * sample(3),
+            sample(1) + 0.707_106_77 * (sample(2) + sample(5)) + 0.316_227_76 * sample(3),
+        ),
+        7 => (
+            sample(0)
+                + 0.707_106_77 * (sample(2) + sample(4) + sample(5))
+                + 0.316_227_76 * sample(3),
+            sample(1)
+                + 0.707_106_77 * (sample(2) + sample(4) + sample(6))
+                + 0.316_227_76 * sample(3),
+        ),
+        _ => (
+            sample(0)
+                + 0.707_106_77 * (sample(2) + sample(4) + sample(6))
+                + 0.316_227_76 * sample(3),
+            sample(1)
+                + 0.707_106_77 * (sample(2) + sample(5) + sample(7))
+                + 0.316_227_76 * sample(3),
+        ),
+    };
+    // Fixed -6 dB headroom keeps common 5.1/7.1 programme material
+    // inside i16 while retaining a deterministic clipping boundary.
+    let to_i16 = |value: f32| {
+        (value * 0.5)
+            .round()
+            .clamp(i16::MIN as f32, i16::MAX as f32) as i16
+    };
+    [to_i16(left), to_i16(right)]
+}
+
 pub(crate) fn default_filters() -> Vec<AudioFileFilter> {
     vec![AudioFileFilter {
         name: "Audio".to_string(),
@@ -34,6 +145,19 @@ pub(crate) fn default_filters() -> Vec<AudioFileFilter> {
             "wav".to_string(),
             "flac".to_string(),
             "ogg".to_string(),
+            "oga".to_string(),
+            "opus".to_string(),
+            "aac".to_string(),
+            "m4a".to_string(),
+            "m4b".to_string(),
+            "mp4".to_string(),
+            "aif".to_string(),
+            "aiff".to_string(),
+            "caf".to_string(),
+            "mka".to_string(),
+            "mkv".to_string(),
+            "webm".to_string(),
+            "weba".to_string(),
         ],
     }]
 }
@@ -100,94 +224,96 @@ pub(crate) fn load_track_ref(path: &Path) -> Result<AudioTrackRef, AudioCommandE
 
 pub(crate) fn open_source(path: &Path) -> Result<AudioSource, AudioCommandError> {
     let started_at = std::time::Instant::now();
-    if path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("flac"))
-    {
-        tracing::info!(
-            operation = "audio.source.open",
-            path = %path.display(),
-            decoder = "symphonia-flac",
-            "opening audio source",
-        );
-        return SymphoniaAudioSource::open_path(path)
-            .map(|source| {
-                tracing::info!(
-                    operation = "audio.source.open",
-                    path = %path.display(),
-                    decoder = "symphonia-flac",
-                    elapsed_ms = started_at.elapsed().as_millis(),
-                    "opened audio source",
-                );
-                Box::new(source) as AudioSource
-            })
-            .map_err(|error| {
-                tracing::warn!(
-                    operation = "audio.source.open",
-                    path = %path.display(),
-                    decoder = "symphonia-flac",
-                    error = %error,
-                    elapsed_ms = started_at.elapsed().as_millis(),
-                    "failed to open audio source",
-                );
-                audio_error(
-                    AudioErrorCode::UnsupportedFormat,
-                    format!("Failed to decode FLAC audio file: {error}"),
-                    true,
-                )
-            });
-    }
-
     tracing::info!(
         operation = "audio.source.open",
         path = %path.display(),
-        decoder = "rodio",
+        decoder = "symphonia",
         "opening audio source",
     );
-    let file = File::open(path).map_err(|error| {
-        tracing::warn!(
-            operation = "audio.source.open",
-            path = %path.display(),
-            decoder = "rodio",
-            error = %error,
-            elapsed_ms = started_at.elapsed().as_millis(),
-            "failed to open audio file for decoding",
-        );
-        audio_error(
-            AudioErrorCode::UnreadableFile,
-            format!("Failed to read audio file: {error}"),
-            true,
-        )
-    })?;
-
-    Decoder::new(BufReader::new(file))
+    SymphoniaAudioSource::open_path(path)
         .map(|source| {
+            let total_duration = source.total_duration();
+            let replay_gain = replay_gain_multiplier(path);
+            let input_channels = source.channels();
+            let source: AudioSource = if input_channels > 2 {
+                Box::new(StereoDownmixSource::new(source))
+            } else {
+                Box::new(source)
+            };
             tracing::info!(
                 operation = "audio.source.open",
                 path = %path.display(),
-                decoder = "rodio",
+                decoder = "symphonia",
                 elapsed_ms = started_at.elapsed().as_millis(),
-                total_duration_ms = source.total_duration().map(duration_ms),
+                total_duration_ms = total_duration.map(duration_ms),
+                replay_gain_multiplier = replay_gain,
+                input_channels,
+                output_channels = source.channels(),
                 "opened audio source",
             );
-            Box::new(source) as AudioSource
+            match replay_gain {
+                Some(multiplier) => Box::new(source.amplify(multiplier)) as AudioSource,
+                None => source,
+            }
         })
         .map_err(|error| {
             tracing::warn!(
                 operation = "audio.source.open",
                 path = %path.display(),
-                decoder = "rodio",
+                decoder = "symphonia",
                 error = %error,
                 elapsed_ms = started_at.elapsed().as_millis(),
                 "failed to decode audio source",
             );
             audio_error(
                 AudioErrorCode::UnsupportedFormat,
-                format!("Failed to decode audio file: {error}"),
+                format!("Failed to decode audio file with Symphonia: {error}"),
                 true,
             )
         })
+}
+
+const REPLAY_GAIN_MIN_DB: f32 = -24.0;
+const REPLAY_GAIN_MAX_DB: f32 = 12.0;
+
+fn replay_gain_multiplier(path: &Path) -> Option<f32> {
+    let tagged_file = lofty_read_content(path).ok()?;
+    let tag = tagged_file
+        .primary_tag()
+        .or_else(|| tagged_file.first_tag())?;
+    let gain_db = [ItemKey::ReplayGainTrackGain, ItemKey::ReplayGainAlbumGain]
+        .into_iter()
+        .find_map(|key| tag_text(tag, key).and_then(|value| parse_replay_gain_db(&value)))?;
+    let peak = [ItemKey::ReplayGainTrackPeak, ItemKey::ReplayGainAlbumPeak]
+        .into_iter()
+        .find_map(|key| tag_text(tag, key).and_then(|value| value.trim().parse::<f32>().ok()))
+        .filter(|peak| peak.is_finite() && *peak > 0.0);
+
+    Some(bounded_replay_gain_multiplier(gain_db, peak))
+}
+
+fn bounded_replay_gain_multiplier(gain_db: f32, peak: Option<f32>) -> f32 {
+    let mut bounded_db = gain_db.clamp(REPLAY_GAIN_MIN_DB, REPLAY_GAIN_MAX_DB);
+    if let Some(peak) = peak {
+        let peak_limited_db = -20.0 * peak.log10();
+        if peak_limited_db.is_finite() {
+            bounded_db = bounded_db.min(peak_limited_db);
+        }
+    }
+    10.0_f32.powf(bounded_db / 20.0)
+}
+
+fn parse_replay_gain_db(value: &str) -> Option<f32> {
+    let number = value
+        .trim()
+        .strip_suffix("dB")
+        .or_else(|| value.trim().strip_suffix("DB"))
+        .or_else(|| value.trim().strip_suffix("db"))
+        .unwrap_or(value.trim())
+        .trim()
+        .parse::<f32>()
+        .ok()?;
+    number.is_finite().then_some(number)
 }
 
 pub(crate) fn duration_ms(duration: Duration) -> u64 {
@@ -225,48 +351,152 @@ fn validate_existing_file(path: &Path) -> Result<(), AudioCommandError> {
 }
 
 fn decode_duration(path: &Path) -> Result<Option<Duration>, AudioCommandError> {
-    match lofty_duration(path) {
-        Ok(duration) => {
+    if is_adts_content(path) {
+        match symphonia_scanned_duration(path) {
+            Ok(Some(duration)) => {
+                tracing::debug!(
+                    operation = "audio.source.duration",
+                    path = %path.display(),
+                    duration_ms = duration_ms(duration),
+                    provider = "symphonia-packet-scan",
+                    "ADTS duration scan succeeded",
+                );
+                return Ok(Some(duration));
+            }
+            Ok(None) => {}
+            Err(error) => tracing::debug!(
+                operation = "audio.source.duration",
+                path = %path.display(),
+                error = %error,
+                "ADTS duration scan failed; using regular duration probes",
+            ),
+        }
+    }
+
+    // Use the same content probe and stream time base as playback first. In
+    // particular, bitrate-based ADTS estimates can be hundreds of milliseconds
+    // short even for a three-second file.
+    match symphonia_duration(path) {
+        Ok(Some(duration)) => {
             tracing::debug!(
                 operation = "audio.source.duration",
                 path = %path.display(),
-                duration_ms = duration.map(duration_ms),
-                provider = "lofty",
+                duration_ms = duration_ms(duration),
+                provider = "symphonia",
                 "audio duration probe succeeded",
             );
-            return Ok(duration);
+            return Ok(Some(duration));
+        }
+        Ok(None) => {
+            tracing::debug!(
+                operation = "audio.source.duration",
+                path = %path.display(),
+                "symphonia duration probe returned no duration, falling back to lofty",
+            );
         }
         Err(error) => {
             tracing::debug!(
                 operation = "audio.source.duration",
                 path = %path.display(),
                 error = %error,
-                "lofty duration probe failed, falling back to symphonia",
+                "symphonia duration probe failed, falling back to lofty",
             );
         }
     }
 
-    match symphonia_duration(path) {
-        Ok(duration) => {
+    match lofty_duration(path) {
+        Ok(Some(duration)) => {
             tracing::debug!(
                 operation = "audio.source.duration",
                 path = %path.display(),
-                duration_ms = duration.map(duration_ms),
-                provider = "symphonia",
+                duration_ms = duration_ms(duration),
+                provider = "lofty",
                 "audio duration probe succeeded",
             );
-            Ok(duration)
+            Ok(Some(duration))
+        }
+        Ok(None) => {
+            tracing::debug!(
+                operation = "audio.source.duration",
+                path = %path.display(),
+                "lofty duration probe returned no duration, falling back to playback source",
+            );
+            Ok(open_source(path)?.total_duration())
         }
         Err(error) => {
             tracing::debug!(
                 operation = "audio.source.duration",
                 path = %path.display(),
                 error = %error,
-                "symphonia duration probe failed, falling back to rodio",
+                "lofty duration probe failed, falling back to playback source",
             );
             Ok(open_source(path)?.total_duration())
         }
     }
+}
+
+fn is_adts_content(path: &Path) -> bool {
+    use std::io::Read;
+
+    let mut header = [0_u8; 2];
+    File::open(path)
+        .and_then(|mut file| file.read_exact(&mut header))
+        .is_ok()
+        && header[0] == 0xff
+        && header[1] & 0xf6 == 0xf0
+}
+
+fn symphonia_scanned_duration(path: &Path) -> Result<Option<Duration>, SymphoniaError> {
+    let file = Box::new(File::open(path)?);
+    let media_source = MediaSourceStream::new(file, Default::default());
+    let probed = symphonia::default::get_probe().format(
+        &Hint::new(),
+        media_source,
+        &FormatOptions {
+            enable_gapless: true,
+            ..Default::default()
+        },
+        &MetadataOptions::default(),
+    )?;
+    let mut format = probed.format;
+    let track = format
+        .default_track()
+        .or_else(|| {
+            format
+                .tracks()
+                .iter()
+                .find(|track| track.codec_params.codec != CODEC_TYPE_NULL)
+        })
+        .ok_or(SymphoniaError::Unsupported("no decodable audio track"))?;
+    let track_id = track.id;
+    let Some(time_base) = track.codec_params.time_base else {
+        return Ok(None);
+    };
+    let mut final_ts = 0_u64;
+
+    loop {
+        match format.next_packet() {
+            Ok(packet) if packet.track_id() == track_id => {
+                final_ts = final_ts.max(packet.ts().saturating_add(packet.dur()));
+            }
+            Ok(_) => {}
+            Err(SymphoniaError::IoError(error))
+                if matches!(error.kind(), std::io::ErrorKind::UnexpectedEof) =>
+            {
+                break;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    Ok((final_ts > 0).then(|| time_to_std_duration(time_base.calc_time(final_ts))))
+}
+
+fn time_to_std_duration(time: symphonia::core::units::Time) -> Duration {
+    let nanos = (time.frac * 1_000_000_000.0)
+        .round()
+        .clamp(0.0, 999_999_999.0) as u32;
+    Duration::new(time.seconds, nanos)
 }
 
 fn track_id(path: &Path) -> String {
@@ -280,7 +510,7 @@ fn track_id(path: &Path) -> String {
 }
 
 fn lofty_duration(path: &Path) -> Result<Option<Duration>, lofty::error::LoftyError> {
-    let tagged_file = lofty::read_from_path(path)?;
+    let tagged_file = lofty_read_content(path)?;
     let duration = tagged_file.properties().duration();
 
     Ok((!duration.is_zero()).then_some(duration))
@@ -349,7 +579,7 @@ fn read_metadata_or_default(path: &Path) -> AudioTrackMetadata {
 }
 
 fn lofty_metadata(path: &Path) -> Result<AudioTrackMetadata, lofty::error::LoftyError> {
-    let tagged_file = lofty::read_from_path(path)?;
+    let tagged_file = lofty_read_content(path)?;
     let Some(tag) = tagged_file
         .primary_tag()
         .or_else(|| tagged_file.first_tag())
@@ -397,23 +627,15 @@ fn tag_text(tag: &Tag, key: ItemKey) -> Option<String> {
     tag.get_string(key).map(ToOwned::to_owned)
 }
 
-fn embed_lyrics(path: &Path, lyrics: &str) -> Result<(), lofty::error::LoftyError> {
-    let mut tagged_file = lofty::read_from_path(path)?;
-    let tag_type = tagged_file.primary_tag_type();
-    if tagged_file.primary_tag().is_none() {
-        tagged_file.insert_tag(Tag::new(tag_type));
-    }
-
-    let lyrics_key = if tag_type == TagType::Id3v2 {
-        ItemKey::UnsyncLyrics
-    } else {
-        ItemKey::Lyrics
-    };
-    let tag = tagged_file
-        .primary_tag_mut()
-        .expect("primary tag was inserted before embedding lyrics");
-    tag.insert_text(lyrics_key, lyrics.to_owned());
-    tagged_file.save_to_path(path, WriteOptions::default())?;
+fn embed_lyrics(path: &Path, lyrics: &str) -> Result<(), String> {
+    safe_update_tag(path, |tag, tag_type| {
+        let lyrics_key = if tag_type == TagType::Id3v2 {
+            ItemKey::UnsyncLyrics
+        } else {
+            ItemKey::Lyrics
+        };
+        tag.insert_text(lyrics_key, lyrics.to_owned());
+    })?;
 
     tracing::info!(
         operation = "audio.source.lyrics.embed",
@@ -422,6 +644,80 @@ fn embed_lyrics(path: &Path, lyrics: &str) -> Result<(), lofty::error::LoftyErro
         "sidecar lyrics embedded into audio file",
     );
     Ok(())
+}
+
+fn safe_update_tag(path: &Path, update: impl FnOnce(&mut Tag, TagType)) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "audio path has no parent directory".to_string())?;
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "audio path has no extension".to_string())?;
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("audio");
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let temporary = parent.join(format!(
+        ".{stem}.spmusic-tag-{}-{unique}.{extension}",
+        std::process::id()
+    ));
+    let backup = parent.join(format!(
+        ".{stem}.spmusic-backup-{}-{unique}.{extension}",
+        std::process::id()
+    ));
+
+    let result = (|| {
+        fs::copy(path, &temporary)
+            .map_err(|error| format!("failed to create tag update copy: {error}"))?;
+        let mut tagged_file = lofty_read_content(&temporary)
+            .map_err(|error| format!("failed to read tag update copy: {error}"))?;
+        let tag_type = tagged_file.primary_tag_type();
+        if tagged_file.primary_tag().is_none() {
+            tagged_file.insert_tag(Tag::new(tag_type));
+        }
+        let tag = tagged_file
+            .primary_tag_mut()
+            .ok_or_else(|| "failed to create primary tag".to_string())?;
+        update(tag, tag_type);
+        tagged_file
+            .save_to_path(&temporary, WriteOptions::default())
+            .map_err(|error| format!("failed to write tag update copy: {error}"))?;
+
+        // Re-probe the complete rewritten container before replacing the
+        // original. Full decode integrity is covered by the compatibility
+        // corpus tests without making ordinary tag edits scan long files.
+        SymphoniaAudioSource::open_path(&temporary)
+            .map_err(|error| format!("rewritten audio failed validation: {error}"))?;
+
+        fs::rename(path, &backup)
+            .map_err(|error| format!("failed to stage original audio file: {error}"))?;
+        if let Err(error) = fs::rename(&temporary, path) {
+            let rollback = fs::rename(&backup, path);
+            return Err(format!(
+                "failed to install rewritten audio: {error}; rollback={rollback:?}"
+            ));
+        }
+        fs::remove_file(&backup)
+            .map_err(|error| format!("tag update succeeded but backup cleanup failed: {error}"))?;
+        Ok(())
+    })();
+
+    if temporary.exists() {
+        let _ = fs::remove_file(&temporary);
+    }
+    if result.is_err() && backup.exists() && !path.exists() {
+        let _ = fs::rename(&backup, path);
+    }
+    result
+}
+
+fn lofty_read_content(path: &Path) -> Result<lofty::file::TaggedFile, lofty::error::LoftyError> {
+    lofty::probe::Probe::open(path)?.guess_file_type()?.read()
 }
 
 fn read_sidecar_lyrics(path: &Path) -> Option<String> {
@@ -566,7 +862,10 @@ fn symphonia_duration(path: &Path) -> Result<Option<Duration>, SymphoniaError> {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{
+        process::Command,
+        time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    };
 
     use super::*;
     use crate::audio::error::AudioErrorCode;
@@ -600,6 +899,98 @@ mod tests {
         std::fs::write(path, wav).expect("test WAV should be written");
     }
 
+    fn generate_ffmpeg_corpus() -> Option<PathBuf> {
+        let ffmpeg_path = std::env::var_os("SPMUSIC_FFMPEG_PATH")?;
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after Unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "spmusic-production-source-{}-{unique}",
+            std::process::id()
+        ));
+        let output = root.join("generated");
+        let manifest = root.join("manifest.json");
+        std::fs::create_dir_all(&root).expect("temporary corpus directory should be created");
+
+        let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("src-tauri should have a repository parent");
+        let generator = repository.join("tools/audio-compatibility/generate-fixtures.mjs");
+        let result = Command::new("node")
+            .arg(generator)
+            .arg("generate")
+            .arg("--require-ffmpeg")
+            .arg("--ffmpeg")
+            .arg(ffmpeg_path)
+            .arg("--output")
+            .arg(&output)
+            .arg("--manifest")
+            .arg(&manifest)
+            .output()
+            .expect("Node.js must be available to generate the compatibility corpus");
+        assert!(
+            result.status.success(),
+            "fixture generator failed:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+
+        Some(root)
+    }
+
+    fn normalized_correlation(left: &[i16], right: &[i16]) -> f64 {
+        let dot = left
+            .iter()
+            .zip(right)
+            .map(|(&left, &right)| f64::from(left) * f64::from(right))
+            .sum::<f64>();
+        let left_energy = left
+            .iter()
+            .map(|&sample| f64::from(sample).powi(2))
+            .sum::<f64>();
+        let right_energy = right
+            .iter()
+            .map(|&sample| f64::from(sample).powi(2))
+            .sum::<f64>();
+        dot / (left_energy * right_energy).sqrt()
+    }
+
+    fn best_stereo_frame_alignment_with_limit(
+        left: &[i16],
+        right: &[i16],
+        max_shift: isize,
+    ) -> (isize, f64) {
+        (-max_shift..=max_shift)
+            .filter_map(|shift| {
+                let sample_shift = shift * 2;
+                let (left_start, right_start) = if sample_shift >= 0 {
+                    (sample_shift as usize, 0)
+                } else {
+                    (0, (-sample_shift) as usize)
+                };
+                let len = left
+                    .len()
+                    .saturating_sub(left_start)
+                    .min(right.len().saturating_sub(right_start));
+                (len >= 128).then(|| {
+                    (
+                        shift,
+                        normalized_correlation(
+                            &left[left_start..left_start + len],
+                            &right[right_start..right_start + len],
+                        ),
+                    )
+                })
+            })
+            .max_by(|left, right| left.1.total_cmp(&right.1))
+            .expect("alignment search should have candidates")
+    }
+
+    fn best_stereo_frame_alignment(left: &[i16], right: &[i16]) -> (isize, f64) {
+        best_stereo_frame_alignment_with_limit(left, right, 128)
+    }
+
     #[test]
     fn duration_ms_saturates_at_u64_max() {
         let duration = Duration::from_millis(u64::MAX).saturating_add(Duration::from_millis(1));
@@ -613,6 +1004,452 @@ mod tests {
 
         assert_eq!(error.code, AudioErrorCode::InvalidPath);
         assert!(error.recoverable);
+    }
+
+    #[test]
+    fn default_filters_include_verified_phase_two_extensions() {
+        let filters = default_filters();
+        let extensions = &filters[0].extensions;
+
+        for extension in [
+            "m4a", "m4b", "mp4", "aif", "aiff", "caf", "mka", "mkv", "ogg", "oga", "opus", "webm",
+            "weba",
+        ] {
+            assert!(
+                extensions.iter().any(|candidate| candidate == extension),
+                "missing phase-two extension: {extension}"
+            );
+        }
+    }
+
+    #[test]
+    fn production_source_decodes_and_seeks_extended_formats() {
+        let Some(corpus_root) = generate_ffmpeg_corpus() else {
+            return;
+        };
+        let generated = corpus_root.join("generated");
+
+        for (file_name, sample_rate, channels) in [
+            ("mp3-cbr.mp3", 44_100, 2),
+            ("mp3-vbr.mp3", 44_100, 2),
+            ("flac-16.flac", 44_100, 2),
+            ("flac-24.flac", 48_000, 2),
+            ("aac-adts.aac", 44_100, 2),
+            ("m4a-aac.m4a", 44_100, 2),
+            ("m4a-alac.m4a", 48_000, 2),
+            ("mp4-aac.mp4", 44_100, 2),
+            ("m4b-aac.m4b", 44_100, 2),
+            ("aiff-pcm16.aiff", 44_100, 2),
+            ("caf-pcm16.caf", 44_100, 2),
+            ("ogg-vorbis.ogg", 44_100, 2),
+            ("oga-vorbis.oga", 44_100, 2),
+            ("mka-flac.mka", 44_100, 2),
+            ("webm-vorbis.webm", 44_100, 2),
+            ("ogg-opus.ogg", 48_000, 2),
+            ("opus-extension.opus", 48_000, 2),
+            ("webm-opus.webm", 48_000, 2),
+            ("weba-opus.weba", 48_000, 2),
+            ("wav-pcm24-88200.wav", 88_200, 2),
+            ("wav-f32-96000.wav", 96_000, 2),
+            ("wav-pcm24-176400.wav", 176_400, 2),
+            ("wav-f32-192000.wav", 192_000, 2),
+            ("wav-pcm16-12345.wav", 12_345, 1),
+            ("flac-24-192000.flac", 192_000, 2),
+        ] {
+            let path = generated.join(file_name);
+            let mut source = open_source(&path).expect("phase-two format should open");
+            assert_eq!(source.sample_rate(), sample_rate, "{file_name} sample rate");
+            assert_eq!(source.channels(), channels, "{file_name} channel count");
+            let duration_ms = source
+                .total_duration()
+                .unwrap_or_else(|| panic!("{file_name} should report duration"))
+                .as_millis() as i64;
+            assert!(
+                duration_ms > 900
+                    && (file_name.starts_with("wav-")
+                        || file_name == "flac-24-192000.flac"
+                        || (duration_ms - 3_000).abs() <= 150),
+                "{file_name} duration {duration_ms} ms exceeds tolerance"
+            );
+            assert!(
+                source.by_ref().take(sample_rate as usize).count() > 0,
+                "{file_name} should produce decoded samples"
+            );
+        }
+
+        for file_name in [
+            "mp3-cbr.mp3",
+            "mp3-vbr.mp3",
+            "flac-16.flac",
+            "flac-24.flac",
+            "aac-adts.aac",
+            "m4a-aac.m4a",
+            "m4a-alac.m4a",
+            "mp4-aac.mp4",
+            "m4b-aac.m4b",
+            "aiff-pcm16.aiff",
+            "caf-pcm16.caf",
+            "ogg-vorbis.ogg",
+            "oga-vorbis.oga",
+            "mka-flac.mka",
+            "webm-vorbis.webm",
+            "ogg-opus.ogg",
+            "opus-extension.opus",
+            "webm-opus.webm",
+            "weba-opus.weba",
+        ] {
+            let path = generated.join(file_name);
+            let mut reference =
+                open_source(&path).expect("phase-two format should open for seek reference");
+            let reference_sample_rate = reference.sample_rate();
+            let reference_channels = reference.channels();
+            let samples_to_target =
+                (reference_sample_rate as usize * reference_channels as usize * 3) / 2;
+            assert_eq!(
+                reference.by_ref().take(samples_to_target).count(),
+                samples_to_target,
+                "{file_name} should reach the seek reference position"
+            );
+            let expected_after_seek: Vec<_> = reference.take(8_192).collect();
+
+            let mut seekable = open_source(&path).expect("phase-two format should reopen");
+            seekable
+                .try_seek(Duration::from_millis(1_500))
+                .unwrap_or_else(|error| panic!("{file_name} seek failed: {error}"));
+            let actual_after_seek: Vec<_> = seekable.take(8_192).collect();
+            if matches!(
+                file_name,
+                "mp3-cbr.mp3"
+                    | "mp3-vbr.mp3"
+                    | "aac-adts.aac"
+                    | "m4a-aac.m4a"
+                    | "mp4-aac.mp4"
+                    | "m4b-aac.m4b"
+                    | "ogg-vorbis.ogg"
+                    | "oga-vorbis.oga"
+                    | "webm-vorbis.webm"
+                    | "ogg-opus.ogg"
+                    | "opus-extension.opus"
+                    | "webm-opus.webm"
+                    | "weba-opus.weba"
+            ) {
+                let search_limit = if file_name.starts_with("mp3-") {
+                    2_048
+                } else {
+                    240
+                };
+                let (frame_shift, correlation) = best_stereo_frame_alignment_with_limit(
+                    &actual_after_seek,
+                    &expected_after_seek,
+                    search_limit,
+                );
+                let max_shift = if file_name.starts_with("mp3-") {
+                    // MPEG Layer III seeks are bounded by one 1152-sample
+                    // codec frame when the stream index cannot name an
+                    // arbitrary PCM sample.
+                    1_152
+                } else {
+                    240
+                };
+                assert!(
+                    correlation >= 0.95 && frame_shift.abs() <= max_shift,
+                    "{file_name} seek output is not aligned with the requested frame: correlation={correlation}, frame_shift={frame_shift}"
+                );
+            } else {
+                assert_eq!(
+                    actual_after_seek, expected_after_seek,
+                    "{file_name} should continue from the exact requested audio frame"
+                );
+            }
+        }
+
+        for file_name in ["ogg-opus.ogg", "webm-opus.webm"] {
+            let bytes =
+                std::fs::read(generated.join(file_name)).expect("Opus fixture should be readable");
+            let truncated_path = corpus_root.join(format!("truncated-{file_name}"));
+            std::fs::write(&truncated_path, &bytes[..bytes.len().min(32)])
+                .expect("truncated Opus fixture should be written");
+            let result = std::panic::catch_unwind(|| open_source(&truncated_path).map(|_| ()));
+            assert!(result.is_ok(), "{file_name} truncated input must not panic");
+            let error = result
+                .expect("truncated Opus open should return normally")
+                .expect_err("truncated Opus input must fail");
+            assert!(error.recoverable, "{file_name} error should be recoverable");
+        }
+
+        let audiobook_path = generated.join("ogg-opus-long-audiobook.opus");
+        let mut audiobook =
+            open_source(&audiobook_path).expect("long audiobook fixture should open");
+        let audiobook_duration = audiobook
+            .total_duration()
+            .expect("long audiobook should report duration");
+        assert!(
+            audiobook_duration.abs_diff(Duration::from_secs(1_800)) <= Duration::from_millis(100),
+            "long audiobook duration was {audiobook_duration:?}"
+        );
+        let seek_started = Instant::now();
+        audiobook
+            .try_seek(Duration::from_secs(1_620))
+            .expect("long audiobook should seek to 90%");
+        let seek_elapsed = seek_started.elapsed();
+        assert!(
+            seek_elapsed < Duration::from_millis(100),
+            "long audiobook indexed seek took {seek_elapsed:?}"
+        );
+        assert_eq!(
+            audiobook.take(4_096).count(),
+            4_096,
+            "long audiobook should decode after a large seek"
+        );
+
+        std::fs::remove_dir_all(corpus_root).expect("temporary corpus should be removed");
+    }
+
+    #[test]
+    fn indexed_seek_avoids_decoding_a_long_opus_file_from_the_start() {
+        let Some(ffmpeg_path) = std::env::var_os("SPMUSIC_FFMPEG_PATH") else {
+            return;
+        };
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after Unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "spmusic-long-indexed-seek-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).expect("long seek test directory should be created");
+        let path = root.join("long-ogg-opus.ogg");
+        let generated = Command::new(ffmpeg_path)
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:sample_rate=48000:duration=120",
+                "-c:a",
+                "libopus",
+                "-b:a",
+                "64k",
+                "-ac",
+                "2",
+                "-f",
+                "ogg",
+            ])
+            .arg(&path)
+            .status()
+            .expect("FFmpeg should generate the long seek fixture");
+        assert!(generated.success(), "long Opus fixture generation failed");
+
+        let target = Duration::from_secs(108);
+        let mut indexed =
+            SymphoniaAudioSource::open_path(&path).expect("long Opus fixture should open");
+        let indexed_started = Instant::now();
+        indexed
+            .try_seek(target)
+            .expect("long Opus fixture indexed seek should succeed");
+        let indexed_elapsed = indexed_started.elapsed();
+        let indexed_samples: Vec<_> = indexed.take(2_048).collect();
+
+        let mut linear =
+            SymphoniaAudioSource::open_path(&path).expect("long Opus fixture should reopen");
+        let linear_started = Instant::now();
+        linear
+            .linear_seek(target)
+            .expect("long Opus fixture linear reference seek should succeed");
+        let linear_elapsed = linear_started.elapsed();
+        let linear_samples: Vec<_> = linear.take(2_048).collect();
+        let (frame_shift, correlation) =
+            best_stereo_frame_alignment(&indexed_samples, &linear_samples);
+
+        eprintln!(
+            "long Ogg/Opus seek: indexed={}ms, linear={}ms, speedup={:.1}x, correlation={correlation:.6}, frame_shift={frame_shift}",
+            indexed_elapsed.as_millis(),
+            linear_elapsed.as_millis(),
+            linear_elapsed.as_secs_f64() / indexed_elapsed.as_secs_f64(),
+        );
+        assert!(
+            indexed_elapsed * 5 < linear_elapsed,
+            "indexed seek should be at least 5x faster than decoding 108 seconds linearly"
+        );
+        assert!(
+            correlation >= 0.95 && frame_shift.abs() <= 120,
+            "indexed long seek should remain aligned with the linear reference"
+        );
+
+        std::fs::remove_dir_all(root).expect("long seek test directory should be removed");
+    }
+
+    #[test]
+    fn matroska_cues_seek_long_audio_under_one_hundred_milliseconds() {
+        let Some(ffmpeg_path) = std::env::var_os("SPMUSIC_FFMPEG_PATH") else {
+            return;
+        };
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after Unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "spmusic-long-matroska-seek-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).expect("Matroska seek test directory should be created");
+
+        for (file_name, codec_args) in [
+            ("long-mka-flac.mka", &["-c:a", "flac", "-f", "matroska"][..]),
+            (
+                "long-webm-vorbis.webm",
+                &["-c:a", "libvorbis", "-q:a", "4", "-f", "webm"][..],
+            ),
+            (
+                "long-webm-opus.webm",
+                &["-c:a", "libopus", "-b:a", "64k", "-f", "webm"][..],
+            ),
+        ] {
+            let path = root.join(file_name);
+            let generated = Command::new(&ffmpeg_path)
+                .args([
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "sine=frequency=440:sample_rate=48000:duration=120",
+                    "-ac",
+                    "2",
+                ])
+                .args(codec_args)
+                .arg(&path)
+                .status()
+                .expect("FFmpeg should generate Matroska seek fixture");
+            assert!(generated.success(), "{file_name} generation failed");
+
+            let target = Duration::from_secs(108);
+            let mut indexed =
+                SymphoniaAudioSource::open_path(&path).expect("Matroska fixture should open");
+            let indexed_started = Instant::now();
+            indexed
+                .try_seek(target)
+                .unwrap_or_else(|error| panic!("{file_name} indexed seek failed: {error}"));
+            let indexed_elapsed = indexed_started.elapsed();
+            let indexed_samples: Vec<_> = indexed.take(2_048).collect();
+
+            let mut linear =
+                SymphoniaAudioSource::open_path(&path).expect("Matroska fixture should reopen");
+            let linear_started = Instant::now();
+            linear
+                .linear_seek(target)
+                .unwrap_or_else(|error| panic!("{file_name} linear reference failed: {error}"));
+            let linear_elapsed = linear_started.elapsed();
+            let linear_samples: Vec<_> = linear.take(2_048).collect();
+            let (frame_shift, correlation) =
+                best_stereo_frame_alignment(&indexed_samples, &linear_samples);
+            eprintln!(
+                "{file_name}: indexed={}ms, linear={}ms, correlation={correlation:.6}, frame_shift={frame_shift}",
+                indexed_elapsed.as_millis(),
+                linear_elapsed.as_millis(),
+            );
+
+            assert!(
+                indexed_elapsed < Duration::from_millis(100),
+                "{file_name} indexed seek exceeded 100 ms"
+            );
+            assert!(
+                correlation >= 0.95 && frame_shift.abs() <= 240,
+                "{file_name} seek exceeded the 5 ms alignment tolerance"
+            );
+            if file_name.ends_with(".mka") {
+                assert_eq!(
+                    indexed_samples, linear_samples,
+                    "lossless MKA/FLAC seek must be sample exact"
+                );
+            }
+        }
+
+        let indexed_path = root.join("long-webm-opus.webm");
+        let indexed_bytes =
+            std::fs::read(&indexed_path).expect("indexed WebM fixture should be readable");
+        let cues_id = [0x1c, 0x53, 0xbb, 0x6b];
+        let cues_offset = indexed_bytes
+            .windows(cues_id.len())
+            .rposition(|window| window == cues_id)
+            .expect("WebM fixture should contain a Cues element");
+        let corrupt_path = root.join("corrupt-cues-webm-opus.webm");
+        let mut corrupt_bytes = indexed_bytes.clone();
+        let cue_cluster_position = corrupt_bytes[cues_offset..]
+            .iter()
+            .position(|&byte| byte == 0xf1)
+            .map(|offset| cues_offset + offset)
+            .expect("Cues should contain CueClusterPosition");
+        let encoded_size = corrupt_bytes[cue_cluster_position + 1];
+        assert_ne!(
+            encoded_size & 0x80,
+            0,
+            "fixture should use a one-byte EBML size"
+        );
+        let position_len = usize::from(encoded_size & 0x7f);
+        corrupt_bytes[cue_cluster_position + 2..cue_cluster_position + 2 + position_len].fill(0xff);
+        std::fs::write(&corrupt_path, corrupt_bytes)
+            .expect("corrupt Cues fixture should be written");
+        let corrupt_result = std::panic::catch_unwind(|| {
+            let mut source = SymphoniaAudioSource::open_path(&corrupt_path)
+                .expect("audio before Cues should open");
+            source.try_seek(Duration::from_secs(108))
+        });
+        assert!(corrupt_result.is_ok(), "corrupt Cues must not panic");
+        assert!(
+            corrupt_result
+                .expect("corrupt Cues seek should return normally")
+                .is_ok(),
+            "corrupt Cues should fall back to linear seek"
+        );
+
+        let no_index_path = root.join("no-index-webm-opus.webm");
+        let no_index_generated = Command::new(&ffmpeg_path)
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:sample_rate=48000:duration=12",
+                "-ac",
+                "2",
+                "-c:a",
+                "libopus",
+                "-write_index",
+                "0",
+                "-f",
+                "webm",
+            ])
+            .arg(&no_index_path)
+            .status()
+            .expect("FFmpeg should generate no-index WebM fixture");
+        assert!(
+            no_index_generated.success(),
+            "no-index WebM generation failed"
+        );
+        let no_index_result = std::panic::catch_unwind(|| {
+            let mut source =
+                SymphoniaAudioSource::open_path(&no_index_path).expect("no-index WebM should open");
+            source.try_seek(Duration::from_secs(10))
+        });
+        assert!(no_index_result.is_ok(), "no-index WebM must not panic");
+        assert!(
+            no_index_result
+                .expect("no-index seek should return normally")
+                .is_ok(),
+            "no-index WebM should fall back to a linear scan"
+        );
+
+        std::fs::remove_dir_all(root).expect("Matroska seek test directory should be removed");
     }
 
     #[test]
@@ -703,6 +1540,170 @@ mod tests {
         assert_eq!(metadata.lyrics.as_deref(), Some("[00:01.00]embedded"));
 
         std::fs::remove_dir_all(&test_dir).expect("test directory should be removed");
+    }
+
+    #[test]
+    fn supported_music_tags_cover_and_lyrics_write_back_without_audio_damage() {
+        use lofty::picture::MimeType;
+
+        let Some(corpus_root) = generate_ffmpeg_corpus() else {
+            return;
+        };
+        let generated = corpus_root.join("generated");
+        let cover_bytes = vec![
+            0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, b'I', b'H', b'D', b'R',
+            0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0, 0, 0,
+        ];
+
+        for file_name in [
+            "mp3-vbr.mp3",
+            "flac-24.flac",
+            "m4a-aac.m4a",
+            "m4a-alac.m4a",
+            "ogg-vorbis.ogg",
+            "ogg-opus.ogg",
+        ] {
+            let path = generated.join(file_name);
+            let samples_before = open_source(&path)
+                .unwrap_or_else(|error| panic!("{file_name} should decode before write: {error}"))
+                .count();
+            safe_update_tag(&path, |tag, tag_type| {
+                tag.set_title("SpMusic metadata round-trip".to_string());
+                tag.set_artist("Synthetic Artist".to_string());
+                tag.set_album("Compatibility Corpus".to_string());
+                tag.insert_text(
+                    if tag_type == TagType::Id3v2 {
+                        ItemKey::UnsyncLyrics
+                    } else {
+                        ItemKey::Lyrics
+                    },
+                    "[00:01.00]hello\u{2009}你好".to_string(),
+                );
+                tag.remove_picture_type(PictureType::CoverFront);
+                tag.push_picture(
+                    Picture::unchecked(cover_bytes.clone())
+                        .pic_type(PictureType::CoverFront)
+                        .mime_type(MimeType::Png)
+                        .build(),
+                );
+            })
+            .unwrap_or_else(|error| panic!("{file_name} metadata write failed: {error}"));
+
+            let metadata = lofty_metadata(&path)
+                .unwrap_or_else(|error| panic!("{file_name} metadata read failed: {error}"));
+            assert_eq!(
+                metadata.title.as_deref(),
+                Some("SpMusic metadata round-trip"),
+                "{file_name} title"
+            );
+            assert_eq!(
+                metadata.artist.as_deref(),
+                Some("Synthetic Artist"),
+                "{file_name} artist"
+            );
+            assert_eq!(
+                metadata.lyrics.as_deref(),
+                Some("[00:01.00]hello\u{2009}你好"),
+                "{file_name} lyrics"
+            );
+            let cover = metadata
+                .cover_art
+                .unwrap_or_else(|| panic!("{file_name} cover should round-trip"));
+            assert_eq!(cover.mime_type, "image/png", "{file_name} cover MIME");
+            assert_eq!(
+                cover.byte_len,
+                cover_bytes.len(),
+                "{file_name} cover length"
+            );
+
+            let samples_after = open_source(&path)
+                .unwrap_or_else(|error| panic!("{file_name} should decode after write: {error}"))
+                .count();
+            assert_eq!(
+                samples_after, samples_before,
+                "{file_name} decoded sample count changed after metadata write"
+            );
+        }
+
+        std::fs::remove_dir_all(corpus_root).expect("temporary corpus should be removed");
+    }
+
+    #[test]
+    fn replay_gain_reads_standard_tags_and_clamps_gain_and_peak() {
+        assert_eq!(parse_replay_gain_db("+6.00 dB"), Some(6.0));
+        assert_eq!(parse_replay_gain_db("not-a-number"), None);
+        assert!(
+            (bounded_replay_gain_multiplier(99.0, None) - 3.981_071_7).abs() < 0.000_1,
+            "positive gain must be capped at +12 dB"
+        );
+        assert!(
+            (bounded_replay_gain_multiplier(-99.0, None) - 0.063_095_73).abs() < 0.000_1,
+            "negative gain must be capped at -24 dB"
+        );
+        assert!(
+            (bounded_replay_gain_multiplier(6.0, Some(2.0)) - 0.5).abs() < 0.000_1,
+            "declared peak must prevent clipping"
+        );
+
+        let Some(corpus_root) = generate_ffmpeg_corpus() else {
+            return;
+        };
+        let path = corpus_root.join("generated/flac-16.flac");
+        safe_update_tag(&path, |tag, _| {
+            tag.insert_text(ItemKey::ReplayGainTrackGain, "+6.00 dB".to_string());
+            tag.insert_text(ItemKey::ReplayGainTrackPeak, "2.000000".to_string());
+        })
+        .expect("ReplayGain tags should be written");
+        let multiplier = replay_gain_multiplier(&path).expect("ReplayGain should be read");
+        assert!((multiplier - 0.5).abs() < 0.000_1);
+        assert_eq!(
+            open_source(&path)
+                .expect("ReplayGain source should open")
+                .count(),
+            44_100 * 3 * 2,
+            "gain wrapper must preserve decoded sample count"
+        );
+        std::fs::remove_dir_all(corpus_root).expect("temporary corpus should be removed");
+    }
+
+    #[test]
+    fn gapless_decode_trims_codec_delay_and_end_padding() {
+        let Some(corpus_root) = generate_ffmpeg_corpus() else {
+            return;
+        };
+        let generated = corpus_root.join("generated");
+        for (file_name, sample_rate) in [
+            ("mp3-vbr.mp3", 44_100_usize),
+            ("m4a-aac.m4a", 44_100),
+            ("ogg-opus.ogg", 48_000),
+        ] {
+            let decoded_samples = open_source(&generated.join(file_name))
+                .unwrap_or_else(|error| panic!("{file_name} should open: {error}"))
+                .count();
+            let expected_samples = sample_rate * 3 * 2;
+            assert!(
+                decoded_samples.abs_diff(expected_samples) <= 4_096,
+                "{file_name} leaked excessive codec delay/padding: decoded={decoded_samples}, expected={expected_samples}"
+            );
+        }
+        std::fs::remove_dir_all(corpus_root).expect("temporary corpus should be removed");
+    }
+
+    #[test]
+    fn multichannel_sources_use_the_documented_stereo_downmix() {
+        assert_eq!(
+            downmix_frame_to_stereo(&[1_000, 2_000, 3_000, 4_000, 5_000, 6_000]),
+            [3_961, 4_814]
+        );
+        let Some(corpus_root) = generate_ffmpeg_corpus() else {
+            return;
+        };
+        let path = corpus_root.join("generated/wav-pcm16-5.1.wav");
+        let source = open_source(&path).expect("5.1 WAV should open through production source");
+        assert_eq!(source.channels(), 2);
+        assert_eq!(source.sample_rate(), 44_100);
+        assert_eq!(source.count(), 44_100 * 3 * 2);
+        std::fs::remove_dir_all(corpus_root).expect("temporary corpus should be removed");
     }
 
     #[test]

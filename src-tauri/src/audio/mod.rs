@@ -1,4 +1,6 @@
+mod chapters;
 mod controller;
+mod cue;
 mod device;
 mod error;
 mod runtime;

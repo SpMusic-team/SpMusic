@@ -54,7 +54,7 @@ export const appCopy = {
     muteAction: (volume: number) => `静音，当前音量 ${Math.round(volume)}%`,
     restoreAction: (volume: number) => `恢复音量，当前音量 ${Math.round(volume)}%`,
   },
-  lyrics: { title: '演示歌词', empty: '暂无演示歌词' },
+  lyrics: { title: '歌词', empty: '未找到歌词' },
   moreMenu: {
     title: '更多操作',
     copyTitle: '复制歌曲名',

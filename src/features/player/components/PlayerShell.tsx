@@ -12,6 +12,7 @@ import { WindowBar } from '@/features/player/components/WindowBar'
 import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { useActiveLyricScroll } from '@/features/player/hooks/useActiveLyricScroll'
 import { nextRepeatMode, nextShuffleMode, resolveNextTrackIndex, type Direction, type RepeatMode, type ShuffleMode } from '@/features/player/model/playbackModes'
+import { splitLyricTranslation } from '@/features/player/model/lyrics'
 import { appCopy } from '@/features/player/model/playerCopy'
 import { initialPlayerState } from '@/features/player/model/playerState'
 import type { DemoLyricLine, PlayerState, Track } from '@/features/player/model/playerTypes'
@@ -72,12 +73,14 @@ function metadataLyricsToLines(track: AudioTrackRef, durationSeconds: number): D
 
     if (!matches.length || !text) return []
 
-    return matches.map((match, matchIndex) => ({
-      id: `${track.id}-lyric-${lineIndex}-${matchIndex}`,
-      timeSeconds: parseLyricTimestamp(match[1]),
-      original: text,
-      translation: '',
-    }))
+    return matches.map((match, matchIndex) => {
+      const lyricText = splitLyricTranslation(text)
+      return {
+        id: `${track.id}-lyric-${lineIndex}-${matchIndex}`,
+        timeSeconds: parseLyricTimestamp(match[1]),
+        ...lyricText,
+      }
+    })
   })
 
   if (timedLines.length) {
@@ -85,12 +88,14 @@ function metadataLyricsToLines(track: AudioTrackRef, durationSeconds: number): D
   }
 
   const step = durationSeconds > 0 ? durationSeconds / rawLines.length : 0
-  return rawLines.map((line, index) => ({
-    id: `${track.id}-lyric-${index}`,
-    timeSeconds: Math.max(0, index * step),
-    original: line,
-    translation: '',
-  }))
+  return rawLines.map((line, index) => {
+    const lyricText = splitLyricTranslation(line)
+    return {
+      id: `${track.id}-lyric-${index}`,
+      timeSeconds: Math.max(0, index * step),
+      ...lyricText,
+    }
+  })
 }
 
 function audioTrackToTrack(track: AudioTrackRef): Track {

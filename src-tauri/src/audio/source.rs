@@ -7,9 +7,10 @@ use std::{
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
 use lofty::{
+    config::WriteOptions,
     file::{AudioFile, TaggedFileExt},
     picture::{Picture, PictureType},
-    tag::{Accessor, ItemKey, Tag},
+    tag::{Accessor, ItemKey, Tag, TagType},
 };
 use rodio::{Decoder, Source};
 use symphonia::core::{
@@ -291,7 +292,17 @@ fn read_metadata_or_default(path: &Path) -> AudioTrackMetadata {
         Ok(mut metadata) => {
             let had_embedded_lyrics = metadata.lyrics.is_some();
             if metadata.lyrics.is_none() {
-                metadata.lyrics = read_sidecar_lyrics(path);
+                if let Some(lyrics) = read_sidecar_lyrics(path) {
+                    if let Err(error) = embed_lyrics(path, &lyrics) {
+                        tracing::warn!(
+                            operation = "audio.source.lyrics.embed",
+                            path = %path.display(),
+                            error = %error,
+                            "sidecar lyrics loaded but could not be embedded into audio file",
+                        );
+                    }
+                    metadata.lyrics = Some(lyrics);
+                }
             }
 
             tracing::debug!(
@@ -318,8 +329,19 @@ fn read_metadata_or_default(path: &Path) -> AudioTrackMetadata {
                 elapsed_ms = started_at.elapsed().as_millis(),
                 "lofty metadata read failed, returning empty metadata",
             );
+            let lyrics = read_sidecar_lyrics(path);
+            if let Some(lyrics) = lyrics.as_deref() {
+                if let Err(embed_error) = embed_lyrics(path, lyrics) {
+                    tracing::warn!(
+                        operation = "audio.source.lyrics.embed",
+                        path = %path.display(),
+                        error = %embed_error,
+                        "sidecar lyrics loaded but could not be embedded into audio file",
+                    );
+                }
+            }
             AudioTrackMetadata {
-                lyrics: read_sidecar_lyrics(path),
+                lyrics,
                 ..Default::default()
             }
         }
@@ -340,7 +362,12 @@ fn lofty_metadata(path: &Path) -> Result<AudioTrackMetadata, lofty::error::Lofty
         return Ok(AudioTrackMetadata::default());
     };
 
-    Ok(metadata_from_tag(tag))
+    let mut metadata = metadata_from_tag(tag);
+    if metadata.lyrics.is_none() {
+        metadata.lyrics = tagged_file.tags().iter().find_map(lyrics_from_tag);
+    }
+
+    Ok(metadata)
 }
 
 fn metadata_from_tag(tag: &Tag) -> AudioTrackMetadata {
@@ -354,13 +381,47 @@ fn metadata_from_tag(tag: &Tag) -> AudioTrackMetadata {
         track_number: tag.track(),
         disc_number: tag.disk(),
         comment: tag.comment().map(cow_to_string),
-        lyrics: tag_text(tag, ItemKey::Lyrics).or_else(|| tag_text(tag, ItemKey::UnsyncLyrics)),
+        lyrics: lyrics_from_tag(tag),
         cover_art: select_cover_art(tag).map(cover_art_from_picture),
     }
 }
 
+fn lyrics_from_tag(tag: &Tag) -> Option<String> {
+    [ItemKey::Lyrics, ItemKey::UnsyncLyrics]
+        .into_iter()
+        .filter_map(|key| tag_text(tag, key))
+        .find(|lyrics| !lyrics.trim().is_empty())
+}
+
 fn tag_text(tag: &Tag, key: ItemKey) -> Option<String> {
     tag.get_string(key).map(ToOwned::to_owned)
+}
+
+fn embed_lyrics(path: &Path, lyrics: &str) -> Result<(), lofty::error::LoftyError> {
+    let mut tagged_file = lofty::read_from_path(path)?;
+    let tag_type = tagged_file.primary_tag_type();
+    if tagged_file.primary_tag().is_none() {
+        tagged_file.insert_tag(Tag::new(tag_type));
+    }
+
+    let lyrics_key = if tag_type == TagType::Id3v2 {
+        ItemKey::UnsyncLyrics
+    } else {
+        ItemKey::Lyrics
+    };
+    let tag = tagged_file
+        .primary_tag_mut()
+        .expect("primary tag was inserted before embedding lyrics");
+    tag.insert_text(lyrics_key, lyrics.to_owned());
+    tagged_file.save_to_path(path, WriteOptions::default())?;
+
+    tracing::info!(
+        operation = "audio.source.lyrics.embed",
+        path = %path.display(),
+        lyric_byte_len = lyrics.len(),
+        "sidecar lyrics embedded into audio file",
+    );
+    Ok(())
 }
 
 fn read_sidecar_lyrics(path: &Path) -> Option<String> {
@@ -510,6 +571,35 @@ mod tests {
     use super::*;
     use crate::audio::error::AudioErrorCode;
 
+    fn write_silent_wav(path: &Path) {
+        let sample_rate = 8_000_u32;
+        let channels = 1_u16;
+        let bits_per_sample = 16_u16;
+        let samples = [0_i16; 8];
+        let data_len = (samples.len() * size_of::<i16>()) as u32;
+        let byte_rate = sample_rate * u32::from(channels) * u32::from(bits_per_sample) / 8;
+        let block_align = channels * bits_per_sample / 8;
+        let mut wav = Vec::with_capacity(44 + data_len as usize);
+
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + data_len).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16_u32.to_le_bytes());
+        wav.extend_from_slice(&1_u16.to_le_bytes());
+        wav.extend_from_slice(&channels.to_le_bytes());
+        wav.extend_from_slice(&sample_rate.to_le_bytes());
+        wav.extend_from_slice(&byte_rate.to_le_bytes());
+        wav.extend_from_slice(&block_align.to_le_bytes());
+        wav.extend_from_slice(&bits_per_sample.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&data_len.to_le_bytes());
+        for sample in samples {
+            wav.extend_from_slice(&sample.to_le_bytes());
+        }
+
+        std::fs::write(path, wav).expect("test WAV should be written");
+    }
+
     #[test]
     fn duration_ms_saturates_at_u64_max() {
         let duration = Duration::from_millis(u64::MAX).saturating_add(Duration::from_millis(1));
@@ -568,6 +658,54 @@ mod tests {
     }
 
     #[test]
+    fn sidecar_lyrics_are_loaded_and_embedded_for_future_reads() {
+        let test_dir = std::env::temp_dir().join(format!(
+            "spmusic-embed-sidecar-lyrics-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&test_dir).expect("test directory should be created");
+
+        let audio_path = test_dir.join("song.wav");
+        let lyrics_path = test_dir.join("song.lrc");
+        let lyrics = "[00:01.00]hello\u{2009}你好";
+        write_silent_wav(&audio_path);
+        std::fs::write(&lyrics_path, lyrics).expect("lyrics file should be written");
+
+        let metadata = read_metadata_or_default(&audio_path);
+        assert_eq!(metadata.lyrics.as_deref(), Some(lyrics));
+
+        std::fs::remove_file(&lyrics_path).expect("sidecar lyrics should be removable");
+        let embedded_metadata =
+            lofty_metadata(&audio_path).expect("embedded metadata should be readable");
+        assert_eq!(embedded_metadata.lyrics.as_deref(), Some(lyrics));
+
+        std::fs::remove_dir_all(&test_dir).expect("test directory should be removed");
+    }
+
+    #[test]
+    fn embedded_lyrics_take_precedence_over_sidecar_lyrics() {
+        let test_dir = std::env::temp_dir().join(format!(
+            "spmusic-embedded-lyrics-priority-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&test_dir).expect("test directory should be created");
+
+        let audio_path = test_dir.join("song.wav");
+        let lyrics_path = test_dir.join("song.lrc");
+        write_silent_wav(&audio_path);
+        embed_lyrics(&audio_path, "[00:01.00]embedded").expect("embedded lyrics should be written");
+        std::fs::write(&lyrics_path, "[00:01.00]sidecar")
+            .expect("sidecar lyrics should be written");
+
+        let metadata = read_metadata_or_default(&audio_path);
+        assert_eq!(metadata.lyrics.as_deref(), Some("[00:01.00]embedded"));
+
+        std::fs::remove_dir_all(&test_dir).expect("test directory should be removed");
+    }
+
+    #[test]
     fn local_flac_source_supports_seek_when_sample_file_exists() {
         let Some(flac_path) = std::env::var_os("SPMUSIC_SEEK_SAMPLE_FLAC").map(PathBuf::from)
         else {
@@ -583,6 +721,33 @@ mod tests {
         source
             .try_seek(Duration::from_secs(300))
             .expect("sample FLAC source should support seek");
+    }
+
+    #[test]
+    fn local_flac_accepts_embedded_lyrics_when_sample_file_exists() {
+        let Some(sample_path) = std::env::var_os("SPMUSIC_LYRICS_SAMPLE_FLAC").map(PathBuf::from)
+        else {
+            return;
+        };
+        if !sample_path.exists() {
+            return;
+        }
+
+        let test_dir = std::env::temp_dir().join(format!(
+            "spmusic-flac-lyrics-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&test_dir).expect("test directory should be created");
+        let test_path = test_dir.join("lyrics-copy.flac");
+        std::fs::copy(&sample_path, &test_path).expect("sample FLAC should be copied");
+        let lyrics = "[00:01.00]test lyrics\u{2009}测试歌词";
+
+        embed_lyrics(&test_path, lyrics).expect("lyrics should be embedded into FLAC copy");
+        let metadata = lofty_metadata(&test_path).expect("FLAC metadata should remain readable");
+        assert_eq!(metadata.lyrics.as_deref(), Some(lyrics));
+
+        std::fs::remove_dir_all(&test_dir).expect("test directory should be removed");
     }
 
     #[test]

@@ -23,7 +23,8 @@ type ControlDockProps = {
   repeatLabel: string
   repeatSelected: boolean
   captionsIcon: SystemIcon
-  showTranslations: boolean
+  desktopCaptionsAvailable: boolean
+  desktopCaptionsEnabled: boolean
   volume: number
   queueOpen: boolean
   audioBusy: boolean
@@ -55,7 +56,8 @@ export function ControlDock({
   repeatLabel,
   repeatSelected,
   captionsIcon,
-  showTranslations,
+  desktopCaptionsAvailable,
+  desktopCaptionsEnabled,
   volume,
   queueOpen,
   audioBusy,
@@ -148,7 +150,13 @@ export function ControlDock({
           <IconButton icon={repeatIcon} label={repeatLabel} selected={repeatSelected} disabled={disabled} onClick={onRepeatCycle} />
         </div>
         <div className="control-side control-side-end">
-          <IconButton icon={captionsIcon} label={appCopy.controls.captions} selected={showTranslations} onClick={onCaptionsToggle} />
+          <IconButton
+            icon={captionsIcon}
+            label={desktopCaptionsAvailable ? appCopy.controls.captions : appCopy.controls.captionsUnavailable}
+            selected={desktopCaptionsEnabled}
+            disabled={!desktopCaptionsAvailable}
+            onClick={onCaptionsToggle}
+          />
           <VolumeControl volume={volume} disabled={disabled} onVolumeChange={onVolumeChange} />
           <IconButton icon={systemIcons.queue} label={appCopy.controls.queue} selected={queueOpen} onClick={onQueueToggle} />
         </div>

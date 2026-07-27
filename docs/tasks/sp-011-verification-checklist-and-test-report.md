@@ -1,51 +1,42 @@
 ---
 doc_id: "TASK-SP-011"
-title: "验证清单与测试报告"
+title: "验证清单与测试报告（已被替代）"
 doc_type: "task"
-status: "blocked"
+status: "superseded"
 owner_agent: "Test Agent"
 version_scope: "v0.1"
 created: "2026-07-09"
-updated: "2026-07-24"
+updated: "2026-07-27"
 source_documents:
   - "docs/sprint-plan.md"
   - "docs/decisions/2026-07-24-v0-1-real-audio-scope.md"
+  - "docs/tasks/sp-018-real-audio-verification.md"
+  - "docs/decisions/2026-07-27-v0-1-implemented-capabilities-boundary.md"
 ---
-# 任务：验证清单与测试报告
+# 任务：验证清单与测试报告（已被替代）
 
 ## 背景
 
-v0.1 已纳入真实本地播放，旧 UI-only 验证清单不再足够。最终验证应以 SP-018 的真实播放报告为准。
+本任务最初用于汇总 v0.1 总体验证，但与后建的 SP-018 在负责 Agent、输出路径、命令检查和人工真实播放验证上重复。保留两个入口会造成报告归属和完成状态不一致。
 
 ## 目标
 
-维护 v0.1 总体验证入口，汇总前端、后端和人工真实播放结果。
+保留任务 ID 和历史来源；v0.1 综合验证统一由 SP-018 执行。
 
 ## 非目标
 
+- 不再生成独立验证报告。
+- 不作为 Sprint 活跃任务或发布 Gate。
 - 不实现功能修复。
-- 不验证媒体库、数据库、播放列表、网络存储或插件系统。
 
-## 负责 Agent
+## 替代关系
 
-Test Agent
+- 替代任务：SP-018。
+- 原负责 Agent：Test Agent；不变。
+- 原计划输出：`docs/test/v0-1-real-audio-verification.md`；由 SP-018 继续拥有。
+- 本任务不得再单独进入 Sprint、生成第二份同类报告或被标为 Done。
 
-## 涉及文件 / 模块
+## 追溯验收
 
-- `docs/test/v0-1-real-audio-verification.md`
-- `package.json`
-- `src-tauri/Cargo.toml`
-- `src/**/*`
-- `src-tauri/**/*`
-
-## 验收标准
-
-- 报告引用 SP-018 的真实播放验证结果。
-- 报告记录 `cargo check`、`npm.cmd run lint`、`npm.cmd run build` 和桌面启动验证。
-- 报告确认播放、暂停、停止和进度状态可验证。
-- 报告确认 v0.1 未实现媒体库、数据库、真实播放列表、网络存储或插件系统。
-- 失败项包含命令、错误摘要和建议退回的负责 Agent。
-
-## 备注
-
-本任务依赖 SP-018。
+- SP-018 明确引用 SP-011 并说明替代关系。
+- Sprint 和发布计划只使用 SP-018 的验证结论。

@@ -2,16 +2,19 @@
 doc_id: "TASK-AC-001"
 title: "音频兼容性首阶段：合成测试语料与格式能力矩阵"
 doc_type: "task"
-status: "ready"
+status: "in-review"
 owner_agent: "Audio Compatibility Agent"
 version_scope: "audio-compatibility-phase-1"
 created: "2026-07-26"
-updated: "2026-07-26"
+updated: "2026-07-27"
 source_documents:
   - "docs/requirements/总需求分析.md"
   - ".agents/prompt/Audio_Compatibility_Agent.md"
   - "src-tauri/Cargo.toml"
   - "user request: 建设几乎所有常见音频格式的测试集并推动广泛格式解析能力"
+  - "docs/decisions/2026-07-27-v0-1-implemented-capabilities-boundary.md"
+  - "docs/audio-compatibility/format-capability-matrix.md"
+  - "docs/audio-compatibility/existing-format-hardening.md"
 ---
 # 任务：音频兼容性首阶段——合成测试语料与格式能力矩阵
 
@@ -24,8 +27,8 @@ SpMusic 的最终产品需求要求优先支持 `flac`、`wav`、`aac`、`mp3`�
 ## 优先级与批准结论
 
 - 优先级：P1。
-- 状态：Ready，可由 Audio Compatibility Agent 立即执行。
-- 范围结论：属于最终产品核心音频能力，但不加入当前 v0.1 Sprint 完成定义。
+- 状态：In review。首阶段输出和后续硬化实现已经存在，但尚未由 v0.1 综合验证复跑和收口。
+- 范围结论：本任务仍属于独立兼容性工作流，不计入 v0.1 Sprint 完成率；其中与 v0.1 实际播放格式声明相关的证据由 SP-018 消费。
 - 技术边界：Symphonia 为当前主路径；本任务不得引入 FFmpeg。是否增加 FFmpeg fallback 必须在本任务证据完成后另立决策和实现任务。
 
 ## 目标
@@ -153,3 +156,10 @@ Audio Compatibility Agent 在本任务中只拥有以下新路径：
 1. 优先启用或补齐 Symphonia 已成熟覆盖的格式。
 2. 对 Symphonia 缺口单独评估 FFmpeg fallback。
 3. 只有在 fallback 决策获批后，才允许修改生产解码路径、Cargo 依赖、打包配置和 CI workflow。
+
+## 当前评审结论
+
+- 仓库已经存在能力矩阵、fixture catalog、decoder baseline、生产解码硬化和回归测试，原 `ready` 状态已失真。
+- 后续用户请求已推动超出本任务首阶段只读生产代码边界的工作；这些实现由各自证据文档追溯，不反向改写本任务的原批准边界。
+- 在当次命令、工具版本、语料 SHA-256 和平台证据复跑前，本任务保持 `in-review`，不直接标 Done。
+- SP-018 只消费与 v0.1 发布声明相关的验证结果；FFmpeg runtime、长尾格式、跨平台认证仍不进入 v0.1。

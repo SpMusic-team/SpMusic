@@ -2,15 +2,16 @@
 doc_id: "TASK-SP-014"
 title: "视觉自定义与动效扩展预研边界"
 doc_type: "task"
-status: "ready"
+status: "deferred"
 owner_agent: "PM Agent"
 version_scope: "future"
 created: "2026-07-10"
-updated: "2026-07-10"
+updated: "2026-07-27"
 source_documents:
   - "docs/decisions/2026-07-10-visual-customization-boundary.md"
   - "docs/requirements/总需求分析.md"
   - "docs/roadmap.md"
+  - "docs/sprint-plan.md"
 ---
 # 任务：视觉自定义与动效扩展预研边界
 
@@ -56,4 +57,4 @@ PM Agent
 
 ## 备注
 
-该任务是未来版本预研入口，不应被加入当前 v0.1 Sprint 完成定义。
+该任务是未来版本预研入口，已从 v0.1 活跃 Sprint 移出。只有 SP-013 关闭 v0.1 范围闸门并由 PM 重新排期后才能转为 `ready`。

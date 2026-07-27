@@ -6,7 +6,7 @@ status: "active"
 owner_agent: "Frontend Agent"
 version_scope: "project"
 created: "2026-07-13"
-updated: "2026-07-24"
+updated: "2026-07-27"
 source_documents:
   - "user request: @frontend 可以写一篇前端架构文档"
   - ".agents/prompt/Frontend_Agent.md"
@@ -16,6 +16,7 @@ source_documents:
   - "components.json"
   - "docs/architecture/real-audio-playback.md"
   - "docs/tasks/sp-017-frontend-real-audio-integration.md"
+  - "user request: CC 图标是桌面字幕开关，不是翻译功能"
 ---
 
 # 前端架构实现说明
@@ -307,8 +308,8 @@ src/features/player/
 
 - `WindowBar`：顶部窗口操作区。
 - `CoverPanel`：封面、喜欢/不喜欢、更多菜单、曲目信息胶囊。
-- `LyricsPanel`：歌词列表、当前歌词状态和翻译显示。
-- `ControlDock`：进度条、播放/暂停、上一首/下一首、随机、循环、字幕、音量、队列按钮。
+- `LyricsPanel`：歌词列表、当前歌词状态和歌词内译文行展示；不消费底部 `CC` / 桌面字幕开关。
+- `ControlDock`：进度条、播放/暂停、上一首/下一首、随机、循环、桌面字幕、音量、队列按钮；桌面字幕在系统 API 未接入时显示为不可用，不调用 Tauri command。
 - `QueuePanel`：当前 demo 队列展示。
 - `EmptyPlayerState`：曲目为空时的安全 UI。
 - `IconButton`：播放器图标按钮封装，统一 tooltip、pressed 状态和 shadcn Button 使用方式。

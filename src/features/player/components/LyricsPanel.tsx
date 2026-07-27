@@ -6,12 +6,11 @@ type LyricsPanelProps = {
   track: Track
   activeLyricId?: string
   activeLyricIndex: number
-  showTranslations: boolean
   lyricListRef: RefObject<HTMLOListElement | null>
   lyricRefs: RefObject<Map<string, HTMLLIElement>>
 }
 
-export function LyricsPanel({ track, activeLyricId, activeLyricIndex, showTranslations, lyricListRef, lyricRefs }: LyricsPanelProps) {
+export function LyricsPanel({ track, activeLyricId, activeLyricIndex, lyricListRef, lyricRefs }: LyricsPanelProps) {
   return (
     <section className="lyrics-panel" aria-labelledby="lyrics-title">
       <h2 id="lyrics-title" className="sr-only">{appCopy.lyrics.title}</h2>
@@ -25,7 +24,7 @@ export function LyricsPanel({ track, activeLyricId, activeLyricIndex, showTransl
               data-position={index < activeLyricIndex ? 'past' : index === activeLyricIndex ? 'active' : 'future'}
             >
               <span>{line.original}</span>
-              {showTranslations ? <span className="translation-line" lang="zh-CN">{line.translation}</span> : null}
+              {line.translation ? <span className="translation-line" lang="zh-CN">{line.translation}</span> : null}
             </li>
           ))}
         </ol>

@@ -237,7 +237,7 @@ export function PlayerShell() {
   const [feedbackByTrackId, setFeedbackByTrackId] = useState<Record<string, TrackFeedback>>({})
   const [shuffleMode, setShuffleMode] = useState<ShuffleMode>('none')
   const [repeatMode, setRepeatMode] = useState<RepeatMode>('list-loop')
-  const [showTranslations, setShowTranslations] = useState(false)
+  const [desktopCaptionsEnabled, setDesktopCaptionsEnabled] = useState(false)
   const [volume, setVolume] = useState(72)
   const [queueOpen, setQueueOpen] = useState(false)
   const [audioState, setAudioState] = useState<AudioPlaybackState | null>(null)
@@ -266,6 +266,8 @@ export function PlayerShell() {
   const folderPlaylistRef = useRef<AudioFolderPlaylist | null>(null)
   const track = useMemo(() => resolveTrack(state.tracks, state.currentTrackId), [state.currentTrackId, state.tracks])
   const realAudioTrackId = audioState?.currentTrackId ?? null
+  // Reserved for a future Tauri-backed desktop captions capability.
+  const desktopCaptionsAvailable = false
   const currentAudioTrack = audioTrack?.id === realAudioTrackId ? audioTrack : null
   const hasRealAudioTrack = Boolean(currentAudioTrack)
   const realAudioPlaying = audioState?.phase === 'playing'
@@ -887,7 +889,7 @@ export function PlayerShell() {
   const shuffleLabel = shuffleMode === 'shuffle-all' ? appCopy.controls.shuffleOff : shuffleMode === 'shuffle-category-order' ? appCopy.controls.shuffleCategoryOrder : shuffleMode === 'shuffle-category-random' ? appCopy.controls.shuffleCategoryRandom : appCopy.controls.shuffle
   const RepeatIcon = repeatMode === 'repeat-one' ? systemIcons.repeatOne : repeatMode === 'sequential' ? systemIcons.sequential : repeatMode === 'all-categories-until-stop' ? systemIcons.playAllCategories : systemIcons.repeat
   const repeatLabel = repeatMode === 'repeat-one' ? appCopy.controls.repeatOne : repeatMode === 'sequential' ? appCopy.controls.sequential : repeatMode === 'all-categories-until-stop' ? appCopy.controls.playAllCategories : appCopy.controls.repeat
-  const CaptionsIcon = showTranslations ? systemIcons.captionsSelected : systemIcons.captions
+  const CaptionsIcon = desktopCaptionsAvailable && desktopCaptionsEnabled ? systemIcons.captionsSelected : systemIcons.captions
   const shuffleSelected = shuffleMode !== 'none'
   const repeatSelected = repeatMode !== 'list-loop'
 
@@ -950,7 +952,6 @@ export function PlayerShell() {
               track={track}
               activeLyricId={activeLyricId}
               activeLyricIndex={activeLyricIndex}
-              showTranslations={showTranslations}
               lyricListRef={lyricListRef}
               lyricRefs={lyricRefs}
             />
@@ -984,7 +985,8 @@ export function PlayerShell() {
           repeatLabel={repeatLabel}
           repeatSelected={repeatSelected}
           captionsIcon={CaptionsIcon}
-          showTranslations={showTranslations}
+          desktopCaptionsAvailable={desktopCaptionsAvailable}
+          desktopCaptionsEnabled={desktopCaptionsAvailable && desktopCaptionsEnabled}
           volume={volume}
           queueOpen={queueOpen}
           audioBusy={audioBusy}
@@ -1012,7 +1014,9 @@ export function PlayerShell() {
           onPlayToggle={togglePlayback}
           onShuffleCycle={cycleShuffleMode}
           onRepeatCycle={cycleRepeatMode}
-          onCaptionsToggle={() => setShowTranslations((value) => !value)}
+          onCaptionsToggle={() => {
+            if (desktopCaptionsAvailable) setDesktopCaptionsEnabled((value) => !value)
+          }}
           onVolumeChange={changeVolume}
           onQueueToggle={() => setQueueOpen((value) => !value)}
         />

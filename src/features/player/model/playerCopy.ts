@@ -46,7 +46,22 @@ export const appCopy = {
     minimize: '最小化',
     maximize: '最大化',
     restore: '还原',
+    settings: '设置',
     close: '关闭',
+  },
+  settings: {
+    title: '设置',
+    description: '管理播放器界面入口和外观。',
+    on: '开启',
+    off: '关闭',
+    temporaryControlBar: {
+      title: '临时控制栏',
+      description: '显示或隐藏顶部的临时音频控制栏。',
+    },
+    theme: {
+      title: '主题管理',
+      description: '打开主题工作室，管理内置和用户主题。',
+    },
   },
   volume: {
     label: '音量',

@@ -1,6 +1,7 @@
 import '@/features/player/styles/player.css'
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
+import { toast } from 'sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { ControlDock } from '@/features/player/components/ControlDock'
 import { CoverPanel } from '@/features/player/components/CoverPanel'
@@ -23,7 +24,7 @@ import {
   listAudioFolderTracks,
   listenAudioStateChanged,
   loadAudioFile,
-  openAudioFile,
+  openAudioSource,
   pauseAudio,
   playAudio,
   seekAudio,
@@ -55,6 +56,10 @@ function fileNameTitle(fileName: string): string {
   return fileName.replace(/\.[^/.]+$/, '') || fileName
 }
 
+function playlistDisplayName(playlist: AudioFolderPlaylist): string {
+  return playlist.sourceKind === 'm3u8' ? playlist.sourceName : playlist.directoryName
+}
+
 function singleTrackFolderPlaylist(track: AudioTrackRef): AudioFolderPlaylist {
   const lastSeparator = Math.max(track.sourcePath.lastIndexOf('/'), track.sourcePath.lastIndexOf('\\'))
   const directoryPath = lastSeparator >= 0 ? track.sourcePath.slice(0, lastSeparator) : ''
@@ -63,11 +68,15 @@ function singleTrackFolderPlaylist(track: AudioTrackRef): AudioFolderPlaylist {
   return {
     directoryPath,
     directoryName,
+    sourceKind: 'folder',
+    sourcePath: directoryPath,
+    sourceName: directoryName,
     selectedIndex: 0,
     tracks: [{
       id: track.id,
       sourcePath: track.sourcePath,
       fileName: track.fileName,
+      available: true,
     }],
   }
 }
@@ -197,6 +206,14 @@ function audioErrorText(error: AudioCommandError | null): string | null {
   return appCopy.audio.errors[error.code] ?? error.message
 }
 
+function missingPlaylistTrackError(fileName: string): AudioCommandError {
+  return {
+    code: 'FILE_NOT_FOUND',
+    message: `\u6b4c\u66f2\u672a\u627e\u5230\uff1a${fileName}`,
+    recoverable: true,
+  }
+}
+
 function audioStatusText(
   state: AudioPlaybackState | null,
   error: AudioCommandError | null,
@@ -238,6 +255,7 @@ export function PlayerShell() {
   const [shuffleMode, setShuffleMode] = useState<ShuffleMode>('none')
   const [repeatMode, setRepeatMode] = useState<RepeatMode>('list-loop')
   const [desktopCaptionsEnabled, setDesktopCaptionsEnabled] = useState(false)
+  const [temporaryControlBarEnabled, setTemporaryControlBarEnabled] = useState(true)
   const [volume, setVolume] = useState(72)
   const [queueOpen, setQueueOpen] = useState(false)
   const [audioState, setAudioState] = useState<AudioPlaybackState | null>(null)
@@ -297,6 +315,7 @@ export function PlayerShell() {
   const coverStyle: CoverStyle | undefined = albumArt ? { '--cover-art': albumArt } : undefined
   const queueTracks = useMemo(() => {
     if (!folderPlaylist) return state.tracks
+    const sourceName = playlistDisplayName(folderPlaylist)
 
     return folderPlaylist.tracks.map((folderTrack) => {
       const loadedTrack = state.tracks.find((candidate) => candidate.id === folderTrack.id)
@@ -305,8 +324,8 @@ export function PlayerShell() {
       return {
         id: folderTrack.id,
         title: fileNameTitle(folderTrack.fileName),
-        artist: folderPlaylist.directoryName,
-        album: folderPlaylist.directoryName,
+        artist: folderTrack.available ? sourceName : `${sourceName} · \u6b4c\u66f2\u672a\u627e\u5230`,
+        album: sourceName,
         category: 'local-audio',
         durationSeconds: 0,
         coverTone: 'blue',
@@ -385,13 +404,20 @@ export function PlayerShell() {
     folderTrack: AudioFolderTrackRef,
     autoplay: boolean,
   ) => {
-    if (audioSelectionInProgressRef.current || transportCommandRunningRef.current) return
+    if (audioSelectionInProgressRef.current || transportCommandRunningRef.current) return false
 
     audioSelectionInProgressRef.current = true
     setAudioBusy(true)
     setAudioError(null)
 
     try {
+      if (!folderTrack.available) {
+        const missingError = missingPlaylistTrackError(folderTrack.fileName)
+        setAudioError(missingError)
+        toast.error(missingError.message)
+        return false
+      }
+
       const nextAudioTrack = await loadAudioFile(folderTrack.sourcePath)
       audioTrackRequestIdRef.current += 1
       audioTrackRequestTrackIdRef.current = null
@@ -405,17 +431,76 @@ export function PlayerShell() {
         applyAudioState(await getAudioState())
       }
       endingTrackRef.current = null
+      return true
     } catch (error) {
-      setAudioError(isAudioCommandError(error) ? error : {
+      const commandError: AudioCommandError = isAudioCommandError(error) ? error : {
         code: 'INTERNAL_ERROR',
         message: appCopy.audio.unavailable,
         recoverable: true,
-      })
+      }
+      setAudioError(commandError)
+      if (commandError.code === 'FILE_NOT_FOUND') {
+        toast.error(missingPlaylistTrackError(folderTrack.fileName).message)
+      }
+      return false
     } finally {
       audioSelectionInProgressRef.current = false
       setAudioBusy(false)
     }
   }, [applyAudioState])
+
+  const loadPlaylistTrackOrSkip = useCallback(async (
+    playlist: AudioFolderPlaylist,
+    startIndex: number,
+    autoplay: boolean,
+    direction: Direction = 1,
+    allowWrap = false,
+  ) => {
+    if (!playlist.tracks.length) return false
+
+    const step = direction < 0 ? -1 : 1
+    let index = Math.min(Math.max(startIndex, 0), playlist.tracks.length - 1)
+
+    for (let attempts = 0; attempts < playlist.tracks.length; attempts += 1) {
+      const target = playlist.tracks[index]
+      if (!target) return false
+
+      const loaded = await loadFolderAudioTrack(target, autoplay)
+      if (loaded) return true
+      if (playlist.sourceKind !== 'm3u8') return false
+
+      const nextIndex = index + step
+      if (nextIndex < 0 || nextIndex >= playlist.tracks.length) {
+        if (!allowWrap) return false
+        index = nextIndex < 0 ? playlist.tracks.length - 1 : 0
+      } else {
+        index = nextIndex
+      }
+    }
+
+    return false
+  }, [loadFolderAudioTrack])
+
+  const loadFolderPlaylistSelection = useCallback(async (
+    playlist: AudioFolderPlaylist,
+    autoplay: boolean,
+  ) => {
+    folderPlaylistRef.current = playlist
+    setFolderPlaylist(playlist)
+
+    const target = playlist.tracks[playlist.selectedIndex] ?? playlist.tracks[0]
+    if (!target) {
+      setAudioError({
+        code: 'NO_TRACK_LOADED',
+        message: '\u9009\u62e9\u7684\u6587\u4ef6\u5939\u6ca1\u6709\u53ef\u64ad\u653e\u7684\u672c\u5730\u97f3\u9891\u3002',
+        recoverable: true,
+      })
+      return
+    }
+
+    setQueueOpen(true)
+    await loadPlaylistTrackOrSkip(playlist, playlist.selectedIndex, autoplay, 1, false)
+  }, [loadPlaylistTrackOrSkip])
 
   const changeFolderTrack = useCallback(async (direction: Direction, automatic = false) => {
     const playlist = folderPlaylistRef.current
@@ -442,8 +527,12 @@ export function PlayerShell() {
     if (!target) return
 
     const autoplay = automatic || latestAudioStateRef.current?.phase === 'playing'
-    await loadFolderAudioTrack(target, autoplay)
-  }, [loadFolderAudioTrack, queueTracks, repeatMode, shuffleMode])
+    const allowMissingSkipWrap = !(
+      automatic
+      && (repeatMode === 'sequential' || repeatMode === 'all-categories-until-stop')
+    )
+    await loadPlaylistTrackOrSkip(playlist, targetIndex, autoplay, direction, allowMissingSkipWrap)
+  }, [loadPlaylistTrackOrSkip, queueTracks, repeatMode, shuffleMode])
 
   function applyOptimisticTransportPhase(phase: TransportIntentPhase) {
     transportIntentRef.current = phase
@@ -661,18 +750,24 @@ export function PlayerShell() {
     audioSelectionInProgressRef.current = true
 
     try {
-      const audioTrack = await openAudioFile()
+      const source = await openAudioSource()
+
+      if (source.kind === 'playlist') {
+        audioSelectionInProgressRef.current = false
+        setAudioBusy(false)
+        await loadFolderPlaylistSelection(source.playlist, autoplay)
+        endingTrackRef.current = null
+        return
+      }
+
+      const { track: audioTrack } = source
       audioTrackRequestIdRef.current += 1
       audioTrackRequestTrackIdRef.current = null
       audioTrackRef.current = audioTrack
       setAudioTrack(audioTrack)
       setState((previous) => upsertAudioTrack(previous, audioTrack))
 
-      if (autoplay) {
-        applyAudioState(await playAudio({ restart: true }))
-      } else {
-        applyAudioState(await getAudioState())
-      }
+      applyAudioState(autoplay ? await playAudio({ restart: true }) : await getAudioState())
 
       let nextFolderPlaylist: AudioFolderPlaylist
       try {
@@ -911,26 +1006,31 @@ export function PlayerShell() {
             />
           ) : null}
         </AnimatePresence>
-        <WindowBar />
-        <TemporaryAudioControlBar
-          busy={audioBusy}
-          duration={temporaryAudioDuration}
-          fileName={temporaryAudioFileName}
-          hasTrack={hasRealAudioTrack}
-          phase={audioState?.phase ?? 'idle'}
-          playing={realAudioPlaying}
-          progress={temporaryAudioProgress}
-          statusText={realAudioStatusText}
-          title={temporaryAudioTitle}
-          transportBusy={transportBusy}
-          onOpen={() => void openAndMaybePlay(false)}
-          onOpenAndPlay={() => void openAndMaybePlay(true)}
-          onPlayToggle={() => void toggleRealAudioPlayback()}
-          onProgressChange={setTemporaryAudioProgress}
-          onProgressCommit={commitTemporaryAudioProgress}
-          onRefresh={() => void refreshRealAudioState()}
-          onStop={() => void stopRealAudioPlayback()}
+        <WindowBar
+          temporaryControlBarEnabled={temporaryControlBarEnabled}
+          onTemporaryControlBarEnabledChange={setTemporaryControlBarEnabled}
         />
+        {temporaryControlBarEnabled ? (
+          <TemporaryAudioControlBar
+            busy={audioBusy}
+            duration={temporaryAudioDuration}
+            fileName={temporaryAudioFileName}
+            hasTrack={hasRealAudioTrack}
+            phase={audioState?.phase ?? 'idle'}
+            playing={realAudioPlaying}
+            progress={temporaryAudioProgress}
+            statusText={realAudioStatusText}
+            title={temporaryAudioTitle}
+            transportBusy={transportBusy}
+            onOpen={() => void openAndMaybePlay(false)}
+            onOpenAndPlay={() => void openAndMaybePlay(true)}
+            onPlayToggle={() => void toggleRealAudioPlayback()}
+            onProgressChange={setTemporaryAudioProgress}
+            onProgressCommit={commitTemporaryAudioProgress}
+            onRefresh={() => void refreshRealAudioState()}
+            onStop={() => void stopRealAudioPlayback()}
+          />
+        ) : null}
 
         {track ? (
           <section className="player-stage" aria-label={appCopy.shellLabel}>
@@ -961,10 +1061,12 @@ export function PlayerShell() {
                 <QueuePanel
                   tracks={queueTracks}
                   currentTrackId={track.id}
-                  playlistName={folderPlaylist?.directoryName}
+                  playlistName={folderPlaylist ? playlistDisplayName(folderPlaylist) : undefined}
                   onTrackSelect={folderPlaylist ? (trackId) => {
-                    const target = folderPlaylist.tracks.find((candidate) => candidate.id === trackId)
-                    if (target) void loadFolderAudioTrack(target, true)
+                    const targetIndex = folderPlaylist.tracks.findIndex((candidate) => candidate.id === trackId)
+                    if (targetIndex >= 0) {
+                      void loadPlaylistTrackOrSkip(folderPlaylist, targetIndex, true, 1, false)
+                    }
                   } : undefined}
                 />
               ) : null}

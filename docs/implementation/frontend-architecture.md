@@ -420,7 +420,7 @@ src/features/<feature-name>/
 
 ## Tauri 集成边界
 
-当前前端已接入 v0.1 真实本地音频播放 command，仍未接入媒体库扫描、数据库、真实播放列表或持久化。接入 Tauri command 时应遵守：
+当前前端已接入 v0.1 真实本地音频播放 command，并允许本地 `.m3u8` 作为当前会话临时队列输入；仍未接入媒体库扫描、数据库、真实播放列表、HLS 或持久化。接入 Tauri command 时应遵守：
 
 - command 名称、输入、输出来自 Architecture Agent 或 Rust/Tauri Agent 的契约。
 - 前端 adapter 应单独放在对应 feature 的 service 或 api 文件中。
@@ -436,7 +436,7 @@ src/features/player/services/audioCommands.ts
 
 前端必须分离两类状态：`AudioTrackRef` 保存低频歌曲资源（元数据、歌词、封面），`AudioPlaybackState` 保存高频传输状态（`currentTrackId`、阶段、进度、时长、音量和错误）。播放/暂停、设备事件以及 500ms 进度同步只能消费轻量 `AudioPlaybackState`；仅在打开文件或恢复连接且歌曲详情缺失时获取 `AudioTrackRef`。
 
-播放键在未加载真实音频时会先调用 `audio_open_file`，用户选择文件后再调用 `audio_play`；已加载真实音频后，播放键在 `audio_play` 与 `audio_pause` 之间切换。真实音频播放中，前端每 500ms 调用 `audio_get_state` 刷新进度；进度条拖动调用 `audio_seek`。左侧波形按钮作为“打开音频”入口，可重新选择一个本地音频文件。
+播放键在未加载真实音频时会先调用 `audio_open_source`，用户选择音频文件后再调用 `audio_play`；如果用户直接选择 `.m3u8` 文件，前端会按后端返回的只读临时队列加载 `selectedIndex` 指向的首个目标。`.m3u8` 中缺失但扩展名受支持的本地音频会保留在队列中，播放遇到它时显示“歌曲未找到”并继续尝试下一首。已加载真实音频后，播放键在 `audio_play` 与 `audio_pause` 之间切换。真实音频播放中，前端每 500ms 调用 `audio_get_state` 刷新进度；进度条拖动调用 `audio_seek`。左侧波形按钮作为“打开音频”入口，可重新选择一个本地音频文件或 `.m3u8` 文件。v0.1 不再提供选择文件夹入口。
 
 后端检测到输出设备变化时会发送 `audio_state_changed` 事件，payload 为 `AudioPlaybackState`。`PlayerShell` 在挂载时注册监听，收到事件后立即应用后端状态；轮询仍作为播放进度和事件漏收时的兜底同步。
 
@@ -499,7 +499,7 @@ src/components/
 ## 当前已知限制
 
 - 播放器仍保留 demo 数据用于界面展示、歌词和队列占位，不代表真实媒体库。
-- 已接入单个本地音频资源的真实播放、暂停、seek 和状态查询；尚未实现媒体库、真实播放列表或歌词与真实音频文件同步。
+- 已接入单个本地音频资源的真实播放、暂停、seek、状态查询和本地 `.m3u8` 临时队列输入；尚未实现媒体库、真实播放列表、HLS 或歌词与真实音频文件同步。
 - Appearance 已提供三个内置主题、主题管理 UI、版本化 JSON 导入导出和 localStorage 持久化；当前持久化仍受浏览器存储配额限制。
 - 图标 provider 已有基础切换管线，但尚未提供用户自定义 SVG 图标包加载。
 - 高级和实验 CSS 可能破坏布局或可访问性；实验资源是否可加载取决于 WebView、CSP 和平台权限。

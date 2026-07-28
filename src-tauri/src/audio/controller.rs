@@ -17,10 +17,10 @@ use super::{
     },
     error::{audio_error, unavailable_state, AudioCommandError, AudioErrorCode},
     runtime::{AudioRuntime, AudioRuntimeRequest},
-    source::{default_filters, input_path, load_folder_playlist},
+    source::{default_filters, input_path, load_folder_playlist, source_filters},
     types::{
         AudioFolderPlaylist, AudioFolderPlaylistInput, AudioLoadFileInput, AudioOpenFileInput,
-        AudioPlayInput, AudioPlaybackState, AudioSeekInput, AudioTrackRef,
+        AudioOpenSourceResult, AudioPlayInput, AudioPlaybackState, AudioSeekInput, AudioTrackRef,
     },
     AUDIO_STATE_CHANGED_EVENT,
 };
@@ -214,6 +214,55 @@ impl AudioController {
             "audio file selected",
         );
         self.load_file_path(path)
+    }
+
+    pub fn open_source(&self) -> Result<AudioOpenSourceResult, AudioCommandError> {
+        tracing::info!(
+            operation = "audio.open_source_dialog",
+            "opening audio source dialog",
+        );
+        let mut dialog = rfd::FileDialog::new();
+
+        for filter in source_filters() {
+            let extensions = filter
+                .extensions
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>();
+            if !extensions.is_empty() {
+                dialog = dialog.add_filter(&filter.name, &extensions);
+            }
+        }
+
+        let Some(path) = dialog.pick_file() else {
+            tracing::info!(
+                operation = "audio.open_source_dialog",
+                "audio source dialog cancelled",
+            );
+            return Err(audio_error(
+                AudioErrorCode::UserCancelled,
+                "User cancelled audio source selection",
+                true,
+            ));
+        };
+
+        tracing::info!(
+            operation = "audio.open_source_dialog",
+            path = %path.display(),
+            "audio source selected",
+        );
+
+        if path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("m3u8"))
+        {
+            return load_folder_playlist(&path)
+                .map(|playlist| AudioOpenSourceResult::Playlist { playlist });
+        }
+
+        self.load_file_path(path)
+            .map(|track| AudioOpenSourceResult::Track { track })
     }
 
     pub fn load_file(&self, input: AudioLoadFileInput) -> Result<AudioTrackRef, AudioCommandError> {

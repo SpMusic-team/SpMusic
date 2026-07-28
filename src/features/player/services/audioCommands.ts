@@ -76,14 +76,24 @@ export type AudioFolderTrackRef = {
   id: string
   sourcePath: string
   fileName: string
+  available: boolean
 }
+
+export type AudioPlaylistSourceKind = 'folder' | 'm3u8'
 
 export type AudioFolderPlaylist = {
   directoryPath: string
   directoryName: string
+  sourceKind: AudioPlaylistSourceKind
+  sourcePath: string
+  sourceName: string
   selectedIndex: number
   tracks: AudioFolderTrackRef[]
 }
+
+export type AudioOpenSourceResult =
+  | { kind: 'track'; track: AudioTrackRef }
+  | { kind: 'playlist'; playlist: AudioFolderPlaylist }
 
 export type AudioPlayInput = {
   restart?: boolean
@@ -91,6 +101,10 @@ export type AudioPlayInput = {
 
 export async function openAudioFile(input?: AudioOpenFileInput): Promise<AudioTrackRef> {
   return invoke<AudioTrackRef>('audio_open_file', { input: input ?? null })
+}
+
+export async function openAudioSource(): Promise<AudioOpenSourceResult> {
+  return invoke<AudioOpenSourceResult>('audio_open_source')
 }
 
 export async function loadAudioFile(path: string): Promise<AudioTrackRef> {

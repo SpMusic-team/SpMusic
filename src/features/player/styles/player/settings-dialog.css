@@ -1,0 +1,66 @@
+.player-settings-dialog {
+  width: min(520px, calc(100vw - 32px));
+  max-width: min(520px, calc(100vw - 32px));
+}
+
+.player-settings-group {
+  gap: 12px;
+}
+
+.player-settings-row {
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 0;
+}
+
+.player-settings-row + .player-settings-row {
+  border-top: 1px solid color-mix(in srgb, var(--player-muted) 16%, transparent);
+}
+
+.player-settings-row [data-slot="field-content"] {
+  min-width: 0;
+}
+
+.player-settings-toggle {
+  position: relative;
+  display: inline-grid;
+  grid-template-columns: 18px auto;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 74px;
+  height: 32px;
+  padding: 0 12px 0 7px;
+  border: 1px solid color-mix(in srgb, var(--player-muted) 22%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--player-dock) 90%, transparent);
+  color: var(--player-muted);
+  font-size: 13px;
+  line-height: 1;
+  transition: color var(--app-motion-fast) ease, border-color var(--app-motion-fast) ease, background var(--app-motion-fast) ease;
+}
+
+.player-settings-toggle span {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: .72;
+}
+
+.player-settings-toggle[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--player-blue) 42%, transparent);
+  background: color-mix(in srgb, var(--player-blue-soft) 84%, transparent);
+  color: var(--player-blue-ink);
+}
+
+.player-settings-toggle:hover,
+.player-settings-toggle:focus-visible {
+  border-color: color-mix(in srgb, var(--player-blue) 52%, transparent);
+  color: var(--player-blue-ink);
+}
+
+.player-settings-theme-row button {
+  flex: 0 0 auto;
+}

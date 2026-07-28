@@ -78,6 +78,13 @@ pub struct AudioFileFilter {
     pub extensions: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum AudioOpenSourceResult {
+    Track { track: AudioTrackRef },
+    Playlist { playlist: AudioFolderPlaylist },
+}
+
 #[derive(Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AudioLoadFileInput {
@@ -95,9 +102,19 @@ pub struct AudioFolderPlaylistInput {
 pub struct AudioFolderPlaylist {
     pub directory_path: String,
     pub directory_name: String,
+    pub source_kind: AudioPlaylistSourceKind,
+    pub source_path: String,
+    pub source_name: String,
     #[ts(type = "number")]
     pub selected_index: usize,
     pub tracks: Vec<AudioFolderTrackRef>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum AudioPlaylistSourceKind {
+    Folder,
+    M3u8,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -106,6 +123,7 @@ pub struct AudioFolderTrackRef {
     pub id: String,
     pub source_path: String,
     pub file_name: String,
+    pub available: bool,
 }
 
 #[derive(Debug, Deserialize, TS)]

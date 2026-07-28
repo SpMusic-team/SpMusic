@@ -1,18 +1,26 @@
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useEffect, useState, type PointerEvent } from 'react'
 import { useSystemIcons } from '@/features/appearance/hooks/useAppearance'
-import { ThemeManager } from '@/features/appearance/components/ThemeManager'
 import { appCopy } from '@/features/player/model/playerCopy'
 import { IconButton } from './IconButton'
+import { SettingsDialog } from './SettingsDialog'
 
 type TauriWindow = ReturnType<typeof getCurrentWindow>
+
+type WindowBarProps = {
+  temporaryControlBarEnabled: boolean
+  onTemporaryControlBarEnabledChange: (enabled: boolean) => void
+}
 
 function getTauriWindow(): TauriWindow | null {
   if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return null
   return getCurrentWindow()
 }
 
-export function WindowBar() {
+export function WindowBar({
+  temporaryControlBarEnabled,
+  onTemporaryControlBarEnabledChange,
+}: WindowBarProps) {
   const systemIcons = useSystemIcons()
   const [maximized, setMaximized] = useState(false)
 
@@ -95,7 +103,10 @@ export function WindowBar() {
       </div>
       <h1 id="app-title" className="sr-only">{appCopy.appTitle}</h1>
       <div className="window-actions" onDoubleClick={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
-        <ThemeManager />
+        <SettingsDialog
+          temporaryControlBarEnabled={temporaryControlBarEnabled}
+          onTemporaryControlBarEnabledChange={onTemporaryControlBarEnabledChange}
+        />
         <IconButton
           icon={systemIcons.fullscreen}
           label={appCopy.controls.fullscreen}

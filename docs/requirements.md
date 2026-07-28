@@ -12,6 +12,7 @@ source_documents:
   - "docs/requirements/v0-2-playlist-ui-prototype.md"
   - "docs/decisions/2026-07-24-v0-1-real-audio-scope.md"
   - "docs/decisions/2026-07-27-v0-1-implemented-capabilities-boundary.md"
+  - "docs/decisions/2026-07-27-v0-1-local-m3u8-temporary-queue.md"
   - "user request: CC 图标是桌面字幕开关，不是翻译功能"
 ---
 # SpMusic 需求索引
@@ -29,6 +30,7 @@ SpMusic 的长期定位是：美观、高性能、有扩展能力的本地优先
 | `docs/requirements/v0-1-foundation.md` | 历史 v0.1 基础需求 | UI-only 播放界面的原始范围，已被 2026-07-24 范围变更部分覆盖 |
 | `docs/decisions/2026-07-24-v0-1-real-audio-scope.md` | Accepted | v0.1 真实播放范围变更的当前依据 |
 | `docs/decisions/2026-07-27-v0-1-implemented-capabilities-boundary.md` | Accepted | 已实现临时队列、歌词 / 封面、兼容性能力的收口与验收边界 |
+| `docs/decisions/2026-07-27-v0-1-local-m3u8-temporary-queue.md` | Accepted | 本地 `.m3u8` 临时队列例外；不等于 HLS 或产品级播放列表 |
 | `docs/requirements/v0-2-playlist-ui-prototype.md` | Approved for v0.2 candidate | 播放列表 UI 候选范围 |
 
 ## 当前目标版本：v0.1 真实本地播放可发布闭环
@@ -43,6 +45,7 @@ v0.1 当前目标是：把已经存在的真实播放实现收敛为有边界、
 - 本地音频资源播放、暂停、继续、停止、seek 和进度状态。
 - 前端接入真实播放 command。
 - 用户选中文件后，对同目录受支持音频进行非递归、只读枚举，并形成不持久化的临时队列。
+- 用户选择 `.m3u8` 文件时，可将其中受支持的本地音频转换为当前会话临时队列；本地绝对路径允许指向 `.m3u8` 所在目录之外。缺失的受支持本地音频仍显示在队列中，按顺序播放遇到缺失项时提示“歌曲未找到”并跳到下一首。
 - 临时队列的上一首、下一首、直接选择和自然结束切换。
 - 基础标签及嵌入式歌词 / 封面的读取展示与缺失后备。
 - 有确定性语料证据的格式兼容性基线。
@@ -52,7 +55,7 @@ v0.1 当前目标是：把已经存在的真实播放实现收敛为有边界、
 ### v0.1 不做
 
 - 递归扫描、媒体库、文件监控、数据库和持久化索引。
-- 产品级播放列表、临时队列持久化、跨目录队列、播放历史、收藏和 `m3u8`。
+- 产品级播放列表、临时队列持久化、跨目录队列、播放历史、收藏、网络 HLS 和完整 `m3u8` 导入导出。
 - 网络 / sidecar / 逐字歌词、歌词 / 封面 / 标签编辑。
 - 电脑系统级桌面字幕浮层、置顶字幕窗口、焦点穿透、跨显示器字幕显示和对应系统 API。
 - CUE / M4B 公共交互、FFmpeg 运行时 fallback 和跨曲目 gapless。
@@ -71,6 +74,7 @@ v0.1 当前目标是：把已经存在的真实播放实现收敛为有边界、
 | REQ-FOUNDATION-005 | UI-only 进度条与演示频谱 | P1 | Superseded for playback progress | `docs/decisions/2026-07-24-v0-1-real-audio-scope.md` |
 | REQ-AUDIO-001 | 真实本地音频播放 | P0 | Implemented candidate; verification pending | `docs/decisions/2026-07-24-v0-1-real-audio-scope.md` |
 | REQ-AUDIO-002 | 同目录只读临时队列 | P0 | PM scope accepted; Requirements reconciliation pending SP-020 | `docs/decisions/2026-07-27-v0-1-implemented-capabilities-boundary.md` |
+| REQ-M3U8-TEMP-001 | 本地 `.m3u8` 临时队列导入 | P0 | Accepted as v0.1 temporary exception; not HLS | `docs/decisions/2026-07-27-v0-1-local-m3u8-temporary-queue.md` |
 | REQ-METADATA-001 | 基础标签与嵌入式歌词 / 封面展示 | P1 | PM scope accepted; Requirements reconciliation pending SP-020 | `docs/decisions/2026-07-27-v0-1-implemented-capabilities-boundary.md` |
 | REQ-CAPTIONS-001 | 电脑系统级桌面字幕显示开关 | P3 | Deferred; v0.1 only allows visual control boundary | user correction on `CC` control semantics |
 | REQ-COMPAT-001 | 当前解码格式兼容性基线 | P1 | Evidence present; v0.1 verification pending | `docs/audio-compatibility/format-capability-matrix.md` |

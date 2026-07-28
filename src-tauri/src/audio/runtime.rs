@@ -12,7 +12,7 @@ use rodio::{
 use super::{
     device::current_output_device_signature,
     error::{audio_error, AudioCommandError, AudioErrorCode},
-    source::{duration_ms, load_track_ref, open_source, AudioSource},
+    source::{duration_ms, hydrate_track_ref, open_source, AudioSource},
     types::{
         AudioPlayInput, AudioPlaybackPhase, AudioPlaybackState, AudioSeekInput, AudioTrackRef,
     },
@@ -103,6 +103,7 @@ pub(crate) struct AudioRuntime {
     error: Option<AudioCommandError>,
     output_device_signature: Option<String>,
     output_device_change_pending: bool,
+    cover_cache_dir: Option<PathBuf>,
 }
 
 impl Default for AudioRuntime {
@@ -120,11 +121,19 @@ impl Default for AudioRuntime {
             error: None,
             output_device_signature: current_output_device_signature(),
             output_device_change_pending: false,
+            cover_cache_dir: None,
         }
     }
 }
 
 impl AudioRuntime {
+    pub(crate) fn with_cover_cache_dir(cover_cache_dir: PathBuf) -> Self {
+        Self {
+            cover_cache_dir: Some(cover_cache_dir),
+            ..Self::default()
+        }
+    }
+
     pub(crate) fn load_path(&mut self, path: PathBuf) -> Result<AudioTrackRef, AudioCommandError> {
         let started_at = Instant::now();
         tracing::info!(
@@ -140,7 +149,7 @@ impl AudioRuntime {
         self.invalidate_loaded_audio();
         self.phase = AudioPlaybackPhase::Loading;
 
-        let track = match load_track_ref(&path) {
+        let track = match hydrate_track_ref(&path, self.cover_cache_dir.as_deref()) {
             Ok(track) => track,
             Err(error) => {
                 self.phase = AudioPlaybackPhase::Error;

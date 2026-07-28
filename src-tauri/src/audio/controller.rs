@@ -17,7 +17,9 @@ use super::{
     },
     error::{audio_error, unavailable_state, AudioCommandError, AudioErrorCode},
     runtime::{AudioRuntime, AudioRuntimeRequest},
-    source::{default_filters, input_path, load_folder_playlist, source_filters},
+    source::{
+        default_filters, hydrate_track_ref, input_path, load_folder_playlist, source_filters,
+    },
     types::{
         AudioFolderPlaylist, AudioFolderPlaylistInput, AudioLoadFileInput, AudioOpenFileInput,
         AudioOpenSourceResult, AudioPlayInput, AudioPlaybackState, AudioSeekInput, AudioTrackRef,
@@ -30,11 +32,12 @@ const OUTPUT_DEVICE_EVENT_MAX_COALESCE: Duration = Duration::from_millis(1_500);
 
 pub struct AudioController {
     tx: Mutex<Sender<AudioRuntimeRequest>>,
+    cover_cache_dir: PathBuf,
     _device_watcher: AudioDeviceWatcherHandle,
 }
 
 impl AudioController {
-    pub fn new(app_handle: AppHandle) -> Self {
+    pub fn new(app_handle: AppHandle, cache_dir: PathBuf) -> Self {
         tracing::info!(
             operation = "audio.controller.start",
             "starting audio controller",
@@ -48,12 +51,15 @@ impl AudioController {
             run_audio_device_bridge(device_rx, runtime_tx);
         });
 
+        let cover_cache_dir = cache_dir.join("audio");
+        let runtime_cover_cache_dir = cover_cache_dir.clone();
+
         thread::spawn(move || {
             tracing::info!(
                 operation = "audio.controller.runtime_thread",
                 "started audio runtime thread",
             );
-            let mut runtime = AudioRuntime::default();
+            let mut runtime = AudioRuntime::with_cover_cache_dir(runtime_cover_cache_dir);
 
             while let Ok(request) = rx.recv() {
                 match request {
@@ -159,6 +165,7 @@ impl AudioController {
 
         Self {
             tx: Mutex::new(tx),
+            cover_cache_dir,
             _device_watcher: device_watcher,
         }
     }
@@ -272,6 +279,18 @@ impl AudioController {
             "load file command received",
         );
         self.load_file_path(input_path(&input.path)?)
+    }
+
+    pub fn hydrate_track(
+        &self,
+        input: AudioLoadFileInput,
+    ) -> Result<AudioTrackRef, AudioCommandError> {
+        tracing::info!(
+            operation = "audio.hydrate_track_command",
+            path = %input.path,
+            "hydrate track command received",
+        );
+        hydrate_track_ref(&input_path(&input.path)?, Some(&self.cover_cache_dir))
     }
 
     pub fn list_folder_tracks(

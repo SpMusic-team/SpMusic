@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core'
+import { convertFileSrc, invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 
 export const AUDIO_STATE_CHANGED_EVENT = 'audio_state_changed'
@@ -49,7 +49,8 @@ export type AudioTrackMetadata = {
 
 export type AudioCoverArt = {
   mimeType: string
-  dataUrl: string
+  filePath: string | null
+  dataUrl: string | null
   byteLen: number
 }
 
@@ -109,6 +110,20 @@ export async function openAudioSource(): Promise<AudioOpenSourceResult> {
 
 export async function loadAudioFile(path: string): Promise<AudioTrackRef> {
   return invoke<AudioTrackRef>('audio_load_file', { input: { path } })
+}
+
+export async function hydrateAudioTrack(path: string): Promise<AudioTrackRef> {
+  return invoke<AudioTrackRef>('audio_hydrate_track', { input: { path } })
+}
+
+export function audioCoverArtUrl(coverArt: AudioCoverArt | null): string | undefined {
+  if (!coverArt) return undefined
+  if (coverArt.filePath) return convertFileSrc(coverArt.filePath)
+  return coverArt.dataUrl ?? undefined
+}
+
+export function audioCoverArtFallbackUrl(coverArt: AudioCoverArt | null): string | undefined {
+  return coverArt?.dataUrl ?? undefined
 }
 
 export async function listAudioFolderTracks(selectedPath: string): Promise<AudioFolderPlaylist> {

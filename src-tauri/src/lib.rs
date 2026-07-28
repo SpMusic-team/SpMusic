@@ -54,6 +54,21 @@ fn audio_load_file(
 }
 
 #[tauri::command]
+fn audio_hydrate_track(
+    state: State<'_, AudioController>,
+    input: AudioLoadFileInput,
+) -> Result<AudioTrackRef, AudioCommandError> {
+    tracing::info!(
+        command = "audio_hydrate_track",
+        path = %input.path,
+        "Tauri command invoked",
+    );
+    let result = state.hydrate_track(input);
+    log_track_command_result("audio_hydrate_track", &result);
+    result
+}
+
+#[tauri::command]
 fn audio_list_folder_tracks(
     state: State<'_, AudioController>,
     input: AudioFolderPlaylistInput,
@@ -160,6 +175,7 @@ pub fn run() {
             audio_open_file,
             audio_open_source,
             audio_load_file,
+            audio_hydrate_track,
             audio_list_folder_tracks,
             audio_play,
             audio_pause,
@@ -177,8 +193,9 @@ pub fn run() {
                 cache_dir = %app_paths.cache_dir.display(),
                 "prepared app directories",
             );
+            let audio_cache_dir = app_paths.cache_dir.clone();
             app.manage(app_paths);
-            app.manage(AudioController::new(app.handle().clone()));
+            app.manage(AudioController::new(app.handle().clone(), audio_cache_dir));
 
             if cfg!(debug_assertions) {
                 app.handle().plugin(

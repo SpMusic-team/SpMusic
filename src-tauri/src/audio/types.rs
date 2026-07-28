@@ -34,7 +34,10 @@ pub struct AudioTrackMetadata {
 #[serde(rename_all = "camelCase")]
 pub struct AudioCoverArt {
     pub mime_type: String,
-    pub data_url: String,
+    #[ts(type = "string | null")]
+    pub file_path: Option<String>,
+    #[ts(type = "string | null")]
+    pub data_url: Option<String>,
     #[ts(type = "number")]
     pub byte_len: usize,
 }
@@ -194,6 +197,15 @@ mod tests {
         assert!(exported.contains("title: string | null"));
         assert!(exported.contains("albumArtist: string | null"));
         assert!(exported.contains("coverArt: AudioCoverArt | null"));
+    }
+
+    #[test]
+    fn audio_cover_art_exports_file_path_and_nullable_data_url() {
+        let exported = AudioCoverArt::export_to_string(&Config::default())
+            .expect("AudioCoverArt should be exportable to TypeScript");
+
+        assert!(exported.contains("filePath: string | null"));
+        assert!(exported.contains("dataUrl: string | null"));
     }
 
     #[test]

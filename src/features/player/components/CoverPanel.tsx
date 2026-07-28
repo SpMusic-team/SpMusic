@@ -1,4 +1,4 @@
-import type { CSSProperties } from 'react'
+import { useState, type CSSProperties } from 'react'
 import { motion } from 'motion/react'
 import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { appCopy } from '@/features/player/model/playerCopy'
@@ -23,21 +23,35 @@ type CoverPanelProps = {
 export function CoverPanel({ track, coverStyle, likeIcon, dislikeIcon, liked, disliked, onLike, onDislike }: CoverPanelProps) {
   const systemIcons = useSystemIcons()
   const appearanceMotion = useAppearanceMotion()
+  const [coverImageSrc, setCoverImageSrc] = useState(track.coverImage)
 
   return (
     <article className="cover-column">
       <motion.div
         className="cover-art"
         data-tone={track.coverTone}
-        data-has-image={Boolean(track.coverImage)}
+        data-has-image={Boolean(coverImageSrc)}
         style={coverStyle}
         variants={appearanceMotion.variants.track}
         initial="initial"
         animate="animate"
         exit="exit"
       >
-        {track.coverImage ? <img className="cover-image" src={track.coverImage} alt={`${track.title} 封面`} /> : null}
-        {!track.coverImage ? <div className="cover-mark"><systemIcons.music /><strong>{appCopy.productName}</strong><span>LOCAL LISTENING</span></div> : null}
+        {coverImageSrc ? (
+          <img
+            className="cover-image"
+            src={coverImageSrc}
+            alt={`${track.title} 封面`}
+            onError={() => {
+              if (track.coverImageFallback && coverImageSrc !== track.coverImageFallback) {
+                setCoverImageSrc(track.coverImageFallback)
+              } else {
+                setCoverImageSrc(undefined)
+              }
+            }}
+          />
+        ) : null}
+        {!coverImageSrc ? <div className="cover-mark"><systemIcons.music /><strong>{appCopy.productName}</strong><span>LOCAL LISTENING</span></div> : null}
         <div className="cover-feedback">
           <IconButton icon={likeIcon} label={appCopy.controls.like} selected={liked} onClick={onLike} />
           <IconButton icon={dislikeIcon} label={appCopy.controls.dislike} selected={disliked} onClick={onDislike} />

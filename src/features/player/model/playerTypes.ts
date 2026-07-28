@@ -9,6 +9,7 @@ export type Track = {
   durationSeconds: number
   coverTone: string
   coverImage?: string
+  coverImageFallback?: string
   lyrics: DemoLyricLine[]
 }
 

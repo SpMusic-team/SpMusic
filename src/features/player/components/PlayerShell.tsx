@@ -20,6 +20,7 @@ import type { DemoLyricLine, PlayerState, Track } from '@/features/player/model/
 import {
   getAudioState,
   getCurrentAudioTrack,
+  hydrateAudioTrack,
   isAudioCommandError,
   listAudioFolderTracks,
   listenAudioStateChanged,
@@ -29,6 +30,8 @@ import {
   playAudio,
   seekAudio,
   stopAudio,
+  audioCoverArtFallbackUrl,
+  audioCoverArtUrl,
   type AudioCommandError,
   type AudioFolderPlaylist,
   type AudioFolderTrackRef,
@@ -142,7 +145,8 @@ function audioTrackToTrack(track: AudioTrackRef): Track {
     category: 'local-audio',
     durationSeconds,
     coverTone: 'blue',
-    coverImage: track.metadata.coverArt?.dataUrl,
+    coverImage: audioCoverArtUrl(track.metadata.coverArt),
+    coverImageFallback: audioCoverArtFallbackUrl(track.metadata.coverArt),
     lyrics: metadataLyricsToLines(track, durationSeconds),
   }
 }
@@ -280,6 +284,8 @@ export function PlayerShell() {
   const audioTrackRequestIdRef = useRef(0)
   const audioTrackRequestTrackIdRef = useRef<string | null>(null)
   const audioSelectionInProgressRef = useRef(false)
+  const hydratedAudioTrackCacheRef = useRef(new Map<string, AudioTrackRef>())
+  const hydrationInFlightRef = useRef(new Map<string, Promise<AudioTrackRef>>())
   const latestAudioStateRef = useRef<AudioPlaybackState | null>(null)
   const folderPlaylistRef = useRef<AudioFolderPlaylist | null>(null)
   const track = useMemo(() => resolveTrack(state.tracks, state.currentTrackId), [state.currentTrackId, state.tracks])
@@ -335,6 +341,44 @@ export function PlayerShell() {
   }, [folderPlaylist, state.tracks])
 
   useActiveLyricScroll(activeLyricId, lyricListRef, lyricRefs)
+
+  const requestHydratedAudioTrack = useCallback((sourcePath: string) => {
+    const cached = hydratedAudioTrackCacheRef.current.get(sourcePath)
+    if (cached) return Promise.resolve(cached)
+
+    const inFlight = hydrationInFlightRef.current.get(sourcePath)
+    if (inFlight) return inFlight
+
+    const request = hydrateAudioTrack(sourcePath)
+      .then((hydratedTrack) => {
+        hydratedAudioTrackCacheRef.current.set(sourcePath, hydratedTrack)
+        return hydratedTrack
+      })
+      .finally(() => {
+        hydrationInFlightRef.current.delete(sourcePath)
+      })
+
+    hydrationInFlightRef.current.set(sourcePath, request)
+    return request
+  }, [])
+
+  const prefetchNextPlaylistTrack = useCallback((trackId: string) => {
+    const playlist = folderPlaylistRef.current
+    if (!playlist?.tracks.length) return
+
+    const currentIndex = playlist.tracks.findIndex((candidate) => candidate.id === trackId)
+    if (currentIndex < 0) return
+
+    const nextTrack = playlist.tracks
+      .slice(currentIndex + 1)
+      .find((candidate) => candidate.available)
+
+    if (!nextTrack || hydratedAudioTrackCacheRef.current.has(nextTrack.sourcePath)) return
+
+    void requestHydratedAudioTrack(nextTrack.sourcePath).catch((error: unknown) => {
+      console.debug('Audio metadata prefetch failed', error)
+    })
+  }, [requestHydratedAudioTrack])
 
   const hydrateCurrentAudioTrack = useCallback((trackId: string) => {
     if (
@@ -425,11 +469,11 @@ export function PlayerShell() {
       setAudioTrack(nextAudioTrack)
       setState((previous) => upsertAudioTrack(previous, nextAudioTrack))
 
-      if (autoplay) {
-        applyAudioState(await playAudio({ restart: true }))
-      } else {
-        applyAudioState(await getAudioState())
-      }
+      const confirmedAudioState = autoplay
+        ? await playAudio({ restart: true })
+        : await getAudioState()
+      applyAudioState(confirmedAudioState)
+      prefetchNextPlaylistTrack(nextAudioTrack.id)
       endingTrackRef.current = null
       return true
     } catch (error) {
@@ -447,7 +491,7 @@ export function PlayerShell() {
       audioSelectionInProgressRef.current = false
       setAudioBusy(false)
     }
-  }, [applyAudioState])
+  }, [applyAudioState, prefetchNextPlaylistTrack])
 
   const loadPlaylistTrackOrSkip = useCallback(async (
     playlist: AudioFolderPlaylist,
@@ -455,6 +499,7 @@ export function PlayerShell() {
     autoplay: boolean,
     direction: Direction = 1,
     allowWrap = false,
+    skipMissing = true,
   ) => {
     if (!playlist.tracks.length) return false
 
@@ -467,7 +512,7 @@ export function PlayerShell() {
 
       const loaded = await loadFolderAudioTrack(target, autoplay)
       if (loaded) return true
-      if (playlist.sourceKind !== 'm3u8') return false
+      if (playlist.sourceKind !== 'm3u8' || !skipMissing) return false
 
       const nextIndex = index + step
       if (nextIndex < 0 || nextIndex >= playlist.tracks.length) {
@@ -767,7 +812,8 @@ export function PlayerShell() {
       setAudioTrack(audioTrack)
       setState((previous) => upsertAudioTrack(previous, audioTrack))
 
-      applyAudioState(autoplay ? await playAudio({ restart: true }) : await getAudioState())
+      const confirmedAudioState = autoplay ? await playAudio({ restart: true }) : await getAudioState()
+      applyAudioState(confirmedAudioState)
 
       let nextFolderPlaylist: AudioFolderPlaylist
       try {
@@ -777,6 +823,7 @@ export function PlayerShell() {
       }
       folderPlaylistRef.current = nextFolderPlaylist
       setFolderPlaylist(nextFolderPlaylist)
+      prefetchNextPlaylistTrack(audioTrack.id)
       endingTrackRef.current = null
     } catch (error) {
       if (isAudioCommandError(error)) {
@@ -1036,7 +1083,7 @@ export function PlayerShell() {
           <section className="player-stage" aria-label={appCopy.shellLabel}>
             <AnimatePresence initial={false}>
               <CoverPanel
-                key={track.id}
+                key={`${track.id}:${track.coverImage ?? ''}`}
                 track={track}
                 coverStyle={coverStyle}
                 likeIcon={LikeIcon}
@@ -1065,7 +1112,7 @@ export function PlayerShell() {
                   onTrackSelect={folderPlaylist ? (trackId) => {
                     const targetIndex = folderPlaylist.tracks.findIndex((candidate) => candidate.id === trackId)
                     if (targetIndex >= 0) {
-                      void loadPlaylistTrackOrSkip(folderPlaylist, targetIndex, true, 1, false)
+                      void loadPlaylistTrackOrSkip(folderPlaylist, targetIndex, true, 1, false, false)
                     }
                   } : undefined}
                 />

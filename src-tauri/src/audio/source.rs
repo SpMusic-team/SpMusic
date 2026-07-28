@@ -188,11 +188,28 @@ pub(crate) fn input_path(input: &str) -> Result<PathBuf, AudioCommandError> {
     Ok(PathBuf::from(input))
 }
 
+#[cfg(test)]
 pub(crate) fn load_track_ref(path: &Path) -> Result<AudioTrackRef, AudioCommandError> {
+    load_track_ref_with_options(path, true, None)
+}
+
+pub(crate) fn hydrate_track_ref(
+    path: &Path,
+    cover_cache_dir: Option<&Path>,
+) -> Result<AudioTrackRef, AudioCommandError> {
+    load_track_ref_with_options(path, true, cover_cache_dir)
+}
+
+fn load_track_ref_with_options(
+    path: &Path,
+    include_metadata: bool,
+    cover_cache_dir: Option<&Path>,
+) -> Result<AudioTrackRef, AudioCommandError> {
     let started_at = std::time::Instant::now();
     tracing::info!(
         operation = "audio.source.load_track_ref",
         path = %path.display(),
+        include_metadata,
         "loading audio track reference",
     );
 
@@ -203,7 +220,11 @@ pub(crate) fn load_track_ref(path: &Path) -> Result<AudioTrackRef, AudioCommandE
     // leaving a track that only fails after the user presses Play.
     let playback_duration = open_source(path)?.total_duration();
     let duration = decode_duration(path)?.or(playback_duration);
-    let metadata = read_metadata_or_default(path);
+    let metadata = if include_metadata {
+        read_metadata_or_default(path, cover_cache_dir)
+    } else {
+        AudioTrackMetadata::default()
+    };
     let track_id = track_id(path);
     let file_name = path
         .file_name()
@@ -217,6 +238,7 @@ pub(crate) fn load_track_ref(path: &Path) -> Result<AudioTrackRef, AudioCommandE
         track_id = %track_id,
         file_name = %file_name,
         duration_ms = duration.map(duration_ms),
+        include_metadata,
         metadata_title = metadata.title.as_deref(),
         metadata_artist = metadata.artist.as_deref(),
         metadata_album = metadata.album.as_deref(),
@@ -925,9 +947,9 @@ fn lofty_duration(path: &Path) -> Result<Option<Duration>, lofty::error::LoftyEr
     Ok((!duration.is_zero()).then_some(duration))
 }
 
-fn read_metadata_or_default(path: &Path) -> AudioTrackMetadata {
+fn read_metadata_or_default(path: &Path, cover_cache_dir: Option<&Path>) -> AudioTrackMetadata {
     let started_at = std::time::Instant::now();
-    match lofty_metadata(path) {
+    match lofty_metadata(path, cover_cache_dir) {
         Ok(mut metadata) => {
             let had_embedded_lyrics = metadata.lyrics.is_some();
             if metadata.lyrics.is_none() {
@@ -987,7 +1009,10 @@ fn read_metadata_or_default(path: &Path) -> AudioTrackMetadata {
     }
 }
 
-fn lofty_metadata(path: &Path) -> Result<AudioTrackMetadata, lofty::error::LoftyError> {
+fn lofty_metadata(
+    path: &Path,
+    cover_cache_dir: Option<&Path>,
+) -> Result<AudioTrackMetadata, lofty::error::LoftyError> {
     let tagged_file = lofty_read_content(path)?;
     let Some(tag) = tagged_file
         .primary_tag()
@@ -1001,7 +1026,7 @@ fn lofty_metadata(path: &Path) -> Result<AudioTrackMetadata, lofty::error::Lofty
         return Ok(AudioTrackMetadata::default());
     };
 
-    let mut metadata = metadata_from_tag(tag);
+    let mut metadata = metadata_from_tag(tag, cover_cache_dir);
     if metadata.lyrics.is_none() {
         metadata.lyrics = tagged_file.tags().iter().find_map(lyrics_from_tag);
     }
@@ -1009,7 +1034,7 @@ fn lofty_metadata(path: &Path) -> Result<AudioTrackMetadata, lofty::error::Lofty
     Ok(metadata)
 }
 
-fn metadata_from_tag(tag: &Tag) -> AudioTrackMetadata {
+fn metadata_from_tag(tag: &Tag, cover_cache_dir: Option<&Path>) -> AudioTrackMetadata {
     AudioTrackMetadata {
         title: tag.title().map(cow_to_string),
         artist: tag.artist().map(cow_to_string),
@@ -1021,7 +1046,8 @@ fn metadata_from_tag(tag: &Tag) -> AudioTrackMetadata {
         disc_number: tag.disk(),
         comment: tag.comment().map(cow_to_string),
         lyrics: lyrics_from_tag(tag),
-        cover_art: select_cover_art(tag).map(cover_art_from_picture),
+        cover_art: select_cover_art(tag)
+            .map(|picture| cover_art_from_picture(picture, cover_cache_dir)),
     }
 }
 
@@ -1198,28 +1224,74 @@ fn select_cover_art(tag: &Tag) -> Option<&Picture> {
         .or_else(|| tag.pictures().first())
 }
 
-fn cover_art_from_picture(picture: &Picture) -> AudioCoverArt {
+fn cover_art_from_picture(picture: &Picture, cover_cache_dir: Option<&Path>) -> AudioCoverArt {
     let mime_type = picture
         .mime_type()
         .map(ToString::to_string)
         .unwrap_or_else(|| "application/octet-stream".to_string());
     let data = picture.data();
+    let file_path =
+        cover_cache_dir.and_then(|cache_dir| cache_cover_art(cache_dir, &mime_type, data));
     tracing::debug!(
         operation = "audio.source.cover_art",
         mime_type = %mime_type,
         byte_len = data.len(),
+        cached = file_path.is_some(),
         "loaded embedded cover art",
     );
 
     AudioCoverArt {
         mime_type: mime_type.clone(),
-        data_url: cover_art_data_url(&mime_type, data),
+        file_path,
+        data_url: Some(cover_art_data_url(&mime_type, data)),
         byte_len: data.len(),
     }
 }
 
 pub(crate) fn cover_art_data_url(mime_type: &str, data: &[u8]) -> String {
     format!("data:{mime_type};base64,{}", BASE64_STANDARD.encode(data))
+}
+
+fn cache_cover_art(cache_dir: &Path, mime_type: &str, data: &[u8]) -> Option<String> {
+    let covers_dir = cache_dir.join("covers");
+    if let Err(error) = fs::create_dir_all(&covers_dir) {
+        tracing::warn!(
+            operation = "audio.source.cover_art.cache",
+            path = %covers_dir.display(),
+            error = %error,
+            "failed to create cover cache directory",
+        );
+        return None;
+    }
+
+    let extension = cover_extension(mime_type);
+    let hash = blake3::hash(data);
+    let cover_path = covers_dir.join(format!("{}.{}", hash.to_hex(), extension));
+
+    if !cover_path.is_file() {
+        if let Err(error) = fs::write(&cover_path, data) {
+            tracing::warn!(
+                operation = "audio.source.cover_art.cache",
+                path = %cover_path.display(),
+                error = %error,
+                "failed to write cover cache file",
+            );
+            return None;
+        }
+    }
+
+    Some(cover_path.to_string_lossy().into_owned())
+}
+
+fn cover_extension(mime_type: &str) -> &'static str {
+    match mime_type.to_ascii_lowercase().as_str() {
+        "image/jpeg" | "image/jpg" => "jpg",
+        "image/png" => "png",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "image/bmp" => "bmp",
+        _ => "bin",
+    }
 }
 
 fn symphonia_duration(path: &Path) -> Result<Option<Duration>, SymphoniaError> {
@@ -2187,12 +2259,12 @@ mod tests {
         write_silent_wav(&audio_path);
         std::fs::write(&lyrics_path, lyrics).expect("lyrics file should be written");
 
-        let metadata = read_metadata_or_default(&audio_path);
+        let metadata = read_metadata_or_default(&audio_path, None);
         assert_eq!(metadata.lyrics.as_deref(), Some(lyrics));
 
         std::fs::remove_file(&lyrics_path).expect("sidecar lyrics should be removable");
         let embedded_metadata =
-            lofty_metadata(&audio_path).expect("embedded metadata should be readable");
+            lofty_metadata(&audio_path, None).expect("embedded metadata should be readable");
         assert_eq!(embedded_metadata.lyrics.as_deref(), Some(lyrics));
 
         std::fs::remove_dir_all(&test_dir).expect("test directory should be removed");
@@ -2214,7 +2286,7 @@ mod tests {
         std::fs::write(&lyrics_path, "[00:01.00]sidecar")
             .expect("sidecar lyrics should be written");
 
-        let metadata = read_metadata_or_default(&audio_path);
+        let metadata = read_metadata_or_default(&audio_path, None);
         assert_eq!(metadata.lyrics.as_deref(), Some("[00:01.00]embedded"));
 
         std::fs::remove_dir_all(&test_dir).expect("test directory should be removed");
@@ -2267,7 +2339,7 @@ mod tests {
             })
             .unwrap_or_else(|error| panic!("{file_name} metadata write failed: {error}"));
 
-            let metadata = lofty_metadata(&path)
+            let metadata = lofty_metadata(&path, None)
                 .unwrap_or_else(|error| panic!("{file_name} metadata read failed: {error}"));
             assert_eq!(
                 metadata.title.as_deref(),
@@ -2423,7 +2495,8 @@ mod tests {
         let lyrics = "[00:01.00]test lyrics\u{2009}测试歌词";
 
         embed_lyrics(&test_path, lyrics).expect("lyrics should be embedded into FLAC copy");
-        let metadata = lofty_metadata(&test_path).expect("FLAC metadata should remain readable");
+        let metadata =
+            lofty_metadata(&test_path, None).expect("FLAC metadata should remain readable");
         assert_eq!(metadata.lyrics.as_deref(), Some(lyrics));
 
         std::fs::remove_dir_all(&test_dir).expect("test directory should be removed");

@@ -7,10 +7,16 @@ import { IconButton } from './IconButton'
 type VolumeControlProps = {
   volume: number
   disabled?: boolean
+  busy?: boolean
   onVolumeChange: (volume: number) => void
 }
 
-export function VolumeControl({ volume, disabled = false, onVolumeChange }: VolumeControlProps) {
+export function VolumeControl({
+  volume,
+  disabled = false,
+  busy = false,
+  onVolumeChange,
+}: VolumeControlProps) {
   const systemIcons = useSystemIcons()
   const panelId = useId()
   const controlRef = useRef<HTMLDivElement>(null)
@@ -61,7 +67,14 @@ export function VolumeControl({ volume, disabled = false, onVolumeChange }: Volu
         disabled={disabled}
         onClick={togglePanel}
       />
-      <div className="volume-panel" id={panelId} role="group" aria-label={appCopy.volume.groupLabel} aria-hidden={!panelOpen}>
+      <div
+        className="volume-panel"
+        id={panelId}
+        role="group"
+        aria-busy={busy}
+        aria-label={appCopy.volume.groupLabel}
+        aria-hidden={!panelOpen}
+      >
         <Slider
           className="volume-slider"
           disabled={disabled}

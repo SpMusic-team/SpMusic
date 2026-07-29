@@ -28,44 +28,48 @@ export function CoverPanel({ track, coverStyle, likeIcon, dislikeIcon, liked, di
   return (
     <article className="cover-column">
       <motion.div
-        className="cover-art"
-        data-tone={track.coverTone}
-        data-has-image={Boolean(coverImageSrc)}
-        style={coverStyle}
+        className="cover-frame"
         variants={appearanceMotion.variants.track}
         initial="initial"
         animate="animate"
         exit="exit"
       >
-        {coverImageSrc ? (
-          <img
-            className="cover-image"
-            src={coverImageSrc}
-            alt={`${track.title} 封面`}
-            onError={() => {
-              if (track.coverImageFallback && coverImageSrc !== track.coverImageFallback) {
-                setCoverImageSrc(track.coverImageFallback)
-              } else {
-                setCoverImageSrc(undefined)
-              }
-            }}
+        <div
+          className="cover-art"
+          data-tone={track.coverTone}
+          data-has-image={Boolean(coverImageSrc)}
+          style={coverStyle}
+        >
+          {coverImageSrc ? (
+            <img
+              className="cover-image"
+              src={coverImageSrc}
+              alt={`${track.title} 封面`}
+              onError={() => {
+                if (track.coverImageFallback && coverImageSrc !== track.coverImageFallback) {
+                  setCoverImageSrc(track.coverImageFallback)
+                } else {
+                  setCoverImageSrc(undefined)
+                }
+              }}
+            />
+          ) : null}
+          {!coverImageSrc ? <div className="cover-mark"><systemIcons.music /><strong>{appCopy.productName}</strong><span>LOCAL LISTENING</span></div> : null}
+          <div className="cover-feedback">
+            <IconButton icon={likeIcon} label={appCopy.controls.like} selected={liked} onClick={onLike} />
+            <IconButton icon={dislikeIcon} label={appCopy.controls.dislike} selected={disliked} onClick={onDislike} />
+          </div>
+          <MoreActionsMenu
+            track={track}
+            coverStyle={coverStyle}
+            likeIcon={likeIcon}
+            dislikeIcon={dislikeIcon}
+            liked={liked}
+            disliked={disliked}
+            onLike={onLike}
+            onDislike={onDislike}
           />
-        ) : null}
-        {!coverImageSrc ? <div className="cover-mark"><systemIcons.music /><strong>{appCopy.productName}</strong><span>LOCAL LISTENING</span></div> : null}
-        <div className="cover-feedback">
-          <IconButton icon={likeIcon} label={appCopy.controls.like} selected={liked} onClick={onLike} />
-          <IconButton icon={dislikeIcon} label={appCopy.controls.dislike} selected={disliked} onClick={onDislike} />
         </div>
-        <MoreActionsMenu
-          track={track}
-          coverStyle={coverStyle}
-          likeIcon={likeIcon}
-          dislikeIcon={dislikeIcon}
-          liked={liked}
-          disliked={disliked}
-          onLike={onLike}
-          onDislike={onDislike}
-        />
       </motion.div>
       <motion.div
         className="track-pills"

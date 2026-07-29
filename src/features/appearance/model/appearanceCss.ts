@@ -7,6 +7,26 @@ const fontFamilies = {
   monospace: "ui-monospace, 'Cascadia Code', Consolas, monospace",
 } as const
 
+function compactNumber(value: number) {
+  return Number(value.toFixed(3))
+}
+
+function prototypeLength(value: number) {
+  return value === 0 ? '0px' : `calc(${compactNumber(value)} * var(--prototype-unit))`
+}
+
+function playerCoverShadow(value: number, responsive = false) {
+  if (value === 0) return 'none'
+  const scale = value / 50
+  const x = compactNumber(-6 * scale)
+  const y = compactNumber(6 * scale)
+  const blur = compactNumber(4 * scale ** 3)
+  const alpha = compactNumber(Math.min(0.5, 0.25 * scale))
+  return responsive
+    ? `${x}px ${y}px ${blur}px rgba(0, 0, 0, ${alpha})`
+    : `${prototypeLength(x)} ${prototypeLength(y)} ${prototypeLength(blur)} rgba(0, 0, 0, ${alpha})`
+}
+
 function scaleDuration(baseMs: number, scale: number) {
   return scale === 0 ? '0ms' : `${Math.max(1, Math.round(baseMs * scale))}ms`
 }
@@ -14,8 +34,14 @@ function scaleDuration(baseMs: number, scale: number) {
 export function createAppearanceCssVars(appearance: AppearancePreset, resolvedColorScheme: ResolvedColorScheme): AppearanceCssVars {
   const durationScale = appearance.motion.level === 'off' ? 0 : appearance.motion.durationScale
   const colors = appearance.colorSchemes[resolvedColorScheme]
+  const coverRadius = prototypeLength(appearance.player.coverRadius * 0.75)
+  const coverRadiusResponsive = `${compactNumber(appearance.player.coverRadius * 0.6)}px`
+  const coverShadow = playerCoverShadow(appearance.player.coverShadow)
+  const coverShadowResponsive = playerCoverShadow(appearance.player.coverShadow, true)
+  const lyricEmphasis = appearance.player.activeLyricEmphasis
 
   return {
+    '--prototype-unit': 'min(0.0390625vw, 0.0694444svh)',
     '--app-bg': colors.background,
     '--app-surface': colors.surface,
     '--app-surface-muted': colors.surfaceMuted,
@@ -44,6 +70,25 @@ export function createAppearanceCssVars(appearance: AppearancePreset, resolvedCo
     '--player-muted': colors.playerMuted,
     '--player-overlay': colors.playerOverlay,
     '--player-dock': colors.playerDock,
+    '--player-background-blur': prototypeLength(appearance.player.backgroundBlur * 0.9),
+    '--player-background-brightness': `${appearance.player.backgroundBrightness}%`,
+    '--player-background-saturation': `${appearance.player.backgroundSaturation}%`,
+    '--player-background-mask-opacity': appearance.player.backgroundMaskOpacity / 100,
+    '--player-background-vignette-opacity': appearance.player.backgroundVignette / 100,
+    '--player-cover-radius': coverRadius,
+    '--player-cover-radius-responsive': coverRadiusResponsive,
+    '--player-cover-shadow': coverShadow,
+    '--player-cover-shadow-responsive': coverShadowResponsive,
+    '--player-lyrics-font-scale': appearance.player.lyricsFontScale,
+    '--player-lyrics-item-height': `calc(${84 * appearance.player.lyricsFontScale} * var(--prototype-unit))`,
+    '--player-lyrics-font-size': `calc(${24 * appearance.player.lyricsFontScale} * var(--prototype-unit))`,
+    '--player-lyrics-line-height': `calc(${32 * appearance.player.lyricsFontScale} * var(--prototype-unit))`,
+    '--player-lyrics-translation-font-size': `calc(${20 * appearance.player.lyricsFontScale} * var(--prototype-unit))`,
+    '--player-lyrics-translation-line-height': `calc(${28 * appearance.player.lyricsFontScale} * var(--prototype-unit))`,
+    '--player-active-lyric-color': lyricEmphasis === 'accent' ? colors.playerBlue : colors.playerInk,
+    '--player-active-lyric-font-weight': lyricEmphasis === 'bold' || lyricEmphasis === 'combined' ? 500 : 400,
+    '--player-active-lyric-scale': lyricEmphasis === 'scale' || lyricEmphasis === 'combined' ? 1.08 : 1,
+    '--player-theme-gradient': `linear-gradient(145deg, ${colors.accent}, ${colors.accentSoft} 48%, ${colors.surfaceMuted})`,
     '--background': colors.background,
     '--foreground': colors.textStrong,
     '--card': colors.surface,

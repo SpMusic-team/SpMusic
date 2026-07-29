@@ -28,6 +28,7 @@ import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
+import { Slider } from '@/components/ui/slider'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { useAppearance } from '../hooks/useAppearance'
@@ -41,6 +42,7 @@ import { defaultAppearance } from '../model/defaultAppearance'
 import type {
   AppearanceColors,
   AppearanceComponents,
+  AppearancePlayer,
   AppearancePreset,
   AppearanceResource,
   AppearanceThemeMetadata,
@@ -112,14 +114,31 @@ const colorSchemeOptions = [
   { label: '浅色', value: 'light' },
   { label: '深色', value: 'dark' },
 ] as const
+const playerBackgroundOptions = [
+  { label: '封面氛围', value: 'cover-ambient' },
+  { label: '主题渐变', value: 'theme-gradient' },
+  { label: '纯色', value: 'solid' },
+  { label: '关闭', value: 'off' },
+] as const
+const activeLyricEmphasisOptions = [
+  { label: '加粗', value: 'bold' },
+  { label: '放大', value: 'scale' },
+  { label: '强调色', value: 'accent' },
+  { label: '组合', value: 'combined' },
+] as const
+const booleanOptions = [
+  { label: '显示', value: 'true' },
+  { label: '隐藏', value: 'false' },
+] as const
+const hexColorPattern = /^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/i
 
 type Option = { label: string; value: string }
 
-function OptionField({ id, label, value, options, onChange }: { id: string; label: string; value: string; options: readonly Option[]; onChange: (value: string) => void }) {
+function OptionField({ id, label, description, disabled = false, value, options, onChange }: { id: string; label: string; description?: string; disabled?: boolean; value: string; options: readonly Option[]; onChange: (value: string) => void }) {
   return (
-    <Field>
+    <Field data-disabled={disabled}>
       <FieldLabel htmlFor={id}>{label}</FieldLabel>
-      <Select items={options} value={value} onValueChange={(next) => next && onChange(next)}>
+      <Select disabled={disabled} items={options} value={value} onValueChange={(next) => next && onChange(next)}>
         <SelectTrigger id={id} className="w-full"><SelectValue /></SelectTrigger>
         <SelectContent alignItemWithTrigger={false}>
           <SelectGroup>
@@ -127,6 +146,71 @@ function OptionField({ id, label, value, options, onChange }: { id: string; labe
           </SelectGroup>
         </SelectContent>
       </Select>
+      {description ? <FieldDescription>{description}</FieldDescription> : null}
+    </Field>
+  )
+}
+
+function SliderField({
+  id,
+  label,
+  description,
+  disabled = false,
+  value,
+  min = 0,
+  max = 100,
+  step = 1,
+  unit = '%',
+  onChange,
+}: {
+  id: string
+  label: string
+  description: string
+  disabled?: boolean
+  value: number
+  min?: number
+  max?: number
+  step?: number
+  unit?: string
+  onChange: (value: number) => void
+}) {
+  function commitValue(candidate: number) {
+    if (!Number.isFinite(candidate)) return
+    onChange(Math.min(max, Math.max(min, candidate)))
+  }
+
+  return (
+    <Field data-disabled={disabled}>
+      <FieldLabel htmlFor={`${id}-value`}>{label}</FieldLabel>
+      <div className="flex items-center gap-3">
+        <Slider
+          id={id}
+          disabled={disabled}
+          getAriaLabel={() => label}
+          getAriaValueText={(_, nextValue) => `${nextValue}${unit}`}
+          max={max}
+          min={min}
+          step={step}
+          value={[value]}
+          onValueChange={(nextValue) => commitValue(Array.isArray(nextValue) ? (nextValue[0] ?? min) : nextValue)}
+        />
+        <div className="flex w-24 shrink-0 items-center gap-1">
+          <Input
+            id={`${id}-value`}
+            aria-label={`${label}数值`}
+            disabled={disabled}
+            inputMode="decimal"
+            max={max}
+            min={min}
+            step={step}
+            type="number"
+            value={value}
+            onChange={(event) => commitValue(Number(event.target.value))}
+          />
+          <span className="text-sm text-muted-foreground" aria-hidden="true">{unit}</span>
+        </div>
+      </div>
+      <FieldDescription>{description}</FieldDescription>
     </Field>
   )
 }
@@ -139,12 +223,17 @@ function inferCapabilities(theme: AppearancePreset): AppearanceThemeMetadata['ca
   return result
 }
 
-export function ThemeManager() {
+type ThemeManagerProps = {
+  onOpenChange?: (open: boolean) => void
+}
+
+export function ThemeManager({ onOpenChange }: ThemeManagerProps) {
   const appearanceContext = useAppearance()
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [open, setOpen] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [draft, setDraft] = useState(() => cloneAppearance(appearanceContext.appearance))
+  const draftRef = useRef(draft)
   const [draftColorSchemePreference, setDraftColorSchemePreference] = useState<ColorSchemePreference>(appearanceContext.colorSchemePreference)
   const [selectedThemeId, setSelectedThemeId] = useState(appearanceContext.activeThemeId)
   const [riskConfirmed, setRiskConfirmed] = useState(false)
@@ -157,6 +246,12 @@ export function ThemeManager() {
   if (!themeOptions.some((option) => option.value === selectedThemeId)) themeOptions.push({ label: `${draft.name}（草稿）`, value: selectedThemeId })
   const selectedBuiltin = builtinAppearanceIds.has(selectedThemeId)
   const selectedPersistedUser = appearanceContext.themes.some((entry) => !entry.builtin && entry.appearance.id === selectedThemeId)
+  const backgroundBlurDisabled = draft.player.backgroundEffect !== 'cover-ambient'
+  const backgroundMaskDisabled = draft.player.backgroundEffect === 'off'
+  const backgroundVisualDisabled = draft.player.backgroundEffect === 'off'
+  const playerColorScheme = appearanceContext.resolvedColorScheme
+  const playerOverlayColor = draft.colorSchemes[playerColorScheme].playerOverlay
+  const playerOverlayColorValid = hexColorPattern.test(playerOverlayColor)
 
   function safePreview(next: AppearancePreset, confirmed = riskConfirmed) {
     const result = deserializeAppearanceTheme(serializeAppearanceTheme(next))
@@ -169,25 +264,29 @@ export function ThemeManager() {
     appearanceContext.previewAppearance(result.appearance)
   }
 
+  function replaceDraft(next: AppearancePreset) {
+    draftRef.current = next
+    setDraft(next)
+  }
+
   function updateDraft(update: (next: AppearancePreset) => void) {
-    setDraft((previous) => {
-      const next = cloneAppearance(previous)
-      update(next)
-      next.metadata.capabilities = inferCapabilities(next)
-      safePreview(next)
-      return next
-    })
+    const next = cloneAppearance(draftRef.current)
+    update(next)
+    next.metadata.capabilities = inferCapabilities(next)
+    replaceDraft(next)
+    safePreview(next)
   }
 
   function openManager() {
     const active = appearanceContext.themes.find((entry) => entry.appearance.id === appearanceContext.activeThemeId)?.appearance ?? appearanceContext.appearance
-    setDraft(cloneAppearance(active))
+    replaceDraft(cloneAppearance(active))
     setResourcesText(JSON.stringify(active.experimental.resources, null, 2))
     setSelectedThemeId(active.id)
     setRiskConfirmed(active.metadata.tier === 'standard' || active.metadata.riskAcknowledged)
     setDraftColorSchemePreference(appearanceContext.colorSchemePreference)
     setStatus(appearanceContext.storageWarning ?? null)
     setOpen(true)
+    onOpenChange?.(true)
   }
 
   function chooseTheme(id: string) {
@@ -196,7 +295,7 @@ export function ThemeManager() {
     const next = cloneAppearance(selected)
     const confirmed = next.metadata.tier === 'standard' || next.metadata.riskAcknowledged
     setSelectedThemeId(id)
-    setDraft(next)
+    replaceDraft(next)
     setResourcesText(JSON.stringify(next.experimental.resources, null, 2))
     setRiskConfirmed(confirmed)
     safePreview(next, confirmed)
@@ -206,25 +305,21 @@ export function ThemeManager() {
   function changeTier(tier: AppearanceThemeMetadata['tier']) {
     const confirmed = tier === 'standard'
     setRiskConfirmed(confirmed)
-    setDraft((previous) => {
-      const next = cloneAppearance(previous)
-      next.metadata.tier = tier
-      next.metadata.riskAcknowledged = confirmed
-      next.metadata.capabilities = inferCapabilities(next)
-      safePreview(next, confirmed)
-      return next
-    })
+    const next = cloneAppearance(draftRef.current)
+    next.metadata.tier = tier
+    next.metadata.riskAcknowledged = confirmed
+    next.metadata.capabilities = inferCapabilities(next)
+    replaceDraft(next)
+    safePreview(next, confirmed)
   }
 
   function confirmRisk() {
     setRiskConfirmed(true)
-    setDraft((previous) => {
-      const next = cloneAppearance(previous)
-      next.metadata.riskAcknowledged = true
-      next.metadata.capabilities = inferCapabilities(next)
-      safePreview(next, true)
-      return next
-    })
+    const next = cloneAppearance(draftRef.current)
+    next.metadata.riskAcknowledged = true
+    next.metadata.capabilities = inferCapabilities(next)
+    replaceDraft(next)
+    safePreview(next, true)
     setStatus('已确认高级主题风险；CSS 将实时作用于预览。')
   }
 
@@ -232,6 +327,15 @@ export function ThemeManager() {
     if (draft.metadata.tier !== 'standard' && !riskConfirmed) {
       setStatus('应用高级或实验主题前必须确认风险。')
       toast.error('请先确认主题风险')
+      return
+    }
+    const invalidOverlaySchemes = (['light', 'dark'] as const)
+      .filter((scheme) => !hexColorPattern.test(draft.colorSchemes[scheme].playerOverlay))
+    if (invalidOverlaySchemes.length) {
+      const schemeNames = invalidOverlaySchemes.map((scheme) => scheme === 'dark' ? '深色' : '浅色').join('、')
+      const message = `${schemeNames}背景遮罩颜色无效，请使用 #RRGGBB 或 #RRGGBBAA。`
+      setStatus(message)
+      toast.error('请修正背景遮罩颜色')
       return
     }
     const candidate = cloneAppearance(draft)
@@ -255,11 +359,13 @@ export function ThemeManager() {
     if (validated.warnings.length) toast.warning(`主题已应用，含 ${validated.warnings.length} 条回退提示`)
     else toast.success('主题已应用')
     setOpen(false)
+    onOpenChange?.(false)
   }
 
   function cancel() {
     appearanceContext.cancelPreview()
     setOpen(false)
+    onOpenChange?.(false)
   }
 
   function duplicate() {
@@ -267,7 +373,7 @@ export function ThemeManager() {
     duplicateTheme.id = `${draft.id.slice(0, 38).replace(/-+$/, '')}-copy-${Date.now()}`
     duplicateTheme.name = `${draft.name} 副本`
     duplicateTheme.metadata.author = '用户'
-    setDraft(cloneAppearance(duplicateTheme))
+    replaceDraft(cloneAppearance(duplicateTheme))
     setSelectedThemeId(duplicateTheme.id)
     setResourcesText(JSON.stringify(duplicateTheme.experimental.resources, null, 2))
     setRiskConfirmed(duplicateTheme.metadata.tier === 'standard' || duplicateTheme.metadata.riskAcknowledged)
@@ -279,7 +385,7 @@ export function ThemeManager() {
   function remove() {
     if (!appearanceContext.deleteAppearance(selectedThemeId)) return
     setDeleteDialogOpen(false)
-    setDraft(cloneAppearance(defaultAppearance))
+    replaceDraft(cloneAppearance(defaultAppearance))
     setSelectedThemeId(defaultAppearance.id)
     setResourcesText('[]')
     setRiskConfirmed(true)
@@ -289,7 +395,7 @@ export function ThemeManager() {
 
   function reset() {
     appearanceContext.resetDefault()
-    setDraft(cloneAppearance(defaultAppearance))
+    replaceDraft(cloneAppearance(defaultAppearance))
     setSelectedThemeId(defaultAppearance.id)
     setResourcesText('[]')
     setRiskConfirmed(true)
@@ -310,7 +416,7 @@ export function ThemeManager() {
       return
     }
     const requiresConfirmation = result.appearance.metadata.tier !== 'standard'
-    setDraft(result.appearance)
+    replaceDraft(result.appearance)
     setSelectedThemeId(result.appearance.id)
     setResourcesText(JSON.stringify(result.appearance.experimental.resources, null, 2))
     setRiskConfirmed(false)
@@ -325,12 +431,12 @@ export function ThemeManager() {
     try {
       const parsed = JSON.parse(value)
       if (!Array.isArray(parsed)) throw new Error('资源必须是 JSON 数组')
-      const candidate = cloneAppearance(draft)
+      const candidate = cloneAppearance(draftRef.current)
       candidate.experimental.resources = parsed as AppearanceResource[]
       candidate.metadata.capabilities = inferCapabilities(candidate)
       const validated = deserializeAppearanceTheme(serializeAppearanceTheme(candidate))
       if (!validated.ok) throw new Error(validated.error)
-      setDraft(validated.appearance)
+      replaceDraft(validated.appearance)
       safePreview(validated.appearance)
       setStatus(validated.warnings.length ? `资源已解析，${validated.warnings.length} 项内容被忽略或回退。` : '资源模型有效。')
     } catch (error) {
@@ -353,7 +459,11 @@ export function ThemeManager() {
     <>
       <IconButton icon={PaletteIcon} label="主题管理" onClick={openManager} />
       <Dialog open={open} onOpenChange={(nextOpen) => nextOpen ? openManager() : cancel()}>
-        <DialogContent className="h-[min(88vh,760px)] sm:max-w-4xl" showCloseButton={false}>
+        <DialogContent
+          className="theme-manager-dialog"
+          overlayClassName="theme-manager-overlay"
+          showCloseButton={false}
+        >
           <DialogHeader>
             <DialogTitle>主题工作室</DialogTitle>
             <DialogDescription>管理内置与用户主题，实时预览 tokens、组件变体和受控 CSS。</DialogDescription>
@@ -375,6 +485,7 @@ export function ThemeManager() {
           <Tabs className="min-h-0" defaultValue="general">
             <TabsList>
               <TabsTrigger value="general">常规</TabsTrigger>
+              <TabsTrigger value="player">播放器</TabsTrigger>
               <TabsTrigger value="tokens">Tokens</TabsTrigger>
               <TabsTrigger value="advanced">高级</TabsTrigger>
               <TabsTrigger value="experimental">实验</TabsTrigger>
@@ -425,6 +536,144 @@ export function ThemeManager() {
                         <OptionField id="theme-surface" label="表面风格" value={draft.components.surface} options={surfaceOptions} onChange={(value) => updateDraft((next) => { next.components.surface = value as AppearanceComponents['surface'] })} />
                         <OptionField id="theme-buttons" label="按钮风格" value={draft.components.buttons} options={buttonOptions} onChange={(value) => updateDraft((next) => { next.components.buttons = value as AppearanceComponents['buttons'] })} />
                         <OptionField id="theme-window-controls" label="窗口按钮" value={draft.components.windowControls} options={windowOptions} onChange={(value) => updateDraft((next) => { next.components.windowControls = value as AppearanceComponents['windowControls'] })} />
+                      </FieldGroup>
+                    </CardContent>
+                  </Card>
+                </div>
+              </TabsContent>
+
+              <TabsContent value="player">
+                <div className="flex flex-col gap-4 py-2">
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>背景与封面</CardTitle>
+                      <CardDescription>调整播放器舞台的氛围层与封面外观，不会改动主题颜色 token。</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <FieldGroup>
+                        <OptionField
+                          id="player-background-effect"
+                          label="播放器背景效果"
+                          description="封面氛围使用当前专辑图；主题渐变使用主题色过渡，纯色使用柔和强调色，关闭则仅保留应用背景。"
+                          value={draft.player.backgroundEffect}
+                          options={playerBackgroundOptions}
+                          onChange={(value) => updateDraft((next) => { next.player.backgroundEffect = value as AppearancePlayer['backgroundEffect'] })}
+                        />
+                        <SliderField
+                          id="player-background-blur"
+                          label="背景模糊强度"
+                          description={backgroundBlurDisabled
+                            ? '仅“封面氛围”使用封面背景并支持模糊；当前背景无需模糊。'
+                            : '连续调节 0–100%；只作用于封面氛围背景。'}
+                          disabled={backgroundBlurDisabled}
+                          value={draft.player.backgroundBlur}
+                          onChange={(value) => updateDraft((next) => { next.player.backgroundBlur = value })}
+                        />
+                        <SliderField
+                          id="player-background-brightness"
+                          label="背景亮度"
+                          description={backgroundVisualDisabled
+                            ? '背景效果已关闭，因此亮度不会渲染；切换到其他背景后可调整。'
+                            : '连续调节 0–200%；100% 保持原始亮度。'}
+                          disabled={backgroundVisualDisabled}
+                          max={200}
+                          value={draft.player.backgroundBrightness}
+                          onChange={(value) => updateDraft((next) => { next.player.backgroundBrightness = value })}
+                        />
+                        <SliderField
+                          id="player-background-saturation"
+                          label="背景饱和度"
+                          description={backgroundVisualDisabled
+                            ? '背景效果已关闭，因此饱和度不会渲染；切换到其他背景后可调整。'
+                            : '连续调节 0–200%；0% 为灰度，100% 为原始饱和度。'}
+                          disabled={backgroundVisualDisabled}
+                          max={200}
+                          value={draft.player.backgroundSaturation}
+                          onChange={(value) => updateDraft((next) => { next.player.backgroundSaturation = value })}
+                        />
+                        <SliderField
+                          id="player-background-mask-opacity"
+                          label="背景遮罩强度"
+                          description={backgroundMaskDisabled
+                            ? '背景效果已关闭，因此遮罩不会渲染；切换到其他背景后可调整。'
+                            : '连续调节 0–100%；颜色与强度相互独立。'}
+                          disabled={backgroundMaskDisabled}
+                          value={draft.player.backgroundMaskOpacity}
+                          onChange={(value) => updateDraft((next) => { next.player.backgroundMaskOpacity = value })}
+                        />
+                        <SliderField
+                          id="player-background-vignette"
+                          label="暗角强度"
+                          description={backgroundVisualDisabled
+                            ? '背景效果已关闭，因此暗角不会渲染；切换到其他背景后可调整。'
+                            : '连续调节 0–100%；只压暗背景边缘，不影响封面、歌词和控件。'}
+                          disabled={backgroundVisualDisabled}
+                          value={draft.player.backgroundVignette}
+                          onChange={(value) => updateDraft((next) => { next.player.backgroundVignette = value })}
+                        />
+                        <Field data-invalid={!playerOverlayColorValid}>
+                          <FieldLabel htmlFor="player-background-mask-color">背景遮罩颜色（当前{playerColorScheme === 'dark' ? '深色' : '浅色'}）</FieldLabel>
+                          <Input
+                            id="player-background-mask-color"
+                            aria-invalid={!playerOverlayColorValid}
+                            value={playerOverlayColor}
+                            onChange={(event) => updateDraft((next) => { next.colorSchemes[playerColorScheme].playerOverlay = event.target.value })}
+                          />
+                          <FieldDescription>与 Tokens 使用同一字段；接受 #RRGGBB 或 #RRGGBBAA。切换应用配色后可分别设置浅色和深色。</FieldDescription>
+                        </Field>
+                        <SliderField
+                          id="player-cover-radius"
+                          label="封面圆角"
+                          description="连续调节 0–100%；0% 为直角，响应式布局会按比例缩放。"
+                          value={draft.player.coverRadius}
+                          onChange={(value) => updateDraft((next) => { next.player.coverRadius = value })}
+                        />
+                        <SliderField
+                          id="player-cover-shadow"
+                          label="封面阴影"
+                          description="连续调节 0–100%；0% 完全关闭，数值越大投影越明显。"
+                          value={draft.player.coverShadow}
+                          onChange={(value) => updateDraft((next) => { next.player.coverShadow = value })}
+                        />
+                      </FieldGroup>
+                    </CardContent>
+                  </Card>
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>歌词与音量</CardTitle>
+                      <CardDescription>控制播放器中的歌词可读性与音量面板显示，不改变真实播放状态。</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <FieldGroup>
+                        <Field>
+                          <FieldLabel htmlFor="player-lyrics-font-scale">歌词字号</FieldLabel>
+                          <Input
+                            id="player-lyrics-font-scale"
+                            type="number"
+                            min="0.75"
+                            max="1.5"
+                            step="0.05"
+                            value={draft.player.lyricsFontScale}
+                            onChange={(event) => updateDraft((next) => { next.player.lyricsFontScale = Number(event.target.value) })}
+                          />
+                          <FieldDescription>允许 0.75–1.5 倍，同时缩放原文与翻译。</FieldDescription>
+                        </Field>
+                        <OptionField
+                          id="player-active-lyric-emphasis"
+                          label="当前歌词强调方式"
+                          description="组合会同时采用当前默认界面的加粗与放大效果。"
+                          value={draft.player.activeLyricEmphasis}
+                          options={activeLyricEmphasisOptions}
+                          onChange={(value) => updateDraft((next) => { next.player.activeLyricEmphasis = value as AppearancePlayer['activeLyricEmphasis'] })}
+                        />
+                        <OptionField
+                          id="player-volume-percent"
+                          label="音量百分比显示"
+                          description="隐藏时只移除数值文本；滑块读屏数值与真实音量控制保持不变。"
+                          value={String(draft.player.showVolumePercent)}
+                          options={booleanOptions}
+                          onChange={(value) => updateDraft((next) => { next.player.showVolumePercent = value === 'true' })}
+                        />
                       </FieldGroup>
                     </CardContent>
                   </Card>

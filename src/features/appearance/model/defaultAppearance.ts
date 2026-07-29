@@ -20,7 +20,7 @@ export const defaultAppearance: AppearancePreset = {
       playerBlueInk: '#276389',
       playerInk: '#17212b',
       playerMuted: '#72777f',
-      playerOverlay: '#ffffff99',
+      playerOverlay: '#AAA7B5',
       playerDock: '#f7f9ff99',
     },
     dark: {
@@ -62,6 +62,19 @@ export const defaultAppearance: AppearancePreset = {
     surface: 'glass',
     buttons: 'soft',
     windowControls: 'standard',
+  },
+  player: {
+    backgroundEffect: 'cover-ambient',
+    backgroundBlur: 100,
+    backgroundBrightness: 68,
+    backgroundSaturation: 165,
+    backgroundMaskOpacity: 14,
+    backgroundVignette: 72,
+    coverRadius: 38,
+    coverShadow: 74,
+    lyricsFontScale: 1.2,
+    activeLyricEmphasis: 'combined',
+    showVolumePercent: true,
   },
   icons: {
     provider: 'default',

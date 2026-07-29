@@ -19,6 +19,7 @@ pub struct AudioCommandError {
 pub enum AudioErrorCode {
     UserCancelled,
     NoTrackLoaded,
+    InvalidVolume,
     InvalidPath,
     FileNotFound,
     UnreadableFile,
@@ -49,5 +50,23 @@ pub(crate) fn unavailable_state(message: impl Into<String>) -> AudioPlaybackStat
         duration_ms: None,
         volume: 1.0,
         error: Some(audio_error(AudioErrorCode::InternalError, message, true)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn invalid_volume_error_code_serializes_for_the_frontend_contract() {
+        let serialized = serde_json::to_value(audio_error(
+            AudioErrorCode::InvalidVolume,
+            "invalid volume",
+            true,
+        ))
+        .expect("audio error should serialize");
+
+        assert_eq!(serialized["code"], "INVALID_VOLUME");
+        assert_eq!(serialized["recoverable"], true);
     }
 }

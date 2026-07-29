@@ -67,8 +67,6 @@ export const appCopy = {
     label: '音量',
     groupLabel: '音量控制',
     value: (volume: number) => `${Math.round(volume)}%`,
-    muteAction: (volume: number) => `静音，当前音量 ${Math.round(volume)}%`,
-    restoreAction: (volume: number) => `恢复音量，当前音量 ${Math.round(volume)}%`,
   },
   lyrics: { title: '歌词', empty: '未找到歌词' },
   moreMenu: {
@@ -113,6 +111,7 @@ export const appCopy = {
       PLAYBACK_INIT_FAILED: '音频输出初始化失败。',
       PLAYBACK_FAILED: '播放失败。',
       UNSUPPORTED_OPERATION: '当前播放后端暂不支持这个操作。',
+      INVALID_VOLUME: '音量值无效。',
       INTERNAL_ERROR: '音频后端内部错误。',
     },
   },

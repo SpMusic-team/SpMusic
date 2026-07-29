@@ -26,6 +26,8 @@ type ControlDockProps = {
   desktopCaptionsAvailable: boolean
   desktopCaptionsEnabled: boolean
   volume: number
+  volumeBusy: boolean
+  volumeDisabled: boolean
   queueOpen: boolean
   audioBusy: boolean
   audioStatusText: string
@@ -59,6 +61,8 @@ export function ControlDock({
   desktopCaptionsAvailable,
   desktopCaptionsEnabled,
   volume,
+  volumeBusy,
+  volumeDisabled,
   queueOpen,
   audioBusy,
   audioStatusText,
@@ -157,7 +161,12 @@ export function ControlDock({
             disabled={!desktopCaptionsAvailable}
             onClick={onCaptionsToggle}
           />
-          <VolumeControl volume={volume} disabled={disabled} onVolumeChange={onVolumeChange} />
+          <VolumeControl
+            volume={volume}
+            busy={volumeBusy}
+            disabled={volumeDisabled}
+            onVolumeChange={onVolumeChange}
+          />
           <IconButton icon={systemIcons.queue} label={appCopy.controls.queue} selected={queueOpen} onClick={onQueueToggle} />
         </div>
       </div>

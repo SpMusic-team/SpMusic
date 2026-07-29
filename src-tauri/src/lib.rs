@@ -7,7 +7,7 @@ use app_paths::AppPaths;
 use audio::{
     AudioCommandError, AudioController, AudioFolderPlaylist, AudioFolderPlaylistInput,
     AudioLoadFileInput, AudioOpenFileInput, AudioOpenSourceResult, AudioPlayInput,
-    AudioPlaybackState, AudioSeekInput, AudioTrackRef,
+    AudioPlaybackState, AudioSeekInput, AudioSetVolumeInput, AudioTrackRef,
 };
 use tauri::{Manager, State};
 use tracing_subscriber::EnvFilter;
@@ -128,6 +128,21 @@ fn audio_seek(
 }
 
 #[tauri::command]
+fn audio_set_volume(
+    state: State<'_, AudioController>,
+    input: AudioSetVolumeInput,
+) -> Result<AudioPlaybackState, AudioCommandError> {
+    tracing::info!(
+        command = "audio_set_volume",
+        requested_volume = input.volume,
+        "Tauri command invoked",
+    );
+    let result = state.set_volume(input);
+    log_state_command_result("audio_set_volume", &result);
+    result
+}
+
+#[tauri::command]
 fn audio_get_state(state: State<'_, AudioController>) -> AudioPlaybackState {
     tracing::debug!(command = "audio_get_state", "Tauri command invoked");
     let state = state.get_state();
@@ -136,6 +151,7 @@ fn audio_get_state(state: State<'_, AudioController>) -> AudioPlaybackState {
         phase = ?state.phase,
         position_ms = state.position_ms,
         duration_ms = state.duration_ms,
+        volume = state.volume,
         "Tauri command completed",
     );
     state
@@ -181,6 +197,7 @@ pub fn run() {
             audio_pause,
             audio_stop,
             audio_seek,
+            audio_set_volume,
             audio_get_state,
             audio_get_current_track,
         ])
@@ -265,6 +282,7 @@ fn log_state_command_result(
             phase = ?state.phase,
             position_ms = state.position_ms,
             duration_ms = state.duration_ms,
+            volume = state.volume,
             track_id = state.current_track_id.as_deref(),
             "Tauri command completed",
         ),

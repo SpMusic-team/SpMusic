@@ -6,6 +6,7 @@ import type {
   AppearanceComponents,
   AppearanceEasing,
   AppearancePreset,
+  AppearancePlayer,
   AppearanceRadii,
   AppearanceResource,
   AppearanceThemeMetadata,
@@ -63,10 +64,15 @@ const fontFamilies = ['geist', 'system', 'serif', 'monospace'] as const
 const surfaces = ['glass', 'solid', 'flat'] as const
 const buttonVariants = ['soft', 'outline', 'minimal'] as const
 const windowControlVariants = ['standard', 'compact', 'traffic-lights'] as const
+const playerBackgroundEffects = ['cover-ambient', 'theme-gradient', 'solid', 'off'] as const
+const legacyPlayerBackgroundBlurs = { off: 0, light: 27, medium: 62, strong: 100 } as const
+const legacyPlayerCoverRadii = { square: 0, small: 17, medium: 40, large: 100 } as const
+const legacyPlayerCoverShadows = { off: 0, light: 25, standard: 50, prominent: 100 } as const
+const playerActiveLyricEmphases = ['bold', 'scale', 'accent', 'combined'] as const
 const tiers = ['standard', 'advanced', 'experimental'] as const
 const capabilities = ['tokens', 'custom-css', 'layout-overrides', 'local-resources'] as const
 const resourceKinds = ['font', 'image'] as const
-const themeKeys = ['id', 'name', 'colors', 'colorSchemes', 'radii', 'motion', 'typography', 'components', 'icons', 'advanced', 'experimental', 'metadata'] as const
+const themeKeys = ['id', 'name', 'colors', 'colorSchemes', 'radii', 'motion', 'typography', 'components', 'player', 'icons', 'advanced', 'experimental', 'metadata'] as const
 const hexColorPattern = /^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/i
 const lengthPattern = /^(?:0|(?:\d|[1-9]\d|[1-8]\d{2}|9\d{2})(?:\.\d{1,3})?)px$/
 const themeIdPattern = /^[a-z0-9][a-z0-9_-]{0,63}$/
@@ -89,6 +95,7 @@ export function cloneAppearance(appearance: AppearancePreset): AppearancePreset 
     motion: { ...appearance.motion },
     typography: { ...appearance.typography },
     components: { ...appearance.components },
+    player: { ...appearance.player },
     icons: { ...appearance.icons },
     advanced: { ...appearance.advanced },
     experimental: {
@@ -135,6 +142,27 @@ function boundedNumber(input: unknown, fallback: number, min: number, max: numbe
   if (typeof input === 'number' && Number.isFinite(input) && input >= min && input <= max) return input
   warnings.push(`${path} 必须在 ${min} 到 ${max} 之间，已使用默认值`)
   return fallback
+}
+
+function booleanValue(input: unknown, fallback: boolean, path: string, warnings: string[]) {
+  if (input === undefined) return fallback
+  if (typeof input === 'boolean') return input
+  warnings.push(`${path} 必须是布尔值，已使用默认值`)
+  return fallback
+}
+
+function boundedPlayerNumber(
+  input: unknown,
+  legacyValues: Record<string, number>,
+  fallback: number,
+  path: string,
+  warnings: string[],
+) {
+  if (typeof input === 'string' && Object.hasOwn(legacyValues, input)) {
+    warnings.push(`${path} 已从旧版预设迁移为连续数值`)
+    return legacyValues[input]
+  }
+  return boundedNumber(input, fallback, 0, 100, path, warnings)
 }
 
 function cssText(input: unknown, fallback: string, path: string, warnings: string[]) {
@@ -219,6 +247,35 @@ function parseComponents(input: JsonObject, fallback: AppearanceComponents, warn
     surface: enumValue(input.surface, surfaces, fallback.surface, 'theme.components.surface', warnings),
     buttons: enumValue(input.buttons, buttonVariants, fallback.buttons, 'theme.components.buttons', warnings),
     windowControls: enumValue(input.windowControls, windowControlVariants, fallback.windowControls, 'theme.components.windowControls', warnings),
+  }
+}
+
+function parsePlayer(input: JsonObject, fallback: AppearancePlayer, warnings: string[]): AppearancePlayer {
+  reportUnknownKeys(input, [
+    'backgroundEffect',
+    'backgroundBlur',
+    'backgroundBrightness',
+    'backgroundSaturation',
+    'backgroundMaskOpacity',
+    'backgroundVignette',
+    'coverRadius',
+    'coverShadow',
+    'lyricsFontScale',
+    'activeLyricEmphasis',
+    'showVolumePercent',
+  ], 'theme.player', warnings)
+  return {
+    backgroundEffect: enumValue(input.backgroundEffect, playerBackgroundEffects, fallback.backgroundEffect, 'theme.player.backgroundEffect', warnings),
+    backgroundBlur: boundedPlayerNumber(input.backgroundBlur, legacyPlayerBackgroundBlurs, fallback.backgroundBlur, 'theme.player.backgroundBlur', warnings),
+    backgroundBrightness: boundedNumber(input.backgroundBrightness, fallback.backgroundBrightness, 0, 200, 'theme.player.backgroundBrightness', warnings),
+    backgroundSaturation: boundedNumber(input.backgroundSaturation, fallback.backgroundSaturation, 0, 200, 'theme.player.backgroundSaturation', warnings),
+    backgroundMaskOpacity: boundedNumber(input.backgroundMaskOpacity, fallback.backgroundMaskOpacity, 0, 100, 'theme.player.backgroundMaskOpacity', warnings),
+    backgroundVignette: boundedNumber(input.backgroundVignette, fallback.backgroundVignette, 0, 100, 'theme.player.backgroundVignette', warnings),
+    coverRadius: boundedPlayerNumber(input.coverRadius, legacyPlayerCoverRadii, fallback.coverRadius, 'theme.player.coverRadius', warnings),
+    coverShadow: boundedPlayerNumber(input.coverShadow, legacyPlayerCoverShadows, fallback.coverShadow, 'theme.player.coverShadow', warnings),
+    lyricsFontScale: boundedNumber(input.lyricsFontScale, fallback.lyricsFontScale, 0.75, 1.5, 'theme.player.lyricsFontScale', warnings),
+    activeLyricEmphasis: enumValue(input.activeLyricEmphasis, playerActiveLyricEmphases, fallback.activeLyricEmphasis, 'theme.player.activeLyricEmphasis', warnings),
+    showVolumePercent: booleanValue(input.showVolumePercent, fallback.showVolumePercent, 'theme.player.showVolumePercent', warnings),
   }
 }
 
@@ -357,6 +414,7 @@ export function deserializeAppearanceTheme(source: string, fallback: AppearanceP
     },
     typography: parseTypography(section(theme, 'typography', warnings), fallback.typography, warnings),
     components: parseComponents(section(theme, 'components', warnings), fallback.components, warnings),
+    player: parsePlayer(section(theme, 'player', warnings), fallback.player, warnings),
     icons: { provider },
     advanced: { customCss: cssText(advancedInput.customCss, fallback.advanced.customCss, 'theme.advanced.customCss', warnings) },
     experimental: {

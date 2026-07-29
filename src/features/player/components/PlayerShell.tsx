@@ -29,6 +29,7 @@ import {
   pauseAudio,
   playAudio,
   seekAudio,
+  setAudioVolume,
   stopAudio,
   audioCoverArtFallbackUrl,
   audioCoverArtUrl,
@@ -48,6 +49,16 @@ type TransportIntentPhase = 'playing' | 'paused'
 type TransportRequest = {
   phase: TransportIntentPhase
   restart: boolean
+}
+
+function volumeScalarToPercent(volume: number): number {
+  if (!Number.isFinite(volume)) return 100
+  return Math.round(Math.min(1, Math.max(0, volume)) * 100)
+}
+
+function volumePercentToScalar(volume: number): number {
+  if (!Number.isFinite(volume)) return 1
+  return Math.round(Math.min(100, Math.max(0, volume))) / 100
 }
 
 function nonEmptyText(value: string | null | undefined): string | undefined {
@@ -268,6 +279,7 @@ export function PlayerShell() {
   const [audioError, setAudioError] = useState<AudioCommandError | null>(null)
   const [audioBusy, setAudioBusy] = useState(false)
   const [transportBusy, setTransportBusy] = useState(false)
+  const [volumeBusy, setVolumeBusy] = useState(false)
   const [seekPreviewSeconds, setSeekPreviewSeconds] = useState<number | null>(null)
   const lyricListRef = useRef<HTMLOListElement>(null)
   const lyricRefs = useRef(new Map<string, HTMLLIElement>())
@@ -280,6 +292,9 @@ export function PlayerShell() {
   const desiredTransportRequestRef = useRef<TransportRequest | null>(null)
   const transportCommandRunningRef = useRef(false)
   const transportRollbackStateRef = useRef<AudioPlaybackState | null>(null)
+  const confirmedVolumeRef = useRef(volume)
+  const desiredVolumeRef = useRef<number | null>(null)
+  const volumeCommandRunningRef = useRef(false)
   const audioTrackRef = useRef<AudioTrackRef | null>(null)
   const audioTrackRequestIdRef = useRef(0)
   const audioTrackRequestTrackIdRef = useRef<string | null>(null)
@@ -434,6 +449,11 @@ export function PlayerShell() {
     setAudioState(nextAudioState)
     setAudioError(nextAudioState.error)
     setState((previous) => syncPlaybackState(previous, nextAudioState, audioTrackRef.current))
+    if (!volumeCommandRunningRef.current && desiredVolumeRef.current === null) {
+      const confirmedVolume = volumeScalarToPercent(nextAudioState.volume)
+      confirmedVolumeRef.current = confirmedVolume
+      setVolume(confirmedVolume)
+    }
 
     if (
       nextAudioState.currentTrackId
@@ -1022,6 +1042,44 @@ export function PlayerShell() {
   function changeVolume(nextVolume: number) {
     const safeVolume = Math.min(100, Math.max(0, Math.round(nextVolume)))
     setVolume(safeVolume)
+    desiredVolumeRef.current = volumePercentToScalar(safeVolume)
+    setAudioError(null)
+
+    if (volumeCommandRunningRef.current) return
+
+    volumeCommandRunningRef.current = true
+    setVolumeBusy(true)
+    void runVolumeCommandQueue()
+  }
+
+  async function runVolumeCommandQueue() {
+    let lastConfirmedVolume = confirmedVolumeRef.current
+
+    try {
+      while (desiredVolumeRef.current !== null) {
+        const requestedVolume = desiredVolumeRef.current
+        desiredVolumeRef.current = null
+        const nextAudioState = await setAudioVolume(requestedVolume)
+        lastConfirmedVolume = volumeScalarToPercent(nextAudioState.volume)
+        confirmedVolumeRef.current = lastConfirmedVolume
+
+        if (desiredVolumeRef.current === null) {
+          setVolume(lastConfirmedVolume)
+          applyAudioState(nextAudioState)
+        }
+      }
+    } catch (error) {
+      desiredVolumeRef.current = null
+      setVolume(lastConfirmedVolume)
+      setAudioError(isAudioCommandError(error) ? error : {
+        code: 'INTERNAL_ERROR',
+        message: appCopy.audio.unavailable,
+        recoverable: true,
+      })
+    } finally {
+      volumeCommandRunningRef.current = false
+      setVolumeBusy(false)
+    }
   }
 
   const currentFeedback = track ? feedbackByTrackId[track.id] : undefined
@@ -1137,6 +1195,8 @@ export function PlayerShell() {
           desktopCaptionsAvailable={desktopCaptionsAvailable}
           desktopCaptionsEnabled={desktopCaptionsAvailable && desktopCaptionsEnabled}
           volume={volume}
+          volumeBusy={volumeBusy}
+          volumeDisabled={audioBusy || !hasRealAudioTrack}
           queueOpen={queueOpen}
           audioBusy={audioBusy}
           audioStatusText={realAudioStatusText}

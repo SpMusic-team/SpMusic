@@ -12,7 +12,8 @@ pub use controller::AudioController;
 pub use error::AudioCommandError;
 pub use types::{
     AudioFolderPlaylist, AudioFolderPlaylistInput, AudioLoadFileInput, AudioOpenFileInput,
-    AudioOpenSourceResult, AudioPlayInput, AudioPlaybackState, AudioSeekInput, AudioTrackRef,
+    AudioOpenSourceResult, AudioPlayInput, AudioPlaybackState, AudioSeekInput, AudioSetVolumeInput,
+    AudioTrackRef,
 };
 
 pub const AUDIO_STATE_CHANGED_EVENT: &str = "audio_state_changed";

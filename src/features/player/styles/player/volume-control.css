@@ -30,4 +30,5 @@
 .volume-slider [data-slot="slider-range"] { width: 100%; border-radius: 0 0 17px 17px; background: var(--player-blue); }
 .volume-slider [data-slot="slider-thumb"] { width: 34px; height: 34px; border: 0; border-radius: 50%; background: var(--player-blue); box-shadow: none; }
 .volume-slider [data-slot="slider-thumb"]::before { content: ""; position: absolute; top: 10px; left: 11px; width: 12px; height: 12px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.15); }
-.volume-value { position: absolute; top: 182px; left: 0; z-index: 1; width: 64px; color: #666; font-size: 12px; font-weight: 500; line-height: normal; text-align: center; font-variant-numeric: tabular-nums; }
+.volume-value { position: absolute; top: 182px; left: 0; z-index: 1; width: 64px; color: var(--player-muted); font-size: 12px; font-weight: 500; line-height: normal; text-align: center; font-variant-numeric: tabular-nums; }
+body[data-player-volume-percent="false"] .volume-value { visibility: hidden; }

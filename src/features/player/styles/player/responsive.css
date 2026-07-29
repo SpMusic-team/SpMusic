@@ -6,7 +6,7 @@
   .window-bar button svg { width: 20px; height: 20px; }
   .player-stage { position: relative; top: 0; left: auto; width: min(100%, 620px); height: auto; margin: 0 auto; transform: none; }
   .cover-column { position: relative; inset: auto; width: min(100%, calc(100svh - 220px)); margin: 0 auto; }
-  .cover-art { position: relative; top: auto; left: auto; width: 100%; height: auto; aspect-ratio: 1; border-radius: 24px; box-shadow: -6px 6px 4px rgba(0,0,0,.25); }
+  .cover-frame { position: relative; top: auto; left: auto; width: 100%; height: auto; aspect-ratio: 1; border-radius: var(--player-cover-radius-responsive); box-shadow: var(--player-cover-shadow-responsive); }
   .cover-feedback { left: 12px; bottom: 12px; gap: 8px; }
   .cover-art button svg { width: 36px; height: 36px; }
   .cover-feedback button { width: 78px; height: 56px; }

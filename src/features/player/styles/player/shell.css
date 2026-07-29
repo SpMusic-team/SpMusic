@@ -16,21 +16,56 @@
 .ambient-cover {
   position: absolute;
   inset: 0;
-  z-index: -2;
+  z-index: -3;
   background: var(--player-background-art);
   background-position: center;
   background-repeat: no-repeat;
   background-size: cover;
+  transform-origin: center;
+  will-change: opacity, transform;
 }
 
+.player-shell::before,
 .player-shell::after {
   content: "";
   position: absolute;
   inset: 0;
+  pointer-events: none;
+}
+
+.player-shell::before {
+  z-index: -2;
+  background: radial-gradient(
+    ellipse at center,
+    transparent 45%,
+    rgb(0 0 0 / var(--player-background-vignette-opacity)) 100%
+  );
+}
+
+.player-shell::after {
   z-index: -1;
   background: var(--player-overlay);
-  backdrop-filter: blur(calc(90 * var(--prototype-unit))) saturate(0.9);
+  opacity: var(--player-background-mask-opacity);
 }
+
+body[data-player-background="cover-ambient"] .ambient-cover {
+  inset: calc(0px - var(--player-background-blur));
+  filter:
+    blur(var(--player-background-blur))
+    brightness(var(--player-background-brightness))
+    saturate(var(--player-background-saturation));
+}
+body[data-player-background="theme-gradient"] .ambient-cover {
+  background: var(--player-theme-gradient);
+  filter: brightness(var(--player-background-brightness)) saturate(var(--player-background-saturation));
+}
+body[data-player-background="solid"] .ambient-cover {
+  background: var(--app-accent-soft);
+  filter: brightness(var(--player-background-brightness)) saturate(var(--player-background-saturation));
+}
+body[data-player-background="off"] .ambient-cover { display: none; }
+body[data-player-background="off"] .player-shell::before,
+body[data-player-background="off"] .player-shell::after { content: none; }
 
 .ambient-cover[data-tone="lagoon"] { --player-background-art: linear-gradient(145deg, #0f5d72 2%, #73c7bb 36%, #f3dd9b 68%, #263c45); }
 .cover-art[data-tone="lagoon"] { --cover-art: linear-gradient(145deg, #0f5d72 2%, #73c7bb 36%, #f3dd9b 68%, #263c45); }

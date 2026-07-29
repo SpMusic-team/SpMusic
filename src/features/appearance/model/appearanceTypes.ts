@@ -10,6 +10,8 @@ export type AppearanceTier = 'standard' | 'advanced' | 'experimental'
 export type SurfaceVariant = 'glass' | 'solid' | 'flat'
 export type ButtonVariant = 'soft' | 'outline' | 'minimal'
 export type WindowControlVariant = 'standard' | 'compact' | 'traffic-lights'
+export type PlayerBackgroundEffect = 'cover-ambient' | 'theme-gradient' | 'solid' | 'off'
+export type PlayerActiveLyricEmphasis = 'bold' | 'scale' | 'accent' | 'combined'
 
 export type AppearanceColors = {
   background: string
@@ -57,6 +59,20 @@ export type AppearanceComponents = {
   windowControls: WindowControlVariant
 }
 
+export type AppearancePlayer = {
+  backgroundEffect: PlayerBackgroundEffect
+  backgroundBlur: number
+  backgroundBrightness: number
+  backgroundSaturation: number
+  backgroundMaskOpacity: number
+  backgroundVignette: number
+  coverRadius: number
+  coverShadow: number
+  lyricsFontScale: number
+  activeLyricEmphasis: PlayerActiveLyricEmphasis
+  showVolumePercent: boolean
+}
+
 export type AppearanceResource = {
   id: string
   kind: 'font' | 'image'
@@ -79,6 +95,7 @@ export type AppearancePreset = {
   motion: AppearanceMotion
   typography: AppearanceTypography
   components: AppearanceComponents
+  player: AppearancePlayer
   icons: {
     provider: IconProviderId
   }
@@ -93,6 +110,7 @@ export type AppearancePreset = {
 }
 
 export type AppearanceCssVars = CSSProperties & {
+  '--prototype-unit': string
   '--app-bg': string
   '--app-surface': string
   '--app-surface-muted': string
@@ -121,6 +139,25 @@ export type AppearanceCssVars = CSSProperties & {
   '--player-muted': string
   '--player-overlay': string
   '--player-dock': string
+  '--player-background-blur': string
+  '--player-background-brightness': string
+  '--player-background-saturation': string
+  '--player-background-mask-opacity': number
+  '--player-background-vignette-opacity': number
+  '--player-cover-radius': string
+  '--player-cover-radius-responsive': string
+  '--player-cover-shadow': string
+  '--player-cover-shadow-responsive': string
+  '--player-lyrics-font-scale': number
+  '--player-lyrics-item-height': string
+  '--player-lyrics-font-size': string
+  '--player-lyrics-line-height': string
+  '--player-lyrics-translation-font-size': string
+  '--player-lyrics-translation-line-height': string
+  '--player-active-lyric-color': string
+  '--player-active-lyric-font-weight': number
+  '--player-active-lyric-scale': number
+  '--player-theme-gradient': string
   '--background': string
   '--foreground': string
   '--card': string

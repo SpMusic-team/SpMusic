@@ -142,6 +142,12 @@ pub struct AudioSeekInput {
     pub position_ms: u64,
 }
 
+#[derive(Debug, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioSetVolumeInput {
+    pub volume: f32,
+}
+
 #[cfg(test)]
 mod tests {
     use ts_rs::{Config, TS};
@@ -179,6 +185,15 @@ mod tests {
         assert!(serialized.get("metadata").is_none());
         assert!(serialized.get("coverArt").is_none());
         assert!(serialized.get("lyrics").is_none());
+    }
+
+    #[test]
+    fn audio_set_volume_input_exports_normalized_volume_contract() {
+        let exported = AudioSetVolumeInput::export_to_string(&Config::default())
+            .expect("AudioSetVolumeInput should be exportable to TypeScript");
+
+        assert!(exported.contains("AudioSetVolumeInput"));
+        assert!(exported.contains("volume: number"));
     }
 
     #[test]

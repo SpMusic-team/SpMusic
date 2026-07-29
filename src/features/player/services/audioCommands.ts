@@ -23,6 +23,7 @@ export type AudioErrorCode =
   | 'PLAYBACK_INIT_FAILED'
   | 'PLAYBACK_FAILED'
   | 'UNSUPPORTED_OPERATION'
+  | 'INVALID_VOLUME'
   | 'INTERNAL_ERROR'
 
 export type AudioTrackRef = {
@@ -146,6 +147,10 @@ export async function stopAudio(): Promise<AudioPlaybackState> {
 
 export async function seekAudio(positionMs: number): Promise<AudioPlaybackState> {
   return invoke<AudioPlaybackState>('audio_seek', { input: { positionMs } })
+}
+
+export async function setAudioVolume(volume: number): Promise<AudioPlaybackState> {
+  return invoke<AudioPlaybackState>('audio_set_volume', { input: { volume } })
 }
 
 export async function getAudioState(): Promise<AudioPlaybackState> {

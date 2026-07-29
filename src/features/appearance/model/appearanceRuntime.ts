@@ -12,6 +12,8 @@ const dataAttributes = [
   'data-surface-variant',
   'data-button-variant',
   'data-window-controls',
+  'data-player-background',
+  'data-player-volume-percent',
   'data-spmusic-theme-scope',
 ] as const
 
@@ -47,6 +49,8 @@ export function applyAppearanceRuntime(
     'data-surface-variant': appearance.components.surface,
     'data-button-variant': appearance.components.buttons,
     'data-window-controls': appearance.components.windowControls,
+    'data-player-background': appearance.player.backgroundEffect,
+    'data-player-volume-percent': String(appearance.player.showVolumePercent),
     'data-spmusic-theme-scope': '',
   }
 

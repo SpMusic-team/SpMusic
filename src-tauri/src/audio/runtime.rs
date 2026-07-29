@@ -14,7 +14,8 @@ use super::{
     error::{audio_error, AudioCommandError, AudioErrorCode},
     source::{duration_ms, hydrate_track_ref, open_source, AudioSource},
     types::{
-        AudioPlayInput, AudioPlaybackPhase, AudioPlaybackState, AudioSeekInput, AudioTrackRef,
+        AudioPlayInput, AudioPlaybackPhase, AudioPlaybackState, AudioSeekInput,
+        AudioSetVolumeInput, AudioTrackRef,
     },
 };
 
@@ -29,15 +30,31 @@ trait StoppableSink {
     fn stop_sink(&self);
 }
 
+trait VolumeSink {
+    fn set_sink_volume(&self, volume: f32);
+}
+
 impl StoppableSink for Sink {
     fn stop_sink(&self) {
         self.stop();
     }
 }
 
+impl VolumeSink for Sink {
+    fn set_sink_volume(&self, volume: f32) {
+        self.set_volume(volume);
+    }
+}
+
 fn stop_and_take_sink<S: StoppableSink>(slot: &mut Option<S>) {
     if let Some(sink) = slot.take() {
         sink.stop_sink();
+    }
+}
+
+fn apply_volume_to_sink<S: VolumeSink>(sink: Option<&S>, volume: f32) {
+    if let Some(sink) = sink {
+        sink.set_sink_volume(volume);
     }
 }
 
@@ -76,6 +93,10 @@ pub(crate) enum AudioRuntimeRequest {
     },
     Seek {
         input: AudioSeekInput,
+        reply: Sender<Result<AudioPlaybackState, AudioCommandError>>,
+    },
+    SetVolume {
+        input: AudioSetVolumeInput,
         reply: Sender<Result<AudioPlaybackState, AudioCommandError>>,
     },
     GetState {
@@ -387,6 +408,47 @@ impl AudioRuntime {
         Ok(state)
     }
 
+    pub(crate) fn set_volume(
+        &mut self,
+        input: AudioSetVolumeInput,
+    ) -> Result<AudioPlaybackState, AudioCommandError> {
+        let volume = input.volume;
+        tracing::info!(
+            operation = "audio.runtime.set_volume",
+            requested_volume = volume,
+            previous_volume = self.volume,
+            has_sink = self.sink.is_some(),
+            "volume change requested",
+        );
+
+        if !volume.is_finite() || !(0.0..=1.0).contains(&volume) {
+            let error = audio_error(
+                AudioErrorCode::InvalidVolume,
+                "Volume must be a finite number between 0.0 and 1.0 inclusive",
+                true,
+            );
+            tracing::warn!(
+                operation = "audio.runtime.set_volume",
+                requested_volume = volume,
+                error_code = ?error.code,
+                error = %error.message,
+                "volume change rejected",
+            );
+            return Err(error);
+        }
+
+        apply_volume_to_sink(self.sink.as_ref(), volume);
+        self.volume = volume;
+        let state = self.state();
+        tracing::info!(
+            operation = "audio.runtime.set_volume",
+            volume = state.volume,
+            phase = ?state.phase,
+            "volume change completed",
+        );
+        Ok(state)
+    }
+
     pub(crate) fn get_state(&mut self) -> AudioPlaybackState {
         self.state()
     }
@@ -621,7 +683,7 @@ impl AudioRuntime {
         if let Some(previous) = self.sink.take() {
             previous.stop();
         }
-        sink.set_volume(self.volume);
+        apply_volume_to_sink(Some(&sink), self.volume);
         configure_rebuilt_sink(&sink, source, position, play).map_err(|error| {
             tracing::warn!(
                 operation = "audio.runtime.rebuild_sink",
@@ -808,6 +870,17 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct RecordingVolumeSink {
+        volume: Cell<Option<f32>>,
+    }
+
+    impl VolumeSink for RecordingVolumeSink {
+        fn set_sink_volume(&self, volume: f32) {
+            self.volume.set(Some(volume));
+        }
+    }
+
     fn loaded_test_track() -> AudioTrackRef {
         AudioTrackRef {
             id: "old-track".to_string(),
@@ -864,6 +937,79 @@ mod tests {
 
         assert!(stopped.get());
         assert!(slot.is_none());
+    }
+
+    #[test]
+    fn volume_change_is_applied_to_an_existing_sink_immediately() {
+        let sink = RecordingVolumeSink::default();
+
+        apply_volume_to_sink(Some(&sink), 0.35);
+
+        assert_eq!(sink.volume.get(), Some(0.35));
+    }
+
+    #[test]
+    fn set_volume_without_sink_updates_runtime_and_returned_state() {
+        let mut runtime = AudioRuntime::default();
+
+        let state = runtime
+            .set_volume(AudioSetVolumeInput { volume: 0.4 })
+            .expect("valid normalized volume should be accepted");
+
+        assert_eq!(runtime.volume, 0.4);
+        assert_eq!(state.volume, 0.4);
+        assert_eq!(state.phase, AudioPlaybackPhase::Idle);
+    }
+
+    #[test]
+    fn stored_volume_is_used_for_a_later_sink_rebuild() {
+        let mut runtime = AudioRuntime::default();
+        runtime
+            .set_volume(AudioSetVolumeInput { volume: 0.25 })
+            .expect("valid normalized volume should be accepted");
+        let rebuilt_sink = RecordingVolumeSink::default();
+
+        apply_volume_to_sink(Some(&rebuilt_sink), runtime.volume);
+
+        assert_eq!(rebuilt_sink.volume.get(), Some(0.25));
+    }
+
+    #[test]
+    fn set_volume_accepts_normalized_range_boundaries() {
+        let mut runtime = AudioRuntime::default();
+
+        let muted = runtime
+            .set_volume(AudioSetVolumeInput { volume: 0.0 })
+            .expect("zero volume should be accepted");
+        let full = runtime
+            .set_volume(AudioSetVolumeInput { volume: 1.0 })
+            .expect("full volume should be accepted");
+
+        assert_eq!(muted.volume, 0.0);
+        assert_eq!(full.volume, 1.0);
+    }
+
+    #[test]
+    fn set_volume_rejects_invalid_values_without_mutating_runtime_state() {
+        for invalid_volume in [-0.01, 1.01, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let mut runtime = AudioRuntime {
+                phase: AudioPlaybackPhase::Paused,
+                volume: 0.6,
+                ..AudioRuntime::default()
+            };
+
+            let error = runtime
+                .set_volume(AudioSetVolumeInput {
+                    volume: invalid_volume,
+                })
+                .expect_err("invalid volume should be rejected");
+
+            assert_eq!(error.code, AudioErrorCode::InvalidVolume);
+            assert!(error.recoverable);
+            assert_eq!(runtime.volume, 0.6);
+            assert_eq!(runtime.phase, AudioPlaybackPhase::Paused);
+            assert!(runtime.error.is_none());
+        }
     }
 
     #[test]

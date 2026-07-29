@@ -1,4 +1,4 @@
-body[data-surface-variant="solid"] .player-shell::after,
+body[data-surface-variant="solid"] .player-shell::before,
 body[data-surface-variant="solid"] .control-dock,
 body[data-surface-variant="solid"] .volume-panel,
 body[data-surface-variant="solid"] .debug-queue-panel { backdrop-filter: none; }

@@ -22,7 +22,8 @@ use super::{
     },
     types::{
         AudioFolderPlaylist, AudioFolderPlaylistInput, AudioLoadFileInput, AudioOpenFileInput,
-        AudioOpenSourceResult, AudioPlayInput, AudioPlaybackState, AudioSeekInput, AudioTrackRef,
+        AudioOpenSourceResult, AudioPlayInput, AudioPlaybackState, AudioSeekInput,
+        AudioSetVolumeInput, AudioTrackRef,
     },
     AUDIO_STATE_CHANGED_EVENT,
 };
@@ -116,6 +117,19 @@ impl AudioController {
                         );
                         let result = runtime.seek(input);
                         log_state_result("audio.seek", started_at, &result);
+                        let state = state_for_audio_result(&mut runtime, &result);
+                        let _ = reply.send(result);
+                        emit_state_changed(&app_handle, state);
+                    }
+                    AudioRuntimeRequest::SetVolume { input, reply } => {
+                        let started_at = Instant::now();
+                        tracing::info!(
+                            operation = "audio.set_volume",
+                            requested_volume = input.volume,
+                            "runtime volume request received",
+                        );
+                        let result = runtime.set_volume(input);
+                        log_state_result("audio.set_volume", started_at, &result);
                         let state = state_for_audio_result(&mut runtime, &result);
                         let _ = reply.send(result);
                         emit_state_changed(&app_handle, state);
@@ -338,6 +352,15 @@ impl AudioController {
         self.recv_state(rx)
     }
 
+    pub fn set_volume(
+        &self,
+        input: AudioSetVolumeInput,
+    ) -> Result<AudioPlaybackState, AudioCommandError> {
+        let (reply, rx) = mpsc::channel();
+        self.send(AudioRuntimeRequest::SetVolume { input, reply })?;
+        self.recv_state(rx)
+    }
+
     pub fn get_state(&self) -> AudioPlaybackState {
         let (reply, rx) = mpsc::channel();
         if self.send(AudioRuntimeRequest::GetState { reply }).is_err() {
@@ -437,6 +460,7 @@ fn emit_state_changed(app_handle: &AppHandle, state: AudioPlaybackState) {
         phase = ?state.phase,
         position_ms = state.position_ms,
         duration_ms = state.duration_ms,
+        volume = state.volume,
         track_id = state.current_track_id.as_deref(),
         "emitting audio state changed",
     );
@@ -632,6 +656,7 @@ fn log_state_result(
             phase = ?state.phase,
             position_ms = state.position_ms,
             duration_ms = state.duration_ms,
+            volume = state.volume,
             track_id = state.current_track_id.as_deref(),
             "audio state request completed",
         ),

@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { SettingsIcon } from 'lucide-react'
 import {
   Dialog,
@@ -23,16 +24,25 @@ export function SettingsDialog({
   onTemporaryControlBarEnabledChange,
 }: SettingsDialogProps) {
   const settingsCopy = appCopy.settings
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [themeManagerOpen, setThemeManagerOpen] = useState(false)
 
   return (
-    <Dialog>
+    <Dialog open={settingsOpen} onOpenChange={(open) => {
+      setSettingsOpen(open)
+      if (!open) setThemeManagerOpen(false)
+    }}>
       <Tooltip>
         <TooltipTrigger render={<DialogTrigger render={<Button aria-label={appCopy.controls.settings} size="icon" type="button" variant="ghost" />} />}>
           <SettingsIcon />
         </TooltipTrigger>
         <TooltipContent>{appCopy.controls.settings}</TooltipContent>
       </Tooltip>
-      <DialogContent className="player-settings-dialog">
+      <DialogContent
+        className="player-settings-dialog"
+        data-theme-manager-open={themeManagerOpen}
+        overlayClassName={themeManagerOpen ? 'player-settings-overlay player-settings-overlay-hidden' : 'player-settings-overlay'}
+      >
         <DialogHeader>
           <DialogTitle>{settingsCopy.title}</DialogTitle>
           <DialogDescription>{settingsCopy.description}</DialogDescription>
@@ -60,7 +70,7 @@ export function SettingsDialog({
               <FieldLabel>{settingsCopy.theme.title}</FieldLabel>
               <FieldDescription>{settingsCopy.theme.description}</FieldDescription>
             </FieldContent>
-            <ThemeManager />
+            <ThemeManager onOpenChange={setThemeManagerOpen} />
           </Field>
         </FieldGroup>
       </DialogContent>

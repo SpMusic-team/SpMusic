@@ -25,14 +25,6 @@ function resolveAppearance(library: AppearanceStorageState, id: string) {
   return library.userThemes.find((theme) => theme.id === id) ?? findBuiltinAppearance(id) ?? defaultAppearance
 }
 
-function uniqueThemeId(baseId: string, themes: AppearancePreset[]) {
-  const normalized = `${baseId.replace(/-custom(?:-\d+)?$/, '')}-custom`
-  if (!themes.some((theme) => theme.id === normalized) && !builtinAppearanceIds.has(normalized)) return normalized
-  let suffix = 2
-  while (themes.some((theme) => theme.id === `${normalized}-${suffix}`) || builtinAppearanceIds.has(`${normalized}-${suffix}`)) suffix += 1
-  return `${normalized}-${suffix}`
-}
-
 export function AppearanceProvider({ children }: AppearanceProviderProps) {
   const [library, setLibrary] = useState(() => loadAppearanceStorage())
   const [appearance, setAppearance] = useState(() => cloneAppearance(resolveAppearance(library, library.currentThemeId)))
@@ -48,8 +40,15 @@ export function AppearanceProvider({ children }: AppearanceProviderProps) {
     [appearance.motion, systemReducedMotion],
   )
   const themes = useMemo(() => [
-    ...builtinAppearances.map((theme) => ({ appearance: theme, builtin: true })),
-    ...library.userThemes.map((theme) => ({ appearance: theme, builtin: false })),
+    ...builtinAppearances.map((theme) => {
+      const override = library.userThemes.find((candidate) => candidate.id === theme.id)
+      return override
+        ? { appearance: override, builtin: false }
+        : { appearance: theme, builtin: true }
+    }),
+    ...library.userThemes
+      .filter((theme) => !builtinAppearanceIds.has(theme.id))
+      .map((theme) => ({ appearance: theme, builtin: false })),
   ], [library.userThemes])
 
   useEffect(() => {
@@ -115,16 +114,7 @@ export function AppearanceProvider({ children }: AppearanceProviderProps) {
   }, [library])
 
   const saveAndApplyAppearance = useCallback((candidate: AppearancePreset) => {
-    let saved = cloneAppearance(candidate)
-    const existingUserThemes = library.userThemes
-    if (builtinAppearanceIds.has(saved.id)) {
-      saved = {
-        ...saved,
-        id: uniqueThemeId(saved.id, existingUserThemes),
-        name: `${saved.name} 自定义`,
-        metadata: { ...saved.metadata, author: saved.metadata.author || '用户' },
-      }
-    }
+    const saved = cloneAppearance(candidate)
     setLibrary((previous) => ({
       ...previous,
       currentThemeId: saved.id,
@@ -132,13 +122,15 @@ export function AppearanceProvider({ children }: AppearanceProviderProps) {
     }))
     setAppearance(cloneAppearance(saved))
     return saved
-  }, [library.userThemes])
+  }, [])
 
   const deleteAppearance = useCallback((id: string) => {
-    if (builtinAppearanceIds.has(id) || !library.userThemes.some((theme) => theme.id === id)) return false
+    if (!library.userThemes.some((theme) => theme.id === id)) return false
     const nextLibrary = {
       ...library,
-      currentThemeId: library.currentThemeId === id ? defaultAppearance.id : library.currentThemeId,
+      currentThemeId: library.currentThemeId === id
+        ? (builtinAppearanceIds.has(id) ? id : defaultAppearance.id)
+        : library.currentThemeId,
       userThemes: library.userThemes.filter((theme) => theme.id !== id),
     }
     setLibrary(nextLibrary)
@@ -147,7 +139,11 @@ export function AppearanceProvider({ children }: AppearanceProviderProps) {
   }, [library])
 
   const resetDefault = useCallback(() => {
-    setLibrary((previous) => ({ ...previous, currentThemeId: defaultAppearance.id }))
+    setLibrary((previous) => ({
+      ...previous,
+      currentThemeId: defaultAppearance.id,
+      userThemes: previous.userThemes.filter((theme) => theme.id !== defaultAppearance.id),
+    }))
     setAppearance(cloneAppearance(defaultAppearance))
   }, [])
 

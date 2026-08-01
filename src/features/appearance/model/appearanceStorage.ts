@@ -38,7 +38,7 @@ export function parseAppearanceStorage(source: string): AppearanceStorageLoadRes
 
   const userThemes = record.userThemes.flatMap((document) => {
     const result = deserializeAppearanceTheme(JSON.stringify(document))
-    return result.ok && !builtinAppearanceIds.has(result.appearance.id) ? [result.appearance] : []
+    return result.ok ? [result.appearance] : []
   })
   const requestedId = typeof record.currentThemeId === 'string' ? record.currentThemeId : defaultAppearance.id
   const currentThemeId = builtinAppearanceIds.has(requestedId) || userThemes.some((theme) => theme.id === requestedId)

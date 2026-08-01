@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   CopyIcon,
   DownloadIcon,
@@ -22,17 +22,17 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Dialog } from '@/components/ui/dialog'
 import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
-import { ScrollArea } from '@/components/ui/scroll-area'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
 import { Slider } from '@/components/ui/slider'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
+import { WorkspaceDialogContent } from '@/components/ui/workspace-dialog'
 import { useAppearance } from '../hooks/useAppearance'
-import { builtinAppearanceIds } from '../model/builtinAppearances'
+import { findBuiltinAppearance } from '../model/builtinAppearances'
 import {
   cloneAppearance,
   deserializeAppearanceTheme,
@@ -134,6 +134,69 @@ const hexColorPattern = /^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/i
 
 type Option = { label: string; value: string }
 
+function colorPickerValue(value: string) {
+  return /^#[0-9a-f]{6}/i.test(value) ? value.slice(0, 7) : '#000000'
+}
+
+function colorWithPreservedAlpha(previous: string, rgb: string) {
+  return hexColorPattern.test(previous) && previous.length === 9
+    ? `${rgb}${previous.slice(7)}`
+    : rgb
+}
+
+function ColorField({
+  id,
+  label,
+  description,
+  value,
+  onChange,
+  onPickerChange,
+}: {
+  id: string
+  label: string
+  description?: string
+  value: string
+  onChange: (value: string) => void
+  onPickerChange: (value: string) => void
+}) {
+  const [localValue, setLocalValue] = useState(value)
+  const [lastExternalValue, setLastExternalValue] = useState(value)
+  if (value !== lastExternalValue) {
+    setLastExternalValue(value)
+    setLocalValue(value)
+  }
+
+  const valid = hexColorPattern.test(localValue)
+  return (
+    <Field data-invalid={!valid}>
+      <FieldLabel htmlFor={id}>{label}</FieldLabel>
+      <div className="flex items-center gap-2">
+        <Input
+          id={id}
+          aria-invalid={!valid}
+          value={localValue}
+          onChange={(event) => {
+            setLocalValue(event.target.value)
+            onChange(event.target.value)
+          }}
+        />
+        <Input
+          className="size-8 shrink-0 cursor-pointer p-0.5"
+          type="color"
+          aria-label={`${label}取色器`}
+          value={colorPickerValue(localValue)}
+          onChange={(event) => {
+            const next = colorWithPreservedAlpha(localValue, event.target.value)
+            setLocalValue(next)
+            onPickerChange(next)
+          }}
+        />
+      </div>
+      {description ? <FieldDescription>{description}</FieldDescription> : null}
+    </Field>
+  )
+}
+
 function OptionField({ id, label, description, disabled = false, value, options, onChange }: { id: string; label: string; description?: string; disabled?: boolean; value: string; options: readonly Option[]; onChange: (value: string) => void }) {
   return (
     <Field data-disabled={disabled}>
@@ -230,6 +293,8 @@ type ThemeManagerProps = {
 export function ThemeManager({ onOpenChange }: ThemeManagerProps) {
   const appearanceContext = useAppearance()
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const colorFrameRef = useRef<number | null>(null)
+  const pendingColorDraftRef = useRef<AppearancePreset | null>(null)
   const [open, setOpen] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [draft, setDraft] = useState(() => cloneAppearance(appearanceContext.appearance))
@@ -244,14 +309,14 @@ export function ThemeManager({ onOpenChange }: ThemeManagerProps) {
     value: entry.appearance.id,
   }))
   if (!themeOptions.some((option) => option.value === selectedThemeId)) themeOptions.push({ label: `${draft.name}（草稿）`, value: selectedThemeId })
-  const selectedBuiltin = builtinAppearanceIds.has(selectedThemeId)
+  const selectedTheme = appearanceContext.themes.find((entry) => entry.appearance.id === selectedThemeId)
+  const selectedBuiltin = selectedTheme?.builtin ?? false
   const selectedPersistedUser = appearanceContext.themes.some((entry) => !entry.builtin && entry.appearance.id === selectedThemeId)
   const backgroundBlurDisabled = draft.player.backgroundEffect !== 'cover-ambient'
   const backgroundMaskDisabled = draft.player.backgroundEffect === 'off'
   const backgroundVisualDisabled = draft.player.backgroundEffect === 'off'
   const playerColorScheme = appearanceContext.resolvedColorScheme
   const playerOverlayColor = draft.colorSchemes[playerColorScheme].playerOverlay
-  const playerOverlayColorValid = hexColorPattern.test(playerOverlayColor)
 
   function safePreview(next: AppearancePreset, confirmed = riskConfirmed) {
     const result = deserializeAppearanceTheme(serializeAppearanceTheme(next))
@@ -264,9 +329,44 @@ export function ThemeManager({ onOpenChange }: ThemeManagerProps) {
     appearanceContext.previewAppearance(result.appearance)
   }
 
+  function cancelScheduledColorCommit() {
+    if (colorFrameRef.current !== null) cancelAnimationFrame(colorFrameRef.current)
+    colorFrameRef.current = null
+    pendingColorDraftRef.current = null
+  }
+
   function replaceDraft(next: AppearancePreset) {
+    cancelScheduledColorCommit()
     draftRef.current = next
     setDraft(next)
+  }
+
+  function commitPendingColorDraft() {
+    const next = pendingColorDraftRef.current
+    cancelScheduledColorCommit()
+    if (!next) return draftRef.current
+    draftRef.current = next
+    setDraft(next)
+    safePreview(next)
+    return next
+  }
+
+  function updateDraftColor(update: (next: AppearancePreset) => void) {
+    const next = cloneAppearance(draftRef.current)
+    update(next)
+    next.metadata.capabilities = inferCapabilities(next)
+    draftRef.current = next
+    pendingColorDraftRef.current = next
+    if (colorFrameRef.current !== null) return
+    colorFrameRef.current = requestAnimationFrame(() => {
+      colorFrameRef.current = null
+      const pending = pendingColorDraftRef.current
+      pendingColorDraftRef.current = null
+      if (!pending) return
+      draftRef.current = pending
+      setDraft(pending)
+      safePreview(pending)
+    })
   }
 
   function updateDraft(update: (next: AppearancePreset) => void) {
@@ -276,6 +376,8 @@ export function ThemeManager({ onOpenChange }: ThemeManagerProps) {
     replaceDraft(next)
     safePreview(next)
   }
+
+  useEffect(() => () => cancelScheduledColorCommit(), [])
 
   function openManager() {
     const active = appearanceContext.themes.find((entry) => entry.appearance.id === appearanceContext.activeThemeId)?.appearance ?? appearanceContext.appearance
@@ -324,13 +426,14 @@ export function ThemeManager({ onOpenChange }: ThemeManagerProps) {
   }
 
   function applyDraft() {
-    if (draft.metadata.tier !== 'standard' && !riskConfirmed) {
+    const currentDraft = commitPendingColorDraft()
+    if (currentDraft.metadata.tier !== 'standard' && !riskConfirmed) {
       setStatus('应用高级或实验主题前必须确认风险。')
       toast.error('请先确认主题风险')
       return
     }
     const invalidOverlaySchemes = (['light', 'dark'] as const)
-      .filter((scheme) => !hexColorPattern.test(draft.colorSchemes[scheme].playerOverlay))
+      .filter((scheme) => !hexColorPattern.test(currentDraft.colorSchemes[scheme].playerOverlay))
     if (invalidOverlaySchemes.length) {
       const schemeNames = invalidOverlaySchemes.map((scheme) => scheme === 'dark' ? '深色' : '浅色').join('、')
       const message = `${schemeNames}背景遮罩颜色无效，请使用 #RRGGBB 或 #RRGGBBAA。`
@@ -338,7 +441,7 @@ export function ThemeManager({ onOpenChange }: ThemeManagerProps) {
       toast.error('请修正背景遮罩颜色')
       return
     }
-    const candidate = cloneAppearance(draft)
+    const candidate = cloneAppearance(currentDraft)
     candidate.metadata.riskAcknowledged = candidate.metadata.tier === 'standard' ? false : riskConfirmed
     candidate.metadata.capabilities = inferCapabilities(candidate)
     const validated = deserializeAppearanceTheme(serializeAppearanceTheme(candidate))
@@ -363,6 +466,7 @@ export function ThemeManager({ onOpenChange }: ThemeManagerProps) {
   }
 
   function cancel() {
+    cancelScheduledColorCommit()
     appearanceContext.cancelPreview()
     setOpen(false)
     onOpenChange?.(false)
@@ -383,13 +487,15 @@ export function ThemeManager({ onOpenChange }: ThemeManagerProps) {
   }
 
   function remove() {
+    const restoredBuiltin = findBuiltinAppearance(selectedThemeId)
     if (!appearanceContext.deleteAppearance(selectedThemeId)) return
+    const next = restoredBuiltin ?? defaultAppearance
     setDeleteDialogOpen(false)
-    replaceDraft(cloneAppearance(defaultAppearance))
-    setSelectedThemeId(defaultAppearance.id)
-    setResourcesText('[]')
-    setRiskConfirmed(true)
-    setStatus('用户主题已删除。')
+    replaceDraft(cloneAppearance(next))
+    setSelectedThemeId(next.id)
+    setResourcesText(JSON.stringify(next.experimental.resources, null, 2))
+    setRiskConfirmed(next.metadata.tier === 'standard' || next.metadata.riskAcknowledged)
+    setStatus(restoredBuiltin ? '用户主题覆盖已删除，已恢复原内置主题。' : '用户主题已删除。')
     toast.success('已删除主题')
   }
 
@@ -445,11 +551,12 @@ export function ThemeManager({ onOpenChange }: ThemeManagerProps) {
   }
 
   function exportDraft() {
-    const blob = new Blob([serializeAppearanceTheme(draft)], { type: 'application/json' })
+    const currentDraft = commitPendingColorDraft()
+    const blob = new Blob([serializeAppearanceTheme(currentDraft)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = `${draft.id}.spmusic-theme.json`
+    link.download = `${currentDraft.id}.spmusic-theme.json`
     link.click()
     URL.revokeObjectURL(url)
     toast.success('主题已导出')
@@ -459,16 +566,38 @@ export function ThemeManager({ onOpenChange }: ThemeManagerProps) {
     <>
       <IconButton icon={PaletteIcon} label="主题管理" onClick={openManager} />
       <Dialog open={open} onOpenChange={(nextOpen) => nextOpen ? openManager() : cancel()}>
-        <DialogContent
-          className="theme-manager-dialog"
+        <WorkspaceDialogContent
+          open={open}
+          title="主题工作室"
+          description="管理内置与用户主题，实时预览 tokens、组件变体和受控 CSS。"
+          className="theme-manager-dialog h-[calc(100svh-2rem)] w-[min(580px,calc(100vw-2rem))] sm:max-w-[min(580px,calc(100vw-2rem))]"
+          bodyClassName="flex flex-col gap-4 p-4"
           overlayClassName="theme-manager-overlay"
-          showCloseButton={false}
+          initialPlacement="top-right"
+          draggable
+          closeLabel="关闭主题工作室"
+          footer={(
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant={draft.metadata.tier === 'standard' ? 'secondary' : 'destructive'}>{draft.metadata.tier}</Badge>
+                <span className="min-w-0 flex-1 text-sm text-muted-foreground" role="status">{status ?? '更改会实时预览；点击“取消”可完整恢复。'}</span>
+              </div>
+              <Separator />
+              <div className="flex flex-wrap justify-between gap-2">
+                <div className="flex flex-wrap gap-2">
+                  <input ref={fileInputRef} className="sr-only" type="file" accept="application/json,.json" onChange={(event) => { const file = event.target.files?.[0]; if (file) void importFile(file); event.currentTarget.value = '' }} />
+                  <Button variant="outline" onClick={() => fileInputRef.current?.click()}><UploadIcon data-icon="inline-start" />导入</Button>
+                  <Button variant="outline" onClick={exportDraft}><DownloadIcon data-icon="inline-start" />导出</Button>
+                  <Button variant="outline" onClick={reset}><RotateCcwIcon data-icon="inline-start" />恢复默认</Button>
+                </div>
+                <div className="flex gap-2">
+                  <Button variant="outline" onClick={cancel}>取消</Button>
+                  <Button onClick={applyDraft}><SaveIcon data-icon="inline-start" />应用</Button>
+                </div>
+              </div>
+            </div>
+          )}
         >
-          <DialogHeader>
-            <DialogTitle>主题工作室</DialogTitle>
-            <DialogDescription>管理内置与用户主题，实时预览 tokens、组件变体和受控 CSS。</DialogDescription>
-          </DialogHeader>
-
           <div className="grid min-h-0 grid-cols-[minmax(0,1fr)_auto] gap-2">
             <Select items={themeOptions} value={selectedThemeId} onValueChange={(value) => value && chooseTheme(value)}>
               <SelectTrigger className="w-full" aria-label="当前主题"><SelectValue /></SelectTrigger>
@@ -490,8 +619,7 @@ export function ThemeManager({ onOpenChange }: ThemeManagerProps) {
               <TabsTrigger value="advanced">高级</TabsTrigger>
               <TabsTrigger value="experimental">实验</TabsTrigger>
             </TabsList>
-            <ScrollArea className="min-h-0 flex-1 pr-3">
-              <TabsContent value="general">
+            <TabsContent value="general">
                 <div className="flex flex-col gap-4 py-2">
                   <Card>
                     <CardHeader><CardTitle>配色模式</CardTitle><CardDescription>可固定浅色或深色，也可实时跟随操作系统外观。</CardDescription></CardHeader>
@@ -540,9 +668,9 @@ export function ThemeManager({ onOpenChange }: ThemeManagerProps) {
                     </CardContent>
                   </Card>
                 </div>
-              </TabsContent>
+            </TabsContent>
 
-              <TabsContent value="player">
+            <TabsContent value="player">
                 <div className="flex flex-col gap-4 py-2">
                   <Card>
                     <CardHeader>
@@ -611,16 +739,14 @@ export function ThemeManager({ onOpenChange }: ThemeManagerProps) {
                           value={draft.player.backgroundVignette}
                           onChange={(value) => updateDraft((next) => { next.player.backgroundVignette = value })}
                         />
-                        <Field data-invalid={!playerOverlayColorValid}>
-                          <FieldLabel htmlFor="player-background-mask-color">背景遮罩颜色（当前{playerColorScheme === 'dark' ? '深色' : '浅色'}）</FieldLabel>
-                          <Input
-                            id="player-background-mask-color"
-                            aria-invalid={!playerOverlayColorValid}
-                            value={playerOverlayColor}
-                            onChange={(event) => updateDraft((next) => { next.colorSchemes[playerColorScheme].playerOverlay = event.target.value })}
-                          />
-                          <FieldDescription>与 Tokens 使用同一字段；接受 #RRGGBB 或 #RRGGBBAA。切换应用配色后可分别设置浅色和深色。</FieldDescription>
-                        </Field>
+                        <ColorField
+                          id="player-background-mask-color"
+                          label={`背景遮罩颜色（当前${playerColorScheme === 'dark' ? '深色' : '浅色'}）`}
+                          description="与 Tokens 使用同一字段；接受 #RRGGBB 或 #RRGGBBAA。切换应用配色后可分别设置浅色和深色。"
+                          value={playerOverlayColor}
+                          onChange={(value) => updateDraft((next) => { next.colorSchemes[playerColorScheme].playerOverlay = value })}
+                          onPickerChange={(value) => updateDraftColor((next) => { next.colorSchemes[playerColorScheme].playerOverlay = value })}
+                        />
                         <SliderField
                           id="player-cover-radius"
                           label="封面圆角"
@@ -678,14 +804,27 @@ export function ThemeManager({ onOpenChange }: ThemeManagerProps) {
                     </CardContent>
                   </Card>
                 </div>
-              </TabsContent>
+            </TabsContent>
 
-              <TabsContent value="tokens">
+            <TabsContent value="tokens">
                 <div className="flex flex-col gap-4 py-2">
                   {(['light', 'dark'] as const).map((scheme) => (
                     <Card key={scheme}>
                       <CardHeader><CardTitle>{scheme === 'light' ? '浅色' : '深色'}颜色</CardTitle><CardDescription>仅接受 #RRGGBB 或 #RRGGBBAA，非法值预览和应用时会回退。</CardDescription></CardHeader>
-                      <CardContent><FieldGroup>{(Object.keys(colorLabels) as Array<keyof AppearanceColors>).map((key) => <Field key={key}><FieldLabel htmlFor={`color-${scheme}-${key}`}>{colorLabels[key]}</FieldLabel><Input id={`color-${scheme}-${key}`} value={draft.colorSchemes[scheme][key]} onChange={(event) => updateDraft((next) => { next.colorSchemes[scheme][key] = event.target.value })} /></Field>)}</FieldGroup></CardContent>
+                      <CardContent>
+                        <FieldGroup>
+                          {(Object.keys(colorLabels) as Array<keyof AppearanceColors>).map((key) => (
+                            <ColorField
+                              key={key}
+                              id={`color-${scheme}-${key}`}
+                              label={colorLabels[key]}
+                              value={draft.colorSchemes[scheme][key]}
+                              onChange={(value) => updateDraft((next) => { next.colorSchemes[scheme][key] = value })}
+                              onPickerChange={(value) => updateDraftColor((next) => { next.colorSchemes[scheme][key] = value })}
+                            />
+                          ))}
+                        </FieldGroup>
+                      </CardContent>
                     </Card>
                   ))}
                   <Card>
@@ -693,9 +832,9 @@ export function ThemeManager({ onOpenChange }: ThemeManagerProps) {
                     <CardContent><FieldGroup>{(Object.keys(radiusLabels) as Array<keyof AppearancePreset['radii']>).map((key) => <Field key={key}><FieldLabel htmlFor={`radius-${key}`}>{radiusLabels[key]}</FieldLabel><Input id={`radius-${key}`} value={draft.radii[key]} onChange={(event) => updateDraft((next) => { next.radii[key] = event.target.value })} /></Field>)}</FieldGroup></CardContent>
                   </Card>
                 </div>
-              </TabsContent>
+            </TabsContent>
 
-              <TabsContent value="advanced">
+            <TabsContent value="advanced">
                 <div className="flex flex-col gap-4 py-2">
                   <Card>
                     <CardHeader><CardTitle>自定义 CSS</CardTitle><CardDescription>高级 CSS 使用 @scope 限制在应用 body 内，同时覆盖播放器和 Portal 弹窗；不执行 JavaScript。</CardDescription></CardHeader>
@@ -711,9 +850,9 @@ export function ThemeManager({ onOpenChange }: ThemeManagerProps) {
                     </CardContent>
                   </Card>
                 </div>
-              </TabsContent>
+            </TabsContent>
 
-              <TabsContent value="experimental">
+            <TabsContent value="experimental">
                 <div className="flex flex-col gap-4 py-2">
                   <Card>
                     <CardHeader><CardTitle>布局覆盖</CardTitle><CardDescription>实验 CSS 不加 @scope，可使用更强选择器覆盖整个 WebView；仍不执行脚本。</CardDescription></CardHeader>
@@ -734,28 +873,9 @@ export function ThemeManager({ onOpenChange }: ThemeManagerProps) {
                     </CardContent>
                   </Card>
                 </div>
-              </TabsContent>
-            </ScrollArea>
+            </TabsContent>
           </Tabs>
-
-          <Separator />
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant={draft.metadata.tier === 'standard' ? 'secondary' : 'destructive'}>{draft.metadata.tier}</Badge>
-            <span className="min-w-0 flex-1 text-sm text-muted-foreground" role="status">{status ?? '更改会实时预览；点击“取消”可完整恢复。'}</span>
-          </div>
-          <DialogFooter className="flex-wrap sm:justify-between">
-            <div className="flex flex-wrap gap-2">
-              <input ref={fileInputRef} className="sr-only" type="file" accept="application/json,.json" onChange={(event) => { const file = event.target.files?.[0]; if (file) void importFile(file); event.currentTarget.value = '' }} />
-              <Button variant="outline" onClick={() => fileInputRef.current?.click()}><UploadIcon data-icon="inline-start" />导入</Button>
-              <Button variant="outline" onClick={exportDraft}><DownloadIcon data-icon="inline-start" />导出</Button>
-              <Button variant="outline" onClick={reset}><RotateCcwIcon data-icon="inline-start" />恢复默认</Button>
-            </div>
-            <div className="flex gap-2">
-              <Button variant="outline" onClick={cancel}>取消</Button>
-              <Button onClick={applyDraft}><SaveIcon data-icon="inline-start" />应用</Button>
-            </div>
-          </DialogFooter>
-        </DialogContent>
+        </WorkspaceDialogContent>
       </Dialog>
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <AlertDialogContent>

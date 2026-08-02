@@ -59,6 +59,14 @@ export type AppearanceComponents = {
   windowControls: WindowControlVariant
 }
 
+export type AppearancePlayerTrackMetadata = {
+  titleMaxWidth: number
+  detailsMaxWidth: number
+  scrollPixelsPerSecond: number
+  scrollStartDelayMs: number
+  scrollEdgePauseMs: number
+}
+
 export type AppearancePlayer = {
   backgroundEffect: PlayerBackgroundEffect
   backgroundBlur: number
@@ -71,6 +79,7 @@ export type AppearancePlayer = {
   lyricsFontScale: number
   activeLyricEmphasis: PlayerActiveLyricEmphasis
   showVolumePercent: boolean
+  trackMetadata: AppearancePlayerTrackMetadata
 }
 
 export type AppearanceResource = {
@@ -159,6 +168,8 @@ export type AppearanceCssVars = CSSProperties & {
   '--player-active-lyric-color': string
   '--player-active-lyric-font-weight': number
   '--player-active-lyric-scale': number
+  '--player-track-title-max-width': string
+  '--player-track-details-max-width': string
   '--player-theme-gradient': string
   '--background': string
   '--foreground': string

@@ -36,12 +36,6 @@
 .more-track-title, .more-track-byline { width: 100%; min-width: 0; overflow: hidden; color: var(--player-blue-ink); font-weight: 500; white-space: nowrap; }
 .more-track-title { font-size: calc(28 * var(--more-unit)); line-height: calc(36 * var(--more-unit)); }
 .more-track-byline { font-size: calc(24 * var(--more-unit)); line-height: calc(32 * var(--more-unit)); }
-.more-marquee-viewport { display: block; width: 100%; min-width: 0; overflow: hidden; }
-.more-marquee-track { display: inline-flex; min-width: 100%; white-space: nowrap; transform: translateX(0); }
-.more-marquee-item { flex: 0 0 auto; padding-right: calc(36 * var(--more-unit)); }
-.more-track-title[data-overflow="true"] .more-marquee-viewport, .more-track-byline[data-overflow="true"] .more-marquee-viewport { -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 calc(10 * var(--more-unit)), #000 calc(100% - 10 * var(--more-unit)), transparent 100%); mask-image: linear-gradient(90deg, transparent 0, #000 calc(10 * var(--more-unit)), #000 calc(100% - 10 * var(--more-unit)), transparent 100%); }
-.more-track-title[data-overflow="true"] .more-marquee-track, .more-track-byline[data-overflow="true"] .more-marquee-track { animation: more-marquee var(--more-marquee-duration, 10s) linear infinite; }
-.more-track-title[data-overflow="true"]:hover .more-marquee-track, .more-track-title[data-overflow="true"]:focus-within .more-marquee-track, .more-track-byline[data-overflow="true"]:hover .more-marquee-track, .more-track-byline[data-overflow="true"]:focus-within .more-marquee-track { animation-play-state: paused; }
 .more-track-meta { width: 100%; display: flex; align-items: center; gap: calc(12 * var(--more-unit)); color: var(--player-blue); font-size: calc(22 * var(--more-unit)); font-variant-numeric: tabular-nums; }
 .more-track-meta > span { min-width: 0; display: flex; align-items: center; gap: calc(4 * var(--more-unit)); white-space: nowrap; }
 .more-track-meta > span svg { width: calc(24 * var(--more-unit)); height: calc(24 * var(--more-unit)); }
@@ -60,8 +54,3 @@
 .more-action-copy strong { max-width: 100%; overflow: hidden; font-size: calc(22 * var(--more-unit)); font-weight: 500; line-height: calc(28 * var(--more-unit)); text-overflow: ellipsis; white-space: nowrap; }
 .more-action-copy small { display: none; }
 .more-action-grid-secondary { padding-top: calc(42 * var(--more-unit)); padding-bottom: 0; }
-
-@keyframes more-marquee {
-  from { transform: translateX(0); }
-  to { transform: translateX(-50%); }
-}

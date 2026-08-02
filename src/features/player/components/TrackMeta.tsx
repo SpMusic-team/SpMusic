@@ -1,4 +1,5 @@
 import { motion } from 'motion/react'
+import { PingPongText } from '@/components/PingPongText'
 import { useAppearanceMotion } from '@/features/appearance/hooks/useAppearance'
 import type { Track } from '@/features/player/model/playerTypes'
 
@@ -19,8 +20,8 @@ export function TrackMeta({ track }: TrackMetaProps) {
       exit="exit"
       aria-live="polite"
     >
-      <span className="title-pill">{track.title}</span>
-      <span className="artist-pill">{track.artist} - {track.album}</span>
+      <PingPongText className="track-pill title-pill" text={track.title} />
+      <PingPongText className="track-pill artist-pill" text={`${track.artist} - ${track.album}`} />
     </motion.div>
   )
 }

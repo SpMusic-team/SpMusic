@@ -90,6 +90,8 @@ export function createAppearanceCssVars(appearance: AppearancePreset, resolvedCo
     '--player-active-lyric-color': lyricEmphasis === 'accent' ? colors.playerBlue : colors.playerInk,
     '--player-active-lyric-font-weight': lyricEmphasis === 'bold' || lyricEmphasis === 'combined' ? 500 : 400,
     '--player-active-lyric-scale': lyricEmphasis === 'scale' || lyricEmphasis === 'combined' ? 1.08 : 1,
+    '--player-track-title-max-width': prototypeLength(appearance.player.trackMetadata.titleMaxWidth),
+    '--player-track-details-max-width': prototypeLength(appearance.player.trackMetadata.detailsMaxWidth),
     '--player-theme-gradient': `linear-gradient(145deg, ${colors.accent}, ${colors.accentSoft} 48%, ${colors.surfaceMuted})`,
     '--background': colors.background,
     '--foreground': colors.textStrong,

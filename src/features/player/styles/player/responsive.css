@@ -100,8 +100,7 @@
   gap: calc(29 * var(--player-layout-unit));
 }
 
-.responsive-player-layout .track-pills span {
-  max-width: 100%;
+.responsive-player-layout .track-pills .track-pill {
   height: auto;
   padding:
     calc(10 * var(--player-layout-unit))
@@ -490,8 +489,7 @@
   justify-self: center;
 }
 
-.responsive-player-layout[data-player-layout="quarter"][data-player-short="true"] .track-pills span {
-  max-width: 100%;
+.responsive-player-layout[data-player-layout="quarter"][data-player-short="true"] .track-pills .track-pill {
   padding: 6px 14px;
   font-size: 15px;
   line-height: 22px;

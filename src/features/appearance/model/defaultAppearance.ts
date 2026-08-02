@@ -75,6 +75,13 @@ export const defaultAppearance: AppearancePreset = {
     lyricsFontScale: 1.2,
     activeLyricEmphasis: 'combined',
     showVolumePercent: true,
+    trackMetadata: {
+      titleMaxWidth: 420,
+      detailsMaxWidth: 680,
+      scrollPixelsPerSecond: 32,
+      scrollStartDelayMs: 1000,
+      scrollEdgePauseMs: 800,
+    },
   },
   icons: {
     provider: 'default',

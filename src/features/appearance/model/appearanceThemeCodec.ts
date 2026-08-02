@@ -95,7 +95,10 @@ export function cloneAppearance(appearance: AppearancePreset): AppearancePreset 
     motion: { ...appearance.motion },
     typography: { ...appearance.typography },
     components: { ...appearance.components },
-    player: { ...appearance.player },
+    player: {
+      ...appearance.player,
+      trackMetadata: { ...appearance.player.trackMetadata },
+    },
     icons: { ...appearance.icons },
     advanced: { ...appearance.advanced },
     experimental: {
@@ -263,7 +266,16 @@ function parsePlayer(input: JsonObject, fallback: AppearancePlayer, warnings: st
     'lyricsFontScale',
     'activeLyricEmphasis',
     'showVolumePercent',
+    'trackMetadata',
   ], 'theme.player', warnings)
+  const trackMetadataInput = optionalObject(input, 'trackMetadata', 'theme.player.trackMetadata', warnings) ?? {}
+  reportUnknownKeys(trackMetadataInput, [
+    'titleMaxWidth',
+    'detailsMaxWidth',
+    'scrollPixelsPerSecond',
+    'scrollStartDelayMs',
+    'scrollEdgePauseMs',
+  ], 'theme.player.trackMetadata', warnings)
   return {
     backgroundEffect: enumValue(input.backgroundEffect, playerBackgroundEffects, fallback.backgroundEffect, 'theme.player.backgroundEffect', warnings),
     backgroundBlur: boundedPlayerNumber(input.backgroundBlur, legacyPlayerBackgroundBlurs, fallback.backgroundBlur, 'theme.player.backgroundBlur', warnings),
@@ -276,6 +288,13 @@ function parsePlayer(input: JsonObject, fallback: AppearancePlayer, warnings: st
     lyricsFontScale: boundedNumber(input.lyricsFontScale, fallback.lyricsFontScale, 0.75, 1.5, 'theme.player.lyricsFontScale', warnings),
     activeLyricEmphasis: enumValue(input.activeLyricEmphasis, playerActiveLyricEmphases, fallback.activeLyricEmphasis, 'theme.player.activeLyricEmphasis', warnings),
     showVolumePercent: booleanValue(input.showVolumePercent, fallback.showVolumePercent, 'theme.player.showVolumePercent', warnings),
+    trackMetadata: {
+      titleMaxWidth: boundedNumber(trackMetadataInput.titleMaxWidth, fallback.trackMetadata.titleMaxWidth, 120, 1200, 'theme.player.trackMetadata.titleMaxWidth', warnings),
+      detailsMaxWidth: boundedNumber(trackMetadataInput.detailsMaxWidth, fallback.trackMetadata.detailsMaxWidth, 120, 1600, 'theme.player.trackMetadata.detailsMaxWidth', warnings),
+      scrollPixelsPerSecond: boundedNumber(trackMetadataInput.scrollPixelsPerSecond, fallback.trackMetadata.scrollPixelsPerSecond, 8, 160, 'theme.player.trackMetadata.scrollPixelsPerSecond', warnings),
+      scrollStartDelayMs: boundedNumber(trackMetadataInput.scrollStartDelayMs, fallback.trackMetadata.scrollStartDelayMs, 0, 10000, 'theme.player.trackMetadata.scrollStartDelayMs', warnings),
+      scrollEdgePauseMs: boundedNumber(trackMetadataInput.scrollEdgePauseMs, fallback.trackMetadata.scrollEdgePauseMs, 0, 10000, 'theme.player.trackMetadata.scrollEdgePauseMs', warnings),
+    },
   }
 }
 

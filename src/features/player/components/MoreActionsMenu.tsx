@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react'
+import type { CSSProperties } from 'react'
 import type { LucideIcon } from 'lucide-react'
 import {
   AlbumIcon,
@@ -15,6 +15,7 @@ import {
   Trash2Icon,
 } from 'lucide-react'
 import { toast } from 'sonner'
+import { PingPongText } from '@/components/PingPongText'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -43,64 +44,6 @@ type MoreActionsMenuProps = {
   disliked: boolean
   onLike: () => void
   onDislike: () => void
-}
-
-type ScrollingTextProps = {
-  as?: 'strong' | 'span'
-  className: string
-  children: string
-}
-
-function ScrollingText({ as: Component = 'span', className, children }: ScrollingTextProps) {
-  const viewportRef = useRef<HTMLSpanElement>(null)
-  const textRef = useRef<HTMLSpanElement>(null)
-  const [marquee, setMarquee] = useState({ duration: 8, overflow: false })
-
-  useEffect(() => {
-    const viewportElement = viewportRef.current
-    const textElement = textRef.current
-
-    if (!viewportElement || !textElement) {
-      return undefined
-    }
-
-    function updateMarqueeState() {
-      if (!viewportElement || !textElement) {
-        return
-      }
-
-      const overflowAmount = textElement.scrollWidth - viewportElement.clientWidth
-
-      setMarquee({
-        duration: Math.min(18, Math.max(8, textElement.scrollWidth / 28)),
-        overflow: overflowAmount > 1,
-      })
-    }
-
-    updateMarqueeState()
-
-    const observer = new ResizeObserver(updateMarqueeState)
-    observer.observe(viewportElement)
-    observer.observe(textElement)
-
-    return () => observer.disconnect()
-  }, [children])
-
-  return (
-    <Component
-      className={className}
-      data-overflow={marquee.overflow}
-      style={marquee.overflow ? ({ '--more-marquee-duration': `${marquee.duration}s` } as CSSProperties) : undefined}
-      title={children}
-    >
-      <span className="more-marquee-viewport" ref={viewportRef}>
-        <span className="more-marquee-track">
-          <span className="more-marquee-item" ref={textRef}>{children}</span>
-          {marquee.overflow ? <span className="more-marquee-item" aria-hidden="true">{children}</span> : null}
-        </span>
-      </span>
-    </Component>
-  )
 }
 
 type UnavailableActionProps = {
@@ -173,8 +116,8 @@ export function MoreActionsMenu({
                 : <systemIcons.music aria-hidden="true" />}
             </div>
             <div className="more-track-details">
-              <ScrollingText as="strong" className="more-track-title">{track.title}</ScrollingText>
-              <ScrollingText className="more-track-byline">{`${track.artist} - ${track.album}`}</ScrollingText>
+              <PingPongText as="strong" className="more-track-title" text={track.title} />
+              <PingPongText className="more-track-byline" text={`${track.artist} - ${track.album}`} />
               <div className="more-track-meta">
                 <span><Music2Icon />{formatDuration(track.durationSeconds)}</span>
                 <button type="button" className="more-copy-action" aria-label={appCopy.moreMenu.copyTitle} onClick={() => void copyTrackTitle()}>

@@ -14,6 +14,7 @@ export type AppearanceMotionRuntime = {
   disabled: boolean
   reducedMotion: 'always' | 'never'
   transition: Transition
+  layoutTransition: Transition
   variants: {
     backdrop: Variants
     track: Variants
@@ -33,6 +34,7 @@ export function createAppearanceMotionRuntime(
       disabled: true,
       reducedMotion: 'always',
       transition: { duration: 0 },
+      layoutTransition: { duration: 0 },
       variants: {
         backdrop: { initial: { opacity: 1 }, animate: { opacity: 1 }, exit: { opacity: 1 } },
         track: { initial: { opacity: 1 }, animate: { opacity: 1 }, exit: { opacity: 1 } },
@@ -48,10 +50,16 @@ export function createAppearanceMotionRuntime(
   const panelDistance = expressive ? 22 : 14
   const trackScale = expressive ? 0.975 : 0.988
   const glyphScale = expressive ? 0.78 : 0.88
+  const prototypeSmartTransition: Transition = {
+    type: 'tween',
+    duration: 0.3 * durationScale,
+    ease: easingMap['ease-out'],
+  }
 
   return {
     disabled: false,
     reducedMotion: 'never',
+    layoutTransition: prototypeSmartTransition,
     transition: {
       default: {
         type: 'spring',
@@ -82,8 +90,8 @@ export function createAppearanceMotionRuntime(
       },
       glyph: {
         initial: { opacity: 0, scale: glyphScale },
-        animate: { opacity: 1, scale: 1 },
-        exit: { opacity: 0, scale: glyphScale },
+        animate: { opacity: 1, scale: 1, transition: prototypeSmartTransition },
+        exit: { opacity: 0, scale: glyphScale, transition: prototypeSmartTransition },
       },
     },
   }

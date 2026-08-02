@@ -1,6 +1,8 @@
 .more-actions-overlay[data-slot="dialog-overlay"] {
   background: color-mix(in srgb, var(--player-ink) 36%, transparent);
   backdrop-filter: blur(calc(6 * var(--prototype-unit, 1px))) saturate(.75);
+  animation-duration: var(--app-motion-prototype-smart);
+  animation-timing-function: ease-out;
 }
 
 .more-actions-menu[data-slot="dialog-content"] {
@@ -20,6 +22,10 @@
   color: var(--player-blue-ink);
   outline: 0;
   box-shadow: 0 calc(4 * var(--more-unit)) calc(4 * var(--more-unit)) rgba(0,0,0,.25);
+  --tw-enter-scale: 1;
+  --tw-exit-scale: 1;
+  animation-duration: var(--app-motion-prototype-smart);
+  animation-timing-function: ease-out;
 }
 
 .more-track-summary { display: grid; grid-template-columns: calc(240 * var(--more-unit)) minmax(0, calc(258 * var(--more-unit))); gap: calc(16 * var(--more-unit)); align-items: center; padding: calc(20 * var(--more-unit)) 0; }

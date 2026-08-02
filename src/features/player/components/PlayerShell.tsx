@@ -8,8 +8,9 @@ import { CoverPanel } from '@/features/player/components/CoverPanel'
 import { EmptyPlayerState } from '@/features/player/components/EmptyPlayerState'
 import { LyricsPanel } from '@/features/player/components/LyricsPanel'
 import { QueuePanel } from '@/features/player/components/QueuePanel'
-import { TemporaryAudioControlBar } from '@/features/player/components/TemporaryAudioControlBar'
-import { WindowBar } from '@/features/player/components/WindowBar'
+import { ResponsivePlayerLayout } from '@/features/player/components/ResponsivePlayerLayout'
+import { TrackMeta } from '@/features/player/components/TrackMeta'
+import { WindowBar, type WindowLayoutState as NativeWindowState } from '@/features/player/components/WindowBar'
 import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { useActiveLyricScroll } from '@/features/player/hooks/useActiveLyricScroll'
 import { nextRepeatMode, nextShuffleMode, resolveNextTrackIndex, type Direction, type RepeatMode, type ShuffleMode } from '@/features/player/model/playbackModes'
@@ -270,7 +271,7 @@ export function PlayerShell() {
   const [shuffleMode, setShuffleMode] = useState<ShuffleMode>('none')
   const [repeatMode, setRepeatMode] = useState<RepeatMode>('list-loop')
   const [desktopCaptionsEnabled, setDesktopCaptionsEnabled] = useState(false)
-  const [temporaryControlBarEnabled, setTemporaryControlBarEnabled] = useState(true)
+  const [nativeWindowState, setNativeWindowState] = useState<NativeWindowState>({ maximized: false, fullscreen: false })
   const [volume, setVolume] = useState(72)
   const [queueOpen, setQueueOpen] = useState(false)
   const [audioState, setAudioState] = useState<AudioPlaybackState | null>(null)
@@ -308,8 +309,6 @@ export function PlayerShell() {
   // Reserved for a future Tauri-backed desktop captions capability.
   const desktopCaptionsAvailable = false
   const currentAudioTrack = audioTrack?.id === realAudioTrackId ? audioTrack : null
-  const hasRealAudioTrack = Boolean(currentAudioTrack)
-  const realAudioPlaying = audioState?.phase === 'playing'
   const usingRealAudio = Boolean(track && realAudioTrackId && track.id === realAudioTrackId)
   const playing = usingRealAudio ? audioState?.phase === 'playing' : state.playbackStatus === 'playing'
   const realAudioDuration = audioState?.durationMs != null ? audioState.durationMs / 1000 : track?.durationSeconds ?? 0
@@ -321,16 +320,6 @@ export function PlayerShell() {
   const activeLyricIndex = track?.lyrics.findIndex((line) => line.id === activeLyricId) ?? -1
   const progressStyle: ProgressStyle = { '--progress-percent': `${duration ? progress / duration * 100 : 0}%` }
   const realAudioStatusText = audioStatusText(audioState, audioError, currentAudioTrack)
-  const temporaryAudioFileName = currentAudioTrack?.fileName ?? null
-  const temporaryAudioTitle = currentAudioTrack
-    ? nonEmptyText(currentAudioTrack.metadata.title) ?? fileNameTitle(currentAudioTrack.fileName)
-    : null
-  const temporaryAudioDuration = audioState?.durationMs != null ? audioState.durationMs / 1000 : 0
-  const temporaryAudioBackendProgress = (audioState?.positionMs ?? 0) / 1000
-  const temporaryAudioProgress = Math.min(
-    Math.max(seekPreviewSeconds ?? temporaryAudioBackendProgress, 0),
-    temporaryAudioDuration,
-  )
   const albumArt = track?.coverImage ? `url("${track.coverImage}") center / cover no-repeat` : undefined
   const playerBackgroundStyle: PlayerBackgroundStyle | undefined = albumArt ? { '--player-background-art': albumArt } : undefined
   const coverStyle: CoverStyle | undefined = albumArt ? { '--cover-art': albumArt } : undefined
@@ -356,6 +345,10 @@ export function PlayerShell() {
   }, [folderPlaylist, state.tracks])
 
   useActiveLyricScroll(activeLyricId, lyricListRef, lyricRefs)
+
+  const handleNativeWindowStateChange = useCallback((nextWindowState: NativeWindowState) => {
+    setNativeWindowState(nextWindowState)
+  }, [])
 
   const requestHydratedAudioTrack = useCallback((sourcePath: string) => {
     const cached = hydratedAudioTrackCacheRef.current.get(sourcePath)
@@ -925,20 +918,6 @@ export function PlayerShell() {
     setState((previous) => ({ ...previous, progressSeconds: nextProgress }))
   }
 
-  function setTemporaryAudioProgress(nextProgress: number) {
-    if (!hasRealAudioTrack) return
-
-    endingTrackRef.current = null
-    setSeekPreviewSeconds(nextProgress)
-  }
-
-  function commitTemporaryAudioProgress(nextProgress: number) {
-    if (!hasRealAudioTrack) return
-
-    endingTrackRef.current = null
-    requestRealAudioSeek(nextProgress, temporaryAudioDuration, temporaryAudioBackendProgress)
-  }
-
   function togglePlayback() {
     if (audioBusy) return
 
@@ -952,59 +931,6 @@ export function PlayerShell() {
       phase: targetPhase,
       restart: targetPhase === 'playing' && duration > 0 && progress >= duration,
     })
-  }
-
-  function toggleRealAudioPlayback() {
-    if (audioBusy) return
-
-    if (!hasRealAudioTrack) {
-      void openAndMaybePlay(true)
-      return
-    }
-
-    const targetPhase: TransportIntentPhase = realAudioPlaying ? 'paused' : 'playing'
-    queueTransportRequest({
-      phase: targetPhase,
-      restart: targetPhase === 'playing' && audioState?.phase === 'ended',
-    })
-  }
-
-  async function stopRealAudioPlayback() {
-    if (audioBusy || !hasRealAudioTrack) return
-
-    setAudioBusy(true)
-    setAudioError(null)
-
-    try {
-      applyAudioState(await stopAudio())
-    } catch (error) {
-      setAudioError(isAudioCommandError(error) ? error : {
-        code: 'INTERNAL_ERROR',
-        message: appCopy.audio.unavailable,
-        recoverable: true,
-      })
-    } finally {
-      setAudioBusy(false)
-    }
-  }
-
-  async function refreshRealAudioState() {
-    if (audioBusy) return
-
-    setAudioBusy(true)
-    setAudioError(null)
-
-    try {
-      applyAudioState(await getAudioState())
-    } catch (error) {
-      setAudioError(isAudioCommandError(error) ? error : {
-        code: 'INTERNAL_ERROR',
-        message: appCopy.audio.unavailable,
-        recoverable: true,
-      })
-    } finally {
-      setAudioBusy(false)
-    }
   }
 
   function stopRealAudioBeforeDemoNavigation() {
@@ -1095,7 +1021,12 @@ export function PlayerShell() {
 
   return (
     <TooltipProvider>
-      <main className="player-shell" data-cover={track?.coverTone ?? 'empty'} aria-labelledby="app-title">
+      <main
+        className="player-shell"
+        data-cover={track?.coverTone ?? 'empty'}
+        data-window-fullscreen={nativeWindowState.fullscreen}
+        aria-labelledby="app-title"
+      >
         <AnimatePresence initial={false}>
           {track ? (
             <motion.div
@@ -1111,34 +1042,17 @@ export function PlayerShell() {
             />
           ) : null}
         </AnimatePresence>
-        <WindowBar
-          temporaryControlBarEnabled={temporaryControlBarEnabled}
-          onTemporaryControlBarEnabledChange={setTemporaryControlBarEnabled}
-        />
-        {temporaryControlBarEnabled ? (
-          <TemporaryAudioControlBar
-            busy={audioBusy}
-            duration={temporaryAudioDuration}
-            fileName={temporaryAudioFileName}
-            hasTrack={hasRealAudioTrack}
-            phase={audioState?.phase ?? 'idle'}
-            playing={realAudioPlaying}
-            progress={temporaryAudioProgress}
-            statusText={realAudioStatusText}
-            title={temporaryAudioTitle}
-            transportBusy={transportBusy}
-            onOpen={() => void openAndMaybePlay(false)}
-            onOpenAndPlay={() => void openAndMaybePlay(true)}
-            onPlayToggle={() => void toggleRealAudioPlayback()}
-            onProgressChange={setTemporaryAudioProgress}
-            onProgressCommit={commitTemporaryAudioProgress}
-            onRefresh={() => void refreshRealAudioState()}
-            onStop={() => void stopRealAudioPlayback()}
-          />
-        ) : null}
-
-        {track ? (
+        <ResponsivePlayerLayout
+          nativeWindowState={nativeWindowState}
+          windowBar={(
+            <WindowBar
+              onWindowStateChange={handleNativeWindowStateChange}
+            />
+          )}
+        >
           <section className="player-stage" aria-label={appCopy.shellLabel}>
+            {track ? (
+              <>
             <AnimatePresence initial={false}>
               <CoverPanel
                 key={`${track.id}:${track.coverImage ?? ''}`}
@@ -1151,6 +1065,10 @@ export function PlayerShell() {
                 onLike={() => toggleTrackFeedback(track.id, 'liked')}
                 onDislike={() => toggleTrackFeedback(track.id, 'disliked')}
               />
+            </AnimatePresence>
+
+            <AnimatePresence initial={false}>
+              <TrackMeta key={`meta:${track.id}`} track={track} />
             </AnimatePresence>
 
             <LyricsPanel
@@ -1176,8 +1094,8 @@ export function PlayerShell() {
                 />
               ) : null}
             </AnimatePresence>
-          </section>
-        ) : <EmptyPlayerState />}
+              </>
+            ) : <EmptyPlayerState />}
 
         <ControlDock
           progress={progress}
@@ -1196,7 +1114,7 @@ export function PlayerShell() {
           desktopCaptionsEnabled={desktopCaptionsAvailable && desktopCaptionsEnabled}
           volume={volume}
           volumeBusy={volumeBusy}
-          volumeDisabled={audioBusy || !hasRealAudioTrack}
+          volumeDisabled={audioBusy}
           queueOpen={queueOpen}
           audioBusy={audioBusy}
           audioStatusText={realAudioStatusText}
@@ -1229,6 +1147,8 @@ export function PlayerShell() {
           onVolumeChange={changeVolume}
           onQueueToggle={() => setQueueOpen((value) => !value)}
         />
+          </section>
+        </ResponsivePlayerLayout>
       </main>
     </TooltipProvider>
   )

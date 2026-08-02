@@ -7,9 +7,13 @@ import { SettingsDialog } from './SettingsDialog'
 
 type TauriWindow = ReturnType<typeof getCurrentWindow>
 
+export type WindowLayoutState = {
+  maximized: boolean
+  fullscreen: boolean
+}
+
 type WindowBarProps = {
-  temporaryControlBarEnabled: boolean
-  onTemporaryControlBarEnabledChange: (enabled: boolean) => void
+  onWindowStateChange: (state: WindowLayoutState) => void
 }
 
 function getTauriWindow(): TauriWindow | null {
@@ -18,11 +22,11 @@ function getTauriWindow(): TauriWindow | null {
 }
 
 export function WindowBar({
-  temporaryControlBarEnabled,
-  onTemporaryControlBarEnabledChange,
+  onWindowStateChange,
 }: WindowBarProps) {
   const systemIcons = useSystemIcons()
   const [maximized, setMaximized] = useState(false)
+  const [fullscreen, setFullscreen] = useState(false)
 
   useEffect(() => {
     const appWindow = getTauriWindow()
@@ -34,25 +38,32 @@ export function WindowBar({
 
     const windowRef = appWindow
 
-    async function syncMaximizedState() {
+    async function syncWindowState() {
       try {
-        const isMaximized = await windowRef.isMaximized()
-        if (active) setMaximized(isMaximized)
+        const [isMaximized, isFullscreen] = await Promise.all([
+          windowRef.isMaximized(),
+          windowRef.isFullscreen(),
+        ])
+
+        if (!active) return
+        setMaximized(isMaximized)
+        setFullscreen(isFullscreen)
+        onWindowStateChange({ maximized: isMaximized, fullscreen: isFullscreen })
       } catch (error: unknown) {
         console.error('Window state sync failed', error)
       }
     }
 
-    void syncMaximizedState()
+    void syncWindowState()
     void windowRef.onResized(() => {
-      void syncMaximizedState()
+      void syncWindowState()
     }).then((unlisten) => {
       unlistenResize = unlisten
     }).catch((error: unknown) => {
       console.error('Window resize listener failed', error)
     })
     void windowRef.onFocusChanged(() => {
-      void syncMaximizedState()
+      void syncWindowState()
     }).then((unlisten) => {
       unlistenFocus = unlisten
     }).catch((error: unknown) => {
@@ -64,7 +75,7 @@ export function WindowBar({
       unlistenResize?.()
       unlistenFocus?.()
     }
-  }, [])
+  }, [onWindowStateChange])
 
   function runWindowAction(action: (appWindow: TauriWindow) => Promise<void>) {
     const appWindow = getTauriWindow()
@@ -77,6 +88,7 @@ export function WindowBar({
   }
 
   function startWindowDrag(event: PointerEvent<HTMLElement>) {
+    if (fullscreen) return
     if (event.button !== 0 || event.isPrimary === false) return
     if ((event.target as HTMLElement).closest('button, a, input, select, textarea, [role="button"]')) return
 
@@ -92,26 +104,34 @@ export function WindowBar({
   function toggleMaximize() {
     runWindowAction(async (windowRef) => {
       await windowRef.toggleMaximize()
-      setMaximized(await windowRef.isMaximized())
+      const [isMaximized, isFullscreen] = await Promise.all([
+        windowRef.isMaximized(),
+        windowRef.isFullscreen(),
+      ])
+      setMaximized(isMaximized)
+      setFullscreen(isFullscreen)
+      onWindowStateChange({ maximized: isMaximized, fullscreen: isFullscreen })
     })
   }
 
   return (
-    <header className="window-bar" data-tauri-drag-region onDoubleClick={toggleMaximize} onPointerDown={startWindowDrag}>
+    <header className="window-bar" data-fullscreen={fullscreen} data-tauri-drag-region={!fullscreen || undefined} onDoubleClick={fullscreen ? undefined : toggleMaximize} onPointerDown={startWindowDrag}>
       <div className="window-leading" onDoubleClick={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
         <IconButton icon={systemIcons.collapse} label={appCopy.controls.collapse} />
       </div>
       <h1 id="app-title" className="sr-only">{appCopy.appTitle}</h1>
       <div className="window-actions" onDoubleClick={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
-        <SettingsDialog
-          temporaryControlBarEnabled={temporaryControlBarEnabled}
-          onTemporaryControlBarEnabledChange={onTemporaryControlBarEnabledChange}
-        />
+        <SettingsDialog />
         <IconButton
           icon={systemIcons.fullscreen}
           label={appCopy.controls.fullscreen}
           onClick={() => runWindowAction(async (windowRef) => {
-            await windowRef.setFullscreen(!(await windowRef.isFullscreen()))
+            const nextFullscreen = !(await windowRef.isFullscreen())
+            await windowRef.setFullscreen(nextFullscreen)
+            const isMaximized = await windowRef.isMaximized()
+            setFullscreen(nextFullscreen)
+            setMaximized(isMaximized)
+            onWindowStateChange({ maximized: isMaximized, fullscreen: nextFullscreen })
           })}
         />
         <IconButton icon={systemIcons.minimize} label={appCopy.controls.minimize} onClick={() => runWindowAction((windowRef) => windowRef.minimize())} />

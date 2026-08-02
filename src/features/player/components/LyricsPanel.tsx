@@ -1,4 +1,6 @@
 import type { RefObject } from 'react'
+import { motion } from 'motion/react'
+import { useAppearanceMotion } from '@/features/appearance/hooks/useAppearance'
 import { appCopy } from '@/features/player/model/playerCopy'
 import type { Track } from '@/features/player/model/playerTypes'
 
@@ -11,8 +13,17 @@ type LyricsPanelProps = {
 }
 
 export function LyricsPanel({ track, activeLyricId, activeLyricIndex, lyricListRef, lyricRefs }: LyricsPanelProps) {
+  const appearanceMotion = useAppearanceMotion()
+
   return (
-    <section className="lyrics-panel" aria-labelledby="lyrics-title">
+    <motion.section
+      layout
+      className="lyrics-panel"
+      variants={appearanceMotion.variants.track}
+      initial="initial"
+      animate="animate"
+      aria-labelledby="lyrics-title"
+    >
       <h2 id="lyrics-title" className="sr-only">{appCopy.lyrics.title}</h2>
       {track.lyrics.length ? (
         <ol ref={lyricListRef}>
@@ -29,6 +40,6 @@ export function LyricsPanel({ track, activeLyricId, activeLyricIndex, lyricListR
           ))}
         </ol>
       ) : <p>{appCopy.lyrics.empty}</p>}
-    </section>
+    </motion.section>
   )
 }

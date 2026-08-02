@@ -26,7 +26,7 @@ export function CoverPanel({ track, coverStyle, likeIcon, dislikeIcon, liked, di
   const [coverImageSrc, setCoverImageSrc] = useState(track.coverImage)
 
   return (
-    <article className="cover-column">
+    <motion.article layout className="cover-column">
       <motion.div
         className="cover-frame"
         variants={appearanceMotion.variants.track}
@@ -56,8 +56,8 @@ export function CoverPanel({ track, coverStyle, likeIcon, dislikeIcon, liked, di
           ) : null}
           {!coverImageSrc ? <div className="cover-mark"><systemIcons.music /><strong>{appCopy.productName}</strong><span>LOCAL LISTENING</span></div> : null}
           <div className="cover-feedback">
-            <IconButton icon={likeIcon} label={appCopy.controls.like} selected={liked} onClick={onLike} />
-            <IconButton icon={dislikeIcon} label={appCopy.controls.dislike} selected={disliked} onClick={onDislike} />
+            <IconButton animated icon={likeIcon} label={appCopy.controls.like} selected={liked} onClick={onLike} />
+            <IconButton animated icon={dislikeIcon} label={appCopy.controls.dislike} selected={disliked} onClick={onDislike} />
           </div>
           <MoreActionsMenu
             track={track}
@@ -71,17 +71,6 @@ export function CoverPanel({ track, coverStyle, likeIcon, dislikeIcon, liked, di
           />
         </div>
       </motion.div>
-      <motion.div
-        className="track-pills"
-        variants={appearanceMotion.variants.track}
-        initial="initial"
-        animate="animate"
-        exit="exit"
-        aria-live="polite"
-      >
-        <span className="title-pill">{track.title}</span>
-        <span className="artist-pill">{track.artist} - {track.album}</span>
-      </motion.div>
-    </article>
+    </motion.article>
   )
 }

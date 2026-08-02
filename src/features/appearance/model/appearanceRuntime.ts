@@ -30,6 +30,8 @@ export function applyAppearanceRuntime(
     cssVariables['--app-motion-fast'] = '0ms'
     cssVariables['--app-motion-standard'] = '0ms'
     cssVariables['--app-motion-slow'] = '0ms'
+    cssVariables['--app-motion-prototype-press'] = '0ms'
+    cssVariables['--app-motion-prototype-smart'] = '0ms'
     cssVariables['--app-motion-duration-scale'] = 0
   }
   const resources = appearance.metadata.tier === 'experimental' ? appearance.experimental.resources : []

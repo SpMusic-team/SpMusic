@@ -59,6 +59,8 @@ export function createAppearanceCssVars(appearance: AppearancePreset, resolvedCo
     '--app-motion-fast': scaleDuration(160, durationScale),
     '--app-motion-standard': scaleDuration(240, durationScale),
     '--app-motion-slow': scaleDuration(820, durationScale),
+    '--app-motion-prototype-press': scaleDuration(200, durationScale),
+    '--app-motion-prototype-smart': scaleDuration(300, durationScale),
     '--app-motion-duration-scale': durationScale,
     '--app-motion-easing': appearance.motion.easing,
     '--app-font-family': fontFamilies[appearance.typography.fontFamily],

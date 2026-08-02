@@ -109,10 +109,14 @@ export function ControlDock({
   }
 
   return (
-    <footer className="control-dock" style={progressStyle}>
+    <motion.footer
+      layout
+      className="control-dock"
+      style={progressStyle}
+    >
       <p className="audio-status" aria-live="polite">{audioStatusText}</p>
-      <div className="progress-row">
-        <time>{formatDuration(progress)}</time>
+      <div className="progress-row control-progress" aria-label={appCopy.progress.label}>
+        <time className="control-progress-time control-progress-time-start">{formatDuration(progress)}</time>
         <input
           aria-label={appCopy.progress.label}
           disabled={audioBusy || transportBusy || disabled || duration <= 0}
@@ -128,18 +132,18 @@ export function ControlDock({
           type="range"
           value={progress}
         />
-        <time>{formatDuration(duration)}</time>
+        <time className="control-progress-time control-progress-time-end">{formatDuration(duration)}</time>
       </div>
       <div className="control-row">
-        <div className="control-side"><IconButton icon={systemIcons.audioWave} label={appCopy.controls.openAudio} disabled={audioBusy || transportBusy} onClick={onOpenAudio} /></div>
-        <div className="transport">
-          <IconButton icon={shuffleIcon} label={shuffleLabel} selected={shuffleSelected} disabled={disabled} onClick={onShuffleCycle} />
-          <IconButton icon={systemIcons.previous} label={appCopy.controls.previous} disabled={disabled || transportBusy} onClick={onPrevious} />
+        <div className="control-auxiliary control-auxiliary-start"><IconButton icon={systemIcons.audioWave} label={appCopy.controls.openAudio} disabled={audioBusy || transportBusy} onClick={onOpenAudio} /></div>
+        <div className="control-primary">
+          <IconButton className="control-optional" icon={shuffleIcon} label={shuffleLabel} selected={shuffleSelected} disabled={disabled} onClick={onShuffleCycle} />
+          <IconButton className="previous-button" icon={systemIcons.previous} label={appCopy.controls.previous} disabled={disabled || transportBusy} onClick={onPrevious} />
           <Button className="play-button" aria-busy={transportBusy} aria-label={playing ? appCopy.controls.pause : appCopy.controls.play} aria-pressed={playing} disabled={audioBusy || disabled} size="icon-lg" onClick={onPlayToggle}>
             <AnimatePresence initial={false} mode="popLayout">
               <motion.span
                 key={playing ? 'pause' : 'play'}
-                className="play-icon-motion"
+                className="player-control-icon-frame"
                 variants={appearanceMotion.variants.glyph}
                 initial="initial"
                 animate="animate"
@@ -150,11 +154,13 @@ export function ControlDock({
               </motion.span>
             </AnimatePresence>
           </Button>
-          <IconButton icon={systemIcons.next} label={appCopy.controls.next} disabled={disabled || transportBusy} onClick={onNext} />
-          <IconButton icon={repeatIcon} label={repeatLabel} selected={repeatSelected} disabled={disabled} onClick={onRepeatCycle} />
+          <IconButton className="next-button" icon={systemIcons.next} label={appCopy.controls.next} disabled={disabled || transportBusy} onClick={onNext} />
+          <IconButton className="control-optional" icon={repeatIcon} label={repeatLabel} selected={repeatSelected} disabled={disabled} onClick={onRepeatCycle} />
         </div>
-        <div className="control-side control-side-end">
+        <div className="control-auxiliary control-auxiliary-end">
           <IconButton
+            animated
+            className="control-optional"
             icon={captionsIcon}
             label={desktopCaptionsAvailable ? appCopy.controls.captions : appCopy.controls.captionsUnavailable}
             selected={desktopCaptionsEnabled}
@@ -167,9 +173,9 @@ export function ControlDock({
             disabled={volumeDisabled}
             onVolumeChange={onVolumeChange}
           />
-          <IconButton icon={systemIcons.queue} label={appCopy.controls.queue} selected={queueOpen} onClick={onQueueToggle} />
+          <IconButton className="control-optional" icon={systemIcons.queue} label={appCopy.controls.queue} selected={queueOpen} onClick={onQueueToggle} />
         </div>
       </div>
-    </footer>
+    </motion.footer>
   )
 }

@@ -128,6 +128,8 @@ export type AppearanceCssVars = CSSProperties & {
   '--app-motion-fast': string
   '--app-motion-standard': string
   '--app-motion-slow': string
+  '--app-motion-prototype-press': string
+  '--app-motion-prototype-smart': string
   '--app-motion-duration-scale': number
   '--app-motion-easing': string
   '--app-font-family': string

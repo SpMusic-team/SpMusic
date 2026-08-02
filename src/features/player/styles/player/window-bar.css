@@ -6,7 +6,7 @@
   width: 100%;
   height: 40px;
   min-height: 40px;
-  padding: 0 16px;
+  padding: 0 20px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -14,7 +14,7 @@
   -webkit-app-region: drag;
 }
 
-.window-actions { display: flex; gap: 20px; }
+.window-actions { display: flex; gap: 31px; }
 .window-leading, .window-actions {
   flex: 0 0 auto;
   cursor: default;
@@ -22,6 +22,7 @@
 }
 .window-bar { cursor: grab; }
 .window-bar:active { cursor: grabbing; }
+.window-bar[data-fullscreen="true"] { cursor: default; -webkit-app-region: no-drag; }
 .window-bar button {
   width: 20px;
   height: 40px;

@@ -14,15 +14,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { ThemeManager } from '@/features/appearance/components/ThemeManager'
 import { appCopy } from '@/features/player/model/playerCopy'
 
-type SettingsDialogProps = {
-  temporaryControlBarEnabled: boolean
-  onTemporaryControlBarEnabledChange: (enabled: boolean) => void
-}
-
-export function SettingsDialog({
-  temporaryControlBarEnabled,
-  onTemporaryControlBarEnabledChange,
-}: SettingsDialogProps) {
+export function SettingsDialog() {
   const settingsCopy = appCopy.settings
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [themeManagerOpen, setThemeManagerOpen] = useState(false)
@@ -33,7 +25,7 @@ export function SettingsDialog({
       if (!open) setThemeManagerOpen(false)
     }}>
       <Tooltip>
-        <TooltipTrigger render={<DialogTrigger render={<Button aria-label={appCopy.controls.settings} size="icon" type="button" variant="ghost" />} />}>
+        <TooltipTrigger render={<DialogTrigger render={<Button className="window-settings-trigger" aria-label={appCopy.controls.settings} size="icon" type="button" variant="ghost" />} />}>
           <SettingsIcon />
         </TooltipTrigger>
         <TooltipContent>{appCopy.controls.settings}</TooltipContent>
@@ -49,22 +41,6 @@ export function SettingsDialog({
         </DialogHeader>
 
         <FieldGroup className="player-settings-group">
-          <Field className="player-settings-row" orientation="horizontal">
-            <FieldContent>
-              <FieldLabel>{settingsCopy.temporaryControlBar.title}</FieldLabel>
-              <FieldDescription>{settingsCopy.temporaryControlBar.description}</FieldDescription>
-            </FieldContent>
-            <button
-              type="button"
-              className="player-settings-toggle"
-              aria-pressed={temporaryControlBarEnabled}
-              onClick={() => onTemporaryControlBarEnabledChange(!temporaryControlBarEnabled)}
-            >
-              <span aria-hidden="true" />
-              {temporaryControlBarEnabled ? settingsCopy.on : settingsCopy.off}
-            </button>
-          </Field>
-
           <Field className="player-settings-row player-settings-theme-row" orientation="horizontal">
             <FieldContent>
               <FieldLabel>{settingsCopy.theme.title}</FieldLabel>

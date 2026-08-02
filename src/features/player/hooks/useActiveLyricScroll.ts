@@ -45,7 +45,7 @@ export function useActiveLyricScroll(
       return
     }
 
-    const durationMs = getAppMotionDuration('--app-motion-slow', 820)
+    const durationMs = getAppMotionDuration('--app-motion-prototype-smart', 300)
     if (durationMs <= 0) {
       lyricList.scrollTop = targetTop
       return

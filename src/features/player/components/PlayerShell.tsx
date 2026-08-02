@@ -9,6 +9,7 @@ import { EmptyPlayerState } from '@/features/player/components/EmptyPlayerState'
 import { LyricsPanel } from '@/features/player/components/LyricsPanel'
 import { QueuePanel } from '@/features/player/components/QueuePanel'
 import { ResponsivePlayerLayout } from '@/features/player/components/ResponsivePlayerLayout'
+import { TemporaryAudioControlBar } from '@/features/player/components/TemporaryAudioControlBar'
 import { TrackMeta } from '@/features/player/components/TrackMeta'
 import { WindowBar, type WindowLayoutState as NativeWindowState } from '@/features/player/components/WindowBar'
 import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
@@ -274,6 +275,7 @@ export function PlayerShell() {
   const [nativeWindowState, setNativeWindowState] = useState<NativeWindowState>({ maximized: false, fullscreen: false })
   const [volume, setVolume] = useState(72)
   const [queueOpen, setQueueOpen] = useState(false)
+  const [temporaryControlBarOpen, setTemporaryControlBarOpen] = useState(false)
   const [audioState, setAudioState] = useState<AudioPlaybackState | null>(null)
   const [audioTrack, setAudioTrack] = useState<AudioTrackRef | null>(null)
   const [folderPlaylist, setFolderPlaylist] = useState<AudioFolderPlaylist | null>(null)
@@ -1042,11 +1044,45 @@ export function PlayerShell() {
             />
           ) : null}
         </AnimatePresence>
+        {temporaryControlBarOpen ? (
+          <TemporaryAudioControlBar
+            busy={audioBusy}
+            duration={(audioState?.durationMs ?? 0) / 1000}
+            fileName={currentAudioTrack?.fileName ?? null}
+            hasTrack={Boolean(audioState?.currentTrackId)}
+            phase={audioState?.phase ?? 'idle'}
+            playing={audioState?.phase === 'playing'}
+            progress={(audioState?.positionMs ?? 0) / 1000}
+            statusText={realAudioStatusText}
+            title={usingRealAudio ? track?.title ?? null : null}
+            transportBusy={transportBusy}
+            onOpen={() => void openAndMaybePlay(false)}
+            onOpenAndPlay={() => void openAndMaybePlay(true)}
+            onPlayToggle={togglePlayback}
+            onProgressChange={setProgress}
+            onProgressCommit={commitProgress}
+            onRefresh={() => {
+              void getAudioState()
+                .then(applyAudioState)
+                .catch((error: unknown) => {
+                  setAudioError(isAudioCommandError(error) ? error : {
+                    code: 'INTERNAL_ERROR',
+                    message: appCopy.audio.unavailable,
+                    recoverable: true,
+                  })
+                })
+            }}
+            onStop={stopRealAudioBeforeDemoNavigation}
+            onClose={() => setTemporaryControlBarOpen(false)}
+          />
+        ) : null}
         <ResponsivePlayerLayout
           nativeWindowState={nativeWindowState}
           windowBar={(
             <WindowBar
               onWindowStateChange={handleNativeWindowStateChange}
+              temporaryControlBarOpen={temporaryControlBarOpen}
+              onTemporaryControlBarOpenChange={setTemporaryControlBarOpen}
             />
           )}
         >

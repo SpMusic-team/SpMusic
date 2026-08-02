@@ -10,11 +10,21 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Field, FieldContent, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field'
+import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { ThemeManager } from '@/features/appearance/components/ThemeManager'
 import { appCopy } from '@/features/player/model/playerCopy'
 
-export function SettingsDialog() {
+type SettingsDialogProps = {
+  temporaryControlBarOpen: boolean
+  onTemporaryControlBarOpenChange: (open: boolean) => void
+}
+
+export function SettingsDialog({
+  temporaryControlBarOpen,
+  onTemporaryControlBarOpenChange,
+}: SettingsDialogProps) {
   const settingsCopy = appCopy.settings
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [themeManagerOpen, setThemeManagerOpen] = useState(false)
@@ -41,6 +51,21 @@ export function SettingsDialog() {
         </DialogHeader>
 
         <FieldGroup className="player-settings-group">
+          <Field className="player-settings-row" orientation="horizontal">
+            <FieldContent>
+              <Label htmlFor="temporary-control-bar">{settingsCopy.temporaryControlBar.title}</Label>
+              <FieldDescription>{settingsCopy.temporaryControlBar.description}</FieldDescription>
+            </FieldContent>
+            <Switch
+              id="temporary-control-bar"
+              aria-label={settingsCopy.temporaryControlBar.title}
+              checked={temporaryControlBarOpen}
+              onCheckedChange={(open) => {
+                onTemporaryControlBarOpenChange(open)
+                if (open) setSettingsOpen(false)
+              }}
+            />
+          </Field>
           <Field className="player-settings-row player-settings-theme-row" orientation="horizontal">
             <FieldContent>
               <FieldLabel>{settingsCopy.theme.title}</FieldLabel>

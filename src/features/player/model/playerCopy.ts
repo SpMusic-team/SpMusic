@@ -55,8 +55,8 @@ export const appCopy = {
     on: '开启',
     off: '关闭',
     temporaryControlBar: {
-      title: '临时控制栏',
-      description: '显示或隐藏顶部的临时音频控制栏。',
+      title: '临时控制台',
+      description: '显示或隐藏顶部的临时音频控制台。',
     },
     theme: {
       title: '主题管理',

@@ -1,7 +1,6 @@
 .responsive-player-layout {
-  /* Full is height-driven in Figma: horizontal growth is absorbed by the
-     flexible right column and dock, while cover, lyrics and controls keep
-     their visual size. Other layout modes replace this reference unit. */
+  /* Full is height-driven. Horizontal-half inherits this structural scale for
+     cover and lyrics, while its controller uses the fixed unit below. */
   --player-layout-unit: 0.0694444444svh;
   --control-unit: var(--player-layout-unit);
   --player-lyrics-item-height: calc(64 * var(--player-layout-unit));
@@ -183,8 +182,15 @@
 }
 
 .responsive-player-layout[data-player-layout="horizontal"] {
-  /* Horizontal reference frame: 2411 x 520. */
-  --player-layout-unit: min(0.0414765657vw, 0.1923076923svh);
+  /* Figma 615:1332 keeps the horizontal-half controller and lyric typography
+     at their reference sizes while the available content height changes. */
+  --horizontal-control-unit: 1px;
+  --control-unit: var(--horizontal-control-unit);
+  --player-lyrics-item-height: 64px;
+  --player-lyrics-font-size: 24px;
+  --player-lyrics-line-height: 32px;
+  --player-lyrics-translation-font-size: 24px;
+  --player-lyrics-translation-line-height: 32px;
 }
 
 .responsive-player-layout[data-player-layout="horizontal"] .player-stage {
@@ -198,7 +204,7 @@
     calc(145 * var(--player-layout-unit))
     calc(9 * var(--player-layout-unit))
     minmax(0, 1fr)
-    calc(145 * var(--player-layout-unit));
+    calc(145 * var(--horizontal-control-unit));
   grid-template-areas:
     "cover meta"
     "cover ."
@@ -219,16 +225,26 @@
 .responsive-player-layout[data-player-layout="horizontal"] .lyrics-panel {
   width: min(
     calc(100% - 48 * var(--player-layout-unit)),
-    calc(762 * var(--player-layout-unit))
+    762px
   );
   height: 100%;
 }
 
+.responsive-player-layout[data-player-layout="horizontal"] .lyrics-panel ol {
+  gap: 36px;
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .lyrics-panel li[data-active="true"],
+.responsive-player-layout[data-player-layout="horizontal"] .lyrics-panel li[data-active="true"] .translation-line {
+  font-size: 28px;
+  line-height: 36px;
+}
+
 .responsive-player-layout[data-player-layout="horizontal"] .control-dock {
   width: auto;
-  height: calc(145 * var(--player-layout-unit));
+  height: calc(145 * var(--horizontal-control-unit));
   margin: 0 calc(12 * var(--player-layout-unit));
-  padding: calc(23 * var(--player-layout-unit)) 0;
+  padding: calc(23 * var(--horizontal-control-unit)) 0;
   justify-self: stretch;
 }
 
@@ -237,7 +253,7 @@
 }
 
 .responsive-player-layout[data-player-layout="horizontal"] .control-row {
-  height: calc(63 * var(--player-layout-unit));
+  height: calc(63 * var(--horizontal-control-unit));
 }
 
 .responsive-player-layout[data-player-layout="quarter"] .player-stage {

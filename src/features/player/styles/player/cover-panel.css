@@ -27,7 +27,7 @@
 
 .cover-feedback { position: absolute; z-index: 3; left: calc(11 * var(--prototype-unit)); bottom: calc(23 * var(--prototype-unit)); display: flex; gap: calc(9 * var(--prototype-unit)); }
 .cover-art button { min-width: 0; padding: 0; border-radius: 999px; background: var(--player-blue-soft); color: var(--player-blue-ink); box-shadow: 0 calc(4 * var(--prototype-unit)) calc(4 * var(--prototype-unit)) rgba(0,0,0,.25); }
-.cover-art button svg { width: calc(48 * var(--prototype-unit)); height: calc(48 * var(--prototype-unit)); }
+.cover-art button svg { width: 100%; height: 100%; }
 .cover-feedback button { width: calc(100 * var(--prototype-unit)); height: calc(72 * var(--prototype-unit)); }
 .cover-art button[data-selected="true"] { background: var(--player-blue-soft); color: var(--player-blue-ink); }
 .cover-art .more-button { position: absolute; z-index: 3; right: calc(13 * var(--prototype-unit)); bottom: calc(24 * var(--prototype-unit)); width: calc(72 * var(--prototype-unit)); height: calc(72 * var(--prototype-unit)); }

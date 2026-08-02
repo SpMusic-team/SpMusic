@@ -14,6 +14,8 @@ export type WindowLayoutState = {
 
 type WindowBarProps = {
   onWindowStateChange: (state: WindowLayoutState) => void
+  temporaryControlBarOpen: boolean
+  onTemporaryControlBarOpenChange: (open: boolean) => void
 }
 
 function getTauriWindow(): TauriWindow | null {
@@ -23,6 +25,8 @@ function getTauriWindow(): TauriWindow | null {
 
 export function WindowBar({
   onWindowStateChange,
+  temporaryControlBarOpen,
+  onTemporaryControlBarOpenChange,
 }: WindowBarProps) {
   const systemIcons = useSystemIcons()
   const [maximized, setMaximized] = useState(false)
@@ -121,7 +125,10 @@ export function WindowBar({
       </div>
       <h1 id="app-title" className="sr-only">{appCopy.appTitle}</h1>
       <div className="window-actions" onDoubleClick={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
-        <SettingsDialog />
+        <SettingsDialog
+          temporaryControlBarOpen={temporaryControlBarOpen}
+          onTemporaryControlBarOpenChange={onTemporaryControlBarOpenChange}
+        />
         <IconButton
           icon={systemIcons.fullscreen}
           label={appCopy.controls.fullscreen}

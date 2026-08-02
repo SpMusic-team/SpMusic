@@ -1,15 +1,28 @@
+import { FolderOpenIcon, PauseIcon, PlayIcon, RefreshCwIcon, SquareIcon, XIcon } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card'
+import { Slider } from '@/components/ui/slider'
 import { formatDuration } from '@/features/player/model/trackUtils'
 
 const copy = {
-  ariaLabel: '\u4e34\u65f6\u97f3\u9891\u63a7\u5236\u680f',
+  ariaLabel: '\u4e34\u65f6\u97f3\u9891\u63a7\u5236\u53f0',
+  close: '\u5173\u95ed\u4e34\u65f6\u97f3\u9891\u63a7\u5236\u53f0',
   empty: '\u672a\u9009\u62e9\u97f3\u9891',
-  kicker: '\u4e34\u65f6\u63a7\u5236\u680f',
+  kicker: '\u4e34\u65f6\u97f3\u9891\u63a7\u5236\u53f0',
   open: '\u9009\u62e9\u6587\u4ef6',
   openAndPlay: '\u9009\u62e9\u5e76\u64ad\u653e',
   pause: '\u6682\u505c',
   play: '\u64ad\u653e',
-  progress: '\u4e34\u65f6\u63a7\u5236\u680f\u64ad\u653e\u8fdb\u5ea6',
+  progress: '\u4e34\u65f6\u97f3\u9891\u63a7\u5236\u53f0\u64ad\u653e\u8fdb\u5ea6',
   refresh: '\u5237\u65b0\u72b6\u6001',
   stop: '\u505c\u6b62',
 }
@@ -32,6 +45,7 @@ type TemporaryAudioControlBarProps = {
   onProgressCommit: (progress: number) => void
   onRefresh: () => void
   onStop: () => void
+  onClose: () => void
 }
 
 export function TemporaryAudioControlBar({
@@ -52,63 +66,65 @@ export function TemporaryAudioControlBar({
   onProgressCommit,
   onRefresh,
   onStop,
+  onClose,
 }: TemporaryAudioControlBarProps) {
   const hasDuration = duration > 0
-  const commitProgress = (value: string) => onProgressCommit(Number(value))
-  const updateProgress = (value: string) => onProgressChange(Number(value))
+  const safeProgress = hasDuration ? Math.min(Math.max(progress, 0), duration) : 0
+  const readProgressValue = (value: number | readonly number[]) => Array.isArray(value) ? (value[0] ?? 0) : value as number
 
   return (
-    <section className="temporary-audio-control-bar" aria-label={copy.ariaLabel}>
-      <div className="temporary-audio-control-copy">
-        <span className="temporary-audio-control-kicker">{copy.kicker}</span>
-        <strong>{title ?? fileName ?? copy.empty}</strong>
-        <span>{statusText}</span>
-      </div>
+    <Card className="temporary-audio-control-bar" role="region" aria-label={copy.ariaLabel} size="sm">
+      <CardHeader>
+        <CardTitle>{copy.kicker}</CardTitle>
+        <CardDescription className="temporary-audio-control-copy">
+          <strong>{title ?? fileName ?? copy.empty}</strong>
+          <span>{statusText}</span>
+        </CardDescription>
+        <CardAction className="temporary-audio-control-heading-actions">
+          <Badge variant="secondary">phase: {phase}</Badge>
+          <Button aria-label={copy.close} onClick={onClose} size="icon-sm" type="button" variant="ghost">
+            <XIcon />
+          </Button>
+        </CardAction>
+      </CardHeader>
 
-      <div className="temporary-audio-control-actions">
+      <CardContent className="temporary-audio-control-actions">
         <Button type="button" size="sm" disabled={busy || transportBusy} onClick={onOpenAndPlay}>
+          <PlayIcon data-icon="inline-start" />
           {copy.openAndPlay}
         </Button>
         <Button type="button" size="sm" variant="outline" disabled={busy || transportBusy} onClick={onOpen}>
+          <FolderOpenIcon data-icon="inline-start" />
           {copy.open}
         </Button>
         <Button type="button" size="sm" variant="outline" aria-busy={transportBusy} disabled={busy || !hasTrack} onClick={onPlayToggle}>
+          {playing ? <PauseIcon data-icon="inline-start" /> : <PlayIcon data-icon="inline-start" />}
           {playing ? copy.pause : copy.play}
         </Button>
         <Button type="button" size="sm" variant="outline" disabled={busy || transportBusy || !hasTrack} onClick={onStop}>
-          <span className="temporary-stop-icon" aria-hidden="true" />
+          <SquareIcon data-icon="inline-start" />
           {copy.stop}
         </Button>
         <Button type="button" size="sm" variant="ghost" disabled={busy || transportBusy} onClick={onRefresh}>
+          <RefreshCwIcon data-icon="inline-start" />
           {copy.refresh}
         </Button>
-      </div>
+      </CardContent>
 
-      <label className="temporary-audio-control-progress">
-        <span>{formatDuration(progress)}</span>
-        <input
-          aria-label={copy.progress}
+      <CardFooter className="temporary-audio-control-progress">
+        <output>{formatDuration(safeProgress)}</output>
+        <Slider
           disabled={busy || transportBusy || !hasTrack || !hasDuration}
-          max={duration}
-          min="0"
-          onBlur={(event) => commitProgress(event.currentTarget.value)}
-          onChange={(event) => updateProgress(event.currentTarget.value)}
-          onInput={(event) => updateProgress(event.currentTarget.value)}
-          onKeyUp={(event) => {
-            if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'Enter', ' '].includes(event.key)) {
-              commitProgress(event.currentTarget.value)
-            }
-          }}
-          onPointerDown={(event) => event.currentTarget.setPointerCapture(event.pointerId)}
-          onPointerUp={(event) => commitProgress(event.currentTarget.value)}
-          step="0.01"
-          type="range"
-          value={progress}
+          getAriaLabel={() => copy.progress}
+          max={hasDuration ? duration : 1}
+          min={0}
+          onValueChange={(value) => onProgressChange(readProgressValue(value))}
+          onValueCommitted={(value) => onProgressCommit(readProgressValue(value))}
+          step={0.01}
+          value={[safeProgress]}
         />
-        <span>{formatDuration(duration)}</span>
-      </label>
-
-      <span className="temporary-audio-control-phase">phase: {phase}</span>
-    </section>
+        <output>{formatDuration(duration)}</output>
+      </CardFooter>
+    </Card>
   )
 }

@@ -140,19 +140,21 @@ export function ControlDock({
           <IconButton className="control-optional" icon={shuffleIcon} label={shuffleLabel} selected={shuffleSelected} disabled={disabled} onClick={onShuffleCycle} />
           <IconButton className="previous-button" icon={systemIcons.previous} label={appCopy.controls.previous} disabled={disabled || transportBusy} onClick={onPrevious} />
           <Button className="play-button" aria-busy={transportBusy} aria-label={playing ? appCopy.controls.pause : appCopy.controls.play} aria-pressed={playing} disabled={audioBusy || disabled} size="icon-lg" onClick={onPlayToggle}>
-            <AnimatePresence initial={false} mode="popLayout">
-              <motion.span
-                key={playing ? 'pause' : 'play'}
-                className="player-control-icon-frame"
-                variants={appearanceMotion.variants.glyph}
-                initial="initial"
-                animate="animate"
-                exit="exit"
-                aria-hidden="true"
-              >
-                {playing ? <systemIcons.pause /> : <systemIcons.play />}
-              </motion.span>
-            </AnimatePresence>
+            <span className="player-control-icon-swap">
+              <AnimatePresence initial={false}>
+                <motion.span
+                  key={playing ? 'pause' : 'play'}
+                  className="player-control-icon-frame"
+                  variants={appearanceMotion.variants.glyph}
+                  initial="initial"
+                  animate="animate"
+                  exit="exit"
+                  aria-hidden="true"
+                >
+                  {playing ? <systemIcons.pause /> : <systemIcons.play />}
+                </motion.span>
+              </AnimatePresence>
+            </span>
           </Button>
           <IconButton className="next-button" icon={systemIcons.next} label={appCopy.controls.next} disabled={disabled || transportBusy} onClick={onNext} />
           <IconButton className="control-optional" icon={repeatIcon} label={repeatLabel} selected={repeatSelected} disabled={disabled} onClick={onRepeatCycle} />

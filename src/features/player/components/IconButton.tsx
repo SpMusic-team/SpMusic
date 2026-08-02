@@ -19,19 +19,21 @@ export function IconButton({ label, icon: Icon, selected = false, animated = fal
     <Tooltip>
       <TooltipTrigger render={<Button aria-label={label} aria-pressed={selected} data-selected={selected} size="icon" type="button" variant="ghost" {...props} />}>
         {animated ? (
-          <AnimatePresence initial={false} mode="popLayout">
-            <motion.span
-              key={selected ? 'selected' : 'idle'}
-              className="player-control-icon-frame"
-              variants={appearanceMotion.variants.glyph}
-              initial="initial"
-              animate="animate"
-              exit="exit"
-              aria-hidden="true"
-            >
-              <Icon />
-            </motion.span>
-          </AnimatePresence>
+          <span className="player-control-icon-swap">
+            <AnimatePresence initial={false}>
+              <motion.span
+                key={selected ? 'selected' : 'idle'}
+                className="player-control-icon-frame"
+                variants={appearanceMotion.variants.glyph}
+                initial="initial"
+                animate="animate"
+                exit="exit"
+                aria-hidden="true"
+              >
+                <Icon />
+              </motion.span>
+            </AnimatePresence>
+          </span>
         ) : (
           <span className="player-control-icon-frame" aria-hidden="true">
             <Icon />

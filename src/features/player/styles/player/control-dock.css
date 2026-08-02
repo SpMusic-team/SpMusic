@@ -78,6 +78,8 @@
 .control-primary .play-button { width: calc(84 * var(--control-unit, var(--prototype-unit))); height: calc(84 * var(--control-unit, var(--prototype-unit))); background: var(--player-blue); color: var(--app-accent-contrast); box-shadow: 0 calc(2 * var(--control-unit, var(--prototype-unit))) calc(2 * var(--control-unit, var(--prototype-unit))) rgba(0,0,0,.25); }
 .control-primary .play-button svg { width: calc(48 * var(--control-unit, var(--prototype-unit))); height: calc(48 * var(--control-unit, var(--prototype-unit))); }
 .player-control-icon-frame { min-width: 0; display: grid; flex: 0 0 auto; place-items: center; line-height: 0; }
+.player-control-icon-swap { min-width: 0; display: grid; flex: 0 0 auto; place-items: center; line-height: 0; }
+.player-control-icon-swap > .player-control-icon-frame { grid-area: 1 / 1; }
 .control-primary .player-control-icon-frame,
 .control-auxiliary .player-control-icon-frame { width: calc(48 * var(--control-unit, var(--prototype-unit))); height: calc(48 * var(--control-unit, var(--prototype-unit))); }
 .control-primary .previous-button .player-control-icon-frame,

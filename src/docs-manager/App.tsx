@@ -99,6 +99,7 @@ const INITIAL_FILTERS: DocumentFilters = {
   owner: "",
   scope: "",
   includeInternal: false,
+  extra: {},
 }
 
 function metadataText(value: MetadataValue | undefined) {
@@ -306,7 +307,16 @@ export function App() {
   }, [save])
 
   function updateFilter(key: keyof DocumentFilters, value: string | boolean) {
-    setFilters((current) => ({ ...current, [key]: value }))
+    setFilters((current) => ({ ...current, [key]: value, ...(key === "docType" ? { extra: {} } : {}) }))
+  }
+
+  function updateExtraField(key: string, value: string) {
+    setFilters((current) => {
+      const extra = { ...current.extra }
+      if (value) extra[key] = value
+      else delete extra[key]
+      return { ...current, extra }
+    })
   }
 
   async function create(fields: NewDocumentFields) {
@@ -351,7 +361,11 @@ export function App() {
     }
   }
 
-  const hasFilters = useMemo(() => Boolean(filters.query || filters.docType || filters.status || filters.owner || filters.scope), [filters])
+  const hasFilters = useMemo(() => Boolean(filters.query || filters.docType || filters.status || filters.owner || filters.scope || Object.keys(filters.extra).length > 0), [filters])
+  const activeTypeFields = useMemo(() => {
+    if (!filters.docType || !index) return []
+    return index.filterSchema[filters.docType] ?? []
+  }, [filters.docType, index])
   const previewSource = useMemo(() => source.replace(/^---\s*\r?\n[\s\S]*?\r?\n---\s*\r?\n?/u, ""), [source])
 
   return (
@@ -407,6 +421,15 @@ export function App() {
               <FilterSelect label="状态" value={filters.status} options={index?.facets.statuses ?? []} onChange={(value) => updateFilter("status", value)} />
               <FilterSelect label="负责 Agent" value={filters.owner} options={index?.facets.owners ?? []} onChange={(value) => updateFilter("owner", value)} />
               <FilterSelect label="版本范围" value={filters.scope} options={index?.facets.scopes ?? []} onChange={(value) => updateFilter("scope", value)} />
+              {activeTypeFields.map((field) => (
+                <FilterSelect
+                  key={field.key}
+                  label={field.label}
+                  value={filters.extra[field.key] ?? ""}
+                  options={index?.facets[field.key] ?? []}
+                  onChange={(value) => updateExtraField(field.key, value)}
+                />
+              ))}
             </FieldGroup>
             {hasFilters && <Button variant="ghost" size="sm" onClick={() => setFilters((current) => ({ ...INITIAL_FILTERS, includeInternal: current.includeInternal }))}>清除筛选</Button>}
           </div>

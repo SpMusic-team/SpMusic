@@ -54,6 +54,52 @@ test("document index applies query and metadata filters", () => {
   assert.equal(index.documents[0].title, "Alpha")
 })
 
+test("document index exposes per-type filter schema and applies declared fields", () => {
+  const base = {
+    path: "docs/changes/bugs/BUG-0001.md",
+    title: "Bug 1",
+    excerpt: "",
+    content: "",
+    modifiedAt: "2026-01-01T00:00:00.000Z",
+    metadata: {
+      doc_type: "bug",
+      status: "待处理",
+      owner_agent: "Documentation Agent",
+      version_scope: "project",
+      severity: "中",
+      module: "歌词页",
+    },
+    editable: true,
+    internal: false,
+    issues: [],
+  }
+  const other = {
+    ...base,
+    path: "docs/changes/bugs/BUG-0002.md",
+    title: "Bug 2",
+    metadata: { ...base.metadata, severity: "高", module: "播放控制器" },
+  }
+
+  const docs = [base, other]
+
+  const severityIndex = buildDocumentIndex(docs, { severity: "中" })
+  assert.equal(severityIndex.documents.length, 1)
+  assert.equal(severityIndex.documents[0].path, "docs/changes/bugs/BUG-0001.md")
+
+  const moduleIndex = buildDocumentIndex(docs, { module: "播放控制器" })
+  assert.equal(moduleIndex.documents.length, 1)
+  assert.equal(moduleIndex.documents[0].path, "docs/changes/bugs/BUG-0002.md")
+
+  const bothIndex = buildDocumentIndex(docs, { docType: "bug", severity: "中", module: "歌词页" })
+  assert.equal(bothIndex.documents.length, 1)
+  assert.deepEqual(bothIndex.filterSchema.bug.map((field) => field.key), ["severity", "module"])
+  assert.deepEqual(bothIndex.facets.severity, ["中", "高"])
+  assert.deepEqual(bothIndex.facets.module, ["播放控制器", "歌词页"])
+
+  const ignoredIndex = buildDocumentIndex(docs, { docType: "bug", undeclared: "x" })
+  assert.equal(ignoredIndex.documents.length, 2)
+})
+
 test("PM owner filter includes PM-managed internal agent prompts", () => {
   const base = {
     path: "docs/tasks/sp-001.md",

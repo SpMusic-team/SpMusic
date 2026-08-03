@@ -24,13 +24,20 @@ export interface DocumentDetail extends DocumentSummary {
   content: string
 }
 
+export interface FilterField {
+  key: string
+  label: string
+}
+
 export interface DocumentIndex {
   documents: DocumentSummary[]
+  filterSchema: Record<string, FilterField[]>
   facets: {
     docTypes: string[]
     statuses: string[]
     owners: string[]
     scopes: string[]
+    [key: string]: string[]
   }
   stats: {
     total: number
@@ -49,6 +56,7 @@ export interface DocumentFilters {
   owner: string
   scope: string
   includeInternal: boolean
+  extra: Record<string, string>
 }
 
 export interface NewDocumentFields {

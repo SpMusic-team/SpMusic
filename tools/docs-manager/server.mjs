@@ -78,13 +78,18 @@ app.get("/api/health", (_request, response) => {
 
 app.get("/api/documents", async (request, response, next) => {
   try {
+    const { q, docType, status, owner, scope, internal, ...extra } = request.query
+    const extraFilters = Object.fromEntries(
+      Object.entries(extra).map(([key, value]) => [key, Array.isArray(value) ? String(value[0]) : String(value ?? "")]),
+    )
     const index = buildDocumentIndex(await refreshDocuments(), {
-      query: request.query.q,
-      docType: request.query.docType,
-      status: request.query.status,
-      owner: request.query.owner,
-      scope: request.query.scope,
-      includeInternal: request.query.internal === "true",
+      query: q,
+      docType,
+      status,
+      owner,
+      scope,
+      includeInternal: internal === "true",
+      ...extraFilters,
     })
     response.json(index)
   } catch (error) {

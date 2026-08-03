@@ -52,6 +52,9 @@ export function listDocuments(filters: DocumentFilters) {
   if (filters.owner) query.set("owner", filters.owner)
   if (filters.scope) query.set("scope", filters.scope)
   if (filters.includeInternal) query.set("internal", "true")
+  for (const [key, value] of Object.entries(filters.extra)) {
+    if (value) query.set(key, value)
+  }
   return request<DocumentIndex>(`/api/documents?${query}`)
 }
 

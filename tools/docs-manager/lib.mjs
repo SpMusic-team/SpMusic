@@ -314,6 +314,17 @@ function facetValues(documents, field) {
   return [...new Set(documents.map((document) => document.metadata[field]).filter((value) => typeof value === "string" && value))].sort()
 }
 
+const DOC_TYPE_FILTER_SCHEMA = {
+  bug: [
+    { key: "severity", label: "严重程度" },
+    { key: "module", label: "模块" },
+  ],
+}
+
+function filterSchemaFields() {
+  return Object.values(DOC_TYPE_FILTER_SCHEMA).flat()
+}
+
 function isPmManagedInternalDocument(document) {
   return document.internal
     && document.metadata.owner_agent === "PM Agent"
@@ -328,6 +339,7 @@ function isVisibleDocument(document, filters) {
 export function buildDocumentIndex(documents, filters = {}) {
   const visibleDocuments = documents.filter((document) => isVisibleDocument(document, filters))
   const normalizedQuery = String(filters.query ?? "").trim().toLocaleLowerCase()
+  const schemaFields = filterSchemaFields()
   const filtered = visibleDocuments.filter((document) => {
     const matchesQuery = !normalizedQuery || [
       document.path,
@@ -341,15 +353,18 @@ export function buildDocumentIndex(documents, filters = {}) {
       && (!filters.status || document.metadata.status === filters.status)
       && (!filters.owner || document.metadata.owner_agent === filters.owner)
       && (!filters.scope || document.metadata.version_scope === filters.scope)
+      && schemaFields.every(({ key }) => !filters[key] || document.metadata[key] === filters[key])
   })
 
   return {
     documents: filtered.map(({ content: _content, ...document }) => document),
+    filterSchema: DOC_TYPE_FILTER_SCHEMA,
     facets: {
       docTypes: facetValues(visibleDocuments, "doc_type"),
       statuses: facetValues(visibleDocuments, "status"),
       owners: facetValues(visibleDocuments, "owner_agent"),
       scopes: facetValues(visibleDocuments, "version_scope"),
+      ...Object.fromEntries(schemaFields.map(({ key }) => [key, facetValues(visibleDocuments, key)])),
     },
     stats: {
       total: visibleDocuments.length,

@@ -260,7 +260,7 @@
   grid-template-areas:
     "cover"
     "meta"
-    "spacer"
+    "lyrics"
     "dock";
 }
 
@@ -311,7 +311,7 @@
 }
 
 .responsive-player-layout[data-player-layout="vertical"] .lyrics-panel,
-.responsive-player-layout[data-player-layout="quarter"] .lyrics-panel {
+.responsive-player-layout[data-player-layout="quarter"][data-player-short="true"] .lyrics-panel {
   display: none;
 }
 
@@ -368,6 +368,22 @@
   margin-top: calc(34 * var(--player-layout-unit));
   margin-inline: 0;
   padding-inline: 0;
+  justify-self: center;
+}
+
+.responsive-player-layout[data-player-layout="quarter"] .lyrics-panel {
+  /* Figma 766:997: the lyric viewport fills the 26px-padded body at 640px
+     (588px), then grows with the window until its 762px mask limit. */
+  display: block;
+  width: min(
+    calc(100% - 18 * var(--player-layout-unit)),
+    calc(762 * var(--player-layout-unit))
+  );
+  height: auto;
+  margin-block:
+    calc(34 * var(--player-layout-unit))
+    calc(28 * var(--player-layout-unit));
+  align-self: stretch;
   justify-self: center;
 }
 

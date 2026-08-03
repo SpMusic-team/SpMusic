@@ -6,12 +6,13 @@ status: "active"
 owner_agent: "Documentation Agent"
 version_scope: "project"
 created: "2026-07-08"
-updated: "2026-07-11"
+updated: "2026-08-03"
 source_documents:
   - "docs/requirements.md"
   - "docs/roadmap.md"
   - "docs/sprint-plan.md"
   - "docs/release-plan.md"
+  - "docs/changes/change-log.md"
   - "docs/tasks/sp-012-readme-and-developer-documentation.md"
   - "package.json"
   - "src/App.tsx"
@@ -144,6 +145,7 @@ v0.1 的目标是把模板项目收敛为可运行、可验证、边界清晰的
 - [总体架构](docs/architecture/overall-architecture.md)
 - [v0.1 版本需求](docs/requirements/v0-1-foundation.md)
 - [v0.2 播放列表 UI 候选需求](docs/requirements/v0-2-playlist-ui-prototype.md)
+- [变更记录](docs/changes/change-log.md)
 
 ## 项目结构
 

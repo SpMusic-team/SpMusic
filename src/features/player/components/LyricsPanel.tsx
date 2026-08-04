@@ -1,4 +1,4 @@
-import type { RefObject } from 'react'
+import type { KeyboardEvent, RefObject } from 'react'
 import { motion } from 'motion/react'
 import { useAppearanceMotion } from '@/features/appearance/hooks/useAppearance'
 import { appCopy } from '@/features/player/model/playerCopy'
@@ -10,10 +10,18 @@ type LyricsPanelProps = {
   activeLyricIndex: number
   lyricListRef: RefObject<HTMLOListElement | null>
   lyricRefs: RefObject<Map<string, HTMLLIElement>>
+  onLineSelect: (timeSeconds: number) => void
 }
 
-export function LyricsPanel({ track, activeLyricId, activeLyricIndex, lyricListRef, lyricRefs }: LyricsPanelProps) {
+export function LyricsPanel({ track, activeLyricId, activeLyricIndex, lyricListRef, lyricRefs, onLineSelect }: LyricsPanelProps) {
   const appearanceMotion = useAppearanceMotion()
+
+  function handleLineKeyDown(event: KeyboardEvent<HTMLLIElement>, timeSeconds: number) {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      onLineSelect(timeSeconds)
+    }
+  }
 
   return (
     <motion.section
@@ -31,8 +39,13 @@ export function LyricsPanel({ track, activeLyricId, activeLyricIndex, lyricListR
             <li
               key={line.id}
               ref={(node) => { if (node) lyricRefs.current.set(line.id, node) }}
+              role="button"
+              tabIndex={0}
+              aria-current={line.id === activeLyricId ? 'true' : undefined}
               data-active={line.id === activeLyricId}
               data-position={index < activeLyricIndex ? 'past' : index === activeLyricIndex ? 'active' : 'future'}
+              onClick={() => onLineSelect(line.timeSeconds)}
+              onKeyDown={(event) => handleLineKeyDown(event, line.timeSeconds)}
             >
               <span>{line.original}</span>
               {line.translation ? <span className="translation-line" lang="zh-CN">{line.translation}</span> : null}

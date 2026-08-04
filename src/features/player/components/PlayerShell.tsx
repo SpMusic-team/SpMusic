@@ -1113,6 +1113,7 @@ export function PlayerShell() {
               activeLyricIndex={activeLyricIndex}
               lyricListRef={lyricListRef}
               lyricRefs={lyricRefs}
+              onLineSelect={commitProgress}
             />
 
             <AnimatePresence initial={false}>

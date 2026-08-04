@@ -94,10 +94,25 @@
   grid-area: meta;
   position: relative;
   inset: auto;
-  width: calc(100% - 24 * var(--player-layout-unit));
-  margin-inline: calc(12 * var(--player-layout-unit));
+  /* 完整布局：胶囊右缘最大延伸到“窗口右 - 24”；
+     左缘保持距封面右缘 24（列间隙 12 + 左 margin 12），两侧间距相等。
+     信息列右缘 = 窗口右 - 120（舞台内边距），故容器右缘需再向右扩展 96：
+     宽度 = 100% + 96 - 12(左 margin) = 100% + 84。 */
+  width: calc(100% + 84 * var(--player-layout-unit));
+  margin-left: calc(12 * var(--player-layout-unit));
+  margin-right: 0;
   align-self: start;
   gap: calc(29 * var(--player-layout-unit));
+}
+
+.responsive-player-layout[data-player-layout="full"] .track-pill,
+.responsive-player-layout[data-player-layout="horizontal"] .track-pill {
+  max-width: 100%;
+}
+
+.responsive-player-layout[data-player-layout="full"] .track-pills .title-pill,
+.responsive-player-layout[data-player-layout="horizontal"] .track-pills .title-pill {
+  max-width: 100%;
 }
 
 .responsive-player-layout .track-pills .track-pill {
@@ -217,8 +232,13 @@
 }
 
 .responsive-player-layout[data-player-layout="horizontal"] .track-pills {
-  width: calc(100% - 48 * var(--player-layout-unit));
-  margin-inline: calc(24 * var(--player-layout-unit));
+  /* 横向半屏：胶囊左缘距封面右缘 36（列间隙 12 + 左 margin 24），
+     右缘最大延伸到“窗口右 - 36”，两侧间距相等。
+     信息列右缘 = 窗口右 - 60，需再向右扩展 24：
+     宽度 = 100% + 24 - 24(左 margin) = 100%。 */
+  width: 100%;
+  margin-left: calc(24 * var(--player-layout-unit));
+  margin-right: 0;
 }
 
 .responsive-player-layout[data-player-layout="horizontal"] .lyrics-panel {

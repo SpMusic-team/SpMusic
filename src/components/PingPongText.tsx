@@ -51,12 +51,14 @@ export function PingPongText({ as: Component = 'span', className, text }: PingPo
     const returnStart = (timing.scrollStartDelayMs + travelDuration + timing.scrollEdgePauseMs) / totalDuration
     const returnEnd = (timing.scrollStartDelayMs + travelDuration + timing.scrollEdgePauseMs + travelDuration) / totalDuration
 
+    // 正向/反向滚动段使用 ease-in-out，呈现“慢-快-慢”节奏；
+    // 停顿段保持 linear（位置不变，缓动仅保证停顿时长精确）。
     const animation = movingText.animate([
-      { transform: 'translate3d(0, 0, 0)', offset: 0 },
-      { transform: 'translate3d(0, 0, 0)', offset: forwardStart },
-      { transform: `translate3d(-${distance}px, 0, 0)`, offset: forwardEnd },
-      { transform: `translate3d(-${distance}px, 0, 0)`, offset: returnStart },
-      { transform: 'translate3d(0, 0, 0)', offset: returnEnd },
+      { transform: 'translate3d(0, 0, 0)', offset: 0, easing: 'linear' },
+      { transform: 'translate3d(0, 0, 0)', offset: forwardStart, easing: 'ease-in-out' },
+      { transform: `translate3d(-${distance}px, 0, 0)`, offset: forwardEnd, easing: 'linear' },
+      { transform: `translate3d(-${distance}px, 0, 0)`, offset: returnStart, easing: 'ease-in-out' },
+      { transform: 'translate3d(0, 0, 0)', offset: returnEnd, easing: 'linear' },
       { transform: 'translate3d(0, 0, 0)', offset: 1 },
     ], {
       duration: totalDuration,

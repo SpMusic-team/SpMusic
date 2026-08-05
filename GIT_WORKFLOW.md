@@ -335,48 +335,111 @@ develop 没有该修复
 
 ## 7. Commit 提交规范
 
-提交信息统一采用：
+提交信息统一采用 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 风格，结构为：
 
 ```text
-类型: 简短描述
+<type>(<scope>): <subject>
+
+[body]
+
+[footer]
 ```
 
-推荐类型：
+其中 `<type>` 必填，`<scope>`、`body`、`footer` 按需填写。
+
+### 7.1 类型（type，必填）
+
+类型使用小写英文，取值固定为以下集合：
 
 ```text
 feat      新功能
 fix       Bug 修复
-docs      文档修改
-style     格式、样式调整
-refactor  重构
-test      测试相关
-chore     构建、依赖、配置、杂项
+docs      文档修改（README、docs/、AGENTS.md、GIT_WORKFLOW.md 等）
+style     代码格式或样式调整（不改变运行逻辑）
+refactor  重构（不新增功能、不修复 Bug）
 perf      性能优化
+test      测试相关（新增或修改测试）
+chore     构建、依赖、配置与杂项
+ci        CI/CD 配置与流程
+revert    回滚提交
 ```
 
-示例：
+不允许使用集合之外的类型，也不允许省略类型。
 
-```bash
-git commit -m "feat: 新增用户登录接口"
-git commit -m "feat: 增加订单列表页面"
-git commit -m "fix: 修复 Token 过期后无法跳转登录页"
-git commit -m "docs: 更新项目启动说明"
-git commit -m "refactor: 重构用户服务层"
-git commit -m "chore: 更新 Docker 配置"
-```
+### 7.2 作用域（scope，可选）
 
-禁止使用无意义提交信息：
+作用域标注影响模块，使用小写 kebab-case，写在类型后的括号中。不填写时省略括号。
+
+本项目常用作用域：
 
 ```text
-update
-test
-修改
-111
-bug
-改一下
-先这样
+player        播放器界面与播放控制
+audio         音频后端（Tauri command、解码、输出设备）
+theme         外观主题与动效
+docs-manager  本地文档工作台
+docs          项目文档
+ci            构建与 CI
 ```
 
+示例：`feat(player): ...`、`fix(audio): ...`、`docs: ...`。
+
+### 7.3 主题（subject，必填）
+
+主题规则：
+
+* 用祈使语气概括“做了什么”，简洁明确。
+* 默认使用简体中文描述，与项目文档语言一致；代码标识符、文件名、API 名称可保留英文。
+* 建议不超过 50 个字符，避免把多个改动塞进一个主题。
+* 末尾不加句号。
+* 禁止使用无意义或笼统描述，例如 `update`、`test`、`修改`、`111`、`bug`、`改一下`、`先这样`。
+
+### 7.4 正文（body，可选）
+
+正文说明“为什么改”和“怎么改”，不重复主题。格式要求：
+
+* 主题后空一行，再写正文。
+* 需要引用任务卡、决策或 Bug 编号时，使用仓库内稳定标识，例如 `SP-018`、`BUG-0004`、`docs/decisions/2026-07-27-v0-1-implemented-capabilities-boundary.md`。
+* 多行提交信息使用多个 `-m` 参数或 heredoc，不使用单行拼接换行符。
+
+### 7.5 页脚（footer，可选）
+
+页脚用于标记破坏性变更和关联项：
+
+* 破坏性变更：`BREAKING CHANGE: 说明`；也可在类型后加 `!`，例如 `feat!:`。
+* 关联 Bug / Issue：`Closes #123`、`Refs BUG-0004`。
+
+### 7.6 示例
+
+单行提交：
+
+```bash
+git commit -m "feat(player): 新增播放进度拖动"
+git commit -m "docs: 更新项目启动说明"
+git commit -m "fix(audio): 修复输出设备切换后无声音"
+```
+
+带正文与引用：
+
+```bash
+git commit -m "fix(player): 修复歌词行点击跳转位置偏移" \
+  -m "点击歌词行时按行时间戳执行 seek，使进度与歌词高亮保持同步。" \
+  -m "Refs BUG-0004"
+```
+
+带破坏性变更：
+
+```text
+feat(audio)!: 重构播放状态事件契约
+
+audio_state_changed 的 payload 结构变更，旧前端监听方需同步升级。
+BREAKING CHANGE: AudioPlaybackState 字段调整。
+```
+
+### 7.7 提交前检查
+
+* 一条提交只包含一个逻辑改动，禁止多个功能混在同一个提交中。
+* 提交前执行 `git diff --cached --stat` 和 `git status`，确认暂存内容与提交描述一致。
+* 保持小步提交，便于追溯与回滚。
 ---
 
 ## 8. 冲突处理规范

@@ -16,7 +16,7 @@ use super::{
         AudioDeviceWatcherHandle,
     },
     error::{audio_error, unavailable_state, AudioCommandError, AudioErrorCode},
-    runtime::{AudioRuntime, AudioRuntimeRequest},
+    runtime::{start_track_parser, AudioRuntime, AudioRuntimeRequest, TrackParseRequest},
     source::{
         default_filters, hydrate_track_ref, input_path, load_folder_playlist, source_filters,
     },
@@ -31,8 +31,17 @@ use super::{
 const OUTPUT_DEVICE_EVENT_DEBOUNCE: Duration = Duration::from_millis(350);
 const OUTPUT_DEVICE_EVENT_MAX_COALESCE: Duration = Duration::from_millis(1_500);
 
+struct PendingLoad {
+    generation: u64,
+    path: PathBuf,
+    reply: Sender<Result<AudioTrackRef, AudioCommandError>>,
+}
+
 pub struct AudioController {
     tx: Mutex<Sender<AudioRuntimeRequest>>,
+    // Held for the process lifetime so the parser worker keeps receiving
+    // requests; the worker itself owns the receiving side.
+    _parser_tx: Mutex<Sender<TrackParseRequest>>,
     cover_cache_dir: PathBuf,
     _device_watcher: AudioDeviceWatcherHandle,
 }
@@ -54,28 +63,110 @@ impl AudioController {
 
         let cover_cache_dir = cache_dir.join("audio");
         let runtime_cover_cache_dir = cover_cache_dir.clone();
+        let (parser_tx, parser_rx) = mpsc::channel::<TrackParseRequest>();
+        let parser_runtime_tx = tx.clone();
+        let parser_cover_cache_dir = runtime_cover_cache_dir.clone();
+        // start_track_parser spawns the worker thread itself; dropping the
+        // returned join handle detaches it for the process lifetime.
+        let _parser_handle = start_track_parser(parser_rx, parser_runtime_tx, parser_cover_cache_dir);
+
+        let runtime_parser_tx = parser_tx.clone();
 
         thread::spawn(move || {
             tracing::info!(
                 operation = "audio.controller.runtime_thread",
                 "started audio runtime thread",
             );
-            let mut runtime = AudioRuntime::with_cover_cache_dir(runtime_cover_cache_dir);
+            let mut runtime = AudioRuntime::default();
+            let mut pending_load: Option<PendingLoad> = None;
 
             while let Ok(request) = rx.recv() {
                 match request {
                     AudioRuntimeRequest::LoadFile { path, reply } => {
-                        let started_at = Instant::now();
                         tracing::info!(
                             operation = "audio.load_file",
                             path = %path.display(),
                             "runtime load request received",
                         );
-                        let result = runtime.load_path(path);
-                        log_track_result("audio.load_file", started_at, &result);
-                        let state = runtime.get_state();
-                        let _ = reply.send(result);
-                        emit_state_changed(&app_handle, state);
+                        if let Some(previous) = pending_load.take() {
+                            tracing::info!(
+                                operation = "audio.load_file.superseded",
+                                previous_path = %previous.path.display(),
+                                "superseding previous in-flight load",
+                            );
+                            let superseded_error = audio_error(
+                                AudioErrorCode::InternalError,
+                                format!(
+                                    "Audio load superseded by a newer request: {}",
+                                    previous.path.display()
+                                ),
+                                true,
+                            );
+                            let _ = previous.reply.send(Err(superseded_error));
+                        }
+                        let generation = runtime.start_load(&path);
+                        pending_load = Some(PendingLoad {
+                            generation,
+                            path: path.clone(),
+                            reply,
+                        });
+                        emit_state_changed(&app_handle, runtime.get_state());
+                        if let Err(error) = runtime_parser_tx.send(TrackParseRequest {
+                            generation,
+                            path,
+                        }) {
+                            tracing::error!(
+                                operation = "audio.load_file",
+                                error = %error,
+                                "track parser channel is unavailable",
+                            );
+                            if let Some(pending) = pending_load.take() {
+                                let parser_error = audio_error(
+                                    AudioErrorCode::InternalError,
+                                    "Audio parser is unavailable",
+                                    true,
+                                );
+                                runtime.complete_load(
+                                    pending.generation,
+                                    pending.path.clone(),
+                                    &Err(parser_error.clone()),
+                                );
+                                let _ = pending.reply.send(Err(parser_error));
+                            }
+                            emit_state_changed(&app_handle, runtime.get_state());
+                        }
+                    }
+                    AudioRuntimeRequest::TrackParsed {
+                        generation,
+                        path,
+                        result,
+                    } => {
+                        let started_at = Instant::now();
+                        let is_current = pending_load
+                            .as_ref()
+                            .is_some_and(|pending| pending.generation == generation);
+                        if is_current {
+                            let applied = runtime.complete_load(generation, path, &result);
+                            if !applied {
+                                tracing::warn!(
+                                    operation = "audio.track_parsed",
+                                    generation,
+                                    "runtime rejected parse result despite matching pending load",
+                                );
+                            }
+                            let state = runtime.get_state();
+                            log_track_result("audio.load_file", started_at, &result);
+                            if let Some(pending) = pending_load.take() {
+                                let _ = pending.reply.send(result);
+                            }
+                            emit_state_changed(&app_handle, state);
+                        } else {
+                            tracing::debug!(
+                                operation = "audio.track_parsed",
+                                generation,
+                                "ignored stale track parse result",
+                            );
+                        }
                     }
                     AudioRuntimeRequest::Play { input, reply } => {
                         let started_at = Instant::now();
@@ -179,6 +270,7 @@ impl AudioController {
 
         Self {
             tx: Mutex::new(tx),
+            _parser_tx: Mutex::new(parser_tx),
             cover_cache_dir,
             _device_watcher: device_watcher,
         }

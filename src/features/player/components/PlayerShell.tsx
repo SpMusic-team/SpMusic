@@ -281,6 +281,7 @@ export function PlayerShell() {
   const [folderPlaylist, setFolderPlaylist] = useState<AudioFolderPlaylist | null>(null)
   const [audioError, setAudioError] = useState<AudioCommandError | null>(null)
   const [audioBusy, setAudioBusy] = useState(false)
+  const [autoplayInFlight, setAutoplayInFlight] = useState(false)
   const [transportBusy, setTransportBusy] = useState(false)
   const [volumeBusy, setVolumeBusy] = useState(false)
   const [seekPreviewSeconds, setSeekPreviewSeconds] = useState<number | null>(null)
@@ -312,7 +313,9 @@ export function PlayerShell() {
   const desktopCaptionsAvailable = false
   const currentAudioTrack = audioTrack?.id === realAudioTrackId ? audioTrack : null
   const usingRealAudio = Boolean(track && realAudioTrackId && track.id === realAudioTrackId)
-  const playing = usingRealAudio ? audioState?.phase === 'playing' : state.playbackStatus === 'playing'
+  const playing = usingRealAudio
+    ? audioState?.phase === 'playing' || autoplayInFlight
+    : state.playbackStatus === 'playing' || autoplayInFlight
   const realAudioDuration = audioState?.durationMs != null ? audioState.durationMs / 1000 : track?.durationSeconds ?? 0
   const duration = usingRealAudio ? realAudioDuration : track?.durationSeconds ?? 0
   const backendProgress = usingRealAudio ? (audioState?.positionMs ?? 0) / 1000 : state.progressSeconds
@@ -477,6 +480,8 @@ export function PlayerShell() {
         return false
       }
 
+      setAutoplayInFlight(autoplay && latestAudioStateRef.current?.phase === 'playing')
+
       const nextAudioTrack = await loadAudioFile(folderTrack.sourcePath)
       audioTrackRequestIdRef.current += 1
       audioTrackRequestTrackIdRef.current = null
@@ -488,10 +493,12 @@ export function PlayerShell() {
         ? await playAudio({ restart: true })
         : await getAudioState()
       applyAudioState(confirmedAudioState)
+      setAutoplayInFlight(false)
       prefetchNextPlaylistTrack(nextAudioTrack.id)
       endingTrackRef.current = null
       return true
     } catch (error) {
+      setAutoplayInFlight(false)
       const commandError: AudioCommandError = isAudioCommandError(error) ? error : {
         code: 'INTERNAL_ERROR',
         message: appCopy.audio.unavailable,
@@ -1051,7 +1058,7 @@ export function PlayerShell() {
             fileName={currentAudioTrack?.fileName ?? null}
             hasTrack={Boolean(audioState?.currentTrackId)}
             phase={audioState?.phase ?? 'idle'}
-            playing={audioState?.phase === 'playing'}
+            playing={playing}
             progress={(audioState?.positionMs ?? 0) / 1000}
             statusText={realAudioStatusText}
             title={usingRealAudio ? track?.title ?? null : null}
@@ -1151,7 +1158,7 @@ export function PlayerShell() {
           desktopCaptionsEnabled={desktopCaptionsAvailable && desktopCaptionsEnabled}
           volume={volume}
           volumeBusy={volumeBusy}
-          volumeDisabled={audioBusy}
+          volumeDisabled={audioBusy && audioState?.phase !== 'loading'}
           queueOpen={queueOpen}
           audioBusy={audioBusy}
           audioStatusText={realAudioStatusText}

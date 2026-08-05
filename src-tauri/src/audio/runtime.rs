@@ -1,6 +1,7 @@
 use std::{
-    path::PathBuf,
-    sync::mpsc::Sender,
+    path::{Path, PathBuf},
+    sync::mpsc::{Receiver, Sender},
+    thread,
     time::{Duration, Instant},
 };
 
@@ -81,6 +82,11 @@ pub(crate) enum AudioRuntimeRequest {
         path: PathBuf,
         reply: Sender<Result<AudioTrackRef, AudioCommandError>>,
     },
+    TrackParsed {
+        generation: u64,
+        path: PathBuf,
+        result: Result<AudioTrackRef, AudioCommandError>,
+    },
     Play {
         input: Option<AudioPlayInput>,
         reply: Sender<Result<AudioPlaybackState, AudioCommandError>>,
@@ -111,6 +117,73 @@ pub(crate) enum AudioRuntimeRequest {
     },
 }
 
+pub(crate) struct TrackParseRequest {
+    pub generation: u64,
+    pub path: PathBuf,
+}
+
+pub(crate) fn start_track_parser(
+    rx: Receiver<TrackParseRequest>,
+    runtime_tx: Sender<AudioRuntimeRequest>,
+    cover_cache_dir: PathBuf,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        tracing::info!(
+            operation = "audio.parser.thread",
+            "started track parser worker",
+        );
+        while let Ok(request) = rx.recv() {
+            let started_at = Instant::now();
+            tracing::info!(
+                operation = "audio.parser.parse",
+                path = %request.path.display(),
+                generation = request.generation,
+                "parsing audio track on worker",
+            );
+            let result = hydrate_track_ref(&request.path, Some(&cover_cache_dir));
+            let elapsed_ms = started_at.elapsed().as_millis() as u64;
+            match &result {
+                Ok(track) => tracing::info!(
+                    operation = "audio.parser.parse",
+                    elapsed_ms,
+                    path = %request.path.display(),
+                    generation = request.generation,
+                    track_id = %track.id,
+                    duration_ms = track.duration_ms,
+                    "audio track parsed",
+                ),
+                Err(error) => tracing::warn!(
+                    operation = "audio.parser.parse",
+                    elapsed_ms,
+                    path = %request.path.display(),
+                    generation = request.generation,
+                    error_code = ?error.code,
+                    error = %error.message,
+                    "audio track parse failed",
+                ),
+            }
+            if runtime_tx
+                .send(AudioRuntimeRequest::TrackParsed {
+                    generation: request.generation,
+                    path: request.path,
+                    result,
+                })
+                .is_err()
+            {
+                tracing::warn!(
+                    operation = "audio.parser.thread",
+                    "audio runtime channel closed while returning parse result",
+                );
+                break;
+            }
+        }
+        tracing::info!(
+            operation = "audio.parser.thread",
+            "track parser worker stopped",
+        );
+    })
+}
+
 pub(crate) struct AudioRuntime {
     stream: Option<OutputStream>,
     stream_handle: Option<OutputStreamHandle>,
@@ -124,7 +197,8 @@ pub(crate) struct AudioRuntime {
     error: Option<AudioCommandError>,
     output_device_signature: Option<String>,
     output_device_change_pending: bool,
-    cover_cache_dir: Option<PathBuf>,
+    pending_load_generation: Option<u64>,
+    load_generation: u64,
 }
 
 impl Default for AudioRuntime {
@@ -142,26 +216,23 @@ impl Default for AudioRuntime {
             error: None,
             output_device_signature: current_output_device_signature(),
             output_device_change_pending: false,
-            cover_cache_dir: None,
+            pending_load_generation: None,
+            load_generation: 0,
         }
     }
 }
 
 impl AudioRuntime {
-    pub(crate) fn with_cover_cache_dir(cover_cache_dir: PathBuf) -> Self {
-        Self {
-            cover_cache_dir: Some(cover_cache_dir),
-            ..Self::default()
-        }
-    }
-
-    pub(crate) fn load_path(&mut self, path: PathBuf) -> Result<AudioTrackRef, AudioCommandError> {
+    pub(crate) fn start_load(&mut self, path: &Path) -> u64 {
         let started_at = Instant::now();
+        let generation = self.load_generation;
+        self.load_generation = self.load_generation.saturating_add(1);
         tracing::info!(
-            operation = "audio.runtime.load_path",
+            operation = "audio.runtime.start_load",
             path = %path.display(),
+            generation,
             previous_phase = ?self.phase,
-            "loading audio path",
+            "starting asynchronous audio load",
         );
         self.clear_error();
         // Selecting a new path is a replacement operation, not a speculative
@@ -169,37 +240,66 @@ impl AudioRuntime {
         // a rejected file can never resume the old sink on a later Play call.
         self.invalidate_loaded_audio();
         self.phase = AudioPlaybackPhase::Loading;
+        self.pending_load_generation = Some(generation);
+        tracing::info!(
+            operation = "audio.runtime.start_load",
+            path = %path.display(),
+            generation,
+            elapsed_ms = started_at.elapsed().as_millis() as u64,
+            "asynchronous audio load started",
+        );
+        generation
+    }
 
-        let track = match hydrate_track_ref(&path, self.cover_cache_dir.as_deref()) {
-            Ok(track) => track,
+    pub(crate) fn complete_load(
+        &mut self,
+        generation: u64,
+        path: PathBuf,
+        result: &Result<AudioTrackRef, AudioCommandError>,
+    ) -> bool {
+        if self.pending_load_generation != Some(generation) {
+            tracing::debug!(
+                operation = "audio.runtime.complete_load",
+                generation,
+                pending_generation = self.pending_load_generation,
+                "ignored stale audio parse result",
+            );
+            return false;
+        }
+        self.pending_load_generation = None;
+        let started_at = Instant::now();
+        match result {
+            Ok(track) => {
+                tracing::info!(
+                    operation = "audio.runtime.complete_load",
+                    path = %path.display(),
+                    generation,
+                    track_id = %track.id,
+                    file_name = %track.file_name,
+                    duration_ms = track.duration_ms,
+                    "audio parse completed",
+                );
+                self.current_path = Some(path);
+                self.current_track = Some(track.clone());
+                self.phase = AudioPlaybackPhase::Ready;
+                self.accumulated = Duration::ZERO;
+                self.started_at = None;
+            }
             Err(error) => {
-                self.phase = AudioPlaybackPhase::Error;
-                self.error = Some(error.clone());
                 tracing::warn!(
-                    operation = "audio.runtime.load_path",
-                    elapsed_ms = started_at.elapsed().as_millis() as u64,
+                    operation = "audio.runtime.complete_load",
+                    path = %path.display(),
+                    generation,
                     error_code = ?error.code,
                     error = %error.message,
-                    "failed to load audio path",
+                    elapsed_ms = started_at.elapsed().as_millis() as u64,
+                    "audio parse failed",
                 );
-                return Err(error);
+                self.phase = AudioPlaybackPhase::Error;
+                self.error = Some(error.clone());
             }
-        };
-
-        self.current_path = Some(path);
-        self.current_track = Some(track.clone());
-        self.phase = AudioPlaybackPhase::Ready;
-        self.accumulated = Duration::ZERO;
-        self.started_at = None;
-        tracing::info!(
-            operation = "audio.runtime.load_path",
-            elapsed_ms = started_at.elapsed().as_millis() as u64,
-            track_id = %track.id,
-            file_name = %track.file_name,
-            duration_ms = track.duration_ms,
-            "loaded audio path",
-        );
-        Ok(track)
+        }
+        true
     }
 
     pub(crate) fn play(
@@ -270,6 +370,13 @@ impl AudioRuntime {
             track_id = self.current_track.as_ref().map(|track| track.id.as_str()),
             "pause requested",
         );
+        if matches!(self.phase, AudioPlaybackPhase::Loading) {
+            tracing::debug!(
+                operation = "audio.runtime.pause",
+                "pause is a no-op while loading",
+            );
+            return Ok(self.state());
+        }
         if self.current_path.is_none() {
             return self.fail(
                 AudioErrorCode::NoTrackLoaded,
@@ -330,6 +437,13 @@ impl AudioRuntime {
     ) -> Result<AudioPlaybackState, AudioCommandError> {
         let started_at = Instant::now();
         self.clear_error();
+        if matches!(self.phase, AudioPlaybackPhase::Loading) {
+            tracing::debug!(
+                operation = "audio.runtime.seek",
+                "seek is a no-op while loading",
+            );
+            return Ok(self.state());
+        }
         if self.current_path.is_none() {
             return self.fail(
                 AudioErrorCode::NoTrackLoaded,
@@ -818,6 +932,7 @@ mod tests {
     use std::{
         cell::{Cell, RefCell},
         rc::Rc,
+        sync::mpsc,
         time::{SystemTime, UNIX_EPOCH},
     };
 
@@ -1037,16 +1152,25 @@ mod tests {
                 ..AudioRuntime::default()
             };
 
-            let load_error = runtime
-                .load_path(path)
-                .expect_err("unsupported replacement must fail");
-            assert_eq!(load_error.code, AudioErrorCode::UnsupportedFormat);
+            let generation = runtime.start_load(&path);
+            let unsupported_error = audio_error(
+                AudioErrorCode::UnsupportedFormat,
+                "unsupported replacement",
+                true,
+            );
+            let applied = runtime.complete_load(generation, path, &Err(unsupported_error));
+            assert!(applied, "matching generation should be applied");
             assert_eq!(runtime.phase, AudioPlaybackPhase::Error);
             assert!(runtime.sink.is_none());
             assert!(runtime.current_path.is_none());
             assert!(runtime.current_track.is_none());
             assert_eq!(runtime.accumulated, Duration::ZERO);
             assert!(runtime.started_at.is_none());
+            assert_eq!(
+                runtime.error.as_ref().map(|error| error.code),
+                Some(AudioErrorCode::UnsupportedFormat)
+            );
+            assert_eq!(runtime.pending_load_generation, None);
 
             let play_error = runtime
                 .play(None)
@@ -1058,6 +1182,140 @@ mod tests {
         }
 
         std::fs::remove_dir_all(root).expect("test directory should be removed");
+    }
+
+    #[test]
+    fn start_load_enters_loading_and_invalidates_previous_track() {
+        let mut runtime = AudioRuntime {
+            current_path: Some(PathBuf::from("old.flac")),
+            current_track: Some(loaded_test_track()),
+            phase: AudioPlaybackPhase::Paused,
+            accumulated: Duration::from_secs(12),
+            ..AudioRuntime::default()
+        };
+
+        let generation = runtime.start_load(Path::new("new.flac"));
+
+        assert_eq!(generation, 0);
+        assert_eq!(runtime.phase, AudioPlaybackPhase::Loading);
+        assert!(runtime.current_path.is_none());
+        assert!(runtime.current_track.is_none());
+        assert_eq!(runtime.accumulated, Duration::ZERO);
+        assert_eq!(runtime.pending_load_generation, Some(0));
+        assert_eq!(runtime.load_generation, 1);
+    }
+
+    #[test]
+    fn complete_load_applies_ready_track_for_matching_generation() {
+        let mut runtime = AudioRuntime::default();
+        let generation = runtime.start_load(Path::new("song.flac"));
+        let track = loaded_test_track();
+
+        let applied = runtime.complete_load(
+            generation,
+            PathBuf::from("song.flac"),
+            &Ok(track.clone()),
+        );
+
+        assert!(applied);
+        assert_eq!(runtime.phase, AudioPlaybackPhase::Ready);
+        assert_eq!(runtime.current_path, Some(PathBuf::from("song.flac")));
+        let stored = runtime
+            .current_track
+            .as_ref()
+            .expect("current track should be set after a successful load");
+        assert_eq!(stored.id, track.id);
+        assert_eq!(stored.source_path, track.source_path);
+        assert_eq!(stored.duration_ms, track.duration_ms);
+        assert_eq!(runtime.accumulated, Duration::ZERO);
+        assert_eq!(runtime.pending_load_generation, None);
+    }
+
+    #[test]
+    fn stale_generation_parse_result_is_ignored() {
+        let mut runtime = AudioRuntime::default();
+        let generation = runtime.start_load(Path::new("song.flac"));
+
+        let applied = runtime.complete_load(
+            generation.wrapping_add(1),
+            PathBuf::from("song.flac"),
+            &Ok(loaded_test_track()),
+        );
+
+        assert!(!applied);
+        assert_eq!(runtime.phase, AudioPlaybackPhase::Loading);
+        assert!(runtime.current_track.is_none());
+        assert!(runtime.current_path.is_none());
+        assert_eq!(runtime.pending_load_generation, Some(generation));
+    }
+
+    #[test]
+    fn pause_during_loading_is_a_noop() {
+        let mut runtime = AudioRuntime {
+            phase: AudioPlaybackPhase::Loading,
+            pending_load_generation: Some(7),
+            ..AudioRuntime::default()
+        };
+
+        let state = runtime.pause().expect("pause during loading should be a no-op");
+
+        assert_eq!(state.phase, AudioPlaybackPhase::Loading);
+        assert_eq!(runtime.phase, AudioPlaybackPhase::Loading);
+        assert!(runtime.error.is_none());
+        assert_eq!(runtime.pending_load_generation, Some(7));
+    }
+
+    #[test]
+    fn seek_during_loading_is_a_noop() {
+        let mut runtime = AudioRuntime {
+            phase: AudioPlaybackPhase::Loading,
+            pending_load_generation: Some(7),
+            ..AudioRuntime::default()
+        };
+
+        let state = runtime
+            .seek(AudioSeekInput { position_ms: 5_000 })
+            .expect("seek during loading should be a no-op");
+
+        assert_eq!(state.phase, AudioPlaybackPhase::Loading);
+        assert_eq!(runtime.phase, AudioPlaybackPhase::Loading);
+        assert!(runtime.error.is_none());
+        assert_eq!(runtime.pending_load_generation, Some(7));
+    }
+
+    #[test]
+    fn track_parser_worker_forwards_results_to_the_runtime_channel() {
+        let (runtime_tx, runtime_rx) = mpsc::channel::<AudioRuntimeRequest>();
+        let (parser_tx, parser_rx) = mpsc::channel::<TrackParseRequest>();
+        let _parser_handle = start_track_parser(parser_rx, runtime_tx, std::env::temp_dir());
+
+        let missing = std::env::temp_dir().join(format!(
+            "spmusic-parser-missing-{}-{}.mp3",
+            std::process::id(),
+            line!()
+        ));
+        parser_tx
+            .send(TrackParseRequest {
+                generation: 11,
+                path: missing.clone(),
+            })
+            .expect("parser request should send");
+
+        match runtime_rx.recv_timeout(Duration::from_secs(10)) {
+            Ok(AudioRuntimeRequest::TrackParsed {
+                generation,
+                path,
+                result,
+            }) => {
+                assert_eq!(generation, 11);
+                assert_eq!(path, missing);
+                assert!(matches!(
+                    result,
+                    Err(error) if error.code == AudioErrorCode::FileNotFound
+                ));
+            }
+            _ => panic!("expected TrackParsed from parser worker"),
+        }
     }
 
     #[test]

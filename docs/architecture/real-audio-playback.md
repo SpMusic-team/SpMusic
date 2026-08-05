@@ -1,16 +1,18 @@
 ---
 doc_id: "ARCH-REAL-AUDIO-PLAYBACK"
-title: "v0.1 真实本地播放架构契约"
+title: "架构说明：v0.1 真实本地播放架构契约"
 doc_type: "architecture"
 status: "active"
 owner_agent: "Architecture Agent"
 version_scope: "v0.1"
 created: "2026-07-24"
-updated: "2026-07-27"
+updated: "2026-08-05"
 source_documents:
   - "docs/decisions/2026-07-24-v0-1-real-audio-scope.md"
   - "docs/decisions/2026-07-27-v0-1-implemented-capabilities-boundary.md"
   - "docs/decisions/2026-07-27-v0-1-local-m3u8-temporary-queue.md"
+  - "docs/decisions/2026-08-05-OPT-0001-async-track-parsing.md"
+  - "docs/changes/optimizations/OPT-0001.md"
   - "docs/tasks/sp-015-real-audio-architecture-contract.md"
   - "docs/tasks/sp-021-real-audio-contract-reconciliation.md"
   - "docs/sprint-plan.md"
@@ -447,6 +449,55 @@ v0.1 采用「command 返回即时状态 + 事件推送 + 播放中轮询」三�
 - 旧状态事件不得覆盖最新用户意图：前端以「请求代际」与「传输意图守卫」丢弃过期响应 / 事件（seek 与传输请求均使用单调递增代际）。
 - `audio_get_state` 轮询响应只在与当前代际一致时才应用，防止轮询期间已发起的新命令被旧快照回滚。
 - 任何通道到达的 `currentTrackId` 与前端缓存的 `AudioTrackRef` 不一致时，前端只通过低频 `audio_get_current_track` / `audio_hydrate_track` 补水，不通过轮询或事件传输详情。
+
+## 异步解析 worker（OPT-0001）
+
+本决策（见 `docs/decisions/2026-08-05-OPT-0001-async-track-parsing.md`）覆盖早期「单线程 actor 同步执行 `LoadFile`」的隐含假设：音频 runtime 线程不再承担重 I/O 解析，`hydrate_track_ref`（容器探测、时长解码、元数据与封面读取）移入独立解析 worker 线程。
+
+### 线程模型与消息流
+
+```mermaid
+sequenceDiagram
+    participant Cmd as Tauri command 线程
+    participant Rt as 音频 runtime 线程
+    participant Ps as 解析 worker 线程
+
+    Cmd->>Rt: LoadFile { path, reply }
+    Rt->>Rt: start_load(path)：失效旧轨道、phase=Loading、分配 generation
+    Rt-->>前端: emit audio_state_changed (loading)
+    Rt->>Ps: TrackParseRequest { generation, path }
+    Rt-->>Cmd: （命令线程继续等待 reply，音频线程空闲可处理控制命令）
+    Cmd->>Rt: Pause / Seek / SetVolume / GetState（立即响应，见 no-op 表）
+    Ps->>Ps: hydrate_track_ref（重 I/O，不在音频线程）
+    Ps->>Rt: TrackParsed { generation, path, result }
+    Rt->>Rt: complete_load：generation 匹配才应用（Ready/Error）
+    Rt-->>Cmd: reply（LoadFile 结果）
+    Rt-->>前端: emit audio_state_changed (ready/error)
+```
+
+### 代际号规则
+
+- `AudioRuntime` 维护单调递增 `load_generation` 与 `pending_load_generation`；`start_load` 分配并登记代际，`complete_load` 校验代际一致才应用结果。
+- controller runtime 循环维护 `pending_load: Option<PendingLoad>`（代际、路径、reply），作为「当前待完成加载」的权威；`TrackParsed` 代际不匹配时丢弃，不回复。
+- 并发 `LoadFile`：新加载到达时旧 pending 收到可恢复 `INTERNAL_ERROR`（说明被更新请求取代），新加载正常进行。
+
+### 加载期间控制语义
+
+| 命令 | Loading 期间行为 |
+| --- | --- |
+| `audio_get_state` | 立即返回 `phase=loading` |
+| `audio_pause` | no-op，返回 `phase=loading`，不报错 |
+| `audio_seek` | no-op，返回 `phase=loading`，不报错 |
+| `audio_set_volume` | 正常更新音量，返回 `phase=loading` |
+| `audio_play` | 返回 `NO_TRACK_LOADED`（无可播放轨道） |
+| `audio_stop` | 返回 `idle`，不取消在途加载 |
+
+### 边界与残留风险
+
+- 命令契约不变：`audio_load_file` / `audio_open_file` / `audio_open_source` 仍返回 `AudioTrackRef`，reply 在解析完成后发出；controller 阻塞的是 command 线程，音频线程保持空闲。
+- `audio_hydrate_track` 仍在 command 线程同步解析（不影响音频线程），解析结果复用与去重见 OPT-0002。
+- `play()` 的 `rebuild_sink` 中 `open_source` 仍发生在 runtime 线程（属于开始播放的开销，非加载路径）。
+- 解析 worker 为单线程串行；连续换曲时至多产生一个被浪费的过期解析任务。
 
 ## 临时队列规则
 

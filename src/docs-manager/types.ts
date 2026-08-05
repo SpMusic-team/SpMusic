@@ -26,19 +26,23 @@ export interface DocumentDetail extends DocumentSummary {
 
 export interface FilterField {
   key: string
+  param: string
   label: string
 }
 
+export interface FacetOption {
+  value: string
+  count: number
+}
+
+export type FilterSort = "updated" | "created" | "title" | "docId"
+export type FilterOrder = "asc" | "desc"
+export type IssuesFilter = "" | "any" | "errors" | "none"
+
 export interface DocumentIndex {
   documents: DocumentSummary[]
-  filterSchema: Record<string, FilterField[]>
-  facets: {
-    docTypes: string[]
-    statuses: string[]
-    owners: string[]
-    scopes: string[]
-    [key: string]: string[]
-  }
+  filterSchema: FilterField[]
+  facets: Record<string, FacetOption[]>
   stats: {
     total: number
     filtered: number
@@ -51,12 +55,11 @@ export interface DocumentIndex {
 
 export interface DocumentFilters {
   query: string
-  docType: string
-  status: string
-  owner: string
-  scope: string
+  values: Record<string, string[]>
+  issues: IssuesFilter
+  sort: FilterSort
+  order: FilterOrder
   includeInternal: boolean
-  extra: Record<string, string>
 }
 
 export interface NewDocumentFields {

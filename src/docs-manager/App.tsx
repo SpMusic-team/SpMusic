@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   AlertTriangleIcon,
+  ArrowUpDownIcon,
   CheckIcon,
+  ChevronDownIcon,
   ClipboardIcon,
   ExternalLinkIcon,
   FileIcon,
@@ -17,7 +19,9 @@ import {
   SaveIcon,
   SearchIcon,
   ShieldCheckIcon,
+  SlidersHorizontalIcon,
   Trash2Icon,
+  XIcon,
 } from "lucide-react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
@@ -50,6 +54,9 @@ import {
   DropdownMenuContent,
   DropdownMenuGroup,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
@@ -88,18 +95,93 @@ import type {
   DocumentFilters,
   DocumentIndex,
   DocumentSummary,
+  FacetOption,
+  FilterOrder,
+  FilterSort,
+  IssuesFilter,
   MetadataValue,
   NewDocumentFields,
 } from "./types"
 
+const FILTER_PARAMS = ["docType", "status", "owner", "scope", "severity", "module", "priority"]
+
+const PARAM_LABELS: Record<string, string> = {
+  docType: "类型",
+  status: "状态",
+  owner: "负责 Agent",
+  scope: "版本范围",
+  severity: "严重程度",
+  module: "模块",
+  priority: "优先级",
+}
+
+const PARAM_KEYS: Record<string, string> = {
+  docType: "doc_type",
+  status: "status",
+  owner: "owner_agent",
+  scope: "version_scope",
+  severity: "severity",
+  module: "module",
+  priority: "priority",
+}
+
+const ISSUES_OPTIONS: { value: IssuesFilter; label: string }[] = [
+  { value: "", label: "全部问题状态" },
+  { value: "any", label: "有问题" },
+  { value: "errors", label: "仅错误" },
+  { value: "none", label: "无问题" },
+]
+
+const SORT_ITEMS: { sort: FilterSort; order: FilterOrder; label: string }[] = [
+  { sort: "updated", order: "desc", label: "更新时间（新→旧）" },
+  { sort: "updated", order: "asc", label: "更新时间（旧→新）" },
+  { sort: "created", order: "desc", label: "创建时间（新→旧）" },
+  { sort: "created", order: "asc", label: "创建时间（旧→新）" },
+  { sort: "title", order: "asc", label: "标题（A→Z）" },
+  { sort: "title", order: "desc", label: "标题（Z→A）" },
+  { sort: "docId", order: "asc", label: "文档 ID（A→Z）" },
+  { sort: "docId", order: "desc", label: "文档 ID（Z→A）" },
+]
+
 const INITIAL_FILTERS: DocumentFilters = {
   query: "",
-  docType: "",
-  status: "",
-  owner: "",
-  scope: "",
+  values: {},
+  issues: "",
+  sort: "updated",
+  order: "desc",
   includeInternal: false,
-  extra: {},
+}
+
+function parseSort(value: string | null): FilterSort {
+  return value === "created" || value === "title" || value === "docId" ? value : "updated"
+}
+
+function parseOrder(value: string | null): FilterOrder {
+  return value === "asc" ? "asc" : "desc"
+}
+
+function parseIssues(value: string | null): IssuesFilter {
+  return value === "any" || value === "errors" || value === "none" ? value : ""
+}
+
+function filtersFromUrl(): DocumentFilters {
+  const params = new URLSearchParams(window.location.search)
+  const values: Record<string, string[]> = {}
+  for (const param of FILTER_PARAMS) {
+    const raw = params.get(param)
+    if (raw) {
+      const list = raw.split(",").map((item) => item.trim()).filter(Boolean)
+      if (list.length) values[param] = list
+    }
+  }
+  return {
+    query: params.get("q") ?? "",
+    values,
+    issues: parseIssues(params.get("issues")),
+    sort: parseSort(params.get("sort")),
+    order: parseOrder(params.get("order")),
+    includeInternal: params.get("internal") === "true",
+  }
 }
 
 function metadataText(value: MetadataValue | undefined) {
@@ -137,26 +219,54 @@ source_documents:
 `
 }
 
-interface FilterSelectProps {
+interface FilterMultiSelectProps {
   label: string
-  value: string
-  options: string[]
-  onChange: (value: string) => void
+  selected: string[]
+  options: FacetOption[]
+  onChange: (values: string[]) => void
 }
 
-function FilterSelect({ label, value, options, onChange }: FilterSelectProps) {
-  const items = [{ label: `全部${label}`, value: "__all__" }, ...options.map((option) => ({ label: option, value: option }))]
+function FilterMultiSelect({ label, selected, options, onChange }: FilterMultiSelectProps) {
+  const summary = selected.length === 0 ? `全部${label}` : selected.length === 1 ? selected[0] : `${label} ${selected.length} 项`
   return (
-    <Select items={items} value={value || "__all__"} onValueChange={(nextValue) => onChange(nextValue === "__all__" || nextValue == null ? "" : nextValue)}>
-      <SelectTrigger className="w-full" aria-label={label}>
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectGroup>
-          {items.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}
-        </SelectGroup>
-      </SelectContent>
-    </Select>
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <Button variant="outline" className="w-full justify-start gap-1.5 px-2.5 font-normal" aria-label={label} />
+        }
+      >
+        <span className="min-w-0 flex-1 truncate text-left">{summary}</span>
+        <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="max-w-64">
+        <DropdownMenuGroup>
+          {options.length === 0 ? (
+            <DropdownMenuItem disabled>当前条件下无可用选项</DropdownMenuItem>
+          ) : options.map((option) => (
+            <DropdownMenuCheckboxItem
+              key={option.value}
+              checked={selected.includes(option.value)}
+              onCheckedChange={() => onChange(
+                selected.includes(option.value)
+                  ? selected.filter((value) => value !== option.value)
+                  : [...selected, option.value],
+              )}
+            >
+              <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
+                <span className="truncate">{option.value}</span>
+                <span className="text-xs text-muted-foreground">{option.count}</span>
+              </span>
+            </DropdownMenuCheckboxItem>
+          ))}
+        </DropdownMenuGroup>
+        {selected.length > 0 && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={() => onChange([])}>清空{label}筛选</DropdownMenuItem>
+          </>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 
@@ -202,7 +312,7 @@ function LoadingWorkspace() {
 }
 
 export function App() {
-  const [filters, setFilters] = useState(INITIAL_FILTERS)
+  const [filters, setFilters] = useState(filtersFromUrl)
   const [index, setIndex] = useState<DocumentIndex | null>(null)
   const [selectedPath, setSelectedPath] = useState("")
   const [document, setDocument] = useState<DocumentDetail | null>(null)
@@ -249,6 +359,20 @@ export function App() {
       if (queryTimer.current) window.clearTimeout(queryTimer.current)
     }
   }, [filters, refreshIndex])
+
+  useEffect(() => {
+    const params = new URLSearchParams()
+    if (filters.query) params.set("q", filters.query)
+    for (const [param, values] of Object.entries(filters.values)) {
+      if (values.length > 0) params.set(param, values.join(","))
+    }
+    if (filters.issues) params.set("issues", filters.issues)
+    if (filters.sort !== "updated") params.set("sort", filters.sort)
+    if (filters.order !== "desc") params.set("order", filters.order)
+    if (filters.includeInternal) params.set("internal", "true")
+    const search = params.toString()
+    window.history.replaceState(null, "", `${window.location.pathname}${search ? `?${search}` : ""}`)
+  }, [filters])
 
   useEffect(() => {
     const events = new EventSource("/api/events")
@@ -306,17 +430,38 @@ export function App() {
     return () => window.removeEventListener("keydown", shortcut)
   }, [save])
 
-  function updateFilter(key: keyof DocumentFilters, value: string | boolean) {
-    setFilters((current) => ({ ...current, [key]: value, ...(key === "docType" ? { extra: {} } : {}) }))
+  function setParamValues(param: string, values: string[]) {
+    setFilters((current) => {
+      const nextValues = { ...current.values }
+      if (values.length) nextValues[param] = values
+      else delete nextValues[param]
+      return { ...current, values: nextValues }
+    })
   }
 
-  function updateExtraField(key: string, value: string) {
-    setFilters((current) => {
-      const extra = { ...current.extra }
-      if (value) extra[key] = value
-      else delete extra[key]
-      return { ...current, extra }
-    })
+  function setIssues(issues: IssuesFilter) {
+    setFilters((current) => ({ ...current, issues }))
+  }
+
+  function setSorting(sort: FilterSort, order: FilterOrder) {
+    setFilters((current) => ({ ...current, sort, order }))
+  }
+
+  function setIncludeInternal(checked: boolean) {
+    setFilters((current) => ({ ...current, includeInternal: checked }))
+  }
+
+  function clearAllFilters() {
+    setFilters((current) => ({ ...INITIAL_FILTERS, includeInternal: current.includeInternal }))
+  }
+
+  function applyPreset(preset: Partial<DocumentFilters>) {
+    setFilters((current) => ({
+      ...INITIAL_FILTERS,
+      ...preset,
+      values: preset.values ?? {},
+      includeInternal: current.includeInternal,
+    }))
   }
 
   async function create(fields: NewDocumentFields) {
@@ -361,11 +506,31 @@ export function App() {
     }
   }
 
-  const hasFilters = useMemo(() => Boolean(filters.query || filters.docType || filters.status || filters.owner || filters.scope || Object.keys(filters.extra).length > 0), [filters])
-  const activeTypeFields = useMemo(() => {
-    if (!filters.docType || !index) return []
-    return index.filterSchema[filters.docType] ?? []
-  }, [filters.docType, index])
+  const hasFilters = useMemo(() => Boolean(
+    filters.query
+    || filters.issues
+    || Object.values(filters.values).some((values) => values.length > 0),
+  ), [filters])
+  const schemaFields = useMemo(() => index?.filterSchema ?? FILTER_PARAMS.map((param) => ({
+    key: PARAM_KEYS[param] ?? param,
+    param,
+    label: PARAM_LABELS[param] ?? param,
+  })), [index])
+  const activeChips = useMemo(() => {
+    const chips: { param: string; label: string; value: string }[] = []
+    for (const param of FILTER_PARAMS) {
+      const label = PARAM_LABELS[param] ?? param
+      for (const value of filters.values[param] ?? []) chips.push({ param, label, value })
+    }
+    if (filters.issues === "any") chips.push({ param: "issues", label: "问题", value: "有问题" })
+    if (filters.issues === "errors") chips.push({ param: "issues", label: "问题", value: "仅错误" })
+    if (filters.issues === "none") chips.push({ param: "issues", label: "问题", value: "无问题" })
+    return chips
+  }, [filters])
+  const currentSortLabel = useMemo(
+    () => SORT_ITEMS.find((item) => item.sort === filters.sort && item.order === filters.order)?.label ?? "排序",
+    [filters.sort, filters.order],
+  )
   const previewSource = useMemo(() => source.replace(/^---\s*\r?\n[\s\S]*?\r?\n---\s*\r?\n?/u, ""), [source])
 
   return (
@@ -405,33 +570,81 @@ export function App() {
           className="docs-filter-sidebar flex min-h-0 flex-col border-r bg-muted/20"
           aria-hidden={filtersCollapsed}
         >
-          <div className="flex flex-col gap-4 p-4">
+          <div className="flex min-h-0 flex-col gap-4 overflow-y-auto p-4">
             <div className="flex items-center gap-2 rounded-lg border bg-background px-3">
               <SearchIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
               <Input
                 className="border-0 px-0 shadow-none focus-visible:ring-0"
                 value={filters.query}
-                onChange={(event) => updateFilter("query", event.target.value)}
-                placeholder="搜索标题、正文或元数据"
+                onChange={(event) => setFilters((current) => ({ ...current, query: event.target.value }))}
+                placeholder="搜索标题、正文，或字段:值（如 status:待处理）"
                 aria-label="全文搜索"
               />
             </div>
+            {activeChips.length > 0 && (
+              <div className="flex flex-wrap gap-1">
+                {activeChips.map((chip) => (
+                  <Badge key={`${chip.param}:${chip.value}`} variant="secondary" className="gap-1 pr-1">
+                    <span className="text-xs">{chip.label}: {chip.value}</span>
+                    <button
+                      type="button"
+                      className="rounded-sm p-0.5 text-muted-foreground hover:bg-muted-foreground/20 hover:text-foreground"
+                      onClick={() => {
+                        if (chip.param === "issues") setIssues("")
+                        else setParamValues(chip.param, (filters.values[chip.param] ?? []).filter((value) => value !== chip.value))
+                      }}
+                      aria-label={`移除筛选 ${chip.label}: ${chip.value}`}
+                    >
+                      <XIcon className="size-3" />
+                    </button>
+                  </Badge>
+                ))}
+              </div>
+            )}
             <FieldGroup className="gap-2">
-              <FilterSelect label="类型" value={filters.docType} options={index?.facets.docTypes ?? []} onChange={(value) => updateFilter("docType", value)} />
-              <FilterSelect label="状态" value={filters.status} options={index?.facets.statuses ?? []} onChange={(value) => updateFilter("status", value)} />
-              <FilterSelect label="负责 Agent" value={filters.owner} options={index?.facets.owners ?? []} onChange={(value) => updateFilter("owner", value)} />
-              <FilterSelect label="版本范围" value={filters.scope} options={index?.facets.scopes ?? []} onChange={(value) => updateFilter("scope", value)} />
-              {activeTypeFields.map((field) => (
-                <FilterSelect
-                  key={field.key}
+              {schemaFields.map((field) => (
+                <FilterMultiSelect
+                  key={field.param}
                   label={field.label}
-                  value={filters.extra[field.key] ?? ""}
-                  options={index?.facets[field.key] ?? []}
-                  onChange={(value) => updateExtraField(field.key, value)}
+                  selected={filters.values[field.param] ?? []}
+                  options={index?.facets[field.param] ?? []}
+                  onChange={(values) => setParamValues(field.param, values)}
                 />
               ))}
+              <Select
+                value={filters.issues || "__all__"}
+                onValueChange={(value) => setIssues(value === "__all__" ? "" : value as IssuesFilter)}
+              >
+                <SelectTrigger className="w-full" aria-label="问题状态">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    {ISSUES_OPTIONS.map((option) => (
+                      <SelectItem key={option.value || "__all__"} value={option.value || "__all__"}>{option.label}</SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
             </FieldGroup>
-            {hasFilters && <Button variant="ghost" size="sm" onClick={() => setFilters((current) => ({ ...INITIAL_FILTERS, includeInternal: current.includeInternal }))}>清除筛选</Button>}
+            <div className="flex items-center gap-2">
+              <DropdownMenu>
+                <DropdownMenuTrigger render={<Button variant="outline" size="sm" className="flex-1" />}>
+                  <SlidersHorizontalIcon data-icon="inline-start" />
+                  预设
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start">
+                  <DropdownMenuGroup>
+                    <DropdownMenuItem onSelect={clearAllFilters}>全部文档</DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => applyPreset({ values: { status: ["待处理"] } })}>待处理项</DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => applyPreset({ values: { status: ["待评估"] } })}>待评估项</DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => applyPreset({ issues: "any" })}>有问题文档</DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => applyPreset({ issues: "errors" })}>仅错误文档</DropdownMenuItem>
+                  </DropdownMenuGroup>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              {hasFilters && <Button variant="ghost" size="sm" onClick={clearAllFilters}>清除筛选</Button>}
+            </div>
           </div>
           <Separator />
           <div className="grid grid-cols-2 gap-2 p-4 text-sm">
@@ -472,19 +685,48 @@ export function App() {
               </Tooltip>
               <span className="truncate text-sm font-medium">文档</span>
             </div>
-            <DropdownMenu>
-              <DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" />}>
-                <MoreHorizontalIcon />
-                <span className="sr-only">列表选项</span>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuGroup>
-                  <DropdownMenuCheckboxItem checked={filters.includeInternal} onCheckedChange={(checked) => updateFilter("includeInternal", checked === true)}>
-                    显示 Agent 与内部文档
-                  </DropdownMenuCheckboxItem>
-                </DropdownMenuGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
+            <div className="flex shrink-0 items-center gap-1">
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  render={
+                    <Button variant="ghost" size="sm" className="gap-1 px-2 text-xs font-normal text-muted-foreground" />
+                  }
+                >
+                  <ArrowUpDownIcon className="size-4" />
+                  <span className="hidden max-w-28 truncate lg:inline">{currentSortLabel}</span>
+                  <span className="sr-only">排序</span>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuLabel>排序</DropdownMenuLabel>
+                  <DropdownMenuRadioGroup
+                    value={`${filters.sort}:${filters.order}`}
+                    onValueChange={(value) => {
+                      const [sort, order] = value.split(":") as [FilterSort, FilterOrder]
+                      setSorting(sort, order)
+                    }}
+                  >
+                    {SORT_ITEMS.map((item) => (
+                      <DropdownMenuRadioItem key={`${item.sort}:${item.order}`} value={`${item.sort}:${item.order}`}>
+                        {item.label}
+                      </DropdownMenuRadioItem>
+                    ))}
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <DropdownMenu>
+                <DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" />}>
+                  <MoreHorizontalIcon />
+                  <span className="sr-only">列表选项</span>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuGroup>
+                    <DropdownMenuCheckboxItem checked={filters.includeInternal} onCheckedChange={(checked) => setIncludeInternal(checked === true)}>
+                      显示 Agent 与内部文档
+                    </DropdownMenuCheckboxItem>
+                  </DropdownMenuGroup>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
           </div>
           <ScrollArea className="min-h-0 flex-1">
             <div className="flex flex-col gap-1 p-2">
@@ -494,8 +736,11 @@ export function App() {
                   <EmptyHeader>
                     <EmptyMedia variant="icon"><FileIcon /></EmptyMedia>
                     <EmptyTitle>没有匹配的文档</EmptyTitle>
-                    <EmptyDescription>调整搜索条件，或新建一份项目文档。</EmptyDescription>
+                    <EmptyDescription>
+                      {hasFilters ? "当前筛选条件下没有结果，可移除部分筛选后重试。" : "调整搜索条件，或新建一份项目文档。"}
+                    </EmptyDescription>
                   </EmptyHeader>
+                  {hasFilters && <Button variant="outline" size="sm" onClick={clearAllFilters}>清除筛选</Button>}
                 </Empty>
               ) : null}
               {index?.documents.map((item) => (

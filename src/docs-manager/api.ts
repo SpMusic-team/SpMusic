@@ -47,14 +47,13 @@ export function documentAssetUrl(documentPath: string, source?: string) {
 export function listDocuments(filters: DocumentFilters) {
   const query = new URLSearchParams()
   if (filters.query) query.set("q", filters.query)
-  if (filters.docType) query.set("docType", filters.docType)
-  if (filters.status) query.set("status", filters.status)
-  if (filters.owner) query.set("owner", filters.owner)
-  if (filters.scope) query.set("scope", filters.scope)
-  if (filters.includeInternal) query.set("internal", "true")
-  for (const [key, value] of Object.entries(filters.extra)) {
-    if (value) query.set(key, value)
+  for (const [param, values] of Object.entries(filters.values)) {
+    if (values.length > 0) query.set(param, values.join(","))
   }
+  if (filters.issues) query.set("issues", filters.issues)
+  if (filters.sort !== "updated") query.set("sort", filters.sort)
+  if (filters.order !== "desc") query.set("order", filters.order)
+  if (filters.includeInternal) query.set("internal", "true")
   return request<DocumentIndex>(`/api/documents?${query}`)
 }
 

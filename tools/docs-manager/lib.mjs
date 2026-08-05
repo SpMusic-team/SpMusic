@@ -310,19 +310,150 @@ export async function loadAllDocuments(repositoryRoot) {
   return documents.sort((left, right) => right.modifiedAt.localeCompare(left.modifiedAt))
 }
 
-function facetValues(documents, field) {
-  return [...new Set(documents.map((document) => document.metadata[field]).filter((value) => typeof value === "string" && value))].sort()
+// 统一的元数据筛选字段。severity/module/priority 等不再依附某个 doc_type 才出现，
+// 而是全部作为一级筛选项，通过 facet 计数引导可用值。
+export const FILTER_FIELDS = [
+  { key: "doc_type", param: "docType", label: "类型" },
+  { key: "status", param: "status", label: "状态" },
+  { key: "owner_agent", param: "owner", label: "负责 Agent" },
+  { key: "version_scope", param: "scope", label: "版本范围" },
+  { key: "severity", param: "severity", label: "严重程度" },
+  { key: "module", param: "module", label: "模块" },
+  { key: "priority", param: "priority", label: "优先级" },
+]
+
+// 搜索框 `字段:值` 快捷语法：doc_id/title/path 走包含匹配，其余与 FILTER_FIELDS 一致。
+const QUERY_FIELD_ALIASES = {
+  doc_id: "doc_id",
+  docId: "doc_id",
+  title: "title",
+  path: "path",
+  doc_type: "docType",
+  docType: "docType",
+  status: "status",
+  owner: "owner",
+  owner_agent: "owner",
+  scope: "scope",
+  version_scope: "scope",
+  severity: "severity",
+  module: "module",
+  priority: "priority",
 }
 
-const DOC_TYPE_FILTER_SCHEMA = {
-  bug: [
-    { key: "severity", label: "严重程度" },
-    { key: "module", label: "模块" },
-  ],
+const QUERY_MATCH_FIELDS = [
+  { key: "doc_id", param: "doc_id", match: "contains" },
+  { key: "title", param: "title", match: "contains" },
+  { key: "path", param: "path", match: "contains" },
+]
+
+function splitQueryTokens(query) {
+  const tokens = []
+  let current = ""
+  let inQuotes = false
+  for (const char of String(query ?? "")) {
+    if (char === '"') {
+      inQuotes = !inQuotes
+      current += char
+    } else if (/\s/.test(char) && !inQuotes) {
+      if (current) {
+        tokens.push(current)
+        current = ""
+      }
+    } else {
+      current += char
+    }
+  }
+  if (current) tokens.push(current)
+  return tokens
 }
 
-function filterSchemaFields() {
-  return Object.values(DOC_TYPE_FILTER_SCHEMA).flat()
+export function parseQueryTokens(query) {
+  const fieldValues = new Map()
+  const textParts = []
+  for (const token of splitQueryTokens(query)) {
+    const colon = token.indexOf(":")
+    if (colon > 0) {
+      const name = token.slice(0, colon).trim().toLowerCase()
+      let value = token.slice(colon + 1).trim()
+      if (value.startsWith('"') && value.endsWith('"') && value.length >= 2) {
+        value = value.slice(1, -1)
+      }
+      const param = QUERY_FIELD_ALIASES[name]
+      if (param && value) {
+        const values = fieldValues.get(param) ?? []
+        if (!values.includes(value)) values.push(value)
+        fieldValues.set(param, values)
+        continue
+      }
+    }
+    const clean = token.startsWith('"') && token.endsWith('"') && token.length >= 2 ? token.slice(1, -1) : token
+    if (clean) textParts.push(clean)
+  }
+  return { text: textParts.join(" ").trim(), fieldValues }
+}
+
+function toFilterValues(value) {
+  if (value == null) return []
+  const list = Array.isArray(value) ? value : [value]
+  return [...new Set(list.flatMap((item) => String(item ?? "").split(",")).map((item) => item.trim()).filter(Boolean))]
+}
+
+function matchesField(document, field, values) {
+  if (values.length === 0) return true
+  if (field.match === "contains") {
+    const source = field.key === "title"
+      ? document.title
+      : field.key === "path"
+        ? document.path
+        : String(document.metadata[field.key] ?? "")
+    const haystack = source.toLocaleLowerCase()
+    return values.some((value) => haystack.includes(value.toLocaleLowerCase()))
+  }
+  const haystack = String(document.metadata[field.key] ?? "")
+  return values.some((value) => haystack === value)
+}
+
+function matchesIssues(document, value) {
+  const mode = toFilterValues(value)[0]
+  if (!mode) return true
+  if (mode === "any") return document.issues.length > 0
+  if (mode === "errors") return document.issues.some((item) => item.severity === "error")
+  if (mode === "none") return document.issues.length === 0
+  return true
+}
+
+function matchText(document, normalizedQuery) {
+  return !normalizedQuery || [
+    document.path,
+    document.title,
+    document.excerpt,
+    document.content,
+    ...Object.values(document.metadata).flat(),
+  ].join(" ").toLocaleLowerCase().includes(normalizedQuery)
+}
+
+const SORTERS = {
+  updated: (left, right) => left.modifiedAt.localeCompare(right.modifiedAt),
+  created: (left, right) => left.createdAt.localeCompare(right.createdAt),
+  title: (left, right) => left.title.localeCompare(right.title, "zh-CN"),
+  docId: (left, right) => String(left.metadata.doc_id ?? "").localeCompare(String(right.metadata.doc_id ?? ""), "zh-CN"),
+}
+
+function applySort(documents, sort, order) {
+  const sorter = SORTERS[sort] ?? SORTERS.updated
+  const multiplier = order === "asc" ? 1 : -1
+  return [...documents].sort((left, right) => multiplier * sorter(left, right))
+}
+
+function facetOptions(candidates, field) {
+  const counts = new Map()
+  for (const document of candidates) {
+    const value = document.metadata[field.key]
+    if (typeof value === "string" && value) counts.set(value, (counts.get(value) ?? 0) + 1)
+  }
+  return [...counts.entries()]
+    .map(([value, count]) => ({ value, count }))
+    .sort((left, right) => right.count - left.count || left.value.localeCompare(right.value, "zh-CN"))
 }
 
 function isPmManagedInternalDocument(document) {
@@ -338,34 +469,48 @@ function isVisibleDocument(document, filters) {
 
 export function buildDocumentIndex(documents, filters = {}) {
   const visibleDocuments = documents.filter((document) => isVisibleDocument(document, filters))
-  const normalizedQuery = String(filters.query ?? "").trim().toLocaleLowerCase()
-  const schemaFields = filterSchemaFields()
-  const filtered = visibleDocuments.filter((document) => {
-    const matchesQuery = !normalizedQuery || [
-      document.path,
-      document.title,
-      document.excerpt,
-      document.content,
-      ...Object.values(document.metadata).flat(),
-    ].join(" ").toLocaleLowerCase().includes(normalizedQuery)
-    return matchesQuery
-      && (!filters.docType || document.metadata.doc_type === filters.docType)
-      && (!filters.status || document.metadata.status === filters.status)
-      && (!filters.owner || document.metadata.owner_agent === filters.owner)
-      && (!filters.scope || document.metadata.version_scope === filters.scope)
-      && schemaFields.every(({ key }) => !filters[key] || document.metadata[key] === filters[key])
+  const { text, fieldValues } = parseQueryTokens(filters.query)
+  const normalizedQuery = text.toLocaleLowerCase()
+
+  // 显式筛选与搜索框 `字段:值` 语法合并，同一字段多值取并集（OR），跨字段 AND。
+  const applied = new Map()
+  for (const field of FILTER_FIELDS) {
+    const values = [...toFilterValues(filters[field.param])]
+    for (const value of fieldValues.get(field.param) ?? []) {
+      if (!values.includes(value)) values.push(value)
+    }
+    if (values.length > 0) applied.set(field.param, values)
+  }
+  for (const field of QUERY_MATCH_FIELDS) {
+    const values = fieldValues.get(field.param) ?? []
+    if (values.length > 0) applied.set(field.param, values)
+  }
+
+  const matches = (document) => matchText(document, normalizedQuery)
+    && FILTER_FIELDS.every((field) => matchesField(document, field, applied.get(field.param) ?? []))
+    && QUERY_MATCH_FIELDS.every((field) => matchesField(document, field, applied.get(field.param) ?? []))
+    && matchesIssues(document, filters.issues)
+
+  const filtered = applySort(visibleDocuments.filter(matches), filters.sort, filters.order)
+
+  // 动态 facet：除当前字段外的所有筛选（含全文与 issues）都参与候选集，
+  // 因此每个下拉只展示「在其余条件下仍然存在的值」，并带计数。
+  const facetCandidates = (skipParam) => visibleDocuments.filter((document) => {
+    if (!matchText(document, normalizedQuery)) return false
+    for (const field of FILTER_FIELDS) {
+      if (field.param === skipParam) continue
+      if (!matchesField(document, field, applied.get(field.param) ?? [])) return false
+    }
+    for (const field of QUERY_MATCH_FIELDS) {
+      if (!matchesField(document, field, applied.get(field.param) ?? [])) return false
+    }
+    return matchesIssues(document, filters.issues)
   })
 
   return {
     documents: filtered.map(({ content: _content, ...document }) => document),
-    filterSchema: DOC_TYPE_FILTER_SCHEMA,
-    facets: {
-      docTypes: facetValues(visibleDocuments, "doc_type"),
-      statuses: facetValues(visibleDocuments, "status"),
-      owners: facetValues(visibleDocuments, "owner_agent"),
-      scopes: facetValues(visibleDocuments, "version_scope"),
-      ...Object.fromEntries(schemaFields.map(({ key }) => [key, facetValues(visibleDocuments, key)])),
-    },
+    filterSchema: FILTER_FIELDS,
+    facets: Object.fromEntries(FILTER_FIELDS.map((field) => [field.param, facetOptions(facetCandidates(field.param), field)])),
     stats: {
       total: visibleDocuments.length,
       filtered: filtered.length,

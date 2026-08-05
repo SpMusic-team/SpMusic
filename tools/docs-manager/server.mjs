@@ -10,6 +10,7 @@ import {
   buildDocumentIndex,
   contentVersion,
   DocsManagerError,
+  FILTER_FIELDS,
   loadAllDocuments,
   parseDocument,
   resolveDocumentAssetPath,
@@ -78,19 +79,19 @@ app.get("/api/health", (_request, response) => {
 
 app.get("/api/documents", async (request, response, next) => {
   try {
-    const { q, docType, status, owner, scope, internal, ...extra } = request.query
-    const extraFilters = Object.fromEntries(
-      Object.entries(extra).map(([key, value]) => [key, Array.isArray(value) ? String(value[0]) : String(value ?? "")]),
-    )
-    const index = buildDocumentIndex(await refreshDocuments(), {
+    const { q, sort, order, issues, internal, ...rest } = request.query
+    const filters = {
       query: q,
-      docType,
-      status,
-      owner,
-      scope,
+      sort,
+      order,
+      issues,
       includeInternal: internal === "true",
-      ...extraFilters,
-    })
+    }
+    for (const field of FILTER_FIELDS) {
+      const value = rest[field.param]
+      if (value != null) filters[field.param] = value
+    }
+    const index = buildDocumentIndex(await refreshDocuments(), filters)
     response.json(index)
   } catch (error) {
     next(error)

@@ -9,12 +9,13 @@
     "owner_agent": "PM Agent",
     "version_scope": "project",
     "created": "2026-07-09",
-    "updated": "2026-07-26",
+    "updated": "2026-08-08",
     "source_documents": [
       ".agents/prompt/PM_Agent.md",
       ".agents/prompt/templates/Agent_Prompt_Template.md",
       ".agents/prompt/Audio_Compatibility_Agent.md",
-      "user request: activate Audio Compatibility Agent"
+      "user request: activate Audio Compatibility Agent",
+      "user request: 优化需求 Excel 转文档时提取并压缩图片"
     ]
   },
   "purpose": "Registry of available project agents for PM task assignment and cross-agent collaboration.",
@@ -224,7 +225,9 @@
         "Update README, setup instructions, and capability notes",
         "Document Tauri commands and project conventions",
         "Keep documentation aligned with approved requirements and implementation",
-        "Check document links, paths, and commands"
+        "Check document links, paths, and commands",
+        "Convert user-provided bug and optimization spreadsheets into traceable change documents",
+        "Extract, compress, and reference row-associated screenshots from change spreadsheets"
       ],
       "notResponsibleFor": [
         "Requirement approval",
@@ -234,7 +237,8 @@
       ],
       "allowedOutputs": [
         "README.md",
-        "docs/**/*.md"
+        "docs/**/*.md",
+        "docs/changes/assets/*.{png,jpg,jpeg,webp}"
       ]
     },
     {

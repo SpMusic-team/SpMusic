@@ -84,7 +84,7 @@ pub struct AudioFileFilter {
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum AudioOpenSourceResult {
-    Track { track: AudioTrackRef },
+    Track { track: Box<AudioTrackRef> },
     Playlist { playlist: AudioFolderPlaylist },
 }
 
@@ -202,6 +202,28 @@ mod tests {
             .expect("AudioTrackRef should be exportable to TypeScript");
 
         assert!(exported.contains("metadata: AudioTrackMetadata"));
+    }
+
+    #[test]
+    fn boxed_open_source_track_keeps_the_frontend_contract() {
+        let exported = AudioOpenSourceResult::export_to_string(&Config::default())
+            .expect("AudioOpenSourceResult should be exportable to TypeScript");
+        assert!(exported.contains("track: AudioTrackRef"));
+
+        let result = AudioOpenSourceResult::Track {
+            track: Box::new(AudioTrackRef {
+                id: "local-track".to_owned(),
+                source_path: "music.flac".to_owned(),
+                file_name: "music.flac".to_owned(),
+                duration_ms: Some(1_000),
+                metadata: AudioTrackMetadata::default(),
+            }),
+        };
+        let serialized =
+            serde_json::to_value(result).expect("AudioOpenSourceResult should serialize to JSON");
+
+        assert_eq!(serialized["kind"], "track");
+        assert_eq!(serialized["track"]["id"], "local-track");
     }
 
     #[test]

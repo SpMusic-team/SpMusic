@@ -16,10 +16,9 @@ use super::{
         AudioDeviceWatcherHandle,
     },
     error::{audio_error, unavailable_state, AudioCommandError, AudioErrorCode},
+    playlist::{default_filters, load_folder_playlist, source_filters},
     runtime::{start_track_parser, AudioRuntime, AudioRuntimeRequest, TrackParseRequest},
-    source::{
-        default_filters, hydrate_track_ref, input_path, load_folder_playlist, source_filters,
-    },
+    source::{hydrate_track_ref, input_path},
     types::{
         AudioFolderPlaylist, AudioFolderPlaylistInput, AudioLoadFileInput, AudioOpenFileInput,
         AudioOpenSourceResult, AudioPlayInput, AudioPlaybackState, AudioSeekInput,
@@ -68,7 +67,8 @@ impl AudioController {
         let parser_cover_cache_dir = runtime_cover_cache_dir.clone();
         // start_track_parser spawns the worker thread itself; dropping the
         // returned join handle detaches it for the process lifetime.
-        let _parser_handle = start_track_parser(parser_rx, parser_runtime_tx, parser_cover_cache_dir);
+        let _parser_handle =
+            start_track_parser(parser_rx, parser_runtime_tx, parser_cover_cache_dir);
 
         let runtime_parser_tx = parser_tx.clone();
 
@@ -111,10 +111,9 @@ impl AudioController {
                             reply,
                         });
                         emit_state_changed(&app_handle, runtime.get_state());
-                        if let Err(error) = runtime_parser_tx.send(TrackParseRequest {
-                            generation,
-                            path,
-                        }) {
+                        if let Err(error) =
+                            runtime_parser_tx.send(TrackParseRequest { generation, path })
+                        {
                             tracing::error!(
                                 operation = "audio.load_file",
                                 error = %error,
@@ -142,6 +141,7 @@ impl AudioController {
                         result,
                     } => {
                         let started_at = Instant::now();
+                        let result = *result;
                         let is_current = pending_load
                             .as_ref()
                             .is_some_and(|pending| pending.generation == generation);
@@ -169,61 +169,66 @@ impl AudioController {
                         }
                     }
                     AudioRuntimeRequest::Play { input, reply } => {
-                        let started_at = Instant::now();
                         tracing::info!(
                             operation = "audio.play",
                             restart = input.as_ref().and_then(|value| value.restart),
                             "runtime play request received",
                         );
-                        let result = runtime.play(input);
-                        log_state_result("audio.play", started_at, &result);
-                        let state = state_for_audio_result(&mut runtime, &result);
-                        let _ = reply.send(result);
-                        emit_state_changed(&app_handle, state);
+                        dispatch_state_request(
+                            &app_handle,
+                            &mut runtime,
+                            "audio.play",
+                            reply,
+                            |runtime| runtime.play(input),
+                        );
                     }
                     AudioRuntimeRequest::Pause { reply } => {
-                        let started_at = Instant::now();
                         tracing::info!(operation = "audio.pause", "runtime pause request received");
-                        let result = runtime.pause();
-                        log_state_result("audio.pause", started_at, &result);
-                        let state = state_for_audio_result(&mut runtime, &result);
-                        let _ = reply.send(result);
-                        emit_state_changed(&app_handle, state);
+                        dispatch_state_request(
+                            &app_handle,
+                            &mut runtime,
+                            "audio.pause",
+                            reply,
+                            AudioRuntime::pause,
+                        );
                     }
                     AudioRuntimeRequest::Stop { reply } => {
-                        let started_at = Instant::now();
                         tracing::info!(operation = "audio.stop", "runtime stop request received");
-                        let result = runtime.stop();
-                        log_state_result("audio.stop", started_at, &result);
-                        let state = state_for_audio_result(&mut runtime, &result);
-                        let _ = reply.send(result);
-                        emit_state_changed(&app_handle, state);
+                        dispatch_state_request(
+                            &app_handle,
+                            &mut runtime,
+                            "audio.stop",
+                            reply,
+                            AudioRuntime::stop,
+                        );
                     }
                     AudioRuntimeRequest::Seek { input, reply } => {
-                        let started_at = Instant::now();
                         tracing::info!(
                             operation = "audio.seek",
                             requested_ms = input.position_ms,
                             "runtime seek request received",
                         );
-                        let result = runtime.seek(input);
-                        log_state_result("audio.seek", started_at, &result);
-                        let state = state_for_audio_result(&mut runtime, &result);
-                        let _ = reply.send(result);
-                        emit_state_changed(&app_handle, state);
+                        dispatch_state_request(
+                            &app_handle,
+                            &mut runtime,
+                            "audio.seek",
+                            reply,
+                            |runtime| runtime.seek(input),
+                        );
                     }
                     AudioRuntimeRequest::SetVolume { input, reply } => {
-                        let started_at = Instant::now();
                         tracing::info!(
                             operation = "audio.set_volume",
                             requested_volume = input.volume,
                             "runtime volume request received",
                         );
-                        let result = runtime.set_volume(input);
-                        log_state_result("audio.set_volume", started_at, &result);
-                        let state = state_for_audio_result(&mut runtime, &result);
-                        let _ = reply.send(result);
-                        emit_state_changed(&app_handle, state);
+                        dispatch_state_request(
+                            &app_handle,
+                            &mut runtime,
+                            "audio.set_volume",
+                            reply,
+                            |runtime| runtime.set_volume(input),
+                        );
                     }
                     AudioRuntimeRequest::GetState { reply } => {
                         tracing::debug!(operation = "audio.get_state", "runtime state requested");
@@ -375,7 +380,9 @@ impl AudioController {
         }
 
         self.load_file_path(path)
-            .map(|track| AudioOpenSourceResult::Track { track })
+            .map(|track| AudioOpenSourceResult::Track {
+                track: Box::new(track),
+            })
     }
 
     pub fn load_file(&self, input: AudioLoadFileInput) -> Result<AudioTrackRef, AudioCommandError> {
@@ -415,42 +422,36 @@ impl AudioController {
         &self,
         input: Option<AudioPlayInput>,
     ) -> Result<AudioPlaybackState, AudioCommandError> {
-        let started_at = Instant::now();
-        let (reply, rx) = mpsc::channel();
-        self.send(AudioRuntimeRequest::Play { input, reply })?;
-        let result = self.recv_state(rx);
-        log_state_result("audio.controller.play_round_trip", started_at, &result);
-        result
+        self.request_state("audio.controller.play_round_trip", |reply| {
+            AudioRuntimeRequest::Play { input, reply }
+        })
     }
 
     pub fn pause(&self) -> Result<AudioPlaybackState, AudioCommandError> {
-        let started_at = Instant::now();
-        let (reply, rx) = mpsc::channel();
-        self.send(AudioRuntimeRequest::Pause { reply })?;
-        let result = self.recv_state(rx);
-        log_state_result("audio.controller.pause_round_trip", started_at, &result);
-        result
+        self.request_state("audio.controller.pause_round_trip", |reply| {
+            AudioRuntimeRequest::Pause { reply }
+        })
     }
 
     pub fn stop(&self) -> Result<AudioPlaybackState, AudioCommandError> {
-        let (reply, rx) = mpsc::channel();
-        self.send(AudioRuntimeRequest::Stop { reply })?;
-        self.recv_state(rx)
+        self.request_state("audio.controller.stop_round_trip", |reply| {
+            AudioRuntimeRequest::Stop { reply }
+        })
     }
 
     pub fn seek(&self, input: AudioSeekInput) -> Result<AudioPlaybackState, AudioCommandError> {
-        let (reply, rx) = mpsc::channel();
-        self.send(AudioRuntimeRequest::Seek { input, reply })?;
-        self.recv_state(rx)
+        self.request_state("audio.controller.seek_round_trip", |reply| {
+            AudioRuntimeRequest::Seek { input, reply }
+        })
     }
 
     pub fn set_volume(
         &self,
         input: AudioSetVolumeInput,
     ) -> Result<AudioPlaybackState, AudioCommandError> {
-        let (reply, rx) = mpsc::channel();
-        self.send(AudioRuntimeRequest::SetVolume { input, reply })?;
-        self.recv_state(rx)
+        self.request_state("audio.controller.set_volume_round_trip", |reply| {
+            AudioRuntimeRequest::SetVolume { input, reply }
+        })
     }
 
     pub fn get_state(&self) -> AudioPlaybackState {
@@ -542,6 +543,37 @@ impl AudioController {
             )
         })?
     }
+
+    fn request_state(
+        &self,
+        operation: &'static str,
+        build_request: impl FnOnce(
+            Sender<Result<AudioPlaybackState, AudioCommandError>>,
+        ) -> AudioRuntimeRequest,
+    ) -> Result<AudioPlaybackState, AudioCommandError> {
+        let started_at = Instant::now();
+        let (reply, rx) = mpsc::channel();
+        let result = self
+            .send(build_request(reply))
+            .and_then(|()| self.recv_state(rx));
+        log_state_result(operation, started_at, &result);
+        result
+    }
+}
+
+fn dispatch_state_request(
+    app_handle: &AppHandle,
+    runtime: &mut AudioRuntime,
+    operation: &'static str,
+    reply: Sender<Result<AudioPlaybackState, AudioCommandError>>,
+    execute: impl FnOnce(&mut AudioRuntime) -> Result<AudioPlaybackState, AudioCommandError>,
+) {
+    let started_at = Instant::now();
+    let result = execute(runtime);
+    log_state_result(operation, started_at, &result);
+    let state = state_for_audio_result(runtime, &result);
+    let _ = reply.send(result);
+    emit_state_changed(app_handle, state);
 }
 
 fn emit_state_changed(app_handle: &AppHandle, state: AudioPlaybackState) {

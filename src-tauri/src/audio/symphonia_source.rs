@@ -740,7 +740,7 @@ fn skip_back_a_tiny_bit(mut time: Time) -> Time {
     time.frac -= 0.0001;
     if time.frac < 0.0 {
         time.seconds = time.seconds.saturating_sub(1);
-        time.frac = 1.0 + time.frac;
+        time.frac += 1.0;
     }
 
     time

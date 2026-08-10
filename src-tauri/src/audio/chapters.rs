@@ -33,7 +33,7 @@ pub(crate) fn read_m4b_chapters(path: &Path) -> Result<Vec<AudioChapter>, String
             file.read_exact(&mut header)
                 .map_err(|error| format!("truncated chapter box header: {error}"))?;
             let box_len = u32::from_be_bytes(header[..4].try_into().expect("four bytes")) as usize;
-            if box_len < 17 || box_len > MAX_CHAPTER_BOX_BYTES {
+            if !(17..=MAX_CHAPTER_BOX_BYTES).contains(&box_len) {
                 return Err(format!("invalid chpl box size: {box_len}"));
             }
             if offset - 8 + box_len as u64 > file_len {

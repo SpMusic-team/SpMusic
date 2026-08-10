@@ -12,8 +12,9 @@ use rodio::{
 
 use super::{
     device::current_output_device_signature,
+    duration::duration_ms,
     error::{audio_error, AudioCommandError, AudioErrorCode},
-    source::{duration_ms, hydrate_track_ref, open_source, AudioSource},
+    source::{hydrate_track_ref, open_source, AudioSource},
     types::{
         AudioPlayInput, AudioPlaybackPhase, AudioPlaybackState, AudioSeekInput,
         AudioSetVolumeInput, AudioTrackRef,
@@ -85,7 +86,7 @@ pub(crate) enum AudioRuntimeRequest {
     TrackParsed {
         generation: u64,
         path: PathBuf,
-        result: Result<AudioTrackRef, AudioCommandError>,
+        result: Box<Result<AudioTrackRef, AudioCommandError>>,
     },
     Play {
         input: Option<AudioPlayInput>,
@@ -166,7 +167,7 @@ pub(crate) fn start_track_parser(
                 .send(AudioRuntimeRequest::TrackParsed {
                     generation: request.generation,
                     path: request.path,
-                    result,
+                    result: Box::new(result),
                 })
                 .is_err()
             {
@@ -990,6 +991,14 @@ mod tests {
         volume: Cell<Option<f32>>,
     }
 
+    #[test]
+    fn runtime_request_does_not_inline_parsed_track_metadata() {
+        assert!(
+            std::mem::size_of::<AudioRuntimeRequest>() < std::mem::size_of::<AudioTrackRef>(),
+            "parsed track results should stay behind indirection in runtime messages"
+        );
+    }
+
     impl VolumeSink for RecordingVolumeSink {
         fn set_sink_volume(&self, volume: f32) {
             self.volume.set(Some(volume));
@@ -1211,11 +1220,8 @@ mod tests {
         let generation = runtime.start_load(Path::new("song.flac"));
         let track = loaded_test_track();
 
-        let applied = runtime.complete_load(
-            generation,
-            PathBuf::from("song.flac"),
-            &Ok(track.clone()),
-        );
+        let applied =
+            runtime.complete_load(generation, PathBuf::from("song.flac"), &Ok(track.clone()));
 
         assert!(applied);
         assert_eq!(runtime.phase, AudioPlaybackPhase::Ready);
@@ -1257,7 +1263,9 @@ mod tests {
             ..AudioRuntime::default()
         };
 
-        let state = runtime.pause().expect("pause during loading should be a no-op");
+        let state = runtime
+            .pause()
+            .expect("pause during loading should be a no-op");
 
         assert_eq!(state.phase, AudioPlaybackPhase::Loading);
         assert_eq!(runtime.phase, AudioPlaybackPhase::Loading);
@@ -1310,7 +1318,7 @@ mod tests {
                 assert_eq!(generation, 11);
                 assert_eq!(path, missing);
                 assert!(matches!(
-                    result,
+                    *result,
                     Err(error) if error.code == AudioErrorCode::FileNotFound
                 ));
             }

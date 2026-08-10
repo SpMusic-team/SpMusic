@@ -3,15 +3,6 @@ export const appCopy = {
   appTitle: 'SpMusic 播放界面',
   appIntro: '本地优先、轻量安静的桌面音乐播放界面。',
   shellLabel: 'SpMusic 最小播放界面',
-  playbackStatus: {
-    paused: '已暂停',
-    playing: '播放中',
-  },
-  status: {
-    trackCount: '演示歌曲',
-    spectrumCount: '频谱条',
-    playback: '播放状态',
-  },
   nowPlaying: {
     eyebrow: '正在播放',
     emptyTitle: '暂无当前歌曲',
@@ -54,10 +45,6 @@ export const appCopy = {
     description: '管理播放器界面入口和外观。',
     on: '开启',
     off: '关闭',
-    temporaryControlBar: {
-      title: '临时控制台',
-      description: '显示或隐藏顶部的临时音频控制台。',
-    },
     theme: {
       title: '主题管理',
       description: '打开主题工作室，管理内置和用户主题。',
@@ -115,16 +102,11 @@ export const appCopy = {
       INTERNAL_ERROR: '音频后端内部错误。',
     },
   },
-  spectrum: {
-    title: '演示频谱',
-    description: '当前播放视觉',
-    empty: '暂无频谱数据',
-  },
   queue: {
-    title: '演示队列',
-    description: '固定歌曲用于当前界面状态。',
+    title: '播放队列',
+    description: '当前会话中的本地音频。',
     current: '当前',
-    emptyTitle: '暂无演示歌曲',
-    emptyDescription: '添加歌曲数据后会显示播放队列。',
+    emptyTitle: '尚未打开音频',
+    emptyDescription: '使用下方的打开音频按钮选择本地文件或播放列表。',
   },
 } as const

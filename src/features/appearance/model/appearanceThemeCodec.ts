@@ -1,4 +1,4 @@
-import { iconProviders, type IconProviderId } from '@/icons/systemIcons'
+import { isIconProviderId } from '@/icons/iconProviderIds'
 import { defaultAppearance } from './defaultAppearance'
 import type {
   AppearanceColors,
@@ -416,8 +416,8 @@ export function deserializeAppearanceTheme(source: string, fallback: AppearanceP
   reportUnknownKeys(experimentalInput, ['layoutCss', 'resources'], 'theme.experimental', warnings)
 
   const iconCandidate = iconInput.provider
-  const provider = typeof iconCandidate === 'string' && Object.hasOwn(iconProviders, iconCandidate)
-    ? iconCandidate as IconProviderId
+  const provider = isIconProviderId(iconCandidate)
+    ? iconCandidate
     : fallback.icons.provider
   if (iconCandidate !== undefined && provider !== iconCandidate) warnings.push('theme.icons.provider 未安装，已使用默认图标包')
 

@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { SettingsIcon } from 'lucide-react'
+import { lazy, Suspense, useState } from 'react'
+import { PaletteIcon, SettingsIcon } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
@@ -10,20 +10,30 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Field, FieldContent, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field'
-import { Label } from '@/components/ui/label'
-import { Switch } from '@/components/ui/switch'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { ThemeManager } from '@/features/appearance/components/ThemeManager'
+import { IconButton } from '@/features/player/components/IconButton'
 import { appCopy } from '@/features/player/model/playerCopy'
 
+const ThemeManager = lazy(() => import('@/features/appearance/components/ThemeManager').then((module) => ({
+  default: module.ThemeManager,
+})))
+
+const DevAudioSettingsField = import.meta.env.DEV
+  ? lazy(() => import('@/features/player/components/DevAudioSettingsField').then((module) => ({
+      default: module.DevAudioSettingsField,
+    })))
+  : null
+
 type SettingsDialogProps = {
-  temporaryControlBarOpen: boolean
-  onTemporaryControlBarOpenChange: (open: boolean) => void
+  debugToolsEnabled?: boolean
+  debugToolsOpen?: boolean
+  onDebugToolsOpenChange?: (open: boolean) => void
 }
 
 export function SettingsDialog({
-  temporaryControlBarOpen,
-  onTemporaryControlBarOpenChange,
+  debugToolsEnabled = false,
+  debugToolsOpen = false,
+  onDebugToolsOpenChange,
 }: SettingsDialogProps) {
   const settingsCopy = appCopy.settings
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -51,30 +61,35 @@ export function SettingsDialog({
         </DialogHeader>
 
         <FieldGroup className="player-settings-group">
-          <Field className="player-settings-row" orientation="horizontal">
-            <FieldContent>
-              <Label htmlFor="temporary-control-bar">{settingsCopy.temporaryControlBar.title}</Label>
-              <FieldDescription>{settingsCopy.temporaryControlBar.description}</FieldDescription>
-            </FieldContent>
-            <Switch
-              id="temporary-control-bar"
-              aria-label={settingsCopy.temporaryControlBar.title}
-              checked={temporaryControlBarOpen}
-              onCheckedChange={(open) => {
-                onTemporaryControlBarOpenChange(open)
-                if (open) setSettingsOpen(false)
-              }}
-            />
-          </Field>
+          {DevAudioSettingsField && debugToolsEnabled ? (
+            <Suspense fallback={null}>
+              <DevAudioSettingsField
+                open={debugToolsOpen}
+                onOpenChange={(open) => {
+                  onDebugToolsOpenChange?.(open)
+                  if (open) setSettingsOpen(false)
+                }}
+              />
+            </Suspense>
+          ) : null}
           <Field className="player-settings-row player-settings-theme-row" orientation="horizontal">
             <FieldContent>
               <FieldLabel>{settingsCopy.theme.title}</FieldLabel>
               <FieldDescription>{settingsCopy.theme.description}</FieldDescription>
             </FieldContent>
-            <ThemeManager onOpenChange={setThemeManagerOpen} />
+            <IconButton
+              icon={PaletteIcon}
+              label="主题管理"
+              onClick={() => setThemeManagerOpen(true)}
+            />
           </Field>
         </FieldGroup>
       </DialogContent>
+      {themeManagerOpen ? (
+        <Suspense fallback={null}>
+          <ThemeManager open onOpenChange={setThemeManagerOpen} />
+        </Suspense>
+      ) : null}
     </Dialog>
   )
 }

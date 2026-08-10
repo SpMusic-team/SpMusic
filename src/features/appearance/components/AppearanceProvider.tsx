@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { MotionConfig } from 'motion/react'
-import { iconProviders } from '@/icons/systemIcons'
+import { defaultSystemIcons } from '@/icons/providers/defaultIcons'
+import { loadIconProvider } from '@/icons/systemIcons'
+import type { IconProviderId } from '@/icons/iconProviderIds'
+import type { SystemIconProvider } from '@/icons/types'
 import { cn } from '@/lib/utils'
 import { applyAppearanceRuntime } from '../model/appearanceRuntime'
 import { createAppearanceMotionRuntime } from '../model/appearanceMotion'
@@ -21,6 +24,11 @@ type AppearanceProviderProps = {
   children: ReactNode
 }
 
+type LoadedIconProvider = {
+  id: IconProviderId
+  icons: SystemIconProvider
+}
+
 function resolveAppearance(library: AppearanceStorageState, id: string) {
   return library.userThemes.find((theme) => theme.id === id) ?? findBuiltinAppearance(id) ?? defaultAppearance
 }
@@ -30,11 +38,18 @@ export function AppearanceProvider({ children }: AppearanceProviderProps) {
   const [appearance, setAppearance] = useState(() => cloneAppearance(resolveAppearance(library, library.currentThemeId)))
   const [colorSchemePreference, setRuntimeColorSchemePreference] = useState<ColorSchemePreference>(library.colorSchemePreference)
   const [storageWarning, setStorageWarning] = useState(library.warning)
+  const [loadedIconProvider, setLoadedIconProvider] = useState<LoadedIconProvider>({
+    id: 'default',
+    icons: defaultSystemIcons,
+  })
   const [systemReducedMotion, setSystemReducedMotion] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches)
   const [systemDark, setSystemDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches)
   const appRootRef = useRef<HTMLDivElement>(null)
   const resolvedColorScheme = colorSchemePreference === 'system' ? (systemDark ? 'dark' : 'light') : colorSchemePreference
-  const icons = iconProviders[appearance.icons.provider] ?? iconProviders.default
+  const requestedIconProvider = appearance.icons.provider
+  const icons = loadedIconProvider.id === requestedIconProvider
+    ? loadedIconProvider.icons
+    : defaultSystemIcons
   const motion = useMemo(
     () => createAppearanceMotionRuntime(appearance.motion, systemReducedMotion),
     [appearance.motion, systemReducedMotion],
@@ -123,6 +138,23 @@ export function AppearanceProvider({ children }: AppearanceProviderProps) {
     setAppearance(cloneAppearance(saved))
     return saved
   }, [])
+
+  useEffect(() => {
+    let cancelled = false
+
+    void loadIconProvider(requestedIconProvider)
+      .then((nextIcons) => {
+        if (!cancelled) setLoadedIconProvider({ id: requestedIconProvider, icons: nextIcons })
+      })
+      .catch((error: unknown) => {
+        console.warn(`Unable to load icon provider "${requestedIconProvider}"`, error)
+        if (!cancelled) setLoadedIconProvider({ id: 'default', icons: defaultSystemIcons })
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [requestedIconProvider])
 
   const deleteAppearance = useCallback((id: string) => {
     if (!library.userThemes.some((theme) => theme.id === id)) return false

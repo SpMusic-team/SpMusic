@@ -12,6 +12,7 @@ import {
 } from '@/components/ui/card'
 import { Slider } from '@/components/ui/slider'
 import { formatDuration } from '@/features/player/model/trackUtils'
+import '@/features/player/styles/player/temporary-audio-control-bar.css'
 
 const copy = {
   ariaLabel: '\u4e34\u65f6\u97f3\u9891\u63a7\u5236\u53f0',
@@ -27,7 +28,7 @@ const copy = {
   stop: '\u505c\u6b62',
 }
 
-type TemporaryAudioControlBarProps = {
+export type TemporaryAudioControlBarProps = {
   busy: boolean
   duration: number
   fileName: string | null

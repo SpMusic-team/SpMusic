@@ -14,8 +14,9 @@ export type WindowLayoutState = {
 
 type WindowBarProps = {
   onWindowStateChange: (state: WindowLayoutState) => void
-  temporaryControlBarOpen: boolean
-  onTemporaryControlBarOpenChange: (open: boolean) => void
+  debugToolsEnabled?: boolean
+  debugToolsOpen?: boolean
+  onDebugToolsOpenChange?: (open: boolean) => void
 }
 
 function getTauriWindow(): TauriWindow | null {
@@ -25,8 +26,9 @@ function getTauriWindow(): TauriWindow | null {
 
 export function WindowBar({
   onWindowStateChange,
-  temporaryControlBarOpen,
-  onTemporaryControlBarOpenChange,
+  debugToolsEnabled = false,
+  debugToolsOpen = false,
+  onDebugToolsOpenChange,
 }: WindowBarProps) {
   const systemIcons = useSystemIcons()
   const [maximized, setMaximized] = useState(false)
@@ -126,8 +128,9 @@ export function WindowBar({
       <h1 id="app-title" className="sr-only">{appCopy.appTitle}</h1>
       <div className="window-actions" onDoubleClick={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
         <SettingsDialog
-          temporaryControlBarOpen={temporaryControlBarOpen}
-          onTemporaryControlBarOpenChange={onTemporaryControlBarOpenChange}
+          debugToolsEnabled={debugToolsEnabled}
+          debugToolsOpen={debugToolsOpen}
+          onDebugToolsOpenChange={onDebugToolsOpenChange}
         />
         <IconButton
           icon={systemIcons.fullscreen}

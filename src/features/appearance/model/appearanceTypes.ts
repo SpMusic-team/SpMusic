@@ -1,5 +1,5 @@
 import type { CSSProperties } from 'react'
-import type { IconProviderId } from '@/icons/systemIcons'
+import type { IconProviderId } from '@/icons/iconProviderIds'
 
 export type AppearanceThemeId = string
 export type ColorSchemePreference = 'system' | 'light' | 'dark'

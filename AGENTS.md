@@ -44,6 +44,8 @@ When the user starts a message with one of these prefixes, route the request to 
 - `@test` -> use `test` agent
 - `@doc` -> use `documentation` agent
 
+Routing to a custom agent means actually delegating or spawning that agent when the runtime supports it. Merely reading the agent prompt and impersonating the role in the main agent does not count, except for the direct-work exceptions below or when delegation tooling is unavailable.
+
 If the shortcut ends with `?`, answer only and do not edit files unless the user explicitly asks for file changes.
 
 Examples:
@@ -53,17 +55,69 @@ Examples:
 - `@fe Implement the player shell UI from the approved task.`
 - `@doc Update README according to current capabilities.`
 
-## Subagent Guidance
+## Mandatory Subagent Workflow
 
-Use subagents mainly for read-heavy or independent work, such as:
+The main agent is the coordinator, integrator, and final verifier for non-trivial work. Change, build, and fix tasks must be delegated to the matching implementation agent unless they meet the direct-work exceptions below.
 
-- comparing Agent prompts with `agents.json`
-- reviewing requirements against PM scope
-- checking docs consistency
-- mapping code before implementation
-- running independent review passes
+### Required Delegation
 
-Be careful with parallel write-heavy work. If multiple agents need to edit files, split ownership by file or wait for one agent to finish before the next writes.
+Use one or more subagents when any of the following is true:
+
+- the task crosses two or more Agent responsibility domains, especially Frontend plus Rust/Tauri
+- the task is expected to modify three or more business files or affect multiple independent modules
+- the task changes a state machine, async lifecycle, shared state, data contract, Tauri command/event boundary, public interface, or error semantics
+- the task is a large refactor, performance optimization, compatibility change, or production-path migration
+- two or more independent read-only investigations, code-mapping passes, documentation checks, or review workstreams can proceed separately
+- the work exceeds the current agent's responsibility or allowed output paths
+- the user explicitly requests delegation, parallel work, independent verification, or multi-Agent collaboration
+
+For delegated implementation, the main agent must assign the matching specialist, avoid duplicating that specialist's work, integrate the result, and run the final repository-level checks.
+
+### Direct-Work Exceptions
+
+The main agent may work directly only when the task is confined to one responsibility domain and is clearly low risk, such as:
+
+- answering a question, reporting status, or performing a focused read-only inspection
+- a small single-file documentation, copy, comment, spelling, formatting, or local styling correction
+- a mechanical change whose delegation overhead is greater than the work and which does not alter behavior, contracts, state, permissions, or runtime boundaries
+- work that cannot be split safely because delegation would require multiple agents to write the same files
+
+If there is doubt whether an implementation is low risk, delegate it.
+
+### Architecture Review Triggers
+
+Architecture Agent review is required before implementation when any of the following is true:
+
+- the change crosses two or more of React, Tauri commands/events, Rust, or local desktop capabilities
+- it introduces or changes shared data models, shared state, public interfaces, command/event contracts, dependency direction, or error semantics
+- it adds a dependency, permission, persistence mechanism, audio-engine capability, plugin boundary, external service, or runtime capability
+- multiple implementation agents depend on the same contract or shared module
+- module ownership, dependency direction, or responsibility boundaries are unclear
+
+Pure visual styling, a local component-internal refactor, or a single-module fix within an existing contract does not require Architecture Agent review.
+
+### Independent Verification Triggers
+
+Test Agent must independently verify completed implementation when any of the following is true:
+
+- the task is P0/P1, a defect fix, a release candidate, or pre-merge validation
+- user-visible behavior, state transitions, frontend/backend communication, file access, permissions, or error handling changed
+- the change affects cross-module contracts, asynchronous work, concurrency, timing, performance, or compatibility
+- the feature lacks automated coverage or acceptance requires manual interaction checks
+- the implementation agent cannot provide complete build, test, and regression evidence
+
+Pure documentation, planning, comments, or formatting-only changes do not require Test Agent review, but the main agent must still run appropriate basic checks.
+
+### Ownership And Concurrency
+
+- Every file has exactly one write owner during a work phase.
+- Each delegated task must state its responsibility, allowed files or directories, and any shared files it must not modify.
+- Parallel implementation is allowed only when write sets are explicitly non-overlapping.
+- Shared files such as `package.json`, lockfiles, shared types, application entry points, and Tauri configuration must have one owner and be changed sequentially.
+- Architecture, Test, and Code Review agents are read-only by default. Assign explicit paths separately if they must write architecture documents or tests.
+- Subagents must not revert, overwrite, reformat, or opportunistically modify changes outside their assigned ownership.
+- The main agent resolves integration issues and runs final validation after all delegated writes finish.
+- If non-overlapping ownership cannot be established, execute the work serially.
 
 ## Prompt Update Rules
 

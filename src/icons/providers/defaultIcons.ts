@@ -1,13 +1,16 @@
 import { createElement, type SVGProps } from 'react'
 import {
-  CaptionsIcon,
-  Music2Icon,
-  PlayIcon,
-  Repeat1Icon,
-  SquareStackIcon,
-  ThumbsDownIcon,
-  ThumbsUpIcon,
-} from 'lucide-react'
+  ArrowRepeat124Regular,
+  ClosedCaption24Filled,
+  ClosedCaption24Regular,
+  MusicNote224Regular,
+  Play24Filled,
+  SquareMultiple24Regular,
+  ThumbDislike24Filled,
+  ThumbDislike24Regular,
+  ThumbLike24Filled,
+  ThumbLike24Regular,
+} from '@fluentui/react-icons'
 import type { SystemIcon, SystemIconProvider } from '@/icons/types'
 
 function createFigmaIcon(viewBox: string, innerHtml: string): SystemIcon {
@@ -29,12 +32,6 @@ function createFigmaIcon(viewBox: string, innerHtml: string): SystemIcon {
   return FigmaIcon
 }
 
-function filledIcon(Icon: SystemIcon): SystemIcon {
-  return function FilledIcon(props) {
-    return createElement(Icon, { ...props, fill: 'currentColor' })
-  }
-}
-
 const DefaultShuffleIcon = createFigmaIcon('0 0 48 48', `<path d="M8.5 15.5H15.5C19 15.5 21.3 17.2 23.35 20.35L26.65 25.65C28.7 28.8 31 30.5 34.5 30.5H40M34 24.5L40 30.5L34 36.5M8.5 32.5H15.5C18.2 32.5 20.2 31.5 22 29.45M27 18.55C28.8 16.5 30.8 15.5 33.5 15.5H40M34 9.5L40 15.5L34 21.5" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>`)
 const DefaultShuffleOffIcon = createFigmaIcon('0 0 48 48', `<path d="M8.5 15.5H15.5C19 15.5 21.3 17.2 23.35 20.35L26.65 25.65C28.7 28.8 31 30.5 34.5 30.5H40M34 24.5L40 30.5L34 36.5M8.5 32.5H15.5C18.2 32.5 20.2 31.5 22 29.45M27 18.55C28.8 16.5 30.8 15.5 33.5 15.5H40M34 9.5L40 15.5L34 21.5M10.5 10.5L37.5 37.5" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>`)
 const DefaultShuffleCategoryOrderIcon = createFigmaIcon('0 0 48 48', `<path d="M5.5 15.5H9.5M5.5 24H9.5M5.5 32.5H9.5M13.5 15.5H17.5C21 15.5 23.3 17.2 25.35 20.35L28.65 25.65C30.7 28.8 33 30.5 36.5 30.5H40M34 24.5L40 30.5L34 36.5M13.5 32.5H17.5C20.2 32.5 22.2 31.5 24 29.45M29 18.55C30.8 16.5 32.8 15.5 35.5 15.5H40M34 9.5L40 15.5L34 21.5" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>`)
@@ -54,39 +51,34 @@ const FigmaPreviousIcon = createFigmaIcon('0 0 32 32', `<g id="Previous"><path i
 const FigmaNavigationIcon = createFigmaIcon('0 0 48 48', `<g id="Navigation"><path id="Shape" d="M4 11.25C4 10.5596 4.55964 10 5.25 10H42.75C43.4404 10 44 10.5596 44 11.25C44 11.9404 43.4404 12.5 42.75 12.5H5.25C4.55964 12.5 4 11.9404 4 11.25ZM4 24.25C4 23.5596 4.55964 23 5.25 23H42.75C43.4404 23 44 23.5596 44 24.25C44 24.9404 43.4404 25.5 42.75 25.5H5.25C4.55964 25.5 4 24.9404 4 24.25ZM5.25 36C4.55964 36 4 36.5596 4 37.25C4 37.9404 4.55964 38.5 5.25 38.5H42.75C43.4404 38.5 44 37.9404 44 37.25C44 36.5596 43.4404 36 42.75 36H5.25Z" fill="var(--fill-0, currentColor)"/></g>`)
 const FigmaFullscreenIcon = createFigmaIcon('0 0 20 20', `<g id="Full Screen Maximize"><path id="Shape" d="M3 5C3 3.89543 3.89543 3 5 3H7C7.27614 3 7.5 3.22386 7.5 3.5C7.5 3.77614 7.27614 4 7 4H5C4.44772 4 4 4.44772 4 5V7C4 7.27614 3.77614 7.5 3.5 7.5C3.22386 7.5 3 7.27614 3 7V5ZM12.5 3.5C12.5 3.22386 12.7239 3 13 3H15C16.1046 3 17 3.89543 17 5V7C17 7.27614 16.7761 7.5 16.5 7.5C16.2239 7.5 16 7.27614 16 7V5C16 4.44772 15.5523 4 15 4H13C12.7239 4 12.5 3.77614 12.5 3.5ZM3.5 12.5C3.77614 12.5 4 12.7239 4 13V15C4 15.5523 4.44772 16 5 16H7C7.27614 16 7.5 16.2239 7.5 16.5C7.5 16.7761 7.27614 17 7 17H5C3.89543 17 3 16.1046 3 15V13C3 12.7239 3.22386 12.5 3.5 12.5ZM16.5 12.5C16.7761 12.5 17 12.7239 17 13V15C17 16.1046 16.1046 17 15 17H13C12.7239 17 12.5 16.7761 12.5 16.5C12.5 16.2239 12.7239 16 13 16H15C15.5523 16 16 15.5523 16 15V13C16 12.7239 16.2239 12.5 16.5 12.5Z" fill="var(--fill-0, currentColor)"/></g>`)
 const FigmaSubtractIcon = createFigmaIcon('0 0 20 20', `<g id="Subtract"><path id="Shape" d="M3 10C3 9.72386 3.22386 9.5 3.5 9.5H16.5C16.7761 9.5 17 9.72386 17 10C17 10.2761 16.7761 10.5 16.5 10.5H3.5C3.22386 10.5 3 10.2761 3 10Z" fill="var(--fill-0, currentColor)"/></g>`)
-const DefaultPlayIcon = filledIcon(PlayIcon)
-const DefaultLikeSelectedIcon = filledIcon(ThumbsUpIcon)
-const DefaultDislikeSelectedIcon = filledIcon(ThumbsDownIcon)
-const DefaultCaptionsSelectedIcon = filledIcon(CaptionsIcon)
-
 export const defaultSystemIcons: SystemIconProvider = {
   collapse: FigmaChevronIcon,
   fullscreen: FigmaFullscreenIcon,
   minimize: FigmaSubtractIcon,
   maximize: FigmaMaximizeIcon,
-  restore: SquareStackIcon,
+  restore: SquareMultiple24Regular,
   close: FigmaDismissIcon,
-  play: DefaultPlayIcon,
+  play: Play24Filled,
   pause: FigmaPauseIcon,
   previous: FigmaPreviousIcon,
   next: FigmaNextIcon,
-  like: ThumbsUpIcon,
-  likeSelected: DefaultLikeSelectedIcon,
-  dislike: ThumbsDownIcon,
-  dislikeSelected: DefaultDislikeSelectedIcon,
+  like: ThumbLike24Regular,
+  likeSelected: ThumbLike24Filled,
+  dislike: ThumbDislike24Regular,
+  dislikeSelected: ThumbDislike24Filled,
   more: FigmaMoreIcon,
   shuffle: DefaultShuffleIcon,
   shuffleOff: DefaultShuffleOffIcon,
   shuffleCategoryOrder: DefaultShuffleCategoryOrderIcon,
   shuffleCategoryRandom: DefaultShuffleCategoryRandomIcon,
   repeat: DefaultRepeatIcon,
-  repeatOne: Repeat1Icon,
+  repeatOne: ArrowRepeat124Regular,
   sequential: DefaultSequentialIcon,
   playAllCategories: DefaultPlayAllCategoriesIcon,
-  captions: CaptionsIcon,
-  captionsSelected: DefaultCaptionsSelectedIcon,
+  captions: ClosedCaption24Regular,
+  captionsSelected: ClosedCaption24Filled,
   volume: FigmaSpeakerIcon,
   audioWave: FigmaAudioWaveIcon,
   queue: FigmaNavigationIcon,
-  music: Music2Icon,
+  music: MusicNote224Regular,
 }

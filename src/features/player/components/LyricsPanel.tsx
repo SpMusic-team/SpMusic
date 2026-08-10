@@ -38,7 +38,10 @@ export function LyricsPanel({ track, activeLyricId, activeLyricIndex, lyricListR
           {track.lyrics.map((line, index) => (
             <li
               key={line.id}
-              ref={(node) => { if (node) lyricRefs.current.set(line.id, node) }}
+              ref={(node) => {
+                if (node) lyricRefs.current.set(line.id, node)
+                else lyricRefs.current.delete(line.id)
+              }}
               role="button"
               tabIndex={0}
               aria-current={line.id === activeLyricId ? 'true' : undefined}

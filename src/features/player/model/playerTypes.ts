@@ -1,3 +1,5 @@
+export type CoverTone = 'lagoon' | 'violet' | 'rose' | 'amber' | 'blue'
+
 export type Track = {
   id: string
   title: string
@@ -5,7 +7,7 @@ export type Track = {
   album: string
   category?: string
   durationSeconds: number
-  coverTone: string
+  coverTone: CoverTone
   coverImage?: string
   coverImageFallback?: string
   lyrics: DemoLyricLine[]

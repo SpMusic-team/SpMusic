@@ -9,6 +9,7 @@ import {
   type RepeatMode,
   type ShuffleMode,
 } from '@/features/player/model/playbackModes'
+import type { PlayerUiViewModel } from '@/features/player/model/playerUiViewModel'
 import type { TrackFeedback } from '@/features/player/model/playerTypes'
 import { demoTracks } from './demoTracks'
 
@@ -86,40 +87,52 @@ export function DemoPlayerPage() {
     })
   }
 
-  return (
-    <PlayerSurface
-      track={track}
-      queueTracks={demoTracks}
-      playlistName="独立界面演示"
-      currentFeedback={track ? feedbackByTrackId[track.id] : undefined}
-      shuffleMode={shuffleMode}
-      repeatMode={repeatMode}
-      queueOpen={queueOpen}
-      playing={playing}
-      progress={Math.min(progress, duration)}
-      duration={duration}
-      volume={volume}
-      volumeBusy={false}
-      volumeDisabled={false}
-      audioBusy={false}
-      audioStatusText="演示模式：不调用 Tauri 音频后端"
-      transportBusy={false}
-      onProgressChange={setProgress}
-      onProgressCommit={setProgress}
-      onOpenAudio={() => toast.info('独立演示页不会打开本地音频')}
-      onPrevious={() => changeTrack(-1)}
-      onNext={() => changeTrack(1)}
-      onPlayToggle={() => setPlaying((value) => !value)}
-      onShuffleCycle={() => setShuffleMode((value) => nextShuffleMode[value])}
-      onRepeatCycle={() => setRepeatMode((value) => nextRepeatMode[value])}
-      onFeedbackChange={toggleTrackFeedback}
-      onVolumeChange={setVolume}
-      onQueueToggle={() => setQueueOpen((value) => !value)}
-      onQueueTrackSelect={(trackId) => {
+  const viewModel: PlayerUiViewModel = {
+    playback: {
+      track,
+      isPlaying: playing,
+      shuffleMode,
+      repeatMode,
+      isAudioBusy: false,
+      isTransportBusy: false,
+      statusText: '演示模式：不调用 Tauri 音频后端',
+      onOpenAudio: () => toast.info('独立演示页不会打开本地音频'),
+      onPrevious: () => changeTrack(-1),
+      onNext: () => changeTrack(1),
+      onPlayToggle: () => setPlaying((value) => !value),
+      onShuffleCycle: () => setShuffleMode((value) => nextShuffleMode[value]),
+      onRepeatCycle: () => setRepeatMode((value) => nextRepeatMode[value]),
+    },
+    timeline: {
+      positionSeconds: Math.min(progress, duration),
+      durationSeconds: duration,
+      onPreview: setProgress,
+      onCommit: setProgress,
+    },
+    volume: {
+      valuePercent: volume,
+      isBusy: false,
+      isDisabled: false,
+      onChange: setVolume,
+    },
+    queue: {
+      tracks: demoTracks,
+      playlistName: '独立界面演示',
+      isOpen: queueOpen,
+      onToggle: () => setQueueOpen((value) => !value),
+      onTrackSelect: (trackId) => {
         endingTrackRef.current = null
         setCurrentTrackId(trackId)
         setProgress(0)
-      }}
-    />
-  )
+      },
+    },
+    feedback: {
+      value: track ? feedbackByTrackId[track.id] : undefined,
+      onToggle: (feedback) => {
+        if (track) toggleTrackFeedback(track.id, feedback)
+      },
+    },
+  }
+
+  return <PlayerSurface viewModel={viewModel} />
 }

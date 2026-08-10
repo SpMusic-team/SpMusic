@@ -3,88 +3,59 @@ import { AnimatePresence, motion } from 'motion/react'
 import { Button } from '@/components/ui/button'
 import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { appCopy } from '@/features/player/model/playerCopy'
+import type { PlayerUiViewModel } from '@/features/player/model/playerUiViewModel'
 import { formatDuration } from '@/features/player/model/trackUtils'
-import type { SystemIcon } from '@/icons/systemIcons'
 import { IconButton } from './IconButton'
 import { VolumeControl } from './VolumeControl'
 
 type ProgressStyle = CSSProperties & { '--progress-percent': string }
 
-type ControlDockProps = {
-  progress: number
-  duration: number
-  progressStyle: ProgressStyle
-  disabled: boolean
-  playing: boolean
-  shuffleIcon: SystemIcon
-  shuffleLabel: string
-  shuffleSelected: boolean
-  repeatIcon: SystemIcon
-  repeatLabel: string
-  repeatSelected: boolean
-  captionsIcon: SystemIcon
-  desktopCaptionsAvailable: boolean
-  desktopCaptionsEnabled: boolean
-  volume: number
-  volumeBusy: boolean
-  volumeDisabled: boolean
-  queueOpen: boolean
-  audioBusy: boolean
-  audioStatusText: string
-  transportBusy: boolean
-  onProgressChange: (progress: number) => void
-  onProgressCommit: (progress: number) => void
-  onOpenAudio: () => void
-  onPrevious: () => void
-  onNext: () => void
-  onPlayToggle: () => void
-  onShuffleCycle: () => void
-  onRepeatCycle: () => void
-  onCaptionsToggle: () => void
-  onVolumeChange: (volume: number) => void
-  onQueueToggle: () => void
-}
+type ControlDockProps = Pick<PlayerUiViewModel, 'playback' | 'timeline' | 'volume' | 'queue'>
 
 export function ControlDock({
-  progress,
-  duration,
-  progressStyle,
-  disabled,
-  playing,
-  shuffleIcon,
-  shuffleLabel,
-  shuffleSelected,
-  repeatIcon,
-  repeatLabel,
-  repeatSelected,
-  captionsIcon,
-  desktopCaptionsAvailable,
-  desktopCaptionsEnabled,
+  playback,
+  timeline,
   volume,
-  volumeBusy,
-  volumeDisabled,
-  queueOpen,
-  audioBusy,
-  audioStatusText,
-  transportBusy,
-  onProgressChange,
-  onProgressCommit,
-  onOpenAudio,
-  onPrevious,
-  onNext,
-  onPlayToggle,
-  onShuffleCycle,
-  onRepeatCycle,
-  onCaptionsToggle,
-  onVolumeChange,
-  onQueueToggle,
+  queue,
 }: ControlDockProps) {
   const systemIcons = useSystemIcons()
   const appearanceMotion = useAppearanceMotion()
   const progressCommitRef = useRef<{ value: number; at: number } | null>(null)
+  const disabled = !playback.track
+  const progressStyle: ProgressStyle = {
+    '--progress-percent': `${timeline.durationSeconds ? timeline.positionSeconds / timeline.durationSeconds * 100 : 0}%`,
+  }
+  const ShuffleIcon = playback.shuffleMode === 'shuffle-all'
+    ? systemIcons.shuffleOff
+    : playback.shuffleMode === 'shuffle-category-order'
+      ? systemIcons.shuffleCategoryOrder
+      : playback.shuffleMode === 'shuffle-category-random'
+        ? systemIcons.shuffleCategoryRandom
+        : systemIcons.shuffle
+  const shuffleLabel = playback.shuffleMode === 'shuffle-all'
+    ? appCopy.controls.shuffleOff
+    : playback.shuffleMode === 'shuffle-category-order'
+      ? appCopy.controls.shuffleCategoryOrder
+      : playback.shuffleMode === 'shuffle-category-random'
+        ? appCopy.controls.shuffleCategoryRandom
+        : appCopy.controls.shuffle
+  const RepeatIcon = playback.repeatMode === 'repeat-one'
+    ? systemIcons.repeatOne
+    : playback.repeatMode === 'sequential'
+      ? systemIcons.sequential
+      : playback.repeatMode === 'all-categories-until-stop'
+        ? systemIcons.playAllCategories
+        : systemIcons.repeat
+  const repeatLabel = playback.repeatMode === 'repeat-one'
+    ? appCopy.controls.repeatOne
+    : playback.repeatMode === 'sequential'
+      ? appCopy.controls.sequential
+      : playback.repeatMode === 'all-categories-until-stop'
+        ? appCopy.controls.playAllCategories
+        : appCopy.controls.repeat
 
   function handleProgressChange(event: ChangeEvent<HTMLInputElement> | FormEvent<HTMLInputElement>) {
-    onProgressChange(Number(event.currentTarget.value))
+    timeline.onPreview(Number(event.currentTarget.value))
   }
 
   function handleProgressPointerDown(event: PointerEvent<HTMLInputElement>) {
@@ -105,7 +76,7 @@ export function ControlDock({
     }
 
     progressCommitRef.current = { value, at: now }
-    onProgressCommit(value)
+    timeline.onCommit(value)
   }
 
   return (
@@ -114,13 +85,13 @@ export function ControlDock({
       className="control-dock"
       style={progressStyle}
     >
-      <p className="audio-status" aria-live="polite">{audioStatusText}</p>
+      <p className="audio-status" aria-live="polite">{playback.statusText}</p>
       <div className="progress-row control-progress" aria-label={appCopy.progress.label}>
-        <time className="control-progress-time control-progress-time-start">{formatDuration(progress)}</time>
+        <time className="control-progress-time control-progress-time-start">{formatDuration(timeline.positionSeconds)}</time>
         <input
           aria-label={appCopy.progress.label}
-          disabled={audioBusy || transportBusy || disabled || duration <= 0}
-          max={duration}
+          disabled={playback.isAudioBusy || playback.isTransportBusy || disabled || timeline.durationSeconds <= 0}
+          max={timeline.durationSeconds}
           min="0"
           onChange={handleProgressChange}
           onInput={handleProgressChange}
@@ -130,20 +101,20 @@ export function ControlDock({
           onPointerUp={handleProgressCommit}
           step="0.01"
           type="range"
-          value={progress}
+          value={timeline.positionSeconds}
         />
-        <time className="control-progress-time control-progress-time-end">{formatDuration(duration)}</time>
+        <time className="control-progress-time control-progress-time-end">{formatDuration(timeline.durationSeconds)}</time>
       </div>
       <div className="control-row">
-        <div className="control-auxiliary control-auxiliary-start"><IconButton icon={systemIcons.audioWave} label={appCopy.controls.openAudio} disabled={audioBusy || transportBusy} onClick={onOpenAudio} /></div>
+        <div className="control-auxiliary control-auxiliary-start"><IconButton icon={systemIcons.audioWave} label={appCopy.controls.openAudio} disabled={playback.isAudioBusy || playback.isTransportBusy} onClick={playback.onOpenAudio} /></div>
         <div className="control-primary">
-          <IconButton className="control-optional" icon={shuffleIcon} label={shuffleLabel} selected={shuffleSelected} disabled={disabled} onClick={onShuffleCycle} />
-          <IconButton className="previous-button" icon={systemIcons.previous} label={appCopy.controls.previous} disabled={disabled || transportBusy} onClick={onPrevious} />
-          <Button className="play-button" aria-busy={transportBusy} aria-label={playing ? appCopy.controls.pause : appCopy.controls.play} aria-pressed={playing} disabled={audioBusy || disabled} size="icon-lg" onClick={onPlayToggle}>
+          <IconButton className="control-optional" icon={ShuffleIcon} label={shuffleLabel} selected={playback.shuffleMode !== 'none'} disabled={disabled} onClick={playback.onShuffleCycle} />
+          <IconButton className="previous-button" icon={systemIcons.previous} label={appCopy.controls.previous} disabled={disabled || playback.isTransportBusy} onClick={playback.onPrevious} />
+          <Button className="play-button" aria-busy={playback.isTransportBusy} aria-label={playback.isPlaying ? appCopy.controls.pause : appCopy.controls.play} aria-pressed={playback.isPlaying} disabled={playback.isAudioBusy || disabled} size="icon-lg" onClick={playback.onPlayToggle}>
             <span className="player-control-icon-swap">
               <AnimatePresence initial={false}>
                 <motion.span
-                  key={playing ? 'pause' : 'play'}
+                  key={playback.isPlaying ? 'pause' : 'play'}
                   className="player-control-icon-frame"
                   variants={appearanceMotion.variants.glyph}
                   initial="initial"
@@ -151,31 +122,31 @@ export function ControlDock({
                   exit="exit"
                   aria-hidden="true"
                 >
-                  {playing ? <systemIcons.pause /> : <systemIcons.play />}
+                  {playback.isPlaying ? <systemIcons.pause /> : <systemIcons.play />}
                 </motion.span>
               </AnimatePresence>
             </span>
           </Button>
-          <IconButton className="next-button" icon={systemIcons.next} label={appCopy.controls.next} disabled={disabled || transportBusy} onClick={onNext} />
-          <IconButton className="control-optional" icon={repeatIcon} label={repeatLabel} selected={repeatSelected} disabled={disabled} onClick={onRepeatCycle} />
+          <IconButton className="next-button" icon={systemIcons.next} label={appCopy.controls.next} disabled={disabled || playback.isTransportBusy} onClick={playback.onNext} />
+          <IconButton className="control-optional" icon={RepeatIcon} label={repeatLabel} selected={playback.repeatMode !== 'list-loop'} disabled={disabled} onClick={playback.onRepeatCycle} />
         </div>
         <div className="control-auxiliary control-auxiliary-end">
           <IconButton
             animated
             className="control-optional"
-            icon={captionsIcon}
-            label={desktopCaptionsAvailable ? appCopy.controls.captions : appCopy.controls.captionsUnavailable}
-            selected={desktopCaptionsEnabled}
-            disabled={!desktopCaptionsAvailable}
-            onClick={onCaptionsToggle}
+            icon={systemIcons.captions}
+            label={appCopy.controls.captionsUnavailable}
+            selected={false}
+            disabled
+            onClick={() => undefined}
           />
           <VolumeControl
-            volume={volume}
-            busy={volumeBusy}
-            disabled={volumeDisabled}
-            onVolumeChange={onVolumeChange}
+            volume={volume.valuePercent}
+            busy={volume.isBusy}
+            disabled={volume.isDisabled}
+            onVolumeChange={volume.onChange}
           />
-          <IconButton className="control-optional" icon={systemIcons.queue} label={appCopy.controls.queue} selected={queueOpen} onClick={onQueueToggle} />
+          <IconButton className="control-optional" icon={systemIcons.queue} label={appCopy.controls.queue} selected={queue.isOpen} onClick={queue.onToggle} />
         </div>
       </div>
     </motion.footer>

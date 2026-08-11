@@ -1,6 +1,7 @@
-import { useRef, type ChangeEvent, type CSSProperties, type FocusEvent, type KeyboardEvent, type PointerEvent } from 'react'
+import { useEffect, useRef, type FocusEvent, type KeyboardEvent, type PointerEvent } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
 import { Button } from '@/components/ui/button'
+import { Slider } from '@/components/ui/slider'
 import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { appCopy } from '@/features/player/model/playerCopy'
 import type { PlayerUiViewModel } from '@/features/player/model/playerUiViewModel'
@@ -8,9 +9,8 @@ import { formatDuration } from '@/features/player/model/trackUtils'
 import { IconButton } from './IconButton'
 import { VolumeControl } from './VolumeControl'
 
-type ProgressStyle = CSSProperties & { '--progress-percent': string }
-
 type ControlDockProps = Pick<PlayerUiViewModel, 'playback' | 'timeline' | 'volume' | 'queue'>
+type ProgressPressEndReason = 'pointerup' | 'pointercancel' | 'blur'
 
 export function ControlDock({
   playback,
@@ -22,10 +22,13 @@ export function ControlDock({
   const appearanceMotion = useAppearanceMotion()
   const pointerPreviewRef = useRef(false)
   const keyboardPreviewRef = useRef(false)
+  const previewValueRef = useRef(timeline.positionSeconds)
+  const progressSliderRef = useRef<HTMLDivElement>(null)
+  const pressedPointerIdRef = useRef<number | null>(null)
+  const pressEndRef = useRef<{ pointerId: number; reason: ProgressPressEndReason } | null>(null)
+  const cancelProgressPreviewRef = useRef(timeline.onCancelPreview)
   const disabled = !playback.track
-  const progressStyle: ProgressStyle = {
-    '--progress-percent': `${timeline.durationSeconds ? timeline.positionSeconds / timeline.durationSeconds * 100 : 0}%`,
-  }
+  const progressDisabled = playback.isAudioBusy || playback.isTransportBusy || disabled || timeline.durationSeconds <= 0 || timeline.interaction === 'seeking'
   const ShuffleIcon = playback.shuffleMode === 'shuffle-all'
     ? systemIcons.shuffleOff
     : playback.shuffleMode === 'shuffle-category-order'
@@ -55,78 +58,169 @@ export function ControlDock({
         ? appCopy.controls.playAllCategories
         : appCopy.controls.repeat
 
-  function handleProgressChange(event: ChangeEvent<HTMLInputElement>) {
+  function readProgressValue(value: number | readonly number[]) {
+    return Array.isArray(value) ? (value[0] ?? 0) : value as number
+  }
+
+  function handleProgressChange(value: number | readonly number[], reason: 'input-change' | 'track-press' | 'drag' | 'keyboard' | 'none') {
     if (timeline.interaction === 'seeking') return
+    const nextValue = readProgressValue(value)
+    previewValueRef.current = nextValue
+
     if (!pointerPreviewRef.current && !keyboardPreviewRef.current) {
-      keyboardPreviewRef.current = true
       timeline.onPreviewStart()
     }
-    timeline.onPreview(Number(event.currentTarget.value))
+    if (reason === 'drag' || reason === 'track-press') {
+      pointerPreviewRef.current = true
+      keyboardPreviewRef.current = false
+    } else {
+      keyboardPreviewRef.current = true
+    }
+    timeline.onPreview(nextValue)
   }
 
-  function handleProgressPointerDown(event: PointerEvent<HTMLInputElement>) {
-    if (timeline.interaction === 'seeking') return
-    pointerPreviewRef.current = true
-    keyboardPreviewRef.current = false
-    timeline.onPreviewStart()
-    event.currentTarget.setPointerCapture(event.pointerId)
-  }
-
-  function commitPointerPreview(event: PointerEvent<HTMLInputElement>) {
+  function commitPointerPreview(value: number | readonly number[]) {
     if (!pointerPreviewRef.current) return
     pointerPreviewRef.current = false
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId)
-    }
-    timeline.onCommit(Number(event.currentTarget.value))
+    timeline.onCommit(readProgressValue(value))
   }
 
-  function cancelPointerPreview(event: PointerEvent<HTMLInputElement>) {
+  function cancelPointerPreview() {
     if (!pointerPreviewRef.current) return
     pointerPreviewRef.current = false
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId)
-    }
     timeline.onCancelPreview()
   }
 
-  function handleProgressKeyUp(event: KeyboardEvent<HTMLInputElement>) {
+  function handleProgressPointerDown(event: PointerEvent<HTMLDivElement>) {
+    if (progressDisabled || !event.isPrimary || event.button !== 0 || pressedPointerIdRef.current !== null) return
+    const target = event.target
+    if (target instanceof Element && target.closest('[data-slot="slider-thumb"]')) {
+      pressEndRef.current = null
+      pressedPointerIdRef.current = event.pointerId
+      progressSliderRef.current?.setAttribute('data-thumb-pressed', '')
+    }
+  }
+
+  function finishProgressThumbPress(event: PointerEvent<HTMLDivElement>, reason: ProgressPressEndReason) {
+    if (pressedPointerIdRef.current !== event.pointerId) return
+    pressEndRef.current = { pointerId: event.pointerId, reason }
+    pressedPointerIdRef.current = null
+    progressSliderRef.current?.removeAttribute('data-thumb-pressed')
+    if (reason === 'pointercancel') cancelPointerPreview()
+  }
+
+  function handleProgressLostPointerCapture(event: PointerEvent<HTMLDivElement>) {
+    if (pressedPointerIdRef.current !== event.pointerId) return
+    const endedNormally = pressEndRef.current?.pointerId === event.pointerId
+      && pressEndRef.current.reason === 'pointerup'
+    pressedPointerIdRef.current = null
+    pressEndRef.current = null
+    progressSliderRef.current?.removeAttribute('data-thumb-pressed')
+    if (!endedNormally) cancelPointerPreview()
+  }
+
+  function handleProgressKeyUp(event: KeyboardEvent<HTMLDivElement>) {
     if (!keyboardPreviewRef.current) return
     if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'].includes(event.key)) return
     keyboardPreviewRef.current = false
-    timeline.onCommit(Number(event.currentTarget.value))
+    timeline.onCommit(previewValueRef.current)
   }
 
-  function handleProgressBlur(event: FocusEvent<HTMLInputElement>) {
+  function handleProgressBlur(event: FocusEvent<HTMLDivElement>) {
+    if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return
+    const pressedPointerId = pressedPointerIdRef.current
+    if (pressedPointerId !== null) {
+      pressEndRef.current = { pointerId: pressedPointerId, reason: 'blur' }
+      pressedPointerIdRef.current = null
+      progressSliderRef.current?.removeAttribute('data-thumb-pressed')
+      cancelPointerPreview()
+      return
+    }
     if (pointerPreviewRef.current || keyboardPreviewRef.current) {
       pointerPreviewRef.current = false
       keyboardPreviewRef.current = false
-      timeline.onCommit(Number(event.currentTarget.value))
+      timeline.onCommit(previewValueRef.current)
     }
   }
+
+  useEffect(() => {
+    cancelProgressPreviewRef.current = timeline.onCancelPreview
+  }, [timeline.onCancelPreview])
+
+  useEffect(() => {
+    const progressSliderElement = progressSliderRef.current
+
+    function clearOwnedPointer(pointerId: number, reason: ProgressPressEndReason) {
+      if (pressedPointerIdRef.current !== pointerId) return
+      pressEndRef.current = { pointerId, reason }
+      pressedPointerIdRef.current = null
+      progressSliderElement?.removeAttribute('data-thumb-pressed')
+      if (reason !== 'pointerup' && pointerPreviewRef.current) {
+        pointerPreviewRef.current = false
+        cancelProgressPreviewRef.current()
+      }
+    }
+
+    function handleWindowPointerEnd(event: globalThis.PointerEvent) {
+      clearOwnedPointer(event.pointerId, event.type === 'pointercancel' ? 'pointercancel' : 'pointerup')
+    }
+
+    function handleWindowBlur() {
+      const pointerId = pressedPointerIdRef.current
+      if (pointerId !== null) clearOwnedPointer(pointerId, 'blur')
+    }
+
+    window.addEventListener('pointerup', handleWindowPointerEnd)
+    window.addEventListener('pointercancel', handleWindowPointerEnd)
+    window.addEventListener('blur', handleWindowBlur)
+
+    return () => {
+      window.removeEventListener('pointerup', handleWindowPointerEnd)
+      window.removeEventListener('pointercancel', handleWindowPointerEnd)
+      window.removeEventListener('blur', handleWindowBlur)
+      pressedPointerIdRef.current = null
+      pressEndRef.current = null
+      progressSliderElement?.removeAttribute('data-thumb-pressed')
+      if (pointerPreviewRef.current) {
+        pointerPreviewRef.current = false
+        cancelProgressPreviewRef.current()
+      }
+    }
+  }, [])
 
   return (
     <motion.footer
       layout
       className="control-dock"
-      style={progressStyle}
     >
       <p className="audio-status" aria-live="polite">{playback.statusText}</p>
       <div className="progress-row control-progress" aria-label={appCopy.progress.label}>
         <time className="control-progress-time control-progress-time-start">{formatDuration(timeline.positionSeconds)}</time>
-        <input
-          aria-label={appCopy.progress.label}
-          disabled={playback.isAudioBusy || playback.isTransportBusy || disabled || timeline.durationSeconds <= 0 || timeline.interaction === 'seeking'}
+        <Slider
+          ref={progressSliderRef}
+          className="control-progress-slider"
+          data-seeking={timeline.interaction === 'seeking' ? '' : undefined}
+          disabled={progressDisabled}
+          getAriaLabel={() => appCopy.progress.label}
           max={timeline.durationSeconds}
-          min="0"
-          onChange={handleProgressChange}
+          min={0}
           onBlur={handleProgressBlur}
           onKeyUp={handleProgressKeyUp}
+          onLostPointerCapture={handleProgressLostPointerCapture}
+          onPointerCancel={(event) => finishProgressThumbPress(event, 'pointercancel')}
           onPointerDown={handleProgressPointerDown}
-          onPointerCancel={cancelPointerPreview}
-          onPointerUp={commitPointerPreview}
-          step="0.01"
-          type="range"
+          onPointerUp={(event) => finishProgressThumbPress(event, 'pointerup')}
+          onValueChange={(value, eventDetails) => handleProgressChange(value, eventDetails.reason)}
+          onValueCommitted={(value, eventDetails) => {
+            if (eventDetails.reason !== 'keyboard') {
+              const pressedPointerId = pressedPointerIdRef.current
+              if (pressedPointerId !== null) {
+                pressEndRef.current = { pointerId: pressedPointerId, reason: 'pointerup' }
+              }
+              commitPointerPreview(value)
+            }
+          }}
+          step={0.01}
           value={timeline.positionSeconds}
         />
         <time className="control-progress-time control-progress-time-end">{formatDuration(timeline.durationSeconds)}</time>

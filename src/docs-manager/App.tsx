@@ -125,6 +125,29 @@ const PARAM_KEYS: Record<string, string> = {
   priority: "priority",
 }
 
+const DOC_TYPE_LABELS: Record<string, string> = {
+  task: "任务",
+  "optimization-requirement": "优化需求",
+  bug: "缺陷",
+  decision: "决策",
+  architecture: "架构",
+  requirements: "需求",
+  implementation: "实现说明",
+  "compatibility-evidence": "兼容性证据",
+  "implementation-evidence": "实现证据",
+  readme: "项目说明",
+  "release-plan": "发布计划",
+  "requirements-index": "需求索引",
+  roadmap: "路线图",
+  "sprint-plan": "迭代计划",
+  "technical-decision-record": "技术决策记录",
+  "test-catalog": "测试目录",
+  "test-report": "测试报告",
+  "ui-spec": "界面规范",
+  "agent-prompt": "Agent 提示词",
+  template: "模板",
+}
+
 const ISSUES_OPTIONS: { value: IssuesFilter; label: string }[] = [
   { value: "", label: "全部问题状态" },
   { value: "any", label: "有问题" },
@@ -188,6 +211,15 @@ function metadataText(value: MetadataValue | undefined) {
   return Array.isArray(value) ? value.join(", ") : value || "—"
 }
 
+function docTypeLabel(value: string) {
+  return DOC_TYPE_LABELS[value] ?? `未知类型（${value}）`
+}
+
+function docTypeText(value: MetadataValue | undefined) {
+  if (Array.isArray(value)) return value.map(docTypeLabel).join(", ")
+  return value ? docTypeLabel(value) : "—"
+}
+
 function dateText(value: string) {
   return new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value))
 }
@@ -224,10 +256,11 @@ interface FilterMultiSelectProps {
   selected: string[]
   options: FacetOption[]
   onChange: (values: string[]) => void
+  getOptionLabel?: (value: string) => string
 }
 
-function FilterMultiSelect({ label, selected, options, onChange }: FilterMultiSelectProps) {
-  const summary = selected.length === 0 ? `全部${label}` : selected.length === 1 ? selected[0] : `${label} ${selected.length} 项`
+function FilterMultiSelect({ label, selected, options, onChange, getOptionLabel = (value) => value }: FilterMultiSelectProps) {
+  const summary = selected.length === 0 ? `全部${label}` : selected.length === 1 ? getOptionLabel(selected[0]) : `${label} ${selected.length} 项`
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -253,7 +286,7 @@ function FilterMultiSelect({ label, selected, options, onChange }: FilterMultiSe
               )}
             >
               <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
-                <span className="truncate">{option.value}</span>
+                <span className="truncate">{getOptionLabel(option.value)}</span>
                 <span className="text-xs text-muted-foreground">{option.count}</span>
               </span>
             </DropdownMenuCheckboxItem>
@@ -293,7 +326,7 @@ function DocumentListItem({ document, selected, onSelect }: { document: Document
       </span>
       {document.excerpt && <span className="line-clamp-2 text-xs leading-relaxed text-muted-foreground">{document.excerpt}</span>}
       <span className="flex flex-wrap gap-1">
-        {document.metadata.doc_type && <Badge variant="outline">{metadataText(document.metadata.doc_type)}</Badge>}
+        {document.metadata.doc_type && <Badge variant="outline">{docTypeText(document.metadata.doc_type)}</Badge>}
         {document.metadata.status && <Badge variant="secondary">{metadataText(document.metadata.status)}</Badge>}
         {!document.editable && <Badge variant="outline">只读</Badge>}
       </span>
@@ -517,14 +550,16 @@ export function App() {
     label: PARAM_LABELS[param] ?? param,
   })), [index])
   const activeChips = useMemo(() => {
-    const chips: { param: string; label: string; value: string }[] = []
+    const chips: { param: string; label: string; value: string; displayValue: string }[] = []
     for (const param of FILTER_PARAMS) {
       const label = PARAM_LABELS[param] ?? param
-      for (const value of filters.values[param] ?? []) chips.push({ param, label, value })
+      for (const value of filters.values[param] ?? []) {
+        chips.push({ param, label, value, displayValue: param === "docType" ? docTypeLabel(value) : value })
+      }
     }
-    if (filters.issues === "any") chips.push({ param: "issues", label: "问题", value: "有问题" })
-    if (filters.issues === "errors") chips.push({ param: "issues", label: "问题", value: "仅错误" })
-    if (filters.issues === "none") chips.push({ param: "issues", label: "问题", value: "无问题" })
+    if (filters.issues === "any") chips.push({ param: "issues", label: "问题", value: "有问题", displayValue: "有问题" })
+    if (filters.issues === "errors") chips.push({ param: "issues", label: "问题", value: "仅错误", displayValue: "仅错误" })
+    if (filters.issues === "none") chips.push({ param: "issues", label: "问题", value: "无问题", displayValue: "无问题" })
     return chips
   }, [filters])
   const currentSortLabel = useMemo(
@@ -585,7 +620,7 @@ export function App() {
               <div className="flex flex-wrap gap-1">
                 {activeChips.map((chip) => (
                   <Badge key={`${chip.param}:${chip.value}`} variant="secondary" className="gap-1 pr-1">
-                    <span className="text-xs">{chip.label}: {chip.value}</span>
+                    <span className="text-xs">{chip.label}: {chip.displayValue}</span>
                     <button
                       type="button"
                       className="rounded-sm p-0.5 text-muted-foreground hover:bg-muted-foreground/20 hover:text-foreground"
@@ -593,7 +628,7 @@ export function App() {
                         if (chip.param === "issues") setIssues("")
                         else setParamValues(chip.param, (filters.values[chip.param] ?? []).filter((value) => value !== chip.value))
                       }}
-                      aria-label={`移除筛选 ${chip.label}: ${chip.value}`}
+                      aria-label={`移除筛选 ${chip.label}: ${chip.displayValue}`}
                     >
                       <XIcon className="size-3" />
                     </button>
@@ -609,6 +644,7 @@ export function App() {
                   selected={filters.values[field.param] ?? []}
                   options={index?.facets[field.param] ?? []}
                   onChange={(values) => setParamValues(field.param, values)}
+                  getOptionLabel={field.param === "docType" ? docTypeLabel : undefined}
                 />
               ))}
               <Select
@@ -910,7 +946,7 @@ export function App() {
                       </div>
                       <dl className="grid grid-cols-[72px_minmax(0,1fr)] gap-x-2 gap-y-2 text-xs">
                         <dt className="text-muted-foreground">文档 ID</dt><dd className="break-all">{metadataText(activeDocument.metadata.doc_id)}</dd>
-                        <dt className="text-muted-foreground">类型</dt><dd>{metadataText(activeDocument.metadata.doc_type)}</dd>
+                        <dt className="text-muted-foreground">类型</dt><dd>{docTypeText(activeDocument.metadata.doc_type)}</dd>
                         <dt className="text-muted-foreground">状态</dt><dd>{metadataText(activeDocument.metadata.status)}</dd>
                         <dt className="text-muted-foreground">负责 Agent</dt><dd>{metadataText(activeDocument.metadata.owner_agent)}</dd>
                         <dt className="text-muted-foreground">版本范围</dt><dd>{metadataText(activeDocument.metadata.version_scope)}</dd>

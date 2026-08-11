@@ -55,7 +55,15 @@ export const appCopy = {
     groupLabel: '音量控制',
     value: (volume: number) => `${Math.round(volume)}%`,
   },
-  lyrics: { title: '歌词', empty: '未找到歌词' },
+  lyrics: {
+    title: '歌词',
+    empty: '未找到歌词',
+    emptyTitle: '未找到歌词',
+    emptyDescription: '可在第三方应用搜索歌词',
+    openExternalApp: '打开歌词应用',
+    openExternalAppUnavailable: '歌词应用入口暂不可用',
+    settingsUnavailable: '歌词设置入口暂不可用',
+  },
   moreMenu: {
     title: '更多操作',
     copyTitle: '复制歌曲名',

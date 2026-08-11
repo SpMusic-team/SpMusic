@@ -1,8 +1,18 @@
 import type { KeyboardEvent, RefObject } from 'react'
+import { SettingsIcon } from 'lucide-react'
 import { motion } from 'motion/react'
+import { Button } from '@/components/ui/button'
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
+} from '@/components/ui/empty'
 import { useAppearanceMotion } from '@/features/appearance/hooks/useAppearance'
 import { appCopy } from '@/features/player/model/playerCopy'
 import type { Track } from '@/features/player/model/playerTypes'
+import { cn } from '@/lib/utils'
 
 type LyricsPanelProps = {
   track: Track
@@ -36,7 +46,7 @@ export function LyricsPanel({ track, activeLyricId, activeLyricIndex, lyricListR
   return (
     <motion.section
       layout
-      className="lyrics-panel"
+      className={cn('lyrics-panel', !track.lyrics.length && 'track-lyrics-empty-panel')}
       variants={appearanceMotion.variants.track}
       initial="initial"
       animate="animate"
@@ -73,7 +83,41 @@ export function LyricsPanel({ track, activeLyricId, activeLyricIndex, lyricListR
             )
           })}
         </ol>
-      ) : <p>{appCopy.lyrics.empty}</p>}
+      ) : (
+        <Empty className="empty-lyrics-state track-lyrics-empty-state">
+          <EmptyHeader>
+            <EmptyTitle>{appCopy.lyrics.emptyTitle}</EmptyTitle>
+            <EmptyDescription>{appCopy.lyrics.emptyDescription}</EmptyDescription>
+          </EmptyHeader>
+          <EmptyContent>
+            <div className="track-lyrics-empty-actions">
+              <Button
+                type="button"
+                variant="outline"
+                disabled
+                aria-describedby="lyrics-external-app-unavailable"
+              >
+                {appCopy.lyrics.openExternalApp}
+              </Button>
+              <Button
+                className="track-lyrics-settings-button"
+                type="button"
+                variant="ghost"
+                size="icon"
+                disabled
+                aria-label={appCopy.lyrics.settingsUnavailable}
+                aria-describedby="lyrics-settings-unavailable"
+              >
+                <SettingsIcon data-icon="inline-start" aria-hidden="true" />
+              </Button>
+            </div>
+            <div className="sr-only">
+              <p id="lyrics-external-app-unavailable">{appCopy.lyrics.openExternalAppUnavailable}</p>
+              <p id="lyrics-settings-unavailable">{appCopy.lyrics.settingsUnavailable}</p>
+            </div>
+          </EmptyContent>
+        </Empty>
+      )}
     </motion.section>
   )
 }

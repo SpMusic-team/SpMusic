@@ -50,3 +50,79 @@
   font-size: var(--player-lyrics-font-size);
   line-height: var(--player-lyrics-line-height);
 }
+
+.responsive-player-layout[data-player-layout] .lyrics-panel.track-lyrics-empty-panel {
+  height: 100%;
+}
+
+.track-lyrics-empty-state {
+  box-sizing: border-box;
+  height: 100%;
+  min-height: 0;
+  gap: calc(18 * var(--player-layout-unit, var(--prototype-unit)));
+  padding: 0;
+  color: var(--player-lyrics-color);
+  font-family: inherit;
+}
+
+.track-lyrics-empty-state [data-slot="empty-header"] {
+  max-width: none;
+  gap: calc(18 * var(--player-layout-unit, var(--prototype-unit)));
+}
+
+.track-lyrics-empty-state [data-slot="empty-title"] {
+  color: var(--player-lyrics-color);
+  font-family: inherit;
+  font-size: calc(45 * var(--player-layout-unit, var(--prototype-unit)));
+  font-weight: 400;
+  line-height: calc(52 * var(--player-layout-unit, var(--prototype-unit)));
+}
+
+.track-lyrics-empty-state [data-slot="empty-description"] {
+  color: var(--player-lyrics-color);
+  font-family: inherit;
+  font-size: calc(28 * var(--player-layout-unit, var(--prototype-unit)));
+  line-height: calc(36 * var(--player-layout-unit, var(--prototype-unit)));
+  opacity: 0.72;
+}
+
+.track-lyrics-empty-state [data-slot="empty-content"] {
+  max-width: none;
+  gap: 0;
+}
+
+.track-lyrics-empty-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: calc(18 * var(--player-layout-unit, var(--prototype-unit)));
+}
+
+.track-lyrics-empty-actions [data-slot="button"] {
+  height: auto;
+  padding:
+    calc(10 * var(--player-layout-unit, var(--prototype-unit)))
+    calc(20 * var(--player-layout-unit, var(--prototype-unit)));
+  border-width: calc(1 * var(--player-layout-unit, var(--prototype-unit)));
+  border-color: var(--player-lyrics-color);
+  border-radius: calc(30 * var(--player-layout-unit, var(--prototype-unit)));
+  background: transparent;
+  color: var(--player-lyrics-color);
+  font-family: inherit;
+  font-size: calc(36 * var(--player-layout-unit, var(--prototype-unit)));
+  font-weight: 400;
+  line-height: calc(44 * var(--player-layout-unit, var(--prototype-unit)));
+}
+
+.track-lyrics-empty-actions .track-lyrics-settings-button {
+  width: calc(48 * var(--player-layout-unit, var(--prototype-unit)));
+  height: calc(48 * var(--player-layout-unit, var(--prototype-unit)));
+  padding: 0;
+  border-color: transparent;
+}
+
+.track-lyrics-empty-actions [data-slot="button"] svg {
+  width: calc(48 * var(--player-layout-unit, var(--prototype-unit)));
+  height: calc(48 * var(--player-layout-unit, var(--prototype-unit)));
+}

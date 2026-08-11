@@ -15,6 +15,10 @@ function prototypeLength(value: number) {
   return value === 0 ? '0px' : `calc(${compactNumber(value)} * var(--prototype-unit))`
 }
 
+function controlLength(value: number) {
+  return value === 0 ? '0px' : `calc(${compactNumber(value)} * var(--control-unit, var(--prototype-unit)))`
+}
+
 function playerCoverShadow(value: number, responsive = false) {
   if (value === 0) return 'none'
   const scale = value / 50
@@ -73,6 +77,14 @@ export function createAppearanceCssVars(appearance: AppearancePreset, resolvedCo
     '--player-lyrics-color': colors.playerLyrics,
     '--player-overlay': colors.playerOverlay,
     '--player-dock': colors.playerDock,
+    '--player-controls-radius': controlLength(appearance.player.controls.radius * 0.6),
+    '--player-controls-radius-short': `${compactNumber(appearance.player.controls.radius * 0.52)}px`,
+    '--player-controls-shadow': appearance.player.controls.shadow / 200,
+    '--player-primary-size-scale': appearance.player.controls.primaryButton.sizeScale / 100,
+    '--player-progress-played': colors.playerProgressPlayed,
+    '--player-progress-unplayed': colors.playerProgressUnplayed,
+    '--player-progress-track-thickness': controlLength(appearance.player.controls.progress.trackThickness),
+    '--player-progress-thumb-size': controlLength(appearance.player.controls.progress.thumbSize),
     '--player-background-blur': prototypeLength(appearance.player.backgroundBlur * 0.9),
     '--player-background-brightness': `${appearance.player.backgroundBrightness}%`,
     '--player-background-saturation': `${appearance.player.backgroundSaturation}%`,

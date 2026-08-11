@@ -7,6 +7,7 @@ import type {
   AppearanceEasing,
   AppearancePreset,
   AppearancePlayer,
+  AppearancePlayerControls,
   AppearanceRadii,
   AppearanceResource,
   AppearanceThemeMetadata,
@@ -14,7 +15,7 @@ import type {
   MotionLevel,
 } from './appearanceTypes'
 
-export const APPEARANCE_THEME_SCHEMA_VERSION = 4 as const
+export const APPEARANCE_THEME_SCHEMA_VERSION = 5 as const
 
 export type AppearanceThemeDocumentV1 = {
   schemaVersion: 1
@@ -35,23 +36,32 @@ export type AppearanceThemeDocumentV3 = {
   theme: Record<string, unknown>
 }
 
-export type AppearanceThemeColorSchemesV4 =
-  | { light: AppearanceColors; dark?: AppearanceColors }
-  | { light?: AppearanceColors; dark: AppearanceColors }
-
-export type AppearanceThemePayloadV4 = Omit<AppearancePreset, 'colorSchemes'> & (
-  | { colors: AppearanceColors; colorSchemes?: never }
-  | { colors?: never; colorSchemes: AppearanceThemeColorSchemesV4 }
-)
-
+export type AppearanceThemeColorSchemesV4 = Record<'light' | 'dark', Omit<AppearanceColors, 'playerProgressPlayed' | 'playerProgressUnplayed'>>
+export type AppearanceThemePayloadV4 = Record<string, unknown>
 export type AppearanceThemeDocumentV4 = {
-  schemaVersion: typeof APPEARANCE_THEME_SCHEMA_VERSION
+  schemaVersion: 4
   format: 'spmusic-theme'
   exportedAt: string
   theme: AppearanceThemePayloadV4
 }
 
-export type AppearanceThemeDocument = AppearanceThemeDocumentV4
+export type AppearanceThemeColorSchemesV5 =
+  | { light: AppearanceColors; dark?: AppearanceColors }
+  | { light?: AppearanceColors; dark: AppearanceColors }
+
+export type AppearanceThemePayloadV5 = Omit<AppearancePreset, 'colorSchemes'> & (
+  | { colors: AppearanceColors; colorSchemes?: never }
+  | { colors?: never; colorSchemes: AppearanceThemeColorSchemesV5 }
+)
+
+export type AppearanceThemeDocumentV5 = {
+  schemaVersion: typeof APPEARANCE_THEME_SCHEMA_VERSION
+  format: 'spmusic-theme'
+  exportedAt: string
+  theme: AppearanceThemePayloadV5
+}
+
+export type AppearanceThemeDocument = AppearanceThemeDocumentV5
 
 export type AppearanceThemeParseResult =
   | { ok: true; appearance: AppearancePreset; warnings: string[]; migratedFrom?: number }
@@ -63,6 +73,7 @@ const colorKeys = [
   'background', 'surface', 'surfaceMuted', 'text', 'textMuted', 'textStrong', 'border',
   'accent', 'accentSoft', 'accentContrast', 'playerBlue', 'playerBlueSoft', 'playerBlueInk',
   'playerInk', 'playerMuted', 'playerLyrics', 'playerOverlay', 'playerDock',
+  'playerProgressPlayed', 'playerProgressUnplayed',
 ] as const satisfies readonly (keyof AppearanceColors)[]
 const radiusKeys = ['sm', 'md', 'lg', 'pill'] as const satisfies readonly (keyof AppearanceRadii)[]
 const motionLevels = ['off', 'subtle', 'expressive'] as const satisfies readonly MotionLevel[]
@@ -76,6 +87,10 @@ const legacyPlayerBackgroundBlurs = { off: 0, light: 27, medium: 62, strong: 100
 const legacyPlayerCoverRadii = { square: 0, small: 17, medium: 40, large: 100 } as const
 const legacyPlayerCoverShadows = { off: 0, light: 25, standard: 50, prominent: 100 } as const
 const playerActiveLyricEmphases = ['bold', 'scale', 'accent', 'combined'] as const
+const playerControlMaterials = ['inherit', 'glass', 'solid', 'flat'] as const
+const playerControlDensities = ['compact', 'standard', 'comfortable'] as const
+const playerPrimaryButtonStyles = ['filled', 'soft', 'outline'] as const
+const playerAuxiliaryButtonStyles = ['tiered', 'minimal', 'soft', 'outline'] as const
 const tiers = ['standard', 'advanced', 'experimental'] as const
 const capabilities = ['tokens', 'custom-css', 'layout-overrides', 'local-resources'] as const
 const resourceKinds = ['font', 'image'] as const
@@ -104,6 +119,13 @@ export function cloneAppearance(appearance: AppearancePreset): AppearancePreset 
     components: { ...appearance.components },
     player: {
       ...appearance.player,
+      controls: {
+        ...appearance.player.controls,
+        primaryButton: { ...appearance.player.controls.primaryButton },
+        auxiliaryButtons: { ...appearance.player.controls.auxiliaryButtons },
+        progress: { ...appearance.player.controls.progress },
+        visibility: { ...appearance.player.controls.visibility },
+      },
       trackMetadata: { ...appearance.player.trackMetadata },
     },
     icons: { ...appearance.icons },
@@ -151,6 +173,19 @@ function boundedNumber(input: unknown, fallback: number, min: number, max: numbe
   if (input === undefined) return fallback
   if (typeof input === 'number' && Number.isFinite(input) && input >= min && input <= max) return input
   warnings.push(`${path} 必须在 ${min} 到 ${max} 之间，已使用默认值`)
+  return fallback
+}
+
+function steppedNumber(input: unknown, fallback: number, min: number, max: number, step: number, path: string, warnings: string[]) {
+  if (input === undefined) return fallback
+  if (
+    typeof input === 'number'
+    && Number.isFinite(input)
+    && input >= min
+    && input <= max
+    && Math.abs((input - min) / step - Math.round((input - min) / step)) < Number.EPSILON * 10
+  ) return input
+  warnings.push(`${path} 必须在 ${min} 到 ${max} 之间且步长为 ${step}，已使用默认值`)
   return fallback
 }
 
@@ -264,6 +299,42 @@ function parseComponents(input: JsonObject, fallback: AppearanceComponents, warn
   }
 }
 
+function parsePlayerControls(input: JsonObject, fallback: AppearancePlayerControls, warnings: string[]): AppearancePlayerControls {
+  reportUnknownKeys(input, [
+    'material', 'radius', 'shadow', 'density', 'primaryButton', 'auxiliaryButtons', 'progress', 'visibility',
+  ], 'theme.player.controls', warnings)
+  const primaryButton = optionalObject(input, 'primaryButton', 'theme.player.controls.primaryButton', warnings) ?? {}
+  const auxiliaryButtons = optionalObject(input, 'auxiliaryButtons', 'theme.player.controls.auxiliaryButtons', warnings) ?? {}
+  const progress = optionalObject(input, 'progress', 'theme.player.controls.progress', warnings) ?? {}
+  const visibility = optionalObject(input, 'visibility', 'theme.player.controls.visibility', warnings) ?? {}
+  reportUnknownKeys(primaryButton, ['style', 'sizeScale'], 'theme.player.controls.primaryButton', warnings)
+  reportUnknownKeys(auxiliaryButtons, ['style'], 'theme.player.controls.auxiliaryButtons', warnings)
+  reportUnknownKeys(progress, ['trackThickness', 'thumbSize'], 'theme.player.controls.progress', warnings)
+  reportUnknownKeys(visibility, ['timeLabels', 'volumePercent'], 'theme.player.controls.visibility', warnings)
+
+  return {
+    material: enumValue(input.material, playerControlMaterials, fallback.material, 'theme.player.controls.material', warnings),
+    radius: boundedNumber(input.radius, fallback.radius, 0, 100, 'theme.player.controls.radius', warnings),
+    shadow: boundedNumber(input.shadow, fallback.shadow, 0, 100, 'theme.player.controls.shadow', warnings),
+    density: enumValue(input.density, playerControlDensities, fallback.density, 'theme.player.controls.density', warnings),
+    primaryButton: {
+      style: enumValue(primaryButton.style, playerPrimaryButtonStyles, fallback.primaryButton.style, 'theme.player.controls.primaryButton.style', warnings),
+      sizeScale: steppedNumber(primaryButton.sizeScale, fallback.primaryButton.sizeScale, 75, 130, 5, 'theme.player.controls.primaryButton.sizeScale', warnings),
+    },
+    auxiliaryButtons: {
+      style: enumValue(auxiliaryButtons.style, playerAuxiliaryButtonStyles, fallback.auxiliaryButtons.style, 'theme.player.controls.auxiliaryButtons.style', warnings),
+    },
+    progress: {
+      trackThickness: steppedNumber(progress.trackThickness, fallback.progress.trackThickness, 2, 12, 1, 'theme.player.controls.progress.trackThickness', warnings),
+      thumbSize: steppedNumber(progress.thumbSize, fallback.progress.thumbSize, 12, 36, 1, 'theme.player.controls.progress.thumbSize', warnings),
+    },
+    visibility: {
+      timeLabels: booleanValue(visibility.timeLabels, fallback.visibility.timeLabels, 'theme.player.controls.visibility.timeLabels', warnings),
+      volumePercent: booleanValue(visibility.volumePercent, fallback.visibility.volumePercent, 'theme.player.controls.visibility.volumePercent', warnings),
+    },
+  }
+}
+
 function parsePlayer(input: JsonObject, fallback: AppearancePlayer, warnings: string[]): AppearancePlayer {
   reportUnknownKeys(input, [
     'backgroundEffect',
@@ -279,10 +350,11 @@ function parsePlayer(input: JsonObject, fallback: AppearancePlayer, warnings: st
     'lyricsNormalSpacing',
     'lyricsTightThresholdSeconds',
     'activeLyricEmphasis',
-    'showVolumePercent',
+    'controls',
     'trackMetadata',
   ], 'theme.player', warnings)
   const trackMetadataInput = optionalObject(input, 'trackMetadata', 'theme.player.trackMetadata', warnings) ?? {}
+  const controlsInput = optionalObject(input, 'controls', 'theme.player.controls', warnings) ?? {}
   reportUnknownKeys(trackMetadataInput, [
     'titleMaxWidth',
     'detailsMaxWidth',
@@ -311,7 +383,7 @@ function parsePlayer(input: JsonObject, fallback: AppearancePlayer, warnings: st
     lyricsNormalSpacing,
     lyricsTightThresholdSeconds: boundedNumber(input.lyricsTightThresholdSeconds, fallback.lyricsTightThresholdSeconds, 0, 30, 'theme.player.lyricsTightThresholdSeconds', warnings),
     activeLyricEmphasis: enumValue(input.activeLyricEmphasis, playerActiveLyricEmphases, fallback.activeLyricEmphasis, 'theme.player.activeLyricEmphasis', warnings),
-    showVolumePercent: booleanValue(input.showVolumePercent, fallback.showVolumePercent, 'theme.player.showVolumePercent', warnings),
+    controls: parsePlayerControls(controlsInput, fallback.controls, warnings),
     trackMetadata: {
       titleMaxWidth: boundedNumber(trackMetadataInput.titleMaxWidth, fallback.trackMetadata.titleMaxWidth, 120, 1200, 'theme.player.trackMetadata.titleMaxWidth', warnings),
       detailsMaxWidth: boundedNumber(trackMetadataInput.detailsMaxWidth, fallback.trackMetadata.detailsMaxWidth, 120, 1600, 'theme.player.trackMetadata.detailsMaxWidth', warnings),
@@ -365,9 +437,63 @@ function parseMetadata(input: JsonObject, fallback: AppearanceThemeMetadata, war
   }
 }
 
+function addProgressColors(colors: JsonObject) {
+  return {
+    ...colors,
+    playerProgressPlayed: colors.playerProgressPlayed ?? colors.playerBlue,
+    playerProgressUnplayed: colors.playerProgressUnplayed ?? '#c1c7ce',
+  }
+}
+
+function migrateV4ToV5(input: JsonObject): JsonObject | null {
+  if (input.schemaVersion !== 4 || !isObject(input.theme)) return null
+  const theme = { ...input.theme }
+  if (isObject(theme.colors)) theme.colors = addProgressColors(theme.colors)
+  if (isObject(theme.colorSchemes)) {
+    const schemes = { ...theme.colorSchemes }
+    if (isObject(schemes.light)) schemes.light = addProgressColors(schemes.light)
+    if (isObject(schemes.dark)) schemes.dark = addProgressColors(schemes.dark)
+    theme.colorSchemes = schemes
+  }
+
+  const player = isObject(theme.player) ? { ...theme.player } : {}
+  const legacyControls = isObject(player.controls) ? player.controls : {}
+  const legacyVisibility = isObject(legacyControls.visibility) ? legacyControls.visibility : {}
+  player.controls = {
+    ...defaultAppearance.player.controls,
+    ...legacyControls,
+    primaryButton: {
+      ...defaultAppearance.player.controls.primaryButton,
+      ...(isObject(legacyControls.primaryButton) ? legacyControls.primaryButton : {}),
+    },
+    auxiliaryButtons: {
+      ...defaultAppearance.player.controls.auxiliaryButtons,
+      ...(isObject(legacyControls.auxiliaryButtons) ? legacyControls.auxiliaryButtons : {}),
+    },
+    progress: {
+      ...defaultAppearance.player.controls.progress,
+      ...(isObject(legacyControls.progress) ? legacyControls.progress : {}),
+    },
+    visibility: {
+      ...defaultAppearance.player.controls.visibility,
+      ...legacyVisibility,
+      volumePercent: typeof player.showVolumePercent === 'boolean'
+        ? player.showVolumePercent
+        : (legacyVisibility.volumePercent ?? defaultAppearance.player.controls.visibility.volumePercent),
+    },
+  }
+  delete player.showVolumePercent
+  theme.player = player
+  return { ...input, schemaVersion: 5, theme }
+}
+
 function migrateDocument(input: JsonObject): { document: JsonObject; migratedFrom?: number } | null {
   if (input.schemaVersion === APPEARANCE_THEME_SCHEMA_VERSION) return { document: input }
-  if ((input.schemaVersion === 1 || input.schemaVersion === 2 || input.schemaVersion === 3) && isObject(input.theme)) {
+  const migratedFrom = typeof input.schemaVersion === 'number' ? input.schemaVersion : undefined
+  let v4Document: JsonObject | null = null
+
+  if (input.schemaVersion === 4) v4Document = input
+  else if ((input.schemaVersion === 1 || input.schemaVersion === 2 || input.schemaVersion === 3) && isObject(input.theme)) {
     const legacyTheme = { ...input.theme }
     if (!isObject(legacyTheme.colorSchemes) && isObject(legacyTheme.colors)) {
       legacyTheme.colorSchemes = {
@@ -383,21 +509,19 @@ function migrateDocument(input: JsonObject): { document: JsonObject; migratedFro
       lyricsTightThresholdSeconds: 15.5,
       ...legacyPlayer,
     }
-    return {
-      migratedFrom: input.schemaVersion,
-      document: {
-        schemaVersion: APPEARANCE_THEME_SCHEMA_VERSION,
-        format: input.schemaVersion === 1 ? 'spmusic-theme' : input.format,
-        exportedAt: typeof input.exportedAt === 'string' ? input.exportedAt : new Date(0).toISOString(),
-        theme: legacyTheme,
-      },
+    v4Document = {
+      schemaVersion: 4,
+      format: input.schemaVersion === 1 ? 'spmusic-theme' : input.format,
+      exportedAt: typeof input.exportedAt === 'string' ? input.exportedAt : new Date(0).toISOString(),
+      theme: legacyTheme,
     }
   }
-  // Future migrations are added here in ascending, one-version-at-a-time order.
-  return null
+
+  const document = v4Document ? migrateV4ToV5(v4Document) : null
+  return document ? { document, migratedFrom } : null
 }
 
-export function createAppearanceThemeDocument(appearance: AppearancePreset): AppearanceThemeDocumentV4 {
+export function createAppearanceThemeDocument(appearance: AppearancePreset): AppearanceThemeDocumentV5 {
   const cloned = cloneAppearance(appearance)
   const { colorSchemes, ...theme } = cloned
   const usesSinglePalette = colorKeys.every((key) => colorSchemes.light[key] === colorSchemes.dark[key])

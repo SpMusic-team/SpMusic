@@ -1,9 +1,22 @@
 body[data-surface-variant="solid"] .player-shell::before,
-body[data-surface-variant="solid"] .control-dock,
 body[data-surface-variant="solid"] .volume-panel,
 body[data-surface-variant="solid"] .debug-queue-panel { backdrop-filter: none; }
+body[data-player-controls-material-source="override"][data-player-controls-material="glass"] .control-dock {
+  -webkit-backdrop-filter: blur(calc(24 * var(--control-unit, var(--prototype-unit)))) saturate(1.2);
+  backdrop-filter: blur(calc(24 * var(--control-unit, var(--prototype-unit)))) saturate(1.2);
+  background: var(--player-dock);
+}
+body[data-player-controls-material-source="override"][data-player-controls-material="solid"] .control-dock {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  background: rgb(from var(--player-dock) r g b / 1);
+}
 
-body[data-surface-variant="flat"] .control-dock,
 body[data-surface-variant="flat"] .volume-panel,
 body[data-surface-variant="flat"] .debug-queue-panel,
 body[data-surface-variant="flat"] .track-pill { box-shadow: none; backdrop-filter: none; }
+body[data-player-controls-material-source="override"][data-player-controls-material="flat"] .control-dock {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  background: var(--player-dock);
+}

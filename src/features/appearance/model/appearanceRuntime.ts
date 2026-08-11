@@ -13,6 +13,12 @@ const dataAttributes = [
   'data-button-variant',
   'data-window-controls',
   'data-player-background',
+  'data-player-controls-material',
+  'data-player-controls-material-source',
+  'data-player-controls-density',
+  'data-player-primary-button-style',
+  'data-player-auxiliary-button-style',
+  'data-player-controls-time-labels',
   'data-player-volume-percent',
   'data-spmusic-theme-scope',
 ] as const
@@ -52,7 +58,15 @@ export function applyAppearanceRuntime(
     'data-button-variant': appearance.components.buttons,
     'data-window-controls': appearance.components.windowControls,
     'data-player-background': appearance.player.backgroundEffect,
-    'data-player-volume-percent': String(appearance.player.showVolumePercent),
+    'data-player-controls-material': appearance.player.controls.material === 'inherit'
+      ? appearance.components.surface
+      : appearance.player.controls.material,
+    'data-player-controls-material-source': appearance.player.controls.material === 'inherit' ? 'inherit' : 'override',
+    'data-player-controls-density': appearance.player.controls.density,
+    'data-player-primary-button-style': appearance.player.controls.primaryButton.style,
+    'data-player-auxiliary-button-style': appearance.player.controls.auxiliaryButtons.style,
+    'data-player-controls-time-labels': String(appearance.player.controls.visibility.timeLabels),
+    'data-player-volume-percent': String(appearance.player.controls.visibility.volumePercent),
     'data-spmusic-theme-scope': '',
   }
 

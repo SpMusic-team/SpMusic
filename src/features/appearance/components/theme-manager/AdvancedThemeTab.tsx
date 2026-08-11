@@ -1,5 +1,5 @@
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
 import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { TabsContent } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
@@ -16,10 +16,12 @@ type AdvancedThemeTabProps = {
 export function AdvancedThemeTab({ draft, riskConfirmed, updateDraft, onConfirmRisk }: AdvancedThemeTabProps) {
   return (
     <TabsContent value="advanced">
-      <div className="flex flex-col gap-4 py-2">
-        <Card>
-          <CardHeader><CardTitle>自定义 CSS</CardTitle><CardDescription>高级 CSS 使用 @scope 限制在应用 body 内，同时覆盖播放器和 Portal 弹窗；不执行 JavaScript。</CardDescription></CardHeader>
-          <CardContent>
+      <div className="py-2">
+        <Accordion className="rounded-lg border px-4">
+          <AccordionItem value="custom-css">
+            <AccordionTrigger>自定义 CSS</AccordionTrigger>
+            <AccordionContent>
+              <p className="text-muted-foreground">高级 CSS 使用 @scope 限制在应用 body 内，同时覆盖播放器和 Portal 弹窗；不执行 JavaScript。</p>
             <FieldGroup>
               <Field data-disabled={!riskConfirmed}>
                 <FieldLabel htmlFor="theme-custom-css">customCss</FieldLabel>
@@ -28,8 +30,9 @@ export function AdvancedThemeTab({ draft, riskConfirmed, updateDraft, onConfirmR
               </Field>
               {!riskConfirmed && draft.metadata.tier !== 'standard' ? <Button variant="outline" onClick={onConfirmRisk}>我了解风险，启用 CSS 预览</Button> : null}
             </FieldGroup>
-          </CardContent>
-        </Card>
+            </AccordionContent>
+          </AccordionItem>
+        </Accordion>
       </div>
     </TabsContent>
   )

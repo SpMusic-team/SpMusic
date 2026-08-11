@@ -1,4 +1,4 @@
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
 import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { TabsContent } from '@/components/ui/tabs'
@@ -73,10 +73,12 @@ export function GeneralThemeTab({
 }: GeneralThemeTabProps) {
   return (
     <TabsContent value="general">
-      <div className="flex flex-col gap-4 py-2">
-        <Card>
-          <CardHeader><CardTitle>配色模式</CardTitle><CardDescription>可固定浅色或深色，也可实时跟随操作系统外观。</CardDescription></CardHeader>
-          <CardContent>
+      <div className="py-2">
+        <Accordion className="rounded-lg border px-4">
+          <AccordionItem value="color-scheme">
+            <AccordionTrigger>配色模式</AccordionTrigger>
+            <AccordionContent>
+              <p className="text-muted-foreground">可固定浅色或深色，也可实时跟随操作系统外观。</p>
             <FieldGroup>
               <OptionField
                 id="color-scheme-preference"
@@ -87,22 +89,24 @@ export function GeneralThemeTab({
               />
               <FieldDescription>当前预览解析为{resolvedColorScheme === 'dark' ? '深色' : '浅色'}；系统外观变化会立即更新。</FieldDescription>
             </FieldGroup>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader><CardTitle>主题信息</CardTitle><CardDescription>名称、作者和能力等级会完整写入导出文件。</CardDescription></CardHeader>
-          <CardContent>
+            </AccordionContent>
+          </AccordionItem>
+          <AccordionItem value="theme-metadata">
+            <AccordionTrigger>主题信息</AccordionTrigger>
+            <AccordionContent>
+              <p className="text-muted-foreground">名称、作者和能力等级会完整写入导出文件。</p>
             <FieldGroup>
               <Field><FieldLabel htmlFor="theme-name">名称</FieldLabel><Input id="theme-name" value={draft.name} maxLength={80} onChange={(event) => updateDraft((next) => { next.name = event.target.value })} /></Field>
               <Field><FieldLabel htmlFor="theme-author">作者</FieldLabel><Input id="theme-author" value={draft.metadata.author} maxLength={80} onChange={(event) => updateDraft((next) => { next.metadata.author = event.target.value })} /></Field>
               <Field><FieldLabel htmlFor="theme-description">说明</FieldLabel><Textarea id="theme-description" value={draft.metadata.description} maxLength={500} onChange={(event) => updateDraft((next) => { next.metadata.description = event.target.value })} /></Field>
               <OptionField id="theme-tier" label="能力等级" value={draft.metadata.tier} options={tierOptions} onChange={(value) => onTierChange(value as AppearanceThemeMetadata['tier'])} />
             </FieldGroup>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader><CardTitle>组件与动效</CardTitle><CardDescription>这些变体通过 data attributes 和语义 tokens 作用于播放器与弹窗。</CardDescription></CardHeader>
-          <CardContent>
+            </AccordionContent>
+          </AccordionItem>
+          <AccordionItem value="components-motion">
+            <AccordionTrigger>组件与动效</AccordionTrigger>
+            <AccordionContent>
+              <p className="text-muted-foreground">这些变体通过 data attributes 和语义 tokens 作用于播放器与弹窗。</p>
             <FieldGroup>
               <OptionField id="theme-font" label="字体" value={draft.typography.fontFamily} options={fontOptions} onChange={(value) => updateDraft((next) => { next.typography.fontFamily = value as AppearanceTypography['fontFamily'] })} />
               <Field><FieldLabel htmlFor="theme-font-scale">字号倍率</FieldLabel><Input id="theme-font-scale" type="number" min="0.75" max="1.5" step="0.05" value={draft.typography.fontScale} onChange={(event) => updateDraft((next) => { next.typography.fontScale = Number(event.target.value) })} /><FieldDescription>允许 0.75–1.5。</FieldDescription></Field>
@@ -114,8 +118,9 @@ export function GeneralThemeTab({
               <OptionField id="theme-buttons" label="按钮风格" value={draft.components.buttons} options={buttonOptions} onChange={(value) => updateDraft((next) => { next.components.buttons = value as AppearanceComponents['buttons'] })} />
               <OptionField id="theme-window-controls" label="窗口按钮" value={draft.components.windowControls} options={windowOptions} onChange={(value) => updateDraft((next) => { next.components.windowControls = value as AppearanceComponents['windowControls'] })} />
             </FieldGroup>
-          </CardContent>
-        </Card>
+            </AccordionContent>
+          </AccordionItem>
+        </Accordion>
       </div>
     </TabsContent>
   )

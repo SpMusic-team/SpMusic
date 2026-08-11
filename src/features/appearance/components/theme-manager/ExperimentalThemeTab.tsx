@@ -1,5 +1,5 @@
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
 import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { TabsContent } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
@@ -27,10 +27,12 @@ export function ExperimentalThemeTab({
 
   return (
     <TabsContent value="experimental">
-      <div className="flex flex-col gap-4 py-2">
-        <Card>
-          <CardHeader><CardTitle>布局覆盖</CardTitle><CardDescription>实验 CSS 不加 @scope，可使用更强选择器覆盖整个 WebView；仍不执行脚本。</CardDescription></CardHeader>
-          <CardContent>
+      <div className="py-2">
+        <Accordion className="rounded-lg border px-4">
+          <AccordionItem value="layout-overrides">
+            <AccordionTrigger>布局覆盖</AccordionTrigger>
+            <AccordionContent>
+              <p className="text-muted-foreground">实验 CSS 不加 @scope，可使用更强选择器覆盖整个 WebView；仍不执行脚本。</p>
             <FieldGroup>
               <Field data-disabled={disabled}>
                 <FieldLabel htmlFor="theme-layout-css">layoutCss</FieldLabel>
@@ -44,8 +46,9 @@ export function ExperimentalThemeTab({
               </Field>
               {!riskConfirmed && draft.metadata.tier === 'experimental' ? <Button variant="outline" onClick={onConfirmRisk}>我了解风险，启用实验预览</Button> : null}
             </FieldGroup>
-          </CardContent>
-        </Card>
+            </AccordionContent>
+          </AccordionItem>
+        </Accordion>
       </div>
     </TabsContent>
   )

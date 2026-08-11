@@ -32,6 +32,8 @@ export type AppearanceColors = {
   playerLyrics: string
   playerOverlay: string
   playerDock: string
+  playerProgressPlayed: string
+  playerProgressUnplayed: string
 }
 
 export type AppearanceColorSchemes = Record<ResolvedColorScheme, AppearanceColors>
@@ -68,6 +70,28 @@ export type AppearancePlayerTrackMetadata = {
   scrollEdgePauseMs: number
 }
 
+export type AppearancePlayerControls = {
+  material: 'inherit' | SurfaceVariant
+  radius: number
+  shadow: number
+  density: 'compact' | 'standard' | 'comfortable'
+  primaryButton: {
+    style: 'filled' | 'soft' | 'outline'
+    sizeScale: number
+  }
+  auxiliaryButtons: {
+    style: 'tiered' | 'minimal' | 'soft' | 'outline'
+  }
+  progress: {
+    trackThickness: number
+    thumbSize: number
+  }
+  visibility: {
+    timeLabels: boolean
+    volumePercent: boolean
+  }
+}
+
 export type AppearancePlayer = {
   backgroundEffect: PlayerBackgroundEffect
   backgroundBlur: number
@@ -82,7 +106,7 @@ export type AppearancePlayer = {
   lyricsNormalSpacing: number
   lyricsTightThresholdSeconds: number
   activeLyricEmphasis: PlayerActiveLyricEmphasis
-  showVolumePercent: boolean
+  controls: AppearancePlayerControls
   trackMetadata: AppearancePlayerTrackMetadata
 }
 
@@ -155,6 +179,14 @@ export type AppearanceCssVars = CSSProperties & {
   '--player-lyrics-color': string
   '--player-overlay': string
   '--player-dock': string
+  '--player-controls-radius': string
+  '--player-controls-radius-short': string
+  '--player-controls-shadow': number
+  '--player-primary-size-scale': number
+  '--player-progress-played': string
+  '--player-progress-unplayed': string
+  '--player-progress-track-thickness': string
+  '--player-progress-thumb-size': string
   '--player-background-blur': string
   '--player-background-brightness': string
   '--player-background-saturation': string

@@ -1,31 +1,37 @@
 .control-dock {
+  --player-controls-density-unit: var(--control-unit, var(--prototype-unit));
+  --player-controls-density-factor: 1;
+  --player-controls-nonplay-scale: 1;
   position: fixed;
   left: 50%;
   bottom: var(--control-dock-bottom);
   z-index: 4;
   width: calc(2222 * var(--control-unit, var(--prototype-unit)));
   height: var(--control-dock-height);
-  padding: calc(23 * var(--control-unit, var(--prototype-unit))) 0;
+  padding: calc(23 * var(--player-controls-density-unit)) 0;
   transform: translateX(-50%);
   overflow: visible;
   border: 0;
-  border-radius: calc(30 * var(--control-unit, var(--prototype-unit)));
+  border-radius: var(--player-controls-radius);
   background: var(--player-dock);
-  box-shadow: 0 calc(4 * var(--control-unit, var(--prototype-unit))) calc(4 * var(--control-unit, var(--prototype-unit))) rgba(0,0,0,.25);
+  box-shadow: 0 calc(4 * var(--control-unit, var(--prototype-unit))) calc(4 * var(--control-unit, var(--prototype-unit))) rgba(0,0,0,var(--player-controls-shadow));
 }
+
+body[data-player-controls-density="compact"] .control-dock { --player-controls-density-unit: calc(.82 * var(--control-unit, var(--prototype-unit))); --player-controls-density-factor: .82; --player-controls-nonplay-scale: .88; }
+body[data-player-controls-density="comfortable"] .control-dock { --player-controls-density-unit: calc(1.16 * var(--control-unit, var(--prototype-unit))); --player-controls-density-factor: 1.16; --player-controls-nonplay-scale: 1.08; }
 
 .progress-row {
   box-sizing: border-box;
   width: 100%;
   min-width: 0;
   height: calc(28 * var(--control-unit, var(--prototype-unit)));
-  padding-inline: calc(81 * var(--control-unit, var(--prototype-unit)));
+  padding-inline: calc(81 * var(--player-controls-density-unit));
   display: grid;
   grid-template-columns:
     calc(72 * var(--control-unit, var(--prototype-unit)))
     minmax(0, 1fr)
     calc(72 * var(--control-unit, var(--prototype-unit)));
-  gap: calc(88 * var(--control-unit, var(--prototype-unit)));
+  gap: calc(88 * var(--player-controls-density-unit));
   align-items: center;
   color: var(--player-muted);
   font-size: calc(22 * var(--control-unit, var(--prototype-unit)));
@@ -36,13 +42,13 @@
 .progress-row time { min-width: 0; white-space: nowrap; }
 .control-progress-time-start { text-align: start; }
 .control-progress-time-end { text-align: end; }
-.progress-row input { width: 100%; min-width: 0; height: calc(28 * var(--control-unit, var(--prototype-unit))); margin: 0; background: transparent; accent-color: var(--player-blue); appearance: none; }
-.progress-row input::-webkit-slider-runnable-track { height: calc(6 * var(--control-unit, var(--prototype-unit))); border-radius: 50px; background: linear-gradient(90deg,var(--player-blue) var(--progress-percent),#c1c7ce 0); }
-.progress-row input::-webkit-slider-thumb { width: calc(27 * var(--control-unit, var(--prototype-unit))); height: calc(27 * var(--control-unit, var(--prototype-unit))); margin-top: calc(-10.5 * var(--control-unit, var(--prototype-unit))); border: 0; border-radius: 50%; background: var(--player-blue); transform: scale(1); transition: transform var(--app-motion-prototype-press) ease-out; appearance: none; }
+.progress-row input { width: 100%; min-width: 0; height: max(calc(28 * var(--control-unit, var(--prototype-unit))), var(--player-progress-thumb-size)); margin: 0; background: transparent; accent-color: var(--player-progress-played); appearance: none; }
+.progress-row input::-webkit-slider-runnable-track { height: var(--player-progress-track-thickness); border-radius: 50px; background: linear-gradient(90deg,var(--player-progress-played) var(--progress-percent),var(--player-progress-unplayed) 0); }
+.progress-row input::-webkit-slider-thumb { width: var(--player-progress-thumb-size); height: var(--player-progress-thumb-size); margin-top: calc((var(--player-progress-track-thickness) - var(--player-progress-thumb-size)) * .5); border: 0; border-radius: 50%; background: var(--player-progress-played); transform: scale(1); transition: transform var(--app-motion-prototype-press) ease-out; appearance: none; }
 .progress-row input:active::-webkit-slider-thumb { transform: scale(1.18); }
-.progress-row input::-moz-range-track { height: calc(6 * var(--control-unit, var(--prototype-unit))); border: 0; border-radius: 50px; background: #c1c7ce; }
-.progress-row input::-moz-range-progress { height: calc(6 * var(--control-unit, var(--prototype-unit))); border-radius: 50px; background: var(--player-blue); }
-.progress-row input::-moz-range-thumb { width: calc(27 * var(--control-unit, var(--prototype-unit))); border: 0; border-radius: 50%; background: var(--player-blue); height: calc(27 * var(--control-unit, var(--prototype-unit))); transform: scale(1); transition: transform var(--app-motion-prototype-press) ease-out; }
+.progress-row input::-moz-range-track { height: var(--player-progress-track-thickness); border: 0; border-radius: 50px; background: var(--player-progress-unplayed); }
+.progress-row input::-moz-range-progress { height: var(--player-progress-track-thickness); border-radius: 50px; background: var(--player-progress-played); }
+.progress-row input::-moz-range-thumb { width: var(--player-progress-thumb-size); border: 0; border-radius: 50%; background: var(--player-progress-played); height: var(--player-progress-thumb-size); transform: scale(1); transition: transform var(--app-motion-prototype-press) ease-out; }
 .progress-row input:active::-moz-range-thumb { transform: scale(1.18); }
 
 .control-row {
@@ -51,7 +57,7 @@
   min-width: 0;
   height: calc(98 * var(--control-unit, var(--prototype-unit)));
   margin-top: calc(8 * var(--control-unit, var(--prototype-unit)));
-  padding-inline: calc(59 * var(--control-unit, var(--prototype-unit)));
+  padding-inline: calc(59 * var(--player-controls-density-unit));
   display: grid;
   grid-template-columns:
     minmax(0, calc(208 * var(--control-unit, var(--prototype-unit))))
@@ -62,20 +68,20 @@
 }
 .control-row > *, .control-primary, .control-auxiliary { min-width: 0; max-width: 100%; }
 .control-primary, .control-auxiliary { box-sizing: border-box; display: flex; align-items: center; }
-.control-primary { justify-self: center; justify-content: center; gap: calc(36 * var(--control-unit, var(--prototype-unit))); }
+.control-primary { justify-self: center; justify-content: center; gap: calc(36 * var(--player-controls-density-unit)); }
 .responsive-player-layout:not([data-player-layout="quarter"]) .control-primary {
-  width: min(100%, calc(540 * var(--control-unit, var(--prototype-unit))));
-  padding-inline: calc(36 * var(--control-unit, var(--prototype-unit)));
+  width: min(100%, calc(240 * var(--control-unit, var(--prototype-unit)) + 84 * var(--control-unit, var(--prototype-unit)) * var(--player-primary-size-scale) + 216 * var(--player-controls-density-unit)));
+  padding-inline: calc(36 * var(--player-controls-density-unit));
 }
-.control-auxiliary { width: 100%; padding-inline: calc(16 * var(--control-unit, var(--prototype-unit))); }
-.control-auxiliary-end { padding-inline: calc(18 * var(--control-unit, var(--prototype-unit))); justify-content: flex-end; gap: calc(16 * var(--control-unit, var(--prototype-unit))); }
+.control-auxiliary { width: 100%; padding-inline: calc(16 * var(--player-controls-density-unit)); }
+.control-auxiliary-end { padding-inline: calc(18 * var(--player-controls-density-unit)); justify-content: flex-end; gap: calc(16 * var(--player-controls-density-unit)); }
 .control-primary button, .control-auxiliary button { width: calc(48 * var(--control-unit, var(--prototype-unit))); height: calc(48 * var(--control-unit, var(--prototype-unit))); min-width: 0; padding: 0; color: var(--player-blue); border-radius: 999px; }
 .control-primary button svg, .control-auxiliary button svg { width: calc(48 * var(--control-unit, var(--prototype-unit))); height: calc(48 * var(--control-unit, var(--prototype-unit))); }
 .control-primary button:not(.play-button), .control-auxiliary button { background: transparent; }
 .control-primary button:not(.play-button):hover, .control-primary button:not(.play-button):focus-visible, .control-primary button:not(.play-button):active, .control-primary button:not(.play-button)[data-selected="true"], .control-auxiliary button:hover, .control-auxiliary button:focus-visible, .control-auxiliary button:active, .control-auxiliary button[data-selected="true"] { background: transparent; }
-.control-primary .previous-button, .control-primary .next-button { width: calc(72 * var(--control-unit, var(--prototype-unit))); height: calc(72 * var(--control-unit, var(--prototype-unit))); border: calc(1 * var(--control-unit, var(--prototype-unit))) solid var(--player-blue); box-shadow: 0 calc(2 * var(--control-unit, var(--prototype-unit))) calc(4 * var(--control-unit, var(--prototype-unit))) rgba(0,0,0,.25); }
+.control-primary .previous-button, .control-primary .next-button { width: calc(72 * var(--control-unit, var(--prototype-unit))); height: calc(72 * var(--control-unit, var(--prototype-unit))); border: calc(1 * var(--control-unit, var(--prototype-unit))) solid var(--player-blue); box-shadow: 0 calc(2 * var(--control-unit, var(--prototype-unit))) calc(4 * var(--control-unit, var(--prototype-unit))) rgba(0,0,0,var(--player-controls-shadow)); }
 .control-primary .previous-button svg, .control-primary .next-button svg { width: calc(32 * var(--control-unit, var(--prototype-unit))); height: calc(32 * var(--control-unit, var(--prototype-unit))); }
-.control-primary .play-button { width: calc(84 * var(--control-unit, var(--prototype-unit))); height: calc(84 * var(--control-unit, var(--prototype-unit))); background: var(--player-blue); color: var(--app-accent-contrast); box-shadow: 0 calc(2 * var(--control-unit, var(--prototype-unit))) calc(2 * var(--control-unit, var(--prototype-unit))) rgba(0,0,0,.25); }
+.control-primary .play-button { width: calc(84 * var(--control-unit, var(--prototype-unit)) * var(--player-primary-size-scale)); height: calc(84 * var(--control-unit, var(--prototype-unit)) * var(--player-primary-size-scale)); background: var(--player-blue); color: var(--app-accent-contrast); box-shadow: 0 calc(2 * var(--control-unit, var(--prototype-unit))) calc(2 * var(--control-unit, var(--prototype-unit))) rgba(0,0,0,var(--player-controls-shadow)); }
 .control-primary .play-button svg { width: calc(48 * var(--control-unit, var(--prototype-unit))); height: calc(48 * var(--control-unit, var(--prototype-unit))); }
 .player-control-icon-frame { min-width: 0; display: grid; flex: 0 0 auto; place-items: center; line-height: 0; }
 .player-control-icon-swap { min-width: 0; display: grid; flex: 0 0 auto; place-items: center; line-height: 0; }
@@ -86,3 +92,19 @@
 .control-primary .next-button .player-control-icon-frame { width: calc(32 * var(--control-unit, var(--prototype-unit))); height: calc(32 * var(--control-unit, var(--prototype-unit))); }
 .control-primary .play-button .player-control-icon-frame { width: calc(48 * var(--control-unit, var(--prototype-unit))); height: calc(48 * var(--control-unit, var(--prototype-unit))); }
 .player-control-icon-frame > svg { display: block; width: 100%; height: 100%; }
+
+.control-primary button:not(.play-button) svg,
+.control-auxiliary button svg { transform: scale(var(--player-controls-nonplay-scale)); }
+
+body[data-player-primary-button-style="soft"] .control-primary .play-button { background: var(--player-blue-soft); color: var(--player-blue-ink); box-shadow: none; }
+body[data-player-primary-button-style="outline"] .control-primary .play-button { border: calc(1 * var(--control-unit, var(--prototype-unit))) solid var(--player-blue); background: transparent; color: var(--player-blue); box-shadow: none; }
+
+body[data-player-auxiliary-button-style="minimal"] .control-primary button:not(.play-button),
+body[data-player-auxiliary-button-style="minimal"] .control-auxiliary button { border-color: transparent; background: transparent; box-shadow: none; }
+body[data-player-auxiliary-button-style="soft"] .control-primary button:not(.play-button),
+body[data-player-auxiliary-button-style="soft"] .control-auxiliary button { border-color: transparent; background: var(--player-blue-soft); color: var(--player-blue-ink); box-shadow: none; }
+body[data-player-auxiliary-button-style="outline"] .control-primary button:not(.play-button),
+body[data-player-auxiliary-button-style="outline"] .control-auxiliary button { border: calc(1 * var(--control-unit, var(--prototype-unit))) solid var(--player-blue); background: transparent; box-shadow: none; }
+
+body[data-player-controls-time-labels="false"] .progress-row { grid-template-columns: minmax(0, 1fr); gap: 0; }
+body[data-player-controls-time-labels="false"] .progress-row time { display: none; }

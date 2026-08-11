@@ -14,7 +14,7 @@ import type {
   MotionLevel,
 } from './appearanceTypes'
 
-export const APPEARANCE_THEME_SCHEMA_VERSION = 3 as const
+export const APPEARANCE_THEME_SCHEMA_VERSION = 4 as const
 
 export type AppearanceThemeDocumentV1 = {
   schemaVersion: 1
@@ -28,23 +28,30 @@ export type AppearanceThemeDocumentV2 = {
   theme: Record<string, unknown>
 }
 
-export type AppearanceThemeColorSchemesV3 =
+export type AppearanceThemeDocumentV3 = {
+  schemaVersion: 3
+  format: 'spmusic-theme'
+  exportedAt: string
+  theme: Record<string, unknown>
+}
+
+export type AppearanceThemeColorSchemesV4 =
   | { light: AppearanceColors; dark?: AppearanceColors }
   | { light?: AppearanceColors; dark: AppearanceColors }
 
-export type AppearanceThemePayloadV3 = Omit<AppearancePreset, 'colorSchemes'> & (
+export type AppearanceThemePayloadV4 = Omit<AppearancePreset, 'colorSchemes'> & (
   | { colors: AppearanceColors; colorSchemes?: never }
-  | { colors?: never; colorSchemes: AppearanceThemeColorSchemesV3 }
+  | { colors?: never; colorSchemes: AppearanceThemeColorSchemesV4 }
 )
 
-export type AppearanceThemeDocumentV3 = {
+export type AppearanceThemeDocumentV4 = {
   schemaVersion: typeof APPEARANCE_THEME_SCHEMA_VERSION
   format: 'spmusic-theme'
   exportedAt: string
-  theme: AppearanceThemePayloadV3
+  theme: AppearanceThemePayloadV4
 }
 
-export type AppearanceThemeDocument = AppearanceThemeDocumentV3
+export type AppearanceThemeDocument = AppearanceThemeDocumentV4
 
 export type AppearanceThemeParseResult =
   | { ok: true; appearance: AppearancePreset; warnings: string[]; migratedFrom?: number }
@@ -55,7 +62,7 @@ type JsonObject = Record<string, unknown>
 const colorKeys = [
   'background', 'surface', 'surfaceMuted', 'text', 'textMuted', 'textStrong', 'border',
   'accent', 'accentSoft', 'accentContrast', 'playerBlue', 'playerBlueSoft', 'playerBlueInk',
-  'playerInk', 'playerMuted', 'playerOverlay', 'playerDock',
+  'playerInk', 'playerMuted', 'playerLyrics', 'playerOverlay', 'playerDock',
 ] as const satisfies readonly (keyof AppearanceColors)[]
 const radiusKeys = ['sm', 'md', 'lg', 'pill'] as const satisfies readonly (keyof AppearanceRadii)[]
 const motionLevels = ['off', 'subtle', 'expressive'] as const satisfies readonly MotionLevel[]
@@ -179,6 +186,10 @@ function parseColors(input: JsonObject, fallback: AppearanceColors, path: string
   reportUnknownKeys(input, colorKeys, path, warnings)
   const result = { ...fallback }
   colorKeys.forEach((key) => {
+    if (key === 'playerLyrics' && input[key] === undefined) {
+      result[key] = result.playerMuted
+      return
+    }
     result[key] = text(input, key, fallback[key], (value) => hexColorPattern.test(value), path, warnings)
   })
   return result
@@ -264,6 +275,9 @@ function parsePlayer(input: JsonObject, fallback: AppearancePlayer, warnings: st
     'coverRadius',
     'coverShadow',
     'lyricsFontScale',
+    'lyricsTightSpacing',
+    'lyricsNormalSpacing',
+    'lyricsTightThresholdSeconds',
     'activeLyricEmphasis',
     'showVolumePercent',
     'trackMetadata',
@@ -276,6 +290,13 @@ function parsePlayer(input: JsonObject, fallback: AppearancePlayer, warnings: st
     'scrollStartDelayMs',
     'scrollEdgePauseMs',
   ], 'theme.player.trackMetadata', warnings)
+  const lyricsTightSpacing = boundedNumber(input.lyricsTightSpacing, fallback.lyricsTightSpacing, 0, 48, 'theme.player.lyricsTightSpacing', warnings)
+  let lyricsNormalSpacing = boundedNumber(input.lyricsNormalSpacing, fallback.lyricsNormalSpacing, 0, 120, 'theme.player.lyricsNormalSpacing', warnings)
+  if (lyricsNormalSpacing < lyricsTightSpacing) {
+    lyricsNormalSpacing = lyricsTightSpacing
+    warnings.push('theme.player.lyricsNormalSpacing 不能小于 lyricsTightSpacing，已修复为紧密歌词间距')
+  }
+
   return {
     backgroundEffect: enumValue(input.backgroundEffect, playerBackgroundEffects, fallback.backgroundEffect, 'theme.player.backgroundEffect', warnings),
     backgroundBlur: boundedPlayerNumber(input.backgroundBlur, legacyPlayerBackgroundBlurs, fallback.backgroundBlur, 'theme.player.backgroundBlur', warnings),
@@ -286,6 +307,9 @@ function parsePlayer(input: JsonObject, fallback: AppearancePlayer, warnings: st
     coverRadius: boundedPlayerNumber(input.coverRadius, legacyPlayerCoverRadii, fallback.coverRadius, 'theme.player.coverRadius', warnings),
     coverShadow: boundedPlayerNumber(input.coverShadow, legacyPlayerCoverShadows, fallback.coverShadow, 'theme.player.coverShadow', warnings),
     lyricsFontScale: boundedNumber(input.lyricsFontScale, fallback.lyricsFontScale, 0.75, 1.5, 'theme.player.lyricsFontScale', warnings),
+    lyricsTightSpacing,
+    lyricsNormalSpacing,
+    lyricsTightThresholdSeconds: boundedNumber(input.lyricsTightThresholdSeconds, fallback.lyricsTightThresholdSeconds, 0, 30, 'theme.player.lyricsTightThresholdSeconds', warnings),
     activeLyricEmphasis: enumValue(input.activeLyricEmphasis, playerActiveLyricEmphases, fallback.activeLyricEmphasis, 'theme.player.activeLyricEmphasis', warnings),
     showVolumePercent: booleanValue(input.showVolumePercent, fallback.showVolumePercent, 'theme.player.showVolumePercent', warnings),
     trackMetadata: {
@@ -343,7 +367,7 @@ function parseMetadata(input: JsonObject, fallback: AppearanceThemeMetadata, war
 
 function migrateDocument(input: JsonObject): { document: JsonObject; migratedFrom?: number } | null {
   if (input.schemaVersion === APPEARANCE_THEME_SCHEMA_VERSION) return { document: input }
-  if ((input.schemaVersion === 1 || input.schemaVersion === 2) && isObject(input.theme)) {
+  if ((input.schemaVersion === 1 || input.schemaVersion === 2 || input.schemaVersion === 3) && isObject(input.theme)) {
     const legacyTheme = { ...input.theme }
     if (!isObject(legacyTheme.colorSchemes) && isObject(legacyTheme.colors)) {
       legacyTheme.colorSchemes = {
@@ -352,6 +376,13 @@ function migrateDocument(input: JsonObject): { document: JsonObject; migratedFro
       }
     }
     delete legacyTheme.colors
+    const legacyPlayer = isObject(legacyTheme.player) ? legacyTheme.player : {}
+    legacyTheme.player = {
+      lyricsTightSpacing: 0,
+      lyricsNormalSpacing: 53,
+      lyricsTightThresholdSeconds: 15.5,
+      ...legacyPlayer,
+    }
     return {
       migratedFrom: input.schemaVersion,
       document: {
@@ -366,7 +397,7 @@ function migrateDocument(input: JsonObject): { document: JsonObject; migratedFro
   return null
 }
 
-export function createAppearanceThemeDocument(appearance: AppearancePreset): AppearanceThemeDocumentV3 {
+export function createAppearanceThemeDocument(appearance: AppearancePreset): AppearanceThemeDocumentV4 {
   const cloned = cloneAppearance(appearance)
   const { colorSchemes, ...theme } = cloned
   const usesSinglePalette = colorKeys.every((key) => colorSchemes.light[key] === colorSchemes.dark[key])

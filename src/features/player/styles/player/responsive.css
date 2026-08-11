@@ -3,11 +3,11 @@
      cover and lyrics, while its controller uses the fixed unit below. */
   --player-layout-unit: 0.0694444444svh;
   --control-unit: var(--player-layout-unit);
-  --player-lyrics-item-height: calc(64 * var(--player-layout-unit));
-  --player-lyrics-font-size: calc(24 * var(--player-layout-unit));
-  --player-lyrics-line-height: calc(32 * var(--player-layout-unit));
-  --player-lyrics-translation-font-size: calc(24 * var(--player-layout-unit));
-  --player-lyrics-translation-line-height: calc(32 * var(--player-layout-unit));
+  --player-lyrics-item-height: calc(53.333333 * var(--player-lyrics-font-scale) * var(--player-layout-unit));
+  --player-lyrics-font-size: calc(20 * var(--player-lyrics-font-scale) * var(--player-layout-unit));
+  --player-lyrics-line-height: calc(26.666667 * var(--player-lyrics-font-scale) * var(--player-layout-unit));
+  --player-lyrics-translation-font-size: calc(20 * var(--player-lyrics-font-scale) * var(--player-layout-unit));
+  --player-lyrics-translation-line-height: calc(26.666667 * var(--player-lyrics-font-scale) * var(--player-layout-unit));
   position: absolute;
   inset: 0;
   min-width: 0;
@@ -131,6 +131,11 @@
 }
 
 .responsive-player-layout .lyrics-panel {
+  --lyrics-spacing-unit: var(--player-layout-unit);
+  --lyrics-bilingual-block-size: max(
+    var(--player-lyrics-item-height),
+    calc(60 * var(--player-lyrics-font-scale) * var(--player-layout-unit))
+  );
   grid-area: lyrics;
   position: relative;
   inset: auto;
@@ -145,7 +150,7 @@
 }
 
 .responsive-player-layout .lyrics-panel ol {
-  gap: calc(36 * var(--player-layout-unit));
+  gap: 0;
 }
 
 .responsive-player-layout .lyrics-panel li {
@@ -159,14 +164,14 @@
 }
 
 .responsive-player-layout .lyrics-panel li[data-active="true"] {
-  font-size: calc(28 * var(--player-layout-unit));
-  line-height: calc(36 * var(--player-layout-unit));
+  font-size: calc(23.333333 * var(--player-lyrics-font-scale) * var(--player-layout-unit));
+  line-height: calc(30 * var(--player-lyrics-font-scale) * var(--player-layout-unit));
   transform: none;
 }
 
 .responsive-player-layout .lyrics-panel li[data-active="true"] .translation-line {
-  font-size: calc(28 * var(--player-layout-unit));
-  line-height: calc(36 * var(--player-layout-unit));
+  font-size: calc(23.333333 * var(--player-lyrics-font-scale) * var(--player-layout-unit));
+  line-height: calc(30 * var(--player-lyrics-font-scale) * var(--player-layout-unit));
 }
 
 .responsive-player-layout .control-dock {
@@ -200,11 +205,11 @@
      at their reference sizes while the available content height changes. */
   --horizontal-control-unit: 1px;
   --control-unit: var(--horizontal-control-unit);
-  --player-lyrics-item-height: 64px;
-  --player-lyrics-font-size: 24px;
-  --player-lyrics-line-height: 32px;
-  --player-lyrics-translation-font-size: 24px;
-  --player-lyrics-translation-line-height: 32px;
+  --player-lyrics-item-height: calc(53.333333px * var(--player-lyrics-font-scale));
+  --player-lyrics-font-size: calc(20px * var(--player-lyrics-font-scale));
+  --player-lyrics-line-height: calc(26.666667px * var(--player-lyrics-font-scale));
+  --player-lyrics-translation-font-size: calc(20px * var(--player-lyrics-font-scale));
+  --player-lyrics-translation-line-height: calc(26.666667px * var(--player-lyrics-font-scale));
 }
 
 .responsive-player-layout[data-player-layout="horizontal"] .player-stage {
@@ -242,6 +247,10 @@
 }
 
 .responsive-player-layout[data-player-layout="horizontal"] .lyrics-panel {
+  --lyrics-bilingual-block-size: max(
+    var(--player-lyrics-item-height),
+    calc(60px * var(--player-lyrics-font-scale))
+  );
   width: min(
     calc(100% - 48 * var(--player-layout-unit)),
     762px
@@ -249,14 +258,10 @@
   height: 100%;
 }
 
-.responsive-player-layout[data-player-layout="horizontal"] .lyrics-panel ol {
-  gap: 36px;
-}
-
 .responsive-player-layout[data-player-layout="horizontal"] .lyrics-panel li[data-active="true"],
 .responsive-player-layout[data-player-layout="horizontal"] .lyrics-panel li[data-active="true"] .translation-line {
-  font-size: 28px;
-  line-height: 36px;
+  font-size: calc(23.333333px * var(--player-lyrics-font-scale));
+  line-height: calc(30px * var(--player-lyrics-font-scale));
 }
 
 .responsive-player-layout[data-player-layout="horizontal"] .control-dock {

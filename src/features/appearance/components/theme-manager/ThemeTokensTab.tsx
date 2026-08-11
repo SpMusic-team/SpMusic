@@ -22,6 +22,7 @@ const colorLabels: Record<keyof AppearanceColors, string> = {
   playerBlueInk: '播放器强调文字',
   playerInk: '播放器正文',
   playerMuted: '播放器次要文字',
+  playerLyrics: '播放器歌词',
   playerOverlay: '背景遮罩',
   playerDock: '控制面板',
 }

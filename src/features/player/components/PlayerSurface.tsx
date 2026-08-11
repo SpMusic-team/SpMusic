@@ -2,7 +2,7 @@ import '@/features/player/styles/player.css'
 import { useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
 import { TooltipProvider } from '@/components/ui/tooltip'
-import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
+import { useAppearance, useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { CoverPanel } from '@/features/player/components/CoverPanel'
 import { ControlDock } from '@/features/player/components/ControlDock'
 import { EmptyPlayerState } from '@/features/player/components/EmptyPlayerState'
@@ -12,6 +12,7 @@ import { ResponsivePlayerLayout } from '@/features/player/components/ResponsiveP
 import { TrackMeta } from '@/features/player/components/TrackMeta'
 import { WindowBar, type WindowLayoutState } from '@/features/player/components/WindowBar'
 import { useActiveLyricScroll } from '@/features/player/hooks/useActiveLyricScroll'
+import { locateLyricTimeline } from '@/features/player/model/lyricTimeline'
 import { appCopy } from '@/features/player/model/playerCopy'
 import type { PlayerUiViewModel } from '@/features/player/model/playerUiViewModel'
 
@@ -37,20 +38,31 @@ export function PlayerSurface({
   const { track } = playback
   const systemIcons = useSystemIcons()
   const appearanceMotion = useAppearanceMotion()
+  const { appearance } = useAppearance()
   const [nativeWindowState, setNativeWindowState] = useState<WindowLayoutState>({ maximized: false, fullscreen: false })
   const lyricListRef = useRef<HTMLOListElement>(null)
   const lyricRefs = useRef(new Map<string, HTMLLIElement>())
-  const activeLyric = track?.lyrics.reduce<(typeof track.lyrics)[number] | undefined>(
-    (active, line) => line.timeSeconds <= timeline.positionSeconds ? line : active,
-    undefined,
-  )
-  const activeLyricId = activeLyric?.id
-  const activeLyricIndex = track?.lyrics.findIndex((line) => line.id === activeLyricId) ?? -1
+  const lyricTimeline = track ? locateLyricTimeline(track.lyrics, timeline.positionSeconds) : null
+  const activeLyricIndex = lyricTimeline?.currentIndex ?? -1
+  const activeLyricId = activeLyricIndex >= 0 ? track?.lyrics[activeLyricIndex]?.id : undefined
   const albumArt = track?.coverImage ? `url("${track.coverImage}") center / cover no-repeat` : undefined
   const playerBackgroundStyle: PlayerBackgroundStyle | undefined = albumArt ? { '--player-background-art': albumArt } : undefined
   const coverStyle: CoverStyle | undefined = albumArt ? { '--cover-art': albumArt } : undefined
+  const lyricLayoutKey = [
+    appearance.player.lyricsFontScale,
+    appearance.player.lyricsTightSpacing,
+    appearance.player.lyricsNormalSpacing,
+    appearance.player.lyricsTightThresholdSeconds,
+  ].join(':')
 
-  useActiveLyricScroll(activeLyricId, lyricListRef, lyricRefs)
+  useActiveLyricScroll(
+    timeline.positionSeconds,
+    timeline.interaction,
+    track?.lyrics ?? [],
+    lyricListRef,
+    lyricRefs,
+    lyricLayoutKey,
+  )
 
   const LikeIcon = feedback.value === 'liked' ? systemIcons.likeSelected : systemIcons.like
   const DislikeIcon = feedback.value === 'disliked' ? systemIcons.dislikeSelected : systemIcons.dislike
@@ -119,6 +131,7 @@ export function PlayerSurface({
                   activeLyricIndex={activeLyricIndex}
                   lyricListRef={lyricListRef}
                   lyricRefs={lyricRefs}
+                  tightThresholdSeconds={appearance.player.lyricsTightThresholdSeconds}
                   onLineSelect={timeline.onCommit}
                 />
 

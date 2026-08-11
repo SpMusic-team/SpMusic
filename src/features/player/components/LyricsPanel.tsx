@@ -10,10 +10,20 @@ type LyricsPanelProps = {
   activeLyricIndex: number
   lyricListRef: RefObject<HTMLOListElement | null>
   lyricRefs: RefObject<Map<string, HTMLLIElement>>
+  tightThresholdSeconds: number
   onLineSelect: (timeSeconds: number) => void
 }
 
-export function LyricsPanel({ track, activeLyricId, activeLyricIndex, lyricListRef, lyricRefs, onLineSelect }: LyricsPanelProps) {
+type LyricPairSpacing = 'tight' | 'normal' | 'none'
+
+function lyricPairSpacingForDelta(deltaSeconds: number | null, tightThresholdSeconds: number): LyricPairSpacing {
+  if (deltaSeconds === null) return 'none'
+  return Number.isFinite(deltaSeconds) && deltaSeconds >= 0 && deltaSeconds < tightThresholdSeconds
+    ? 'tight'
+    : 'normal'
+}
+
+export function LyricsPanel({ track, activeLyricId, activeLyricIndex, lyricListRef, lyricRefs, tightThresholdSeconds, onLineSelect }: LyricsPanelProps) {
   const appearanceMotion = useAppearanceMotion()
 
   function handleLineKeyDown(event: KeyboardEvent<HTMLLIElement>, timeSeconds: number) {
@@ -35,25 +45,33 @@ export function LyricsPanel({ track, activeLyricId, activeLyricIndex, lyricListR
       <h2 id="lyrics-title" className="sr-only">{appCopy.lyrics.title}</h2>
       {track.lyrics.length ? (
         <ol ref={lyricListRef}>
-          {track.lyrics.map((line, index) => (
-            <li
-              key={line.id}
-              ref={(node) => {
-                if (node) lyricRefs.current.set(line.id, node)
-                else lyricRefs.current.delete(line.id)
-              }}
-              role="button"
-              tabIndex={0}
-              aria-current={line.id === activeLyricId ? 'true' : undefined}
-              data-active={line.id === activeLyricId}
-              data-position={index < activeLyricIndex ? 'past' : index === activeLyricIndex ? 'active' : 'future'}
-              onClick={() => onLineSelect(line.timeSeconds)}
-              onKeyDown={(event) => handleLineKeyDown(event, line.timeSeconds)}
-            >
-              <span>{line.original}</span>
-              {line.translation ? <span className="translation-line" lang="zh-CN">{line.translation}</span> : null}
-            </li>
-          ))}
+          {track.lyrics.map((line, index) => {
+            const nextLine = track.lyrics[index + 1]
+            const pairDeltaSeconds = nextLine ? nextLine.timeSeconds - line.timeSeconds : null
+
+            return (
+              <li
+                key={line.id}
+                ref={(node) => {
+                  if (node) lyricRefs.current.set(line.id, node)
+                  else lyricRefs.current.delete(line.id)
+                }}
+                role="button"
+                tabIndex={0}
+                aria-current={line.id === activeLyricId ? 'true' : undefined}
+                data-active={line.id === activeLyricId}
+                data-line-content={line.translation ? 'bilingual' : 'single'}
+                data-pair-delta-seconds={pairDeltaSeconds ?? undefined}
+                data-pair-spacing={lyricPairSpacingForDelta(pairDeltaSeconds, tightThresholdSeconds)}
+                data-position={index < activeLyricIndex ? 'past' : index === activeLyricIndex ? 'active' : 'future'}
+                onClick={() => onLineSelect(line.timeSeconds)}
+                onKeyDown={(event) => handleLineKeyDown(event, line.timeSeconds)}
+              >
+                <span>{line.original}</span>
+                {line.translation ? <span className="translation-line" lang="zh-CN">{line.translation}</span> : null}
+              </li>
+            )
+          })}
         </ol>
       ) : <p>{appCopy.lyrics.empty}</p>}
     </motion.section>

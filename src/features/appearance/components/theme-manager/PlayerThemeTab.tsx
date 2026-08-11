@@ -1,6 +1,5 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field'
-import { Input } from '@/components/ui/input'
+import { FieldGroup } from '@/components/ui/field'
 import { TabsContent } from '@/components/ui/tabs'
 import type { UpdateThemeDraft } from '../../hooks/useThemeDraft'
 import type { AppearancePlayer, AppearancePreset, ResolvedColorScheme } from '../../model/appearanceTypes'
@@ -35,6 +34,7 @@ export function PlayerThemeTab({ draft, resolvedColorScheme, updateDraft, update
   const backgroundMaskDisabled = draft.player.backgroundEffect === 'off'
   const backgroundVisualDisabled = draft.player.backgroundEffect === 'off'
   const playerOverlayColor = draft.colorSchemes[resolvedColorScheme].playerOverlay
+  const playerLyricsColor = draft.colorSchemes[resolvedColorScheme].playerLyrics
 
   return (
     <TabsContent value="player">
@@ -79,12 +79,19 @@ export function PlayerThemeTab({ draft, resolvedColorScheme, updateDraft, update
           </CardHeader>
           <CardContent>
             <FieldGroup>
-              <Field>
-                <FieldLabel htmlFor="player-lyrics-font-scale">歌词字号</FieldLabel>
-                <Input id="player-lyrics-font-scale" type="number" min="0.75" max="1.5" step="0.05" value={draft.player.lyricsFontScale} onChange={(event) => updateDraft((next) => { next.player.lyricsFontScale = Number(event.target.value) })} />
-                <FieldDescription>允许 0.75–1.5 倍，同时缩放原文与翻译。</FieldDescription>
-              </Field>
+              <SliderField id="player-lyrics-font-scale" label="歌词字号" description="按 75–150% 同步缩放原文、翻译、当前歌词与稳定行高。" min={75} max={150} step={5} value={draft.player.lyricsFontScale * 100} onChange={(value) => updateDraft((next) => { next.player.lyricsFontScale = value / 100 })} />
+              <ColorField
+                id="player-lyrics-color"
+                label={`歌词颜色（当前${resolvedColorScheme === 'dark' ? '深色' : '浅色'}）`}
+                description="控制非当前、过去、未来及翻译歌词的基础色；当前歌词强调颜色仍由强调方式独立控制。"
+                value={playerLyricsColor}
+                onChange={(value) => updateDraft((next) => { next.colorSchemes[resolvedColorScheme].playerLyrics = value })}
+                onPickerChange={(value) => updateDraftColor((next) => { next.colorSchemes[resolvedColorScheme].playerLyrics = value })}
+              />
               <OptionField id="player-active-lyric-emphasis" label="当前歌词强调方式" description="组合会同时采用当前默认界面的加粗与放大效果。" value={draft.player.activeLyricEmphasis} options={activeLyricEmphasisOptions} onChange={(value) => updateDraft((next) => { next.player.activeLyricEmphasis = value as AppearancePlayer['activeLyricEmphasis'] })} />
+              <SliderField id="player-lyrics-tight-threshold" label="紧密判定阈值" description="相邻两条歌词的开始时间差 delta 小于此值时使用紧密间距；等于阈值时使用普通间距。" min={0} max={30} step={0.5} unit="秒" value={draft.player.lyricsTightThresholdSeconds} onChange={(value) => updateDraft((next) => { next.player.lyricsTightThresholdSeconds = value })} />
+              <SliderField id="player-lyrics-tight-spacing" label="紧密歌词间距" description="设置时间差小于阈值的相邻歌词净空；0 表示不添加行后净空。" min={0} max={Math.min(48, draft.player.lyricsNormalSpacing)} step={1} unit="布局单位" value={draft.player.lyricsTightSpacing} onChange={(value) => updateDraft((next) => { next.player.lyricsTightSpacing = value })} />
+              <SliderField id="player-lyrics-normal-spacing" label="普通/长间隔歌词间距" description="设置时间差达到阈值的相邻歌词净空，且不会小于紧密歌词间距。" min={draft.player.lyricsTightSpacing} max={120} step={1} unit="布局单位" value={draft.player.lyricsNormalSpacing} onChange={(value) => updateDraft((next) => { next.player.lyricsNormalSpacing = value })} />
               <OptionField id="player-volume-percent" label="音量百分比显示" description="隐藏时只移除数值文本；滑块读屏数值与真实音量控制保持不变。" value={String(draft.player.showVolumePercent)} options={booleanOptions} onChange={(value) => updateDraft((next) => { next.player.showVolumePercent = value === 'true' })} />
             </FieldGroup>
           </CardContent>

@@ -15,6 +15,7 @@ import {
   type ShuffleMode,
 } from '@/features/player/model/playbackModes'
 import { appCopy } from '@/features/player/model/playerCopy'
+import type { PlayerTimelineInteraction } from '@/features/player/model/playerUiViewModel'
 import type { Track, TrackFeedback } from '@/features/player/model/playerTypes'
 import {
   getAudioState,
@@ -107,12 +108,16 @@ export function useAudioPlayer() {
   const [autoplayInFlight, setAutoplayInFlight] = useState(false)
   const [transportBusy, setTransportBusy] = useState(false)
   const [volumeBusy, setVolumeBusy] = useState(false)
-  const [seekPreviewSeconds, setSeekPreviewSeconds] = useState<number | null>(null)
+  const [timelinePosition, setTimelinePosition] = useState(0)
+  const [timelineInteraction, setTimelineInteraction] = useState<PlayerTimelineInteraction>('following')
 
   const endingTrackRef = useRef<string | null>(null)
   const seekRequestIdRef = useRef(0)
-  const lastSeekCommitRef = useRef<{ positionMs: number; at: number } | null>(null)
   const audioStateRequestGenerationRef = useRef(0)
+  const timelineInteractionRef = useRef<PlayerTimelineInteraction>('following')
+  const timelinePositionRef = useRef(0)
+  const timelineAnchorRef = useRef({ positionSeconds: 0, at: 0, trackId: null as string | null })
+  const seekTargetGuardRef = useRef<{ trackId: string; positionMs: number; expiresAt: number } | null>(null)
   const transportIntentRef = useRef<TransportIntentPhase | null>(null)
   const desiredTransportRequestRef = useRef<TransportRequest | null>(null)
   const transportCommandRunningRef = useRef(false)
@@ -137,8 +142,7 @@ export function useAudioPlayer() {
   const currentAudioTrack = audioTrack?.id === currentTrackId ? audioTrack : null
   const playing = audioState?.phase === 'playing' || autoplayInFlight
   const duration = audioState?.durationMs != null ? audioState.durationMs / 1000 : track?.durationSeconds ?? 0
-  const backendProgress = (audioState?.positionMs ?? 0) / 1000
-  const progress = Math.min(Math.max(seekPreviewSeconds ?? backendProgress, 0), duration)
+  const progress = Math.min(Math.max(timelinePosition, 0), duration)
   const statusText = audioStatusText(audioState, audioError, currentAudioTrack)
   const queueTracks = useMemo(() => {
     if (!folderPlaylist) return tracks
@@ -221,16 +225,52 @@ export function useAudioPlayer() {
       })
   }, [])
 
-  const applyAudioState = useCallback((nextAudioState: AudioPlaybackState, settleTransportIntent = false) => {
+  const applyAudioState = useCallback((
+    nextAudioState: AudioPlaybackState,
+    settleTransportIntent = false,
+    acceptSeekPosition = false,
+  ) => {
     const transportIntent = transportIntentRef.current
     const isConflictingTransportState = transportIntent !== null
       && (nextAudioState.phase === 'playing' || nextAudioState.phase === 'paused')
       && nextAudioState.phase !== transportIntent
     if (!settleTransportIntent && isConflictingTransportState) return
 
+    const previousTrackId = latestAudioStateRef.current?.currentTrackId ?? null
+    const previousPhase = latestAudioStateRef.current?.phase
+    const nextTrackId = nextAudioState.currentTrackId
+    if (previousTrackId !== nextTrackId) {
+      seekRequestIdRef.current += 1
+      audioStateRequestGenerationRef.current += 1
+      timelineInteractionRef.current = 'following'
+      setTimelineInteraction('following')
+      seekTargetGuardRef.current = null
+    }
+
     latestAudioStateRef.current = nextAudioState
     setAudioState(nextAudioState)
     setAudioError(nextAudioState.error)
+
+    const guard = seekTargetGuardRef.current
+    const now = window.performance.now()
+    const guardedOldPosition = !acceptSeekPosition
+      && guard?.trackId === nextTrackId
+      && now < guard.expiresAt
+      && Math.abs(nextAudioState.positionMs - guard.positionMs) > 120
+    if (acceptSeekPosition || (timelineInteractionRef.current === 'following' && !guardedOldPosition)) {
+      const backendPositionSeconds = Math.max(0, nextAudioState.positionMs / 1000)
+      const isNormalPlayingCalibration = !settleTransportIntent
+        && transportIntentRef.current === null
+        && previousTrackId === nextTrackId
+        && previousPhase === 'playing'
+        && nextAudioState.phase === 'playing'
+      const positionSeconds = isNormalPlayingCalibration
+        ? Math.max(backendPositionSeconds, timelinePositionRef.current)
+        : backendPositionSeconds
+      timelineAnchorRef.current = { positionSeconds, at: now, trackId: nextTrackId }
+      timelinePositionRef.current = positionSeconds
+      setTimelinePosition(positionSeconds)
+    }
 
     if (!nextAudioState.currentTrackId) {
       audioTrackRef.current = null
@@ -256,6 +296,11 @@ export function useAudioPlayer() {
   const loadFolderAudioTrack = useCallback(async (folderTrack: AudioFolderTrackRef, autoplay: boolean) => {
     if (audioSelectionInProgressRef.current || transportCommandRunningRef.current) return false
 
+    seekRequestIdRef.current += 1
+    audioStateRequestGenerationRef.current += 1
+    timelineInteractionRef.current = 'following'
+    setTimelineInteraction('following')
+    seekTargetGuardRef.current = null
     audioSelectionInProgressRef.current = true
     setAudioBusy(true)
     setAudioError(null)
@@ -362,7 +407,17 @@ export function useAudioPlayer() {
 
   function applyOptimisticTransportPhase(phase: TransportIntentPhase) {
     transportIntentRef.current = phase
+    seekRequestIdRef.current += 1
     audioStateRequestGenerationRef.current += 1
+    timelineInteractionRef.current = 'following'
+    setTimelineInteraction('following')
+    seekTargetGuardRef.current = null
+    const now = window.performance.now()
+    timelineAnchorRef.current = {
+      positionSeconds: timelinePositionRef.current,
+      at: now,
+      trackId: latestAudioStateRef.current?.currentTrackId ?? null,
+    }
     setAudioState((previous) => {
       if (!previous) return previous
       const optimisticState = { ...previous, phase, error: null }
@@ -448,22 +503,57 @@ export function useAudioPlayer() {
   }, [audioState?.phase, changeFolderTrack, currentTrackId, folderPlaylist])
 
   useEffect(() => {
-    if (audioState?.phase !== 'playing' || seekPreviewSeconds !== null) return
+    if (audioState?.phase !== 'playing' || timelineInteraction !== 'following') return
     const intervalId = window.setInterval(() => {
       const requestGeneration = audioStateRequestGenerationRef.current
+      const requestTrackId = latestAudioStateRef.current?.currentTrackId ?? null
       void getAudioState()
         .then((nextAudioState) => {
-          if (requestGeneration === audioStateRequestGenerationRef.current) applyAudioState(nextAudioState)
+          if (
+            requestGeneration === audioStateRequestGenerationRef.current
+            && requestTrackId === (latestAudioStateRef.current?.currentTrackId ?? null)
+            && nextAudioState.currentTrackId === requestTrackId
+          ) applyAudioState(nextAudioState)
         })
         .catch((error: unknown) => {
           if (requestGeneration === audioStateRequestGenerationRef.current) setAudioError(commandError(error))
         })
     }, 500)
     return () => window.clearInterval(intervalId)
-  }, [applyAudioState, audioState?.phase, seekPreviewSeconds])
+  }, [applyAudioState, audioState?.phase, timelineInteraction])
+
+  useEffect(() => {
+    if (audioState?.phase !== 'playing' || timelineInteraction !== 'following') return
+
+    let frameId = 0
+    const updateVisualClock = (now: number) => {
+      const anchor = timelineAnchorRef.current
+      const currentState = latestAudioStateRef.current
+      if (currentState?.phase !== 'playing' || anchor.trackId !== currentState.currentTrackId) return
+
+      const durationSeconds = currentState.durationMs != null
+        ? currentState.durationMs / 1000
+        : Number.POSITIVE_INFINITY
+      const positionSeconds = Math.min(
+        anchor.positionSeconds + Math.max(0, now - anchor.at) / 1000,
+        durationSeconds,
+      )
+      timelinePositionRef.current = positionSeconds
+      setTimelinePosition(positionSeconds)
+      frameId = window.requestAnimationFrame(updateVisualClock)
+    }
+
+    frameId = window.requestAnimationFrame(updateVisualClock)
+    return () => window.cancelAnimationFrame(frameId)
+  }, [audioState?.phase, timelineInteraction])
 
   async function openAndMaybePlay(autoplay: boolean) {
     if (audioBusy) return
+    seekRequestIdRef.current += 1
+    audioStateRequestGenerationRef.current += 1
+    timelineInteractionRef.current = 'following'
+    setTimelineInteraction('following')
+    seekTargetGuardRef.current = null
     setAudioBusy(true)
     setAudioError(null)
     audioSelectionInProgressRef.current = true
@@ -509,32 +599,101 @@ export function useAudioPlayer() {
   function requestRealAudioSeek(nextProgress: number) {
     const clampedProgress = Math.min(Math.max(nextProgress, 0), duration)
     const positionMs = Math.round(clampedProgress * 1000)
-    const now = window.performance.now()
-    const previousCommit = lastSeekCommitRef.current
-    if (previousCommit && previousCommit.positionMs === positionMs && now - previousCommit.at < 360) return
-    lastSeekCommitRef.current = { positionMs, at: now }
-
-    if (Math.abs(clampedProgress - backendProgress) < 0.08) {
-      setSeekPreviewSeconds(null)
-      return
-    }
-
+    const requestTrackId = latestAudioStateRef.current?.currentTrackId
+    if (!requestTrackId) return
     const requestId = seekRequestIdRef.current + 1
     seekRequestIdRef.current = requestId
-    setSeekPreviewSeconds(clampedProgress)
+    audioStateRequestGenerationRef.current += 1
+    timelineInteractionRef.current = 'seeking'
+    setTimelineInteraction('seeking')
+    timelinePositionRef.current = clampedProgress
+    setTimelinePosition(clampedProgress)
+    seekTargetGuardRef.current = {
+      trackId: requestTrackId,
+      positionMs,
+      expiresAt: window.performance.now() + 900,
+    }
     setAudioError(null)
+    let seekSucceeded = false
     void seekAudio(positionMs)
       .then((nextAudioState) => {
-        if (seekRequestIdRef.current === requestId) applyAudioState(nextAudioState)
+        if (
+          seekRequestIdRef.current === requestId
+          && (latestAudioStateRef.current?.currentTrackId ?? null) === requestTrackId
+          && nextAudioState.currentTrackId === requestTrackId
+        ) {
+          seekSucceeded = true
+          applyAudioState(nextAudioState, false, true)
+        }
       })
-      .catch((error: unknown) => setAudioError(commandError(error)))
+      .catch((error: unknown) => {
+        if (
+          seekRequestIdRef.current === requestId
+          && (latestAudioStateRef.current?.currentTrackId ?? null) === requestTrackId
+        ) setAudioError(commandError(error))
+      })
       .finally(() => {
-        if (seekRequestIdRef.current === requestId) setSeekPreviewSeconds(null)
+        if (
+          seekRequestIdRef.current !== requestId
+          || (latestAudioStateRef.current?.currentTrackId ?? null) !== requestTrackId
+        ) return
+
+        timelineInteractionRef.current = 'following'
+        setTimelineInteraction('following')
+        const latestState = latestAudioStateRef.current
+        if (latestState && latestState.currentTrackId === requestTrackId) {
+          const guardedPosition = seekSucceeded && seekTargetGuardRef.current?.positionMs === positionMs
+            ? positionMs / 1000
+            : latestState.positionMs / 1000
+          if (!seekSucceeded) seekTargetGuardRef.current = null
+          timelineAnchorRef.current = {
+            positionSeconds: guardedPosition,
+            at: window.performance.now(),
+            trackId: requestTrackId,
+          }
+          timelinePositionRef.current = guardedPosition
+          setTimelinePosition(guardedPosition)
+        }
       })
   }
 
+  function startProgressPreview() {
+    if (!track || duration <= 0 || timelineInteractionRef.current === 'seeking') return
+    seekRequestIdRef.current += 1
+    audioStateRequestGenerationRef.current += 1
+    timelineInteractionRef.current = 'previewing'
+    setTimelineInteraction('previewing')
+    seekTargetGuardRef.current = null
+  }
+
   function setProgress(nextProgress: number) {
-    if (track) setSeekPreviewSeconds(nextProgress)
+    if (!track || duration <= 0 || timelineInteractionRef.current === 'seeking') return
+    if (timelineInteractionRef.current !== 'previewing') startProgressPreview()
+    const clampedProgress = Math.min(Math.max(nextProgress, 0), duration)
+    timelinePositionRef.current = clampedProgress
+    setTimelinePosition(clampedProgress)
+  }
+
+  function cancelProgressPreview() {
+    if (timelineInteractionRef.current !== 'previewing') return
+    audioStateRequestGenerationRef.current += 1
+    timelineInteractionRef.current = 'following'
+    setTimelineInteraction('following')
+    const state = latestAudioStateRef.current
+    if (!state) return
+    const anchor = timelineAnchorRef.current
+    const positionSeconds = anchor.trackId === state.currentTrackId
+      ? anchor.positionSeconds
+        + (state.phase === 'playing' ? Math.max(0, window.performance.now() - anchor.at) / 1000 : 0)
+      : state.positionMs / 1000
+    const clampedPosition = Math.min(Math.max(positionSeconds, 0), (state.durationMs ?? Number.POSITIVE_INFINITY) / 1000)
+    timelineAnchorRef.current = {
+      positionSeconds: clampedPosition,
+      at: window.performance.now(),
+      trackId: state.currentTrackId,
+    }
+    timelinePositionRef.current = clampedPosition
+    setTimelinePosition(clampedPosition)
   }
 
   function commitProgress(nextProgress: number) {
@@ -612,6 +771,11 @@ export function useAudioPlayer() {
   }
 
   function stopAudioPlayback() {
+    seekRequestIdRef.current += 1
+    audioStateRequestGenerationRef.current += 1
+    timelineInteractionRef.current = 'following'
+    setTimelineInteraction('following')
+    seekTargetGuardRef.current = null
     void stopAudio().then(applyAudioState).catch((error: unknown) => setAudioError(commandError(error)))
   }
 
@@ -626,6 +790,7 @@ export function useAudioPlayer() {
     playing,
     progress,
     duration,
+    timelineInteraction,
     volume,
     volumeBusy,
     volumeDisabled: audioBusy && audioState?.phase !== 'loading',
@@ -634,8 +799,10 @@ export function useAudioPlayer() {
     transportBusy,
     audioState,
     currentAudioTrack,
+    startProgressPreview,
     setProgress,
     commitProgress,
+    cancelProgressPreview,
     openAudio: () => void openAndMaybePlay(false),
     openAudioAndPlay: () => void openAndMaybePlay(true),
     previous: () => void changeFolderTrack(-1),

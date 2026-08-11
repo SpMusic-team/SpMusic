@@ -17,11 +17,16 @@ export type PlayerPlaybackViewModel = {
   onRepeatCycle: () => void
 }
 
+export type PlayerTimelineInteraction = 'following' | 'previewing' | 'seeking'
+
 export type PlayerTimelineViewModel = {
   positionSeconds: number
   durationSeconds: number
+  interaction: PlayerTimelineInteraction
+  onPreviewStart: () => void
   onPreview: (positionSeconds: number) => void
   onCommit: (positionSeconds: number) => void
+  onCancelPreview: () => void
 }
 
 export type PlayerVolumeViewModel = {

@@ -1,4 +1,4 @@
-import { useRef, type ChangeEvent, type CSSProperties, type FocusEvent, type FormEvent, type KeyboardEvent, type PointerEvent } from 'react'
+import { useRef, type ChangeEvent, type CSSProperties, type FocusEvent, type KeyboardEvent, type PointerEvent } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
 import { Button } from '@/components/ui/button'
 import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
@@ -20,7 +20,8 @@ export function ControlDock({
 }: ControlDockProps) {
   const systemIcons = useSystemIcons()
   const appearanceMotion = useAppearanceMotion()
-  const progressCommitRef = useRef<{ value: number; at: number } | null>(null)
+  const pointerPreviewRef = useRef(false)
+  const keyboardPreviewRef = useRef(false)
   const disabled = !playback.track
   const progressStyle: ProgressStyle = {
     '--progress-percent': `${timeline.durationSeconds ? timeline.positionSeconds / timeline.durationSeconds * 100 : 0}%`,
@@ -54,29 +55,54 @@ export function ControlDock({
         ? appCopy.controls.playAllCategories
         : appCopy.controls.repeat
 
-  function handleProgressChange(event: ChangeEvent<HTMLInputElement> | FormEvent<HTMLInputElement>) {
+  function handleProgressChange(event: ChangeEvent<HTMLInputElement>) {
+    if (timeline.interaction === 'seeking') return
+    if (!pointerPreviewRef.current && !keyboardPreviewRef.current) {
+      keyboardPreviewRef.current = true
+      timeline.onPreviewStart()
+    }
     timeline.onPreview(Number(event.currentTarget.value))
   }
 
   function handleProgressPointerDown(event: PointerEvent<HTMLInputElement>) {
+    if (timeline.interaction === 'seeking') return
+    pointerPreviewRef.current = true
+    keyboardPreviewRef.current = false
+    timeline.onPreviewStart()
     event.currentTarget.setPointerCapture(event.pointerId)
   }
 
-  function handleProgressCommit(event: PointerEvent<HTMLInputElement> | KeyboardEvent<HTMLInputElement> | FocusEvent<HTMLInputElement>) {
-    if ('key' in event && !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'Enter', ' '].includes(event.key)) {
-      return
+  function commitPointerPreview(event: PointerEvent<HTMLInputElement>) {
+    if (!pointerPreviewRef.current) return
+    pointerPreviewRef.current = false
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
     }
+    timeline.onCommit(Number(event.currentTarget.value))
+  }
 
-    const value = Number(event.currentTarget.value)
-    const now = window.performance.now()
-    const previous = progressCommitRef.current
-
-    if (previous && Math.abs(previous.value - value) < 0.01 && now - previous.at < 240) {
-      return
+  function cancelPointerPreview(event: PointerEvent<HTMLInputElement>) {
+    if (!pointerPreviewRef.current) return
+    pointerPreviewRef.current = false
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
     }
+    timeline.onCancelPreview()
+  }
 
-    progressCommitRef.current = { value, at: now }
-    timeline.onCommit(value)
+  function handleProgressKeyUp(event: KeyboardEvent<HTMLInputElement>) {
+    if (!keyboardPreviewRef.current) return
+    if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'].includes(event.key)) return
+    keyboardPreviewRef.current = false
+    timeline.onCommit(Number(event.currentTarget.value))
+  }
+
+  function handleProgressBlur(event: FocusEvent<HTMLInputElement>) {
+    if (pointerPreviewRef.current || keyboardPreviewRef.current) {
+      pointerPreviewRef.current = false
+      keyboardPreviewRef.current = false
+      timeline.onCommit(Number(event.currentTarget.value))
+    }
   }
 
   return (
@@ -90,15 +116,15 @@ export function ControlDock({
         <time className="control-progress-time control-progress-time-start">{formatDuration(timeline.positionSeconds)}</time>
         <input
           aria-label={appCopy.progress.label}
-          disabled={playback.isAudioBusy || playback.isTransportBusy || disabled || timeline.durationSeconds <= 0}
+          disabled={playback.isAudioBusy || playback.isTransportBusy || disabled || timeline.durationSeconds <= 0 || timeline.interaction === 'seeking'}
           max={timeline.durationSeconds}
           min="0"
           onChange={handleProgressChange}
-          onInput={handleProgressChange}
-          onBlur={handleProgressCommit}
-          onKeyUp={handleProgressCommit}
+          onBlur={handleProgressBlur}
+          onKeyUp={handleProgressKeyUp}
           onPointerDown={handleProgressPointerDown}
-          onPointerUp={handleProgressCommit}
+          onPointerCancel={cancelPointerPreview}
+          onPointerUp={commitPointerPreview}
           step="0.01"
           type="range"
           value={timeline.positionSeconds}

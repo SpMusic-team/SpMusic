@@ -29,6 +29,7 @@ export type AppearanceColors = {
   playerBlueInk: string
   playerInk: string
   playerMuted: string
+  playerLyrics: string
   playerOverlay: string
   playerDock: string
 }
@@ -77,6 +78,9 @@ export type AppearancePlayer = {
   coverRadius: number
   coverShadow: number
   lyricsFontScale: number
+  lyricsTightSpacing: number
+  lyricsNormalSpacing: number
+  lyricsTightThresholdSeconds: number
   activeLyricEmphasis: PlayerActiveLyricEmphasis
   showVolumePercent: boolean
   trackMetadata: AppearancePlayerTrackMetadata
@@ -148,6 +152,7 @@ export type AppearanceCssVars = CSSProperties & {
   '--player-blue-ink': string
   '--player-ink': string
   '--player-muted': string
+  '--player-lyrics-color': string
   '--player-overlay': string
   '--player-dock': string
   '--player-background-blur': string
@@ -160,6 +165,8 @@ export type AppearanceCssVars = CSSProperties & {
   '--player-cover-shadow': string
   '--player-cover-shadow-responsive': string
   '--player-lyrics-font-scale': number
+  '--player-lyrics-tight-spacing': number
+  '--player-lyrics-normal-spacing': number
   '--player-lyrics-item-height': string
   '--player-lyrics-font-size': string
   '--player-lyrics-line-height': string

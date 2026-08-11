@@ -17,6 +17,7 @@ export function DemoPlayerPage() {
   const [currentTrackId, setCurrentTrackId] = useState(demoTracks[0]?.id ?? null)
   const [playing, setPlaying] = useState(false)
   const [progress, setProgress] = useState(0)
+  const [timelineInteraction, setTimelineInteraction] = useState<'following' | 'previewing'>('following')
   const [volume, setVolume] = useState(72)
   const [queueOpen, setQueueOpen] = useState(false)
   const [shuffleMode, setShuffleMode] = useState<ShuffleMode>('none')
@@ -24,6 +25,7 @@ export function DemoPlayerPage() {
   const [feedbackByTrackId, setFeedbackByTrackId] = useState<Record<string, TrackFeedback>>({})
   const lastFrameRef = useRef<number | null>(null)
   const endingTrackRef = useRef<string | null>(null)
+  const previewStartProgressRef = useRef(0)
   const track = demoTracks.find((candidate) => candidate.id === currentTrackId) ?? demoTracks[0] ?? null
   const duration = track?.durationSeconds ?? 0
 
@@ -52,7 +54,7 @@ export function DemoPlayerPage() {
   }, [currentTrackId, repeatMode, shuffleMode])
 
   useEffect(() => {
-    if (!playing || !track) return
+    if (!playing || !track || timelineInteraction !== 'following') return
     let frameId = 0
 
     function step(timestamp: number) {
@@ -76,7 +78,7 @@ export function DemoPlayerPage() {
       window.cancelAnimationFrame(frameId)
       lastFrameRef.current = null
     }
-  }, [changeTrack, playing, track])
+  }, [changeTrack, playing, timelineInteraction, track])
 
   function toggleTrackFeedback(trackId: string, feedback: TrackFeedback) {
     setFeedbackByTrackId((previous) => {
@@ -106,8 +108,20 @@ export function DemoPlayerPage() {
     timeline: {
       positionSeconds: Math.min(progress, duration),
       durationSeconds: duration,
+      interaction: timelineInteraction,
+      onPreviewStart: () => {
+        previewStartProgressRef.current = progress
+        setTimelineInteraction('previewing')
+      },
       onPreview: setProgress,
-      onCommit: setProgress,
+      onCommit: (positionSeconds) => {
+        setProgress(positionSeconds)
+        setTimelineInteraction('following')
+      },
+      onCancelPreview: () => {
+        setProgress(previewStartProgressRef.current)
+        setTimelineInteraction('following')
+      },
     },
     volume: {
       valuePercent: volume,

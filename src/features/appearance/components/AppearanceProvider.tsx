@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { MotionConfig } from 'motion/react'
 import { defaultSystemIcons } from '@/icons/providers/defaultIcons'
 import { loadIconProvider } from '@/icons/systemIcons'
@@ -82,7 +82,7 @@ export function AppearanceProvider({ children }: AppearanceProviderProps) {
     return () => media.removeEventListener('change', update)
   }, [])
 
-  useEffect(
+  useLayoutEffect(
     () => applyAppearanceRuntime(appearance, systemReducedMotion, resolvedColorScheme, appRootRef.current),
     [appearance, systemReducedMotion, resolvedColorScheme],
   )

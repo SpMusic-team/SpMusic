@@ -27,8 +27,11 @@ export function PlayerShell() {
     timeline: {
       positionSeconds: player.progress,
       durationSeconds: player.duration,
+      interaction: player.timelineInteraction,
+      onPreviewStart: player.startProgressPreview,
       onPreview: player.setProgress,
       onCommit: player.commitProgress,
+      onCancelPreview: player.cancelProgressPreview,
     },
     volume: {
       valuePercent: player.volume,

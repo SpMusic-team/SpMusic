@@ -1,8 +1,11 @@
 import type { RepeatMode, ShuffleMode } from '@/features/player/model/playbackModes'
 import type { Track, TrackFeedback } from '@/features/player/model/playerTypes'
 
+export type PlayerContentState = 'empty' | 'loading' | 'track' | 'error'
+
 export type PlayerPlaybackViewModel = {
   track: Track | null
+  contentState?: PlayerContentState
   isPlaying: boolean
   shuffleMode: ShuffleMode
   repeatMode: RepeatMode
@@ -38,6 +41,7 @@ export type PlayerVolumeViewModel = {
 
 export type PlayerQueueViewModel = {
   tracks: Track[]
+  unavailableTrackIds?: ReadonlySet<string>
   playlistName?: string
   isOpen: boolean
   onToggle: () => void

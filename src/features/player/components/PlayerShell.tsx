@@ -11,6 +11,7 @@ export function PlayerShell() {
   const viewModel: PlayerUiViewModel = {
     playback: {
       track: player.track,
+      contentState: player.contentState,
       isPlaying: player.playing,
       shuffleMode: player.shuffleMode,
       repeatMode: player.repeatMode,
@@ -41,10 +42,13 @@ export function PlayerShell() {
     },
     queue: {
       tracks: player.queueTracks,
+      unavailableTrackIds: player.unavailableTrackIds,
       playlistName: player.playlistName,
       isOpen: player.queueOpen,
       onToggle: player.toggleQueue,
-      onTrackSelect: player.selectQueueTrack,
+      onTrackSelect: player.audioBusy || player.transportBusy || player.timelineInteraction === 'seeking'
+        ? undefined
+        : player.selectQueueTrack,
     },
     feedback: {
       value: player.currentFeedback,
@@ -60,7 +64,7 @@ export function PlayerShell() {
     phase: player.audioState?.phase ?? 'idle',
     title: player.track?.title ?? null,
     isPlaying: player.playing,
-    isAudioBusy: player.audioBusy,
+    isAudioBusy: player.audioBusy || player.timelineInteraction === 'seeking',
     isTransportBusy: player.transportBusy,
     statusText: player.statusText,
     positionSeconds: player.progress,

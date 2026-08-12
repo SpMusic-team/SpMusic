@@ -36,6 +36,7 @@ export function PlayerSurface({
 }: PlayerSurfaceProps) {
   const { playback, timeline, volume, queue, feedback } = viewModel
   const { track } = playback
+  const contentState = playback.contentState ?? (track ? 'track' : 'empty')
   const systemIcons = useSystemIcons()
   const appearanceMotion = useAppearanceMotion()
   const { appearance } = useAppearance()
@@ -72,7 +73,9 @@ export function PlayerSurface({
       <main
         className="player-shell"
         data-cover={track?.coverTone ?? 'empty'}
+        data-content-state={contentState}
         data-window-fullscreen={nativeWindowState.fullscreen}
+        aria-busy={contentState === 'loading'}
         aria-labelledby="app-title"
       >
         <AnimatePresence initial={false}>
@@ -139,6 +142,7 @@ export function PlayerSurface({
                   {queue.isOpen ? (
                     <QueuePanel
                       tracks={queue.tracks}
+                      unavailableTrackIds={queue.unavailableTrackIds}
                       currentTrackId={track.id}
                       playlistName={queue.playlistName}
                       onTrackSelect={queue.onTrackSelect}
@@ -146,7 +150,7 @@ export function PlayerSurface({
                   ) : null}
                 </AnimatePresence>
               </>
-            ) : <EmptyPlayerState />}
+            ) : <EmptyPlayerState state={contentState === 'track' ? 'empty' : contentState} statusText={playback.statusText} />}
 
             <ControlDock
               playback={playback}

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import {
+  audioTrackToTrack,
   fileNameTitle,
   playlistDisplayName,
   singleTrackFolderPlaylist,
@@ -15,7 +16,7 @@ import {
   type ShuffleMode,
 } from '@/features/player/model/playbackModes'
 import { appCopy } from '@/features/player/model/playerCopy'
-import type { PlayerTimelineInteraction } from '@/features/player/model/playerUiViewModel'
+import type { PlayerContentState, PlayerTimelineInteraction } from '@/features/player/model/playerUiViewModel'
 import type { Track, TrackFeedback } from '@/features/player/model/playerTypes'
 import {
   getAudioState,
@@ -40,6 +41,13 @@ import {
 
 type TransportIntentPhase = 'playing' | 'paused'
 type TransportRequest = { phase: TransportIntentPhase; restart: boolean }
+type PendingTrackSelection = {
+  requestId: number
+  targetTrackId: string | null
+  sourcePath: string | null
+  replacementStarted: boolean
+  loadedTrackId: string | null
+}
 
 function volumeScalarToPercent(volume: number): number {
   if (!Number.isFinite(volume)) return 100
@@ -102,10 +110,11 @@ export function useAudioPlayer() {
   const [queueOpen, setQueueOpen] = useState(false)
   const [audioState, setAudioState] = useState<AudioPlaybackState | null>(null)
   const [audioTrack, setAudioTrack] = useState<AudioTrackRef | null>(null)
+  const [presentationTrack, setPresentationTrack] = useState<Track | null>(null)
+  const [contentState, setContentState] = useState<PlayerContentState>('empty')
   const [folderPlaylist, setFolderPlaylist] = useState<AudioFolderPlaylist | null>(null)
   const [audioError, setAudioError] = useState<AudioCommandError | null>(null)
   const [audioBusy, setAudioBusy] = useState(false)
-  const [autoplayInFlight, setAutoplayInFlight] = useState(false)
   const [transportBusy, setTransportBusy] = useState(false)
   const [volumeBusy, setVolumeBusy] = useState(false)
   const [timelinePosition, setTimelinePosition] = useState(0)
@@ -129,21 +138,23 @@ export function useAudioPlayer() {
   const audioTrackRequestIdRef = useRef(0)
   const audioTrackRequestTrackIdRef = useRef<string | null>(null)
   const audioSelectionInProgressRef = useRef(false)
+  const selectionRequestIdRef = useRef(0)
+  const pendingSelectionRef = useRef<PendingTrackSelection | null>(null)
+  const presentationTrackRef = useRef<Track | null>(null)
   const hydratedAudioTrackCacheRef = useRef(new Map<string, AudioTrackRef>())
   const hydrationInFlightRef = useRef(new Map<string, Promise<AudioTrackRef>>())
   const latestAudioStateRef = useRef<AudioPlaybackState | null>(null)
   const folderPlaylistRef = useRef<AudioFolderPlaylist | null>(null)
 
   const currentTrackId = audioState?.currentTrackId ?? null
-  const track = useMemo(
-    () => currentTrackId ? tracks.find((candidate) => candidate.id === currentTrackId) ?? null : null,
-    [currentTrackId, tracks],
-  )
+  const track = presentationTrack
   const currentAudioTrack = audioTrack?.id === currentTrackId ? audioTrack : null
-  const playing = audioState?.phase === 'playing' || autoplayInFlight
-  const duration = audioState?.durationMs != null ? audioState.durationMs / 1000 : track?.durationSeconds ?? 0
+  const playing = audioState?.phase === 'playing'
+  const duration = audioState?.durationMs != null ? audioState.durationMs / 1000 : 0
   const progress = Math.min(Math.max(timelinePosition, 0), duration)
-  const statusText = audioStatusText(audioState, audioError, currentAudioTrack)
+  const statusText = contentState === 'loading' && !audioError
+    ? appCopy.audio.loading
+    : audioStatusText(audioState, audioError, currentAudioTrack)
   const queueTracks = useMemo(() => {
     if (!folderPlaylist) return tracks
     const sourceName = playlistDisplayName(folderPlaylist)
@@ -164,6 +175,66 @@ export function useAudioPlayer() {
       } satisfies Track
     })
   }, [folderPlaylist, tracks])
+  const unavailableTrackIds = useMemo(
+    () => new Set(folderPlaylist?.tracks.filter((candidate) => !candidate.available).map((candidate) => candidate.id)),
+    [folderPlaylist],
+  )
+
+  const commitPresentationTrack = useCallback((nextAudioTrack: AudioTrackRef, durationMs?: number | null) => {
+    const nextTrack = audioTrackToTrack({
+      ...nextAudioTrack,
+      durationMs: durationMs ?? nextAudioTrack.durationMs,
+    })
+    presentationTrackRef.current = nextTrack
+    setPresentationTrack(nextTrack)
+    setContentState('track')
+    return nextTrack
+  }, [])
+
+  const clearPresentationTrack = useCallback((nextContentState: Exclude<PlayerContentState, 'track'>) => {
+    presentationTrackRef.current = null
+    setPresentationTrack(null)
+    setContentState(nextContentState)
+  }, [])
+
+  const beginTrackSelection = useCallback((targetTrackId: string | null, sourcePath: string | null) => {
+    const requestId = selectionRequestIdRef.current + 1
+    selectionRequestIdRef.current = requestId
+    pendingSelectionRef.current = {
+      requestId,
+      targetTrackId,
+      sourcePath,
+      replacementStarted: false,
+      loadedTrackId: null,
+    }
+    audioSelectionInProgressRef.current = true
+    setAudioBusy(true)
+    setAudioError(null)
+    setContentState('loading')
+    return requestId
+  }, [])
+
+  const selectionIsCurrent = useCallback((requestId: number, targetTrackId?: string) => {
+    const pending = pendingSelectionRef.current
+    return pending?.requestId === requestId
+      && (targetTrackId === undefined || pending.targetTrackId === targetTrackId)
+  }, [])
+
+  const settleSelectionFailure = useCallback((requestId: number, error: AudioCommandError) => {
+    if (!selectionIsCurrent(requestId)) return
+    const pending = pendingSelectionRef.current
+    pendingSelectionRef.current = null
+    if (
+      !pending?.replacementStarted
+      && presentationTrackRef.current
+      && latestAudioStateRef.current?.currentTrackId === presentationTrackRef.current.id
+    ) {
+      setContentState('track')
+    } else {
+      clearPresentationTrack(error.code === 'USER_CANCELLED' ? 'empty' : 'error')
+    }
+    setAudioError(error)
+  }, [clearPresentationTrack, selectionIsCurrent])
 
   const requestHydratedAudioTrack = useCallback((sourcePath: string) => {
     const cached = hydratedAudioTrackCacheRef.current.get(sourcePath)
@@ -216,20 +287,49 @@ export function useAudioPlayer() {
         audioTrackRef.current = nextAudioTrack
         setAudioTrack(nextAudioTrack)
         setTracks((previous) => upsertTrack(previous, nextAudioTrack, latestAudioState.durationMs))
+        if (!pendingSelectionRef.current) {
+          commitPresentationTrack(nextAudioTrack, latestAudioState.durationMs)
+        }
       })
       .catch((error: unknown) => {
-        if (audioTrackRequestIdRef.current === requestId) setAudioError(commandError(error))
+        if (audioTrackRequestIdRef.current === requestId) {
+          setAudioError(commandError(error))
+          if (!pendingSelectionRef.current && latestAudioStateRef.current?.currentTrackId === trackId) {
+            clearPresentationTrack('error')
+          }
+        }
       })
       .finally(() => {
         if (audioTrackRequestIdRef.current === requestId) audioTrackRequestTrackIdRef.current = null
       })
-  }, [])
+  }, [clearPresentationTrack, commitPresentationTrack])
 
   const applyAudioState = useCallback((
     nextAudioState: AudioPlaybackState,
     settleTransportIntent = false,
     acceptSeekPosition = false,
   ) => {
+    const pendingSelection = pendingSelectionRef.current
+    const pendingTargetTrackId = pendingSelection?.targetTrackId
+    const isSelectionLoadingState = nextAudioState.phase === 'loading' && nextAudioState.currentTrackId === null
+    const isSelectionTerminalState = nextAudioState.phase === 'error' && nextAudioState.currentTrackId === null
+    const isPendingTargetState = pendingTargetTrackId !== null
+      && nextAudioState.currentTrackId === pendingTargetTrackId
+    const isConfirmedPresentationState = pendingTargetTrackId === null
+      && nextAudioState.currentTrackId !== null
+      && nextAudioState.currentTrackId === presentationTrackRef.current?.id
+    if (
+      pendingSelection
+      && !isPendingTargetState
+      && !isConfirmedPresentationState
+      && !isSelectionLoadingState
+      && !isSelectionTerminalState
+    ) return
+    if (
+      pendingSelection
+      && (isSelectionLoadingState || isSelectionTerminalState || isPendingTargetState)
+    ) pendingSelection.replacementStarted = true
+
     const transportIntent = transportIntentRef.current
     const isConflictingTransportState = transportIntent !== null
       && (nextAudioState.phase === 'playing' || nextAudioState.phase === 'paused')
@@ -272,12 +372,27 @@ export function useAudioPlayer() {
       setTimelinePosition(positionSeconds)
     }
 
-    if (!nextAudioState.currentTrackId) {
+    const pendingOwnsLoadedTrack = pendingSelection?.loadedTrackId !== null
+      && pendingSelection?.loadedTrackId === audioTrackRef.current?.id
+    if (!nextAudioState.currentTrackId && !pendingOwnsLoadedTrack) {
       audioTrackRef.current = null
       setAudioTrack(null)
     } else if (audioTrackRef.current?.id === nextAudioState.currentTrackId) {
       const loadedTrack = audioTrackRef.current
       setTracks((previous) => upsertTrack(previous, loadedTrack, nextAudioState.durationMs))
+    }
+
+    if (nextTrackId) {
+      const mayCommitTrack = !pendingSelection || pendingSelection.targetTrackId === nextTrackId
+      if (mayCommitTrack && audioTrackRef.current?.id === nextTrackId) {
+        commitPresentationTrack(audioTrackRef.current, nextAudioState.durationMs)
+      } else if (!presentationTrackRef.current) {
+        setContentState('loading')
+      }
+    } else if (nextAudioState.phase === 'loading') {
+      setContentState('loading')
+    } else {
+      clearPresentationTrack(nextAudioState.phase === 'error' || nextAudioState.error ? 'error' : 'empty')
     }
 
     if (!volumeCommandRunningRef.current && desiredVolumeRef.current === null) {
@@ -291,29 +406,38 @@ export function useAudioPlayer() {
       && audioTrackRef.current?.id !== nextAudioState.currentTrackId
       && !audioSelectionInProgressRef.current
     ) hydrateCurrentAudioTrack(nextAudioState.currentTrackId)
-  }, [hydrateCurrentAudioTrack])
+  }, [clearPresentationTrack, commitPresentationTrack, hydrateCurrentAudioTrack])
 
   const loadFolderAudioTrack = useCallback(async (folderTrack: AudioFolderTrackRef, autoplay: boolean) => {
-    if (audioSelectionInProgressRef.current || transportCommandRunningRef.current) return false
+    if (
+      audioSelectionInProgressRef.current
+      || transportCommandRunningRef.current
+      || timelineInteractionRef.current === 'seeking'
+    ) return false
+
+    if (!folderTrack.available) {
+      const missingError = missingPlaylistTrackError(folderTrack.fileName)
+      setAudioError(missingError)
+      toast.error(missingError.message)
+      return false
+    }
 
     seekRequestIdRef.current += 1
     audioStateRequestGenerationRef.current += 1
     timelineInteractionRef.current = 'following'
     setTimelineInteraction('following')
     seekTargetGuardRef.current = null
-    audioSelectionInProgressRef.current = true
-    setAudioBusy(true)
-    setAudioError(null)
+    const selectionRequestId = beginTrackSelection(folderTrack.id, folderTrack.sourcePath)
     try {
-      if (!folderTrack.available) {
-        const missingError = missingPlaylistTrackError(folderTrack.fileName)
-        setAudioError(missingError)
-        toast.error(missingError.message)
+      const nextAudioTrack = await loadAudioFile(folderTrack.sourcePath)
+      if (!selectionIsCurrent(selectionRequestId, folderTrack.id)) return false
+      if (nextAudioTrack.id !== folderTrack.id || nextAudioTrack.sourcePath !== folderTrack.sourcePath) {
+        settleSelectionFailure(selectionRequestId, commandError(new Error('Audio selection target mismatch')))
         return false
       }
-
-      setAutoplayInFlight(autoplay)
-      const nextAudioTrack = await loadAudioFile(folderTrack.sourcePath)
+      const pendingSelection = pendingSelectionRef.current
+      if (!pendingSelection || pendingSelection.requestId !== selectionRequestId) return false
+      pendingSelection.loadedTrackId = nextAudioTrack.id
       audioTrackRequestIdRef.current += 1
       audioTrackRequestTrackIdRef.current = null
       audioTrackRef.current = nextAudioTrack
@@ -321,21 +445,33 @@ export function useAudioPlayer() {
       setTracks((previous) => upsertTrack(previous, nextAudioTrack))
 
       const confirmedAudioState = autoplay ? await playAudio({ restart: true }) : await getAudioState()
+      if (!selectionIsCurrent(selectionRequestId, folderTrack.id)) return false
+      if (confirmedAudioState.currentTrackId !== folderTrack.id) {
+        const mismatchError = commandError(new Error('Audio selection target mismatch'))
+        applyAudioState(confirmedAudioState)
+        pendingSelectionRef.current = null
+        clearPresentationTrack('error')
+        setAudioError(mismatchError)
+        return false
+      }
       applyAudioState(confirmedAudioState)
+      if (!selectionIsCurrent(selectionRequestId, folderTrack.id)) return false
+      pendingSelectionRef.current = null
       prefetchNextPlaylistTrack(nextAudioTrack.id)
       endingTrackRef.current = null
       return true
     } catch (error) {
       const nextError = commandError(error)
-      setAudioError(nextError)
+      settleSelectionFailure(selectionRequestId, nextError)
       if (nextError.code === 'FILE_NOT_FOUND') toast.error(missingPlaylistTrackError(folderTrack.fileName).message)
       return false
     } finally {
-      setAutoplayInFlight(false)
-      audioSelectionInProgressRef.current = false
-      setAudioBusy(false)
+      if (selectionRequestIdRef.current === selectionRequestId) {
+        audioSelectionInProgressRef.current = false
+        setAudioBusy(false)
+      }
     }
-  }, [applyAudioState, prefetchNextPlaylistTrack])
+  }, [applyAudioState, beginTrackSelection, clearPresentationTrack, prefetchNextPlaylistTrack, selectionIsCurrent, settleSelectionFailure])
 
   const loadPlaylistTrackOrSkip = useCallback(async (
     playlist: AudioFolderPlaylist,
@@ -352,6 +488,16 @@ export function useAudioPlayer() {
     for (let attempts = 0; attempts < playlist.tracks.length; attempts += 1) {
       const target = playlist.tracks[index]
       if (!target) return false
+      if (!target.available && playlist.sourceKind === 'm3u8' && skipMissing) {
+        const nextIndex = index + step
+        if (nextIndex < 0 || nextIndex >= playlist.tracks.length) {
+          if (!allowWrap) return false
+          index = nextIndex < 0 ? playlist.tracks.length - 1 : 0
+        } else {
+          index = nextIndex
+        }
+        continue
+      }
       if (await loadFolderAudioTrack(target, autoplay)) return true
       if (playlist.sourceKind !== 'm3u8' || !skipMissing) return false
 
@@ -366,22 +512,36 @@ export function useAudioPlayer() {
     return false
   }, [loadFolderAudioTrack])
 
-  const loadFolderPlaylistSelection = useCallback(async (playlist: AudioFolderPlaylist, autoplay: boolean) => {
+  const loadFolderPlaylistSelection = useCallback(async (
+    playlist: AudioFolderPlaylist,
+    autoplay: boolean,
+    ownerRequestId?: number,
+  ) => {
     folderPlaylistRef.current = playlist
     setFolderPlaylist(playlist)
     const target = playlist.tracks[playlist.selectedIndex] ?? playlist.tracks[0]
-    if (!target) {
-      setAudioError({
+    if (!target || !playlist.tracks.some((candidate) => candidate.available)) {
+      const noPlayableTrackError: AudioCommandError = {
         code: 'NO_TRACK_LOADED',
         message: '选择的文件夹没有可播放的本地音频。',
         recoverable: true,
-      })
+      }
+      if (ownerRequestId !== undefined) settleSelectionFailure(ownerRequestId, noPlayableTrackError)
+      else {
+        clearPresentationTrack('error')
+        setAudioError(noPlayableTrackError)
+      }
       return
     }
 
+    if (ownerRequestId !== undefined && selectionIsCurrent(ownerRequestId)) {
+      pendingSelectionRef.current = null
+      audioSelectionInProgressRef.current = false
+      setAudioBusy(false)
+    }
     setQueueOpen(true)
     await loadPlaylistTrackOrSkip(playlist, playlist.selectedIndex, autoplay, 1, false)
-  }, [loadPlaylistTrackOrSkip])
+  }, [clearPresentationTrack, loadPlaylistTrackOrSkip, selectionIsCurrent, settleSelectionFailure])
 
   const changeFolderTrack = useCallback(async (direction: Direction, automatic = false) => {
     const playlist = folderPlaylistRef.current
@@ -476,9 +636,12 @@ export function useAudioPlayer() {
       })
       .catch((error: unknown) => setAudioError(commandError(error)))
 
+    const initialStateRequestGeneration = audioStateRequestGenerationRef.current
     void getAudioState()
       .then((nextAudioState) => {
-        if (!disposed) applyAudioState(nextAudioState)
+        if (!disposed && initialStateRequestGeneration === audioStateRequestGenerationRef.current) {
+          applyAudioState(nextAudioState)
+        }
       })
       .catch((error: unknown) => {
         if (!disposed) setAudioError(commandError(error))
@@ -548,27 +711,35 @@ export function useAudioPlayer() {
   }, [audioState?.phase, timelineInteraction])
 
   async function openAndMaybePlay(autoplay: boolean) {
-    if (audioBusy) return
+    if (
+      audioSelectionInProgressRef.current
+      || transportCommandRunningRef.current
+      || timelineInteractionRef.current === 'seeking'
+    ) return
     seekRequestIdRef.current += 1
     audioStateRequestGenerationRef.current += 1
     timelineInteractionRef.current = 'following'
     setTimelineInteraction('following')
     seekTargetGuardRef.current = null
-    setAudioBusy(true)
-    setAudioError(null)
-    audioSelectionInProgressRef.current = true
+    const selectionRequestId = beginTrackSelection(null, null)
 
     try {
       const source = await openAudioSource()
+      if (!selectionIsCurrent(selectionRequestId)) return
       if (source.kind === 'playlist') {
-        audioSelectionInProgressRef.current = false
-        setAudioBusy(false)
-        await loadFolderPlaylistSelection(source.playlist, autoplay)
+        await loadFolderPlaylistSelection(source.playlist, autoplay, selectionRequestId)
         endingTrackRef.current = null
         return
       }
 
       const nextAudioTrack = source.track
+      pendingSelectionRef.current = {
+        requestId: selectionRequestId,
+        targetTrackId: nextAudioTrack.id,
+        sourcePath: nextAudioTrack.sourcePath,
+        replacementStarted: pendingSelectionRef.current?.replacementStarted ?? false,
+        loadedTrackId: nextAudioTrack.id,
+      }
       audioTrackRequestIdRef.current += 1
       audioTrackRequestTrackIdRef.current = null
       audioTrackRef.current = nextAudioTrack
@@ -576,7 +747,18 @@ export function useAudioPlayer() {
       setTracks((previous) => upsertTrack(previous, nextAudioTrack))
 
       const confirmedAudioState = autoplay ? await playAudio({ restart: true }) : await getAudioState()
+      if (!selectionIsCurrent(selectionRequestId, nextAudioTrack.id)) return
+      if (confirmedAudioState.currentTrackId !== nextAudioTrack.id) {
+        const mismatchError = commandError(new Error('Audio selection target mismatch'))
+        applyAudioState(confirmedAudioState)
+        pendingSelectionRef.current = null
+        clearPresentationTrack('error')
+        setAudioError(mismatchError)
+        return
+      }
       applyAudioState(confirmedAudioState)
+      if (!selectionIsCurrent(selectionRequestId, nextAudioTrack.id)) return
+      pendingSelectionRef.current = null
 
       let nextFolderPlaylist: AudioFolderPlaylist
       try {
@@ -589,10 +771,12 @@ export function useAudioPlayer() {
       prefetchNextPlaylistTrack(nextAudioTrack.id)
       endingTrackRef.current = null
     } catch (error) {
-      setAudioError(commandError(error))
+      settleSelectionFailure(selectionRequestId, commandError(error))
     } finally {
-      audioSelectionInProgressRef.current = false
-      setAudioBusy(false)
+      if (selectionRequestIdRef.current === selectionRequestId) {
+        audioSelectionInProgressRef.current = false
+        setAudioBusy(false)
+      }
     }
   }
 
@@ -658,7 +842,13 @@ export function useAudioPlayer() {
   }
 
   function startProgressPreview() {
-    if (!track || duration <= 0 || timelineInteractionRef.current === 'seeking') return
+    if (
+      audioSelectionInProgressRef.current
+      || transportCommandRunningRef.current
+      || !track
+      || duration <= 0
+      || timelineInteractionRef.current === 'seeking'
+    ) return
     seekRequestIdRef.current += 1
     audioStateRequestGenerationRef.current += 1
     timelineInteractionRef.current = 'previewing'
@@ -667,7 +857,13 @@ export function useAudioPlayer() {
   }
 
   function setProgress(nextProgress: number) {
-    if (!track || duration <= 0 || timelineInteractionRef.current === 'seeking') return
+    if (
+      audioSelectionInProgressRef.current
+      || transportCommandRunningRef.current
+      || !track
+      || duration <= 0
+      || timelineInteractionRef.current === 'seeking'
+    ) return
     if (timelineInteractionRef.current !== 'previewing') startProgressPreview()
     const clampedProgress = Math.min(Math.max(nextProgress, 0), duration)
     timelinePositionRef.current = clampedProgress
@@ -698,11 +894,20 @@ export function useAudioPlayer() {
 
   function commitProgress(nextProgress: number) {
     endingTrackRef.current = null
-    if (track && duration > 0) requestRealAudioSeek(nextProgress)
+    if (
+      !audioSelectionInProgressRef.current
+      && !transportCommandRunningRef.current
+      && track
+      && duration > 0
+    ) requestRealAudioSeek(nextProgress)
   }
 
   function togglePlayback() {
-    if (audioBusy) return
+    if (
+      audioSelectionInProgressRef.current
+      || transportCommandRunningRef.current
+      || timelineInteractionRef.current === 'seeking'
+    ) return
     if (!track || !currentTrackId) {
       void openAndMaybePlay(true)
       return
@@ -725,6 +930,11 @@ export function useAudioPlayer() {
   }
 
   function changeVolume(nextVolume: number) {
+    if (
+      audioSelectionInProgressRef.current
+      || transportCommandRunningRef.current
+      || timelineInteractionRef.current === 'seeking'
+    ) return
     const safeVolume = Math.min(100, Math.max(0, Math.round(nextVolume)))
     setVolume(safeVolume)
     desiredVolumeRef.current = volumePercentToScalar(safeVolume)
@@ -742,12 +952,13 @@ export function useAudioPlayer() {
       while (desiredVolumeRef.current !== null) {
         const requestedVolume = desiredVolumeRef.current
         desiredVolumeRef.current = null
+        const requestGeneration = audioStateRequestGenerationRef.current
         const nextAudioState = await setAudioVolume(requestedVolume)
         lastConfirmedVolume = volumeScalarToPercent(nextAudioState.volume)
         confirmedVolumeRef.current = lastConfirmedVolume
         if (desiredVolumeRef.current === null) {
           setVolume(lastConfirmedVolume)
-          applyAudioState(nextAudioState)
+          if (requestGeneration === audioStateRequestGenerationRef.current) applyAudioState(nextAudioState)
         }
       }
     } catch (error) {
@@ -761,27 +972,70 @@ export function useAudioPlayer() {
   }
 
   function selectQueueTrack(trackId: string) {
-    if (!folderPlaylist) return
+    if (
+      audioSelectionInProgressRef.current
+      || transportCommandRunningRef.current
+      || timelineInteractionRef.current === 'seeking'
+      || !folderPlaylist
+    ) return
     const targetIndex = folderPlaylist.tracks.findIndex((candidate) => candidate.id === trackId)
     if (targetIndex >= 0) void loadPlaylistTrackOrSkip(folderPlaylist, targetIndex, true, 1, false, false)
   }
 
   function refreshAudioState() {
-    void getAudioState().then(applyAudioState).catch((error: unknown) => setAudioError(commandError(error)))
+    if (
+      audioSelectionInProgressRef.current
+      || transportCommandRunningRef.current
+      || timelineInteractionRef.current === 'seeking'
+    ) return
+    const requestGeneration = audioStateRequestGenerationRef.current
+    void getAudioState()
+      .then((nextAudioState) => {
+        if (requestGeneration === audioStateRequestGenerationRef.current) applyAudioState(nextAudioState)
+      })
+      .catch((error: unknown) => {
+        if (requestGeneration === audioStateRequestGenerationRef.current) setAudioError(commandError(error))
+      })
   }
 
   function stopAudioPlayback() {
+    if (
+      audioSelectionInProgressRef.current
+      || transportCommandRunningRef.current
+      || timelineInteractionRef.current === 'seeking'
+    ) return
     seekRequestIdRef.current += 1
     audioStateRequestGenerationRef.current += 1
+    const requestGeneration = audioStateRequestGenerationRef.current
+    const requestTrackId = latestAudioStateRef.current?.currentTrackId ?? null
     timelineInteractionRef.current = 'following'
     setTimelineInteraction('following')
     seekTargetGuardRef.current = null
-    void stopAudio().then(applyAudioState).catch((error: unknown) => setAudioError(commandError(error)))
+    transportCommandRunningRef.current = true
+    setTransportBusy(true)
+    void stopAudio()
+      .then((nextAudioState) => {
+        if (
+          requestGeneration === audioStateRequestGenerationRef.current
+          && requestTrackId === (latestAudioStateRef.current?.currentTrackId ?? null)
+          && nextAudioState.currentTrackId === requestTrackId
+        ) applyAudioState(nextAudioState, true)
+      })
+      .catch((error: unknown) => {
+        if (requestGeneration === audioStateRequestGenerationRef.current) setAudioError(commandError(error))
+      })
+      .finally(() => {
+        if (requestGeneration !== audioStateRequestGenerationRef.current) return
+        transportCommandRunningRef.current = false
+        setTransportBusy(false)
+      })
   }
 
   return {
     track,
+    contentState,
     queueTracks,
+    unavailableTrackIds,
     playlistName: folderPlaylist ? playlistDisplayName(folderPlaylist) : undefined,
     currentFeedback: track ? feedbackByTrackId[track.id] : undefined,
     shuffleMode,
@@ -793,7 +1047,7 @@ export function useAudioPlayer() {
     timelineInteraction,
     volume,
     volumeBusy,
-    volumeDisabled: audioBusy && audioState?.phase !== 'loading',
+    volumeDisabled: audioBusy || transportBusy || volumeBusy || timelineInteraction === 'seeking',
     audioBusy,
     statusText,
     transportBusy,

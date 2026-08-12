@@ -51,6 +51,41 @@
   line-height: var(--player-lyrics-line-height);
 }
 
+.player-loading-cover-skeleton {
+  width: calc(120 * var(--player-layout-unit, var(--prototype-unit)));
+  height: calc(120 * var(--player-layout-unit, var(--prototype-unit)));
+  border-radius: 999px;
+}
+
+.player-loading-title-skeleton {
+  width: min(62%, calc(420 * var(--player-layout-unit, var(--prototype-unit))));
+  height: calc(46 * var(--player-layout-unit, var(--prototype-unit)));
+}
+
+.player-loading-artist-skeleton {
+  width: min(42%, calc(280 * var(--player-layout-unit, var(--prototype-unit))));
+  height: calc(32 * var(--player-layout-unit, var(--prototype-unit)));
+}
+
+.player-loading-lyrics {
+  display: flex;
+  width: min(78%, calc(760 * var(--player-layout-unit, var(--prototype-unit))));
+  flex-direction: column;
+  gap: calc(24 * var(--player-layout-unit, var(--prototype-unit)));
+}
+
+.player-loading-lyrics [data-slot="skeleton"] {
+  height: calc(40 * var(--player-layout-unit, var(--prototype-unit)));
+}
+
+.player-loading-lyrics [data-slot="skeleton"]:nth-child(2) {
+  width: 72%;
+}
+
+.player-loading-lyrics [data-slot="skeleton"]:nth-child(3) {
+  width: 88%;
+}
+
 .responsive-player-layout[data-player-layout] .lyrics-panel.track-lyrics-empty-panel {
   height: 100%;
 }

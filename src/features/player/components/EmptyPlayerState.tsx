@@ -6,12 +6,23 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from '@/components/ui/empty'
+import { Skeleton } from '@/components/ui/skeleton'
 import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { appCopy } from '@/features/player/model/playerCopy'
+import type { PlayerContentState } from '@/features/player/model/playerUiViewModel'
 
-export function EmptyPlayerState() {
+type EmptyPlayerStateProps = {
+  state?: Exclude<PlayerContentState, 'track'>
+  statusText?: string
+}
+
+export function EmptyPlayerState({ state = 'empty', statusText }: EmptyPlayerStateProps) {
   const systemIcons = useSystemIcons()
   const appearanceMotion = useAppearanceMotion()
+  const loading = state === 'loading'
+  const error = state === 'error'
+  const title = loading ? appCopy.audio.loading : error ? appCopy.audio.unavailable : appCopy.queue.emptyTitle
+  const description = error ? statusText : appCopy.queue.emptyDescription
 
   return (
     <>
@@ -23,10 +34,13 @@ export function EmptyPlayerState() {
           animate="animate"
         >
           <div className="cover-art empty-cover-art">
-            <Empty className="empty-cover-state">
+            <Empty className="empty-cover-state" data-content-state={state}>
               <EmptyHeader>
-                <EmptyMedia variant="icon"><systemIcons.music /></EmptyMedia>
-                <EmptyTitle>{appCopy.queue.emptyTitle}</EmptyTitle>
+                {loading ? <Skeleton className="player-loading-cover-skeleton" /> : (
+                  <EmptyMedia variant="icon"><systemIcons.music /></EmptyMedia>
+                )}
+                <EmptyTitle>{title}</EmptyTitle>
+                {error && description ? <EmptyDescription>{description}</EmptyDescription> : null}
               </EmptyHeader>
             </Empty>
           </div>
@@ -41,8 +55,17 @@ export function EmptyPlayerState() {
         animate="animate"
         aria-live="polite"
       >
-        <span className="track-pill title-pill">{appCopy.queue.emptyTitle}</span>
-        <span className="track-pill artist-pill">{appCopy.queue.emptyDescription}</span>
+        {loading ? (
+          <>
+            <Skeleton className="track-pill player-loading-title-skeleton" />
+            <Skeleton className="track-pill player-loading-artist-skeleton" />
+          </>
+        ) : (
+          <>
+            <span className="track-pill title-pill">{title}</span>
+            <span className="track-pill artist-pill">{description}</span>
+          </>
+        )}
       </motion.div>
 
       <motion.section
@@ -52,12 +75,24 @@ export function EmptyPlayerState() {
         initial="initial"
         animate="animate"
         aria-labelledby="empty-lyrics-title"
+        aria-busy={loading}
       >
-        <Empty className="empty-lyrics-state">
+        <Empty className="empty-lyrics-state" data-content-state={state}>
           <EmptyHeader>
-            <EmptyMedia variant="icon"><systemIcons.captions /></EmptyMedia>
-            <EmptyTitle id="empty-lyrics-title">{appCopy.lyrics.title}</EmptyTitle>
-            <EmptyDescription>{appCopy.lyrics.empty}</EmptyDescription>
+            {loading ? (
+              <div className="player-loading-lyrics" aria-hidden="true">
+                <Skeleton />
+                <Skeleton />
+                <Skeleton />
+              </div>
+            ) : (
+              <>
+                <EmptyMedia variant="icon"><systemIcons.captions /></EmptyMedia>
+                <EmptyTitle id="empty-lyrics-title">{error ? title : appCopy.lyrics.title}</EmptyTitle>
+                <EmptyDescription>{error ? description : appCopy.lyrics.empty}</EmptyDescription>
+              </>
+            )}
+            {loading ? <EmptyTitle id="empty-lyrics-title" className="sr-only">{title}</EmptyTitle> : null}
           </EmptyHeader>
         </Empty>
       </motion.section>

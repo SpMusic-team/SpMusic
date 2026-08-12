@@ -6,6 +6,7 @@ import type { Track } from '@/features/player/model/playerTypes'
 
 type QueuePanelProps = {
   tracks: Track[]
+  unavailableTrackIds?: ReadonlySet<string>
   currentTrackId: string
   playlistName?: string
   onTrackSelect?: (trackId: string) => void
@@ -13,6 +14,7 @@ type QueuePanelProps = {
 
 export function QueuePanel({
   tracks,
+  unavailableTrackIds,
   currentTrackId,
   playlistName,
   onTrackSelect,
@@ -41,7 +43,7 @@ export function QueuePanel({
               variant="ghost"
               type="button"
               aria-current={item.id === currentTrackId ? 'true' : undefined}
-              disabled={!onTrackSelect}
+              disabled={!onTrackSelect || unavailableTrackIds?.has(item.id)}
               onClick={() => onTrackSelect?.(item.id)}
             >
               <span>{index + 1}</span>

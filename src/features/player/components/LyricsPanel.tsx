@@ -1,4 +1,4 @@
-import type { KeyboardEvent, RefObject } from 'react'
+import type { KeyboardEvent, MouseEvent, RefObject } from 'react'
 import { SettingsIcon } from 'lucide-react'
 import { motion } from 'motion/react'
 import { Button } from '@/components/ui/button'
@@ -43,6 +43,11 @@ export function LyricsPanel({ track, activeLyricId, activeLyricIndex, lyricListR
     }
   }
 
+  function handleLineClick(event: MouseEvent<HTMLLIElement>, timeSeconds: number) {
+    onLineSelect(timeSeconds)
+    if (event.detail > 0) event.currentTarget.blur()
+  }
+
   return (
     <motion.section
       layout
@@ -74,7 +79,7 @@ export function LyricsPanel({ track, activeLyricId, activeLyricIndex, lyricListR
                 data-pair-delta-seconds={pairDeltaSeconds ?? undefined}
                 data-pair-spacing={lyricPairSpacingForDelta(pairDeltaSeconds, tightThresholdSeconds)}
                 data-position={index < activeLyricIndex ? 'past' : index === activeLyricIndex ? 'active' : 'future'}
-                onClick={() => onLineSelect(line.timeSeconds)}
+                onClick={(event) => handleLineClick(event, line.timeSeconds)}
                 onKeyDown={(event) => handleLineKeyDown(event, line.timeSeconds)}
               >
                 <span>{line.original}</span>

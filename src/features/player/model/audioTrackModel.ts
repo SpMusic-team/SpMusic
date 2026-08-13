@@ -3,6 +3,7 @@ import type { DemoLyricLine, Track } from '@/features/player/model/playerTypes'
 import {
   audioCoverArtFallbackUrl,
   audioCoverArtUrl,
+  type AudioFolderTrackRef,
   type AudioFolderPlaylist,
   type AudioTrackRef,
 } from '@/features/player/services/audioCommands'
@@ -39,6 +40,28 @@ export function singleTrackFolderPlaylist(track: AudioTrackRef): AudioFolderPlay
       fileName: track.fileName,
       available: true,
     }],
+  }
+}
+
+export function audioFolderTrackPlaceholder(track: AudioFolderTrackRef): AudioTrackRef {
+  return {
+    id: track.id,
+    sourcePath: track.sourcePath,
+    fileName: track.fileName,
+    durationMs: null,
+    metadata: {
+      title: null,
+      artist: null,
+      album: null,
+      albumArtist: null,
+      genre: null,
+      year: null,
+      trackNumber: null,
+      discNumber: null,
+      comment: null,
+      lyrics: null,
+      coverArt: null,
+    },
   }
 }
 

@@ -8,12 +8,19 @@ use rodio::Source;
 use super::{
     duration::{decode_duration, duration_ms},
     error::{audio_error, AudioCommandError, AudioErrorCode},
+    lyrics_cache::LyricsCache,
     metadata::{read_metadata, replay_gain_multiplier},
     symphonia_source::SymphoniaAudioSource,
     types::{AudioTrackMetadata, AudioTrackRef},
 };
 
 pub(crate) type AudioSource = Box<dyn Source<Item = i16> + Send>;
+
+#[derive(Clone, Copy)]
+enum ReplayGainPolicy {
+    ReadTags,
+    SkipTags,
+}
 
 struct StereoDownmixSource {
     inner: SymphoniaAudioSource,
@@ -145,20 +152,36 @@ pub(crate) fn input_path(input: &str) -> Result<PathBuf, AudioCommandError> {
 
 #[cfg(test)]
 pub(crate) fn load_track_ref(path: &Path) -> Result<AudioTrackRef, AudioCommandError> {
-    load_track_ref_with_options(path, true, None)
+    load_track_ref_with_options(path, true, None, None)
 }
 
 pub(crate) fn hydrate_track_ref(
     path: &Path,
     cover_cache_dir: Option<&Path>,
+    lyrics_cache: Option<&LyricsCache>,
 ) -> Result<AudioTrackRef, AudioCommandError> {
-    load_track_ref_with_options(path, true, cover_cache_dir)
+    load_track_ref_with_options(path, true, cover_cache_dir, lyrics_cache)
+}
+
+pub(crate) fn playback_track_ref(path: &Path, duration: Option<Duration>) -> AudioTrackRef {
+    AudioTrackRef {
+        id: track_id(path),
+        source_path: path.to_string_lossy().into_owned(),
+        file_name: path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("audio")
+            .to_string(),
+        duration_ms: duration.map(duration_ms),
+        metadata: AudioTrackMetadata::default(),
+    }
 }
 
 fn load_track_ref_with_options(
     path: &Path,
     include_metadata: bool,
     cover_cache_dir: Option<&Path>,
+    lyrics_cache: Option<&LyricsCache>,
 ) -> Result<AudioTrackRef, AudioCommandError> {
     let started_at = std::time::Instant::now();
     tracing::info!(
@@ -176,7 +199,7 @@ fn load_track_ref_with_options(
     let playback_duration = open_source(path)?.total_duration();
     let duration = decode_duration(path)?.or(playback_duration);
     let metadata = if include_metadata {
-        read_metadata(path, cover_cache_dir)
+        read_metadata(path, cover_cache_dir, lyrics_cache)
     } else {
         AudioTrackMetadata::default()
     };
@@ -215,17 +238,33 @@ fn load_track_ref_with_options(
 }
 
 pub(crate) fn open_source(path: &Path) -> Result<AudioSource, AudioCommandError> {
+    open_source_with_replay_gain(path, ReplayGainPolicy::ReadTags)
+}
+
+/// Opens a decoder for the playback-critical load-and-play transaction.
+/// ReplayGain is deliberately unity here because reading it requires a full
+/// tag probe that can include large embedded artwork. The asynchronous
+/// details pass owns all metadata I/O for this transaction.
+pub(crate) fn open_source_fast(path: &Path) -> Result<AudioSource, AudioCommandError> {
+    open_source_with_replay_gain(path, ReplayGainPolicy::SkipTags)
+}
+
+fn open_source_with_replay_gain(
+    path: &Path,
+    replay_gain_policy: ReplayGainPolicy,
+) -> Result<AudioSource, AudioCommandError> {
     let started_at = std::time::Instant::now();
     tracing::info!(
         operation = "audio.source.open",
         path = %path.display(),
         decoder = "symphonia",
+        reads_replay_gain_tags = matches!(replay_gain_policy, ReplayGainPolicy::ReadTags),
         "opening audio source",
     );
     SymphoniaAudioSource::open_path(path)
         .map(|source| {
             let total_duration = source.total_duration();
-            let replay_gain = replay_gain_multiplier(path);
+            let replay_gain = resolve_replay_gain(path, replay_gain_policy, replay_gain_multiplier);
             let input_channels = source.channels();
             let source: AudioSource = if input_channels > 2 {
                 Box::new(StereoDownmixSource::new(source))
@@ -263,6 +302,17 @@ pub(crate) fn open_source(path: &Path) -> Result<AudioSource, AudioCommandError>
                 true,
             )
         })
+}
+
+fn resolve_replay_gain(
+    path: &Path,
+    policy: ReplayGainPolicy,
+    read_tags: impl FnOnce(&Path) -> Option<f32>,
+) -> Option<f32> {
+    match policy {
+        ReplayGainPolicy::ReadTags => read_tags(path),
+        ReplayGainPolicy::SkipTags => None,
+    }
 }
 
 pub(super) fn validate_existing_file(path: &Path) -> Result<(), AudioCommandError> {
@@ -303,4 +353,48 @@ pub(super) fn track_id(path: &Path) -> String {
         .to_lowercase();
     let hash = blake3::hash(stable_path.as_bytes());
     format!("local-{}", &hash.to_hex()[..16])
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+
+    use super::*;
+
+    #[test]
+    fn fast_source_policy_never_invokes_replay_gain_tag_reader() {
+        let called = Cell::new(false);
+
+        let gain = resolve_replay_gain(
+            Path::new("large-cover.mp3"),
+            ReplayGainPolicy::SkipTags,
+            |_| {
+                called.set(true);
+                Some(0.5)
+            },
+        );
+
+        assert_eq!(gain, None);
+        assert!(!called.get(), "fast path must not read metadata tags");
+    }
+
+    #[test]
+    fn legacy_source_policy_preserves_replay_gain_tag_reader() {
+        let called = Cell::new(false);
+
+        let gain = resolve_replay_gain(
+            Path::new("replay-gain.flac"),
+            ReplayGainPolicy::ReadTags,
+            |_| {
+                called.set(true);
+                Some(0.5)
+            },
+        );
+
+        assert_eq!(gain, Some(0.5));
+        assert!(
+            called.get(),
+            "legacy source must retain ReplayGain behavior"
+        );
+    }
 }

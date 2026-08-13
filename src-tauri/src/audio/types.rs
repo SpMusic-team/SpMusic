@@ -46,6 +46,8 @@ pub struct AudioCoverArt {
 #[serde(rename_all = "camelCase")]
 pub struct AudioPlaybackState {
     pub phase: AudioPlaybackPhase,
+    #[ts(type = "number | null")]
+    pub generation: Option<u64>,
     pub current_track_id: Option<String>,
     #[ts(type = "number")]
     pub position_ms: u64,
@@ -92,6 +94,52 @@ pub enum AudioOpenSourceResult {
 #[serde(rename_all = "camelCase")]
 pub struct AudioLoadFileInput {
     pub path: String,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioLoadAndPlayInput {
+    pub path: String,
+    #[ts(type = "number")]
+    pub request_id: u64,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioLoadAndPlayResult {
+    #[ts(type = "number")]
+    pub request_id: u64,
+    #[ts(type = "number")]
+    pub generation: u64,
+    pub track_id: String,
+    pub file_name: String,
+    pub state: AudioPlaybackState,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(
+    rename_all = "camelCase",
+    tag = "kind",
+    rename_all_fields = "camelCase"
+)]
+pub enum AudioTrackDetailsChanged {
+    #[serde(rename = "ready")]
+    Ready {
+        #[ts(type = "number")]
+        request_id: u64,
+        #[ts(type = "number")]
+        generation: u64,
+        track: AudioTrackRef,
+    },
+    #[serde(rename = "error")]
+    Error {
+        #[ts(type = "number")]
+        request_id: u64,
+        #[ts(type = "number")]
+        generation: u64,
+        track_id: String,
+        error: AudioCommandError,
+    },
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -148,6 +196,15 @@ pub struct AudioSetVolumeInput {
     pub volume: f32,
 }
 
+/// Input for the explicit `audio_embed_lyrics` command (the only production
+/// write entry point). An empty `lyrics` clears the embedded lyrics.
+#[derive(Debug, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioEmbedLyricsInput {
+    pub path: String,
+    pub lyrics: String,
+}
+
 #[cfg(test)]
 mod tests {
     use ts_rs::{Config, TS};
@@ -161,6 +218,7 @@ mod tests {
 
         assert!(exported.contains("AudioPlaybackState"));
         assert!(exported.contains("currentTrackId: string | null"));
+        assert!(exported.contains("generation: number | null"));
         assert!(exported.contains("positionMs: number"));
         assert!(exported.contains("durationMs: number | null"));
         assert!(!exported.contains("currentTrack: AudioTrackRef"));
@@ -170,6 +228,7 @@ mod tests {
     fn audio_playback_state_serializes_as_lightweight_realtime_payload() {
         let state = AudioPlaybackState {
             phase: AudioPlaybackPhase::Playing,
+            generation: Some(7),
             current_track_id: Some("local-track".to_owned()),
             position_ms: 1_250,
             duration_ms: Some(60_000),
@@ -181,6 +240,7 @@ mod tests {
             serde_json::to_value(state).expect("AudioPlaybackState should serialize to JSON");
 
         assert_eq!(serialized["currentTrackId"], "local-track");
+        assert_eq!(serialized["generation"], 7);
         assert!(serialized.get("currentTrack").is_none());
         assert!(serialized.get("metadata").is_none());
         assert!(serialized.get("coverArt").is_none());
@@ -194,6 +254,63 @@ mod tests {
 
         assert!(exported.contains("AudioSetVolumeInput"));
         assert!(exported.contains("volume: number"));
+    }
+
+    #[test]
+    fn audio_embed_lyrics_input_exports_typescript_contract() {
+        let exported = AudioEmbedLyricsInput::export_to_string(&Config::default())
+            .expect("AudioEmbedLyricsInput should be exportable to TypeScript");
+
+        assert!(exported.contains("AudioEmbedLyricsInput"));
+        assert!(exported.contains("path: string"));
+        assert!(exported.contains("lyrics: string"));
+    }
+
+    #[test]
+    fn load_and_play_contract_is_lightweight_and_generation_aware() {
+        let input = AudioLoadAndPlayInput::export_to_string(&Config::default())
+            .expect("AudioLoadAndPlayInput should be exportable to TypeScript");
+        let result = AudioLoadAndPlayResult::export_to_string(&Config::default())
+            .expect("AudioLoadAndPlayResult should be exportable to TypeScript");
+
+        assert!(input.contains("requestId: number"));
+        assert!(result.contains("generation: number"));
+        assert!(result.contains("state: AudioPlaybackState"));
+        assert!(!result.contains("track: AudioTrackRef"));
+    }
+
+    #[test]
+    fn track_details_event_serializes_tagged_ready_and_error_variants() {
+        let ready = AudioTrackDetailsChanged::Ready {
+            request_id: 3,
+            generation: 4,
+            track: AudioTrackRef {
+                id: "local-track".to_owned(),
+                source_path: "music.flac".to_owned(),
+                file_name: "music.flac".to_owned(),
+                duration_ms: Some(1_000),
+                metadata: AudioTrackMetadata::default(),
+            },
+        };
+        let error = AudioTrackDetailsChanged::Error {
+            request_id: 3,
+            generation: 4,
+            track_id: "local-track".to_owned(),
+            error: crate::audio::error::audio_error(
+                crate::audio::error::AudioErrorCode::UnreadableFile,
+                "details unavailable",
+                true,
+            ),
+        };
+
+        let ready = serde_json::to_value(ready).expect("ready event should serialize");
+        let error = serde_json::to_value(error).expect("error event should serialize");
+        assert_eq!(ready["kind"], "ready");
+        assert_eq!(ready["requestId"], 3);
+        assert_eq!(ready["track"]["id"], "local-track");
+        assert_eq!(error["kind"], "error");
+        assert_eq!(error["trackId"], "local-track");
+        assert!(error.get("track").is_none());
     }
 
     #[test]

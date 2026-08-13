@@ -11,11 +11,14 @@ export function PlayerShell() {
   const viewModel: PlayerUiViewModel = {
     playback: {
       track: player.track,
+      artwork: player.artwork,
+      detailsPending: player.detailsPending,
       contentState: player.contentState,
       isPlaying: player.playing,
       shuffleMode: player.shuffleMode,
       repeatMode: player.repeatMode,
       isAudioBusy: player.audioBusy,
+      isSelectionPending: player.selectionPending,
       isTransportBusy: player.transportBusy,
       statusText: player.statusText,
       onOpenAudio: player.openAudio,
@@ -64,7 +67,7 @@ export function PlayerShell() {
     phase: player.audioState?.phase ?? 'idle',
     title: player.track?.title ?? null,
     isPlaying: player.playing,
-    isAudioBusy: player.audioBusy || player.timelineInteraction === 'seeking',
+    isAudioBusy: player.audioBusy || player.selectionPending || player.timelineInteraction === 'seeking',
     isTransportBusy: player.transportBusy,
     statusText: player.statusText,
     positionSeconds: player.progress,

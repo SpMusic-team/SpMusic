@@ -1,15 +1,18 @@
 import type { RepeatMode, ShuffleMode } from '@/features/player/model/playbackModes'
-import type { Track, TrackFeedback } from '@/features/player/model/playerTypes'
+import type { Track, TrackArtwork, TrackFeedback } from '@/features/player/model/playerTypes'
 
 export type PlayerContentState = 'empty' | 'loading' | 'track' | 'error'
 
 export type PlayerPlaybackViewModel = {
   track: Track | null
+  artwork?: TrackArtwork | null
+  detailsPending?: boolean
   contentState?: PlayerContentState
   isPlaying: boolean
   shuffleMode: ShuffleMode
   repeatMode: RepeatMode
   isAudioBusy: boolean
+  isSelectionPending?: boolean
   isTransportBusy: boolean
   statusText: string
   onOpenAudio: () => void

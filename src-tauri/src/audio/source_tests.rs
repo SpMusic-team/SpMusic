@@ -930,7 +930,7 @@ fn sidecar_lyrics_are_loaded_without_modifying_the_audio_file() {
     std::fs::write(&lyrics_path, lyrics).expect("lyrics file should be written");
 
     let audio_before = std::fs::read(&audio_path).expect("audio should be readable");
-    let metadata = read_metadata(&audio_path, None);
+    let metadata = read_metadata(&audio_path, None, None);
     assert_eq!(metadata.lyrics.as_deref(), Some(lyrics));
     assert_eq!(
         std::fs::read(&audio_path).expect("audio should remain readable"),
@@ -961,7 +961,7 @@ fn embedded_lyrics_take_precedence_over_sidecar_lyrics() {
     embed_lyrics(&audio_path, "[00:01.00]embedded").expect("embedded lyrics should be written");
     std::fs::write(&lyrics_path, "[00:01.00]sidecar").expect("sidecar lyrics should be written");
 
-    let metadata = read_metadata(&audio_path, None);
+    let metadata = read_metadata(&audio_path, None, None);
     assert_eq!(metadata.lyrics.as_deref(), Some("[00:01.00]embedded"));
 
     std::fs::remove_dir_all(&test_dir).expect("test directory should be removed");

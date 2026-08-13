@@ -6,13 +6,16 @@ status: "active"
 owner_agent: "Architecture Agent"
 version_scope: "v0.1"
 created: "2026-07-24"
-updated: "2026-08-05"
+updated: "2026-08-13"
 source_documents:
   - "docs/decisions/2026-07-24-v0-1-real-audio-scope.md"
   - "docs/decisions/2026-07-27-v0-1-implemented-capabilities-boundary.md"
   - "docs/decisions/2026-07-27-v0-1-local-m3u8-temporary-queue.md"
   - "docs/decisions/2026-08-05-OPT-0001-async-track-parsing.md"
   - "docs/changes/optimizations/OPT-0001.md"
+  - "docs/changes/optimizations/OPT-0002.md"
+  - "docs/architecture/lyrics-cache-and-embed-boundary.md"
+  - "docs/decisions/2026-08-13-OPT-0002-lyrics-cache-and-embed-boundary.md"
   - "docs/tasks/sp-015-real-audio-architecture-contract.md"
   - "docs/tasks/sp-021-real-audio-contract-reconciliation.md"
   - "docs/sprint-plan.md"
@@ -41,7 +44,7 @@ v0.1 真实播放以单个本地音频资源的最小闭环为核心：前端通
 
 ## 范围
 
-- 定义 v0.1 真实播放 command 契约（12 个已注册 command）。
+- 定义 v0.1 真实播放 command 契约（13 个已注册 command，含 OPT-0002 新增的 `audio_embed_lyrics`）。
 - 定义同目录临时队列与本地 `.m3u8` 临时队列的 command / DTO、排序、非递归、只读和会话内边界。
 - 定义高频播放状态与低频歌曲详情的传输边界，以及 command response、轮询和 `audio_state_changed` 事件的同步 / 乱序原则。
 - 定义格式兼容性声明维度（扩展名枚举 vs 内容解码验证）。
@@ -51,7 +54,7 @@ v0.1 真实播放以单个本地音频资源的最小闭环为核心：前端通
 
 - 不实现媒体库、递归文件夹扫描、文件监控、数据库或持久化索引。
 - 不实现产品级播放列表、临时队列持久化、跨目录队列管理、播放历史、收藏、网络 HLS 或完整 `m3u8` 导入导出。
-- 不实现网络 / sidecar 歌词获取、逐字歌词、歌词 / 封面 / 标签编辑 UI（sidecar 歌词写回问题见「契约一致性与偏差」）。
+- 不实现网络 / sidecar 歌词获取、逐字歌词、歌词 / 封面 / 标签编辑 UI（sidecar 歌词写回偏差已修复，见「契约一致性与偏差」）。
 - 不实现 CUE 分轨与 M4B 章节的公共 Tauri / 前端契约（仓库中的解析模型仅属后端内部研究）。
 - 不实现 FFmpeg 运行时 fallback、网络存储播放、真实频谱分析、高级 DSP、独占输出或插件系统。
 - 不认证无构建与实机证据的平台（当前证据以 Windows x64 为主）。
@@ -524,6 +527,7 @@ sequenceDiagram
 
 - 基础标签（标题、艺术家、专辑、专辑艺术家、流派、年份、音轨、碟号、注释）、歌词与封面由 Rust 只读读取；读取失败时返回空字段并保持前端后备状态，不阻断播放。
 - 嵌入式歌词优先；无嵌入式歌词时允许读取同目录同名 `.lrc` 作为展示后备。
+- 歌词写回仅通过显式 `audio_embed_lyrics` 命令由用户触发，读取路径不写回音频文件（OPT-0002，见「契约一致性与偏差」）。
 - 封面写入应用 cache 目录后以 `filePath` 或 `dataUrl` 展示；不进行网络补全。
 - 歌词解析（时间戳行、翻译分隔、自动滚动）由前端完成。
 
@@ -558,11 +562,11 @@ sequenceDiagram
 | 同目录自动发现 `.m3u8` | 选中普通音频文件时，若目录存在 `.m3u8`，按文件名排序第一个可用播放列表会优先于直接目录枚举。2026-07-27 决策只描述“直接选择 `.m3u8`”，未明确自动发现行为。 | PM Agent / Requirements Agent（口径复核）；Rust/Tauri Agent（如需调整） | 记录目录同时含音频与 `.m3u8` 时的实际队列来源与排序，确认与批准口径一致。 |
 | `audio_open_file` 保留 | 前端主入口使用 `audio_open_source`；`audio_open_file` 仍注册但非主入口，行为与单文件契约一致。 | Architecture Agent | 无独立重测；SP-018 只验证主入口。 |
 
-### 必须修复的偏差
+### 已修复偏差（OPT-0002）
 
-| 偏差 | 说明 | Owner | 修复要求 | SP-018 重测条件 |
-| --- | --- | --- | --- | --- |
-| sidecar 歌词写回用户音频文件 | `read_metadata_or_default` 在无嵌入式歌词时读取同目录 `.lrc`，并通过 `embed_lyrics` 把歌词写入音频文件标签（临时副本 + 替换原文件）。这违反“只读枚举 / 不编辑标签”的批准边界，属于未批准的写操作，可能修改用户原始文件。 | Rust/Tauri Agent | 移除 `embed_lyrics` 写回路径，sidecar 歌词只作为读取展示后备；写回相关代码与测试一并移除或改为仅在测试语料副本上使用。 | SP-018 验证：加载带 `.lrc` 但无嵌入式歌词的音频后，原音频文件字节与修改时间不变；歌词仍正常展示。 |
+| 偏差 | 修复结论（2026-08-13 随 OPT-0002 落地） | 新命令与边界 | 验证条件 |
+| --- | --- | --- | --- |
+| sidecar 歌词写回用户音频文件 | 已修复：读取路径（`read_metadata` / `read_sidecar_lyrics`）只读 sidecar，不再写回音频文件，sidecar 歌词仅作为读取展示后备；`embed_lyrics` 写回能力保留，但只能由用户显式触发，不允许出现在任何只读路径。 | 唯一写入口为 Tauri command `audio_embed_lyrics`（输入 `{ path, lyrics }`，输出重新水合的 `AudioTrackRef`），复用 `tag_writer::embed_lyrics` / `safe_update_tag`；只读模块不得引用 `tag_writer`；sidecar 歌词解析结果进入应用侧内存缓存（`lyrics_cache.rs`）。详见 `lyrics-cache-and-embed-boundary.md`。 | SP-018 验证：加载带 `.lrc` 但无嵌入式歌词的音频后，原音频文件字节与修改时间不变，歌词仍正常展示；`audio_embed_lyrics` 成功写入后文件包含歌词且返回的 `metadata.lyrics` 为新值；只读模块无 `tag_writer` 引用。 |
 
 ## 备选方案与取舍
 
@@ -590,7 +594,7 @@ sequenceDiagram
 - 文档说明 command response、500ms 轮询和事件并存时避免旧状态覆盖最新用户意图的乱序原则。
 - 文档说明目录候选按扩展名枚举与最终按内容解码验证的差异。
 - 文档按 probe、decode、duration、seek、metadata、真实声卡和平台区分格式能力证据。
-- 文档明确 sidecar 歌词写回为必须修复偏差，并给出 Owner 与 SP-018 重测条件。
+- 文档明确 sidecar 歌词写回偏差已修复（OPT-0002）：读取路径无写回，写回仅经显式 `audio_embed_lyrics` 命令由用户触发，并给出验证条件与新命令边界。
 - 文档明确不批准递归扫描、持久队列、媒体库、标签编辑、FFmpeg runtime 或无证据平台认证。
 
 ## 风险
@@ -598,12 +602,12 @@ sequenceDiagram
 - 播放库对 seek、duration 或格式支持可能不一致；后端已把不支持的能力显式返回错误码，SP-018 仍需逐项验证。
 - 文件选择和文件权限在不同平台可能行为不同；v0.1 先验证当前桌面环境。
 - 如果前端依赖 `message` 判断错误，后续本地化会引起回归；必须依赖 `code`。
-- sidecar 歌词写回是当前唯一的未批准写操作，若在 SP-018 前未修复，存在修改用户文件的发布风险。
+- 写回能力现仅存在于显式 `audio_embed_lyrics` 命令：若前端只读流程误调用该命令，或 `safe_update_tag` 回滚失效，仍存在修改用户文件的风险；前端必须只由显式用户动作触发，Test Agent 需验证只读路径无 `tag_writer` 引用。
 - 目录自动发现 `.m3u8` 的行为若未与批准口径对齐，队列来源可能超出用户预期；需 PM / Requirements 复核。
 - 扩展名过滤与内容解码的差异若在 UI 或文档中混淆，会把“候选”升级为“已支持”承诺。
 
 ## 建议下一负责 Agent
 
-- Rust/Tauri Agent：修复 sidecar 歌词写回偏差；对已接受偏差按 SP-018 重测条件提供证据。
+- Rust/Tauri Agent：sidecar 写回偏差已由 OPT-0002 修复并新增 `audio_embed_lyrics` 命令；对已接受偏差按 SP-018 重测条件提供证据。
 - Test Agent：执行 SP-018，按本契约映射 command、DTO、事件、状态、错误与边界检查项。
 - PM Agent：复核“同目录自动发现 `.m3u8`”口径，必要时在 SP-020 需求基线中明确。

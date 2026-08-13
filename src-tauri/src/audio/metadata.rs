@@ -8,7 +8,9 @@ use lofty::{
     tag::{Accessor, ItemKey, Tag},
 };
 
-use super::{cover_cache::cover_art_from_tag, types::AudioTrackMetadata};
+use super::{
+    cover_cache::cover_art_from_tag, lyrics_cache::LyricsCache, types::AudioTrackMetadata,
+};
 
 const REPLAY_GAIN_MIN_DB: f32 = -24.0;
 const REPLAY_GAIN_MAX_DB: f32 = 12.0;
@@ -53,14 +55,21 @@ pub(super) fn parse_replay_gain_db(value: &str) -> Option<f32> {
     number.is_finite().then_some(number)
 }
 
-/// Reads embedded metadata and an optional sidecar `.lrc` without modifying the audio file.
-pub(crate) fn read_metadata(path: &Path, cover_cache_dir: Option<&Path>) -> AudioTrackMetadata {
+/// Reads embedded metadata and an optional sidecar `.lrc` without modifying
+/// the audio file. Embedded lyrics are always read live from the tag; only
+/// when they are absent is the sidecar resolved, through `lyrics_cache` when
+/// one is provided (tests and read-only paths pass `None`).
+pub(crate) fn read_metadata(
+    path: &Path,
+    cover_cache_dir: Option<&Path>,
+    lyrics_cache: Option<&LyricsCache>,
+) -> AudioTrackMetadata {
     let started_at = std::time::Instant::now();
     match read_embedded_metadata(path, cover_cache_dir) {
         Ok(mut metadata) => {
             let had_embedded_lyrics = metadata.lyrics.is_some();
             if metadata.lyrics.is_none() {
-                metadata.lyrics = read_sidecar_lyrics(path);
+                metadata.lyrics = resolve_sidecar_lyrics(path, lyrics_cache);
             }
 
             tracing::debug!(
@@ -71,6 +80,7 @@ pub(crate) fn read_metadata(path: &Path, cover_cache_dir: Option<&Path>) -> Audi
                 album = metadata.album.as_deref(),
                 has_embedded_lyrics = had_embedded_lyrics,
                 has_lyrics = metadata.lyrics.is_some(),
+                lyrics_cache_enabled = lyrics_cache.is_some(),
                 has_cover_art = metadata.cover_art.is_some(),
                 cover_mime_type = metadata.cover_art.as_ref().map(|cover| cover.mime_type.as_str()),
                 cover_byte_len = metadata.cover_art.as_ref().map(|cover| cover.byte_len),
@@ -84,14 +94,24 @@ pub(crate) fn read_metadata(path: &Path, cover_cache_dir: Option<&Path>) -> Audi
                 operation = "audio.source.metadata",
                 path = %path.display(),
                 error = %error,
+                lyrics_cache_enabled = lyrics_cache.is_some(),
                 elapsed_ms = started_at.elapsed().as_millis(),
                 "lofty metadata read failed, returning empty metadata",
             );
             AudioTrackMetadata {
-                lyrics: read_sidecar_lyrics(path),
+                lyrics: resolve_sidecar_lyrics(path, lyrics_cache),
                 ..Default::default()
             }
         }
+    }
+}
+
+/// Resolves sidecar lyrics through the cache when available, otherwise reads
+/// the sidecar directly (identical to the pre-cache behavior).
+fn resolve_sidecar_lyrics(path: &Path, lyrics_cache: Option<&LyricsCache>) -> Option<String> {
+    match lyrics_cache {
+        Some(cache) => cache.get_or_load(path),
+        None => read_sidecar_lyrics(path),
     }
 }
 
@@ -153,7 +173,19 @@ pub(super) fn read_tagged_file(
     lofty::probe::Probe::open(path)?.guess_file_type()?.read()
 }
 
+/// Reads sidecar `.lrc` lyrics, returning only the content (thin wrapper
+/// around [`read_sidecar_lyrics_with_source`] for callers that do not need
+/// the source path; kept for test compatibility).
 pub(super) fn read_sidecar_lyrics(path: &Path) -> Option<String> {
+    read_sidecar_lyrics_with_source(path).map(|(lyrics, _)| lyrics)
+}
+
+/// Reads sidecar `.lrc` lyrics and returns them together with the actual
+/// `.lrc` path that was read. When a case-variant directory scan finds the
+/// sidecar, the real path (e.g. `SONG.LRC`) is what gets reported so the
+/// lyrics cache can fingerprint the exact file. Pure read — never writes to
+/// any file.
+pub(super) fn read_sidecar_lyrics_with_source(path: &Path) -> Option<(String, PathBuf)> {
     let lyrics_path = sidecar_lyrics_path(path)?;
     tracing::debug!(
         operation = "audio.source.lyrics.sidecar",
@@ -182,7 +214,7 @@ pub(super) fn read_sidecar_lyrics(path: &Path) -> Option<String> {
         "sidecar lyrics read succeeded",
     );
 
-    (!lyrics.is_empty()).then_some(lyrics)
+    (!lyrics.is_empty()).then(|| (lyrics, lyrics_path))
 }
 
 fn sidecar_lyrics_path(path: &Path) -> Option<PathBuf> {

@@ -38,8 +38,10 @@ fn cover_art_from_picture(picture: &Picture, cover_cache_dir: Option<&Path>) -> 
 
     AudioCoverArt {
         mime_type: mime_type.clone(),
+        data_url: file_path
+            .is_none()
+            .then(|| cover_art_data_url(&mime_type, data)),
         file_path,
-        data_url: Some(cover_art_data_url(&mime_type, data)),
         byte_len: data.len(),
     }
 }
@@ -87,5 +89,43 @@ fn cover_extension(mime_type: &str) -> &'static str {
         "image/webp" => "webp",
         "image/bmp" => "bmp",
         _ => "bin",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use lofty::picture::{MimeType, Picture};
+
+    use super::*;
+
+    #[test]
+    fn cached_cover_uses_file_path_without_duplicate_data_url() {
+        let cache_dir = std::env::temp_dir().join(format!(
+            "spmusic-cover-xor-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let picture = Picture::unchecked(vec![0xff, 0xd8, 0xff, 0xd9])
+            .pic_type(PictureType::CoverFront)
+            .mime_type(MimeType::Jpeg)
+            .build();
+
+        let cover = cover_art_from_picture(&picture, Some(&cache_dir));
+        assert!(cover.file_path.is_some());
+        assert!(cover.data_url.is_none());
+
+        std::fs::remove_dir_all(cache_dir).expect("cover cache should be removable");
+    }
+
+    #[test]
+    fn uncached_cover_falls_back_to_data_url_only() {
+        let picture = Picture::unchecked(vec![1, 2, 3])
+            .pic_type(PictureType::CoverFront)
+            .mime_type(MimeType::Png)
+            .build();
+
+        let cover = cover_art_from_picture(&picture, None);
+        assert!(cover.file_path.is_none());
+        assert!(cover.data_url.is_some());
     }
 }

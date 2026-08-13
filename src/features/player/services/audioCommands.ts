@@ -2,6 +2,7 @@ import { convertFileSrc, invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 
 export const AUDIO_STATE_CHANGED_EVENT = 'audio_state_changed'
+export const AUDIO_TRACK_DETAILS_CHANGED_EVENT = 'audio_track_details_changed'
 
 export type AudioPlaybackPhase =
   | 'idle'
@@ -63,6 +64,7 @@ export type AudioCommandError = {
 
 export type AudioPlaybackState = {
   phase: AudioPlaybackPhase
+  generation: number | null
   currentTrackId: string | null
   positionMs: number
   durationMs: number | null
@@ -101,6 +103,39 @@ export type AudioPlayInput = {
   restart?: boolean
 }
 
+export type AudioLoadAndPlayInput = {
+  path: string
+  requestId: number
+}
+
+export type AudioLoadAndPlayResult = {
+  requestId: number
+  generation: number
+  trackId: string
+  fileName: string
+  state: AudioPlaybackState
+}
+
+export type AudioTrackDetailsChanged =
+  | {
+    kind: 'ready'
+    requestId: number
+    generation: number
+    track: AudioTrackRef
+  }
+  | {
+    kind: 'error'
+    requestId: number
+    generation: number
+    trackId: string
+    error: AudioCommandError
+  }
+
+export type AudioEmbedLyricsInput = {
+  path: string
+  lyrics: string
+}
+
 export async function openAudioFile(input?: AudioOpenFileInput): Promise<AudioTrackRef> {
   return invoke<AudioTrackRef>('audio_open_file', { input: input ?? null })
 }
@@ -113,8 +148,16 @@ export async function loadAudioFile(path: string): Promise<AudioTrackRef> {
   return invoke<AudioTrackRef>('audio_load_file', { input: { path } })
 }
 
+export async function loadAndPlayAudio(input: AudioLoadAndPlayInput): Promise<AudioLoadAndPlayResult> {
+  return invoke<AudioLoadAndPlayResult>('audio_load_and_play', { input })
+}
+
 export async function hydrateAudioTrack(path: string): Promise<AudioTrackRef> {
   return invoke<AudioTrackRef>('audio_hydrate_track', { input: { path } })
+}
+
+export async function embedAudioLyrics(input: AudioEmbedLyricsInput): Promise<AudioTrackRef> {
+  return invoke<AudioTrackRef>('audio_embed_lyrics', { input })
 }
 
 export function audioCoverArtUrl(coverArt: AudioCoverArt | null): string | undefined {
@@ -165,6 +208,14 @@ export async function listenAudioStateChanged(
   handler: (state: AudioPlaybackState) => void,
 ): Promise<UnlistenFn> {
   return listen<AudioPlaybackState>(AUDIO_STATE_CHANGED_EVENT, (event) => {
+    handler(event.payload)
+  })
+}
+
+export async function listenAudioTrackDetailsChanged(
+  handler: (details: AudioTrackDetailsChanged) => void,
+): Promise<UnlistenFn> {
+  return listen<AudioTrackDetailsChanged>(AUDIO_TRACK_DETAILS_CHANGED_EVENT, (event) => {
     handler(event.payload)
   })
 }

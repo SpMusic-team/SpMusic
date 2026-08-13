@@ -2,6 +2,7 @@ import type { KeyboardEvent, MouseEvent, RefObject } from 'react'
 import { SettingsIcon } from 'lucide-react'
 import { motion } from 'motion/react'
 import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
 import {
   Empty,
   EmptyContent,
@@ -16,6 +17,7 @@ import { cn } from '@/lib/utils'
 
 type LyricsPanelProps = {
   track: Track
+  detailsPending?: boolean
   activeLyricId?: string
   activeLyricIndex: number
   lyricListRef: RefObject<HTMLOListElement | null>
@@ -33,7 +35,7 @@ function lyricPairSpacingForDelta(deltaSeconds: number | null, tightThresholdSec
     : 'normal'
 }
 
-export function LyricsPanel({ track, activeLyricId, activeLyricIndex, lyricListRef, lyricRefs, tightThresholdSeconds, onLineSelect }: LyricsPanelProps) {
+export function LyricsPanel({ track, detailsPending = false, activeLyricId, activeLyricIndex, lyricListRef, lyricRefs, tightThresholdSeconds, onLineSelect }: LyricsPanelProps) {
   const appearanceMotion = useAppearanceMotion()
 
   function handleLineKeyDown(event: KeyboardEvent<HTMLLIElement>, timeSeconds: number) {
@@ -51,14 +53,26 @@ export function LyricsPanel({ track, activeLyricId, activeLyricIndex, lyricListR
   return (
     <motion.section
       layout
-      className={cn('lyrics-panel', !track.lyrics.length && 'track-lyrics-empty-panel')}
+      className={cn('lyrics-panel', (detailsPending || !track.lyrics.length) && 'track-lyrics-empty-panel')}
       variants={appearanceMotion.variants.track}
       initial="initial"
       animate="animate"
       aria-labelledby="lyrics-title"
+      aria-busy={detailsPending}
     >
       <h2 id="lyrics-title" className="sr-only">{appCopy.lyrics.title}</h2>
-      {track.lyrics.length ? (
+      {detailsPending ? (
+        <Empty className="empty-lyrics-state track-lyrics-empty-state" data-content-state="loading">
+          <EmptyHeader>
+            <div className="player-loading-lyrics" aria-hidden="true">
+              <Skeleton />
+              <Skeleton />
+              <Skeleton />
+            </div>
+            <EmptyTitle className="sr-only">{appCopy.audio.loading}</EmptyTitle>
+          </EmptyHeader>
+        </Empty>
+      ) : track.lyrics.length ? (
         <ol ref={lyricListRef}>
           {track.lyrics.map((line, index) => {
             const nextLine = track.lyrics[index + 1]

@@ -45,6 +45,7 @@ pub(crate) fn audio_error(
 pub(crate) fn unavailable_state(message: impl Into<String>) -> AudioPlaybackState {
     AudioPlaybackState {
         phase: AudioPlaybackPhase::Error,
+        generation: None,
         current_track_id: None,
         position_ms: 0,
         duration_ms: None,

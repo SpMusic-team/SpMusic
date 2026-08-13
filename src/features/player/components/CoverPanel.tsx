@@ -2,7 +2,7 @@ import { useState, type CSSProperties } from 'react'
 import { motion } from 'motion/react'
 import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { appCopy } from '@/features/player/model/playerCopy'
-import type { Track } from '@/features/player/model/playerTypes'
+import type { Track, TrackArtwork } from '@/features/player/model/playerTypes'
 import type { SystemIcon } from '@/icons/systemIcons'
 import { IconButton } from './IconButton'
 import { MoreActionsMenu } from './MoreActionsMenu'
@@ -11,6 +11,7 @@ type CoverStyle = CSSProperties & { '--cover-art'?: string }
 
 type CoverPanelProps = {
   track: Track
+  artwork: TrackArtwork
   coverStyle?: CoverStyle
   likeIcon: SystemIcon
   dislikeIcon: SystemIcon
@@ -20,10 +21,10 @@ type CoverPanelProps = {
   onDislike: () => void
 }
 
-export function CoverPanel({ track, coverStyle, likeIcon, dislikeIcon, liked, disliked, onLike, onDislike }: CoverPanelProps) {
+export function CoverPanel({ track, artwork, coverStyle, likeIcon, dislikeIcon, liked, disliked, onLike, onDislike }: CoverPanelProps) {
   const systemIcons = useSystemIcons()
   const appearanceMotion = useAppearanceMotion()
-  const [coverImageSrc, setCoverImageSrc] = useState(track.coverImage)
+  const [coverImageSrc, setCoverImageSrc] = useState(artwork.coverImage)
 
   return (
     <motion.article layout className="cover-column">
@@ -36,7 +37,7 @@ export function CoverPanel({ track, coverStyle, likeIcon, dislikeIcon, liked, di
       >
         <div
           className="cover-art"
-          data-tone={track.coverTone}
+          data-tone={artwork.coverTone}
           data-has-image={Boolean(coverImageSrc)}
           style={coverStyle}
         >
@@ -44,10 +45,10 @@ export function CoverPanel({ track, coverStyle, likeIcon, dislikeIcon, liked, di
             <img
               className="cover-image"
               src={coverImageSrc}
-              alt={`${track.title} 封面`}
+              alt={artwork.id === track.id ? `${track.title} 封面` : ''}
               onError={() => {
-                if (track.coverImageFallback && coverImageSrc !== track.coverImageFallback) {
-                  setCoverImageSrc(track.coverImageFallback)
+                if (artwork.coverImageFallback && coverImageSrc !== artwork.coverImageFallback) {
+                  setCoverImageSrc(artwork.coverImageFallback)
                 } else {
                   setCoverImageSrc(undefined)
                 }
@@ -61,7 +62,7 @@ export function CoverPanel({ track, coverStyle, likeIcon, dislikeIcon, liked, di
           </div>
           <MoreActionsMenu
             track={track}
-            coverStyle={coverStyle}
+            coverStyle={artwork.id === track.id ? coverStyle : undefined}
             likeIcon={likeIcon}
             dislikeIcon={dislikeIcon}
             liked={liked}

@@ -2,7 +2,7 @@ use std::{
     path::PathBuf,
     sync::{
         mpsc::{self, Receiver, RecvTimeoutError, Sender},
-        Mutex,
+        Arc, Mutex,
     },
     thread,
     time::{Duration, Instant},
@@ -16,15 +16,20 @@ use super::{
         AudioDeviceWatcherHandle,
     },
     error::{audio_error, unavailable_state, AudioCommandError, AudioErrorCode},
+    lyrics_cache::LyricsCache,
     playlist::{default_filters, load_folder_playlist, source_filters},
-    runtime::{start_track_parser, AudioRuntime, AudioRuntimeRequest, TrackParseRequest},
-    source::{hydrate_track_ref, input_path},
-    types::{
-        AudioFolderPlaylist, AudioFolderPlaylistInput, AudioLoadFileInput, AudioOpenFileInput,
-        AudioOpenSourceResult, AudioPlayInput, AudioPlaybackState, AudioSeekInput,
-        AudioSetVolumeInput, AudioTrackRef,
+    runtime::{
+        start_track_parser, AudioRuntime, AudioRuntimeRequest, TrackParsePurpose, TrackParseRequest,
     },
-    AUDIO_STATE_CHANGED_EVENT,
+    source::{hydrate_track_ref, input_path, validate_existing_file},
+    tag_writer,
+    types::{
+        AudioEmbedLyricsInput, AudioFolderPlaylist, AudioFolderPlaylistInput,
+        AudioLoadAndPlayInput, AudioLoadAndPlayResult, AudioLoadFileInput, AudioOpenFileInput,
+        AudioOpenSourceResult, AudioPlayInput, AudioPlaybackState, AudioSeekInput,
+        AudioSetVolumeInput, AudioTrackDetailsChanged, AudioTrackRef,
+    },
+    AUDIO_STATE_CHANGED_EVENT, AUDIO_TRACK_DETAILS_CHANGED_EVENT,
 };
 
 const OUTPUT_DEVICE_EVENT_DEBOUNCE: Duration = Duration::from_millis(350);
@@ -42,6 +47,9 @@ pub struct AudioController {
     // requests; the worker itself owns the receiving side.
     _parser_tx: Mutex<Sender<TrackParseRequest>>,
     cover_cache_dir: PathBuf,
+    // Shared sidecar-lyrics cache: cloned into the parser worker thread and
+    // invalidated after a successful `audio_embed_lyrics`.
+    lyrics_cache: Arc<LyricsCache>,
     _device_watcher: AudioDeviceWatcherHandle,
 }
 
@@ -62,13 +70,19 @@ impl AudioController {
 
         let cover_cache_dir = cache_dir.join("audio");
         let runtime_cover_cache_dir = cover_cache_dir.clone();
+        let lyrics_cache = Arc::new(LyricsCache::new(LyricsCache::MAX_LYRICS_CACHE_ENTRIES));
+        let parser_lyrics_cache = Arc::clone(&lyrics_cache);
         let (parser_tx, parser_rx) = mpsc::channel::<TrackParseRequest>();
         let parser_runtime_tx = tx.clone();
         let parser_cover_cache_dir = runtime_cover_cache_dir.clone();
         // start_track_parser spawns the worker thread itself; dropping the
         // returned join handle detaches it for the process lifetime.
-        let _parser_handle =
-            start_track_parser(parser_rx, parser_runtime_tx, parser_cover_cache_dir);
+        let _parser_handle = start_track_parser(
+            parser_rx,
+            parser_runtime_tx,
+            parser_cover_cache_dir,
+            parser_lyrics_cache,
+        );
 
         let runtime_parser_tx = parser_tx.clone();
 
@@ -111,9 +125,11 @@ impl AudioController {
                             reply,
                         });
                         emit_state_changed(&app_handle, runtime.get_state());
-                        if let Err(error) =
-                            runtime_parser_tx.send(TrackParseRequest { generation, path })
-                        {
+                        if let Err(error) = runtime_parser_tx.send(TrackParseRequest {
+                            generation,
+                            path,
+                            purpose: TrackParsePurpose::LegacyLoad,
+                        }) {
                             tracing::error!(
                                 operation = "audio.load_file",
                                 error = %error,
@@ -134,6 +150,73 @@ impl AudioController {
                             }
                             emit_state_changed(&app_handle, runtime.get_state());
                         }
+                    }
+                    AudioRuntimeRequest::LoadAndPlay {
+                        path,
+                        request_id,
+                        reply,
+                    } => {
+                        if let Some(previous) = pending_load.take() {
+                            let superseded_error = audio_error(
+                                AudioErrorCode::InternalError,
+                                format!(
+                                    "Audio load superseded by a newer request: {}",
+                                    previous.path.display()
+                                ),
+                                true,
+                            );
+                            let _ = previous.reply.send(Err(superseded_error));
+                        }
+                        let result = runtime.load_and_play(path.clone(), request_id);
+                        let state = match &result {
+                            Ok(result) => result.state.clone(),
+                            Err(_) => runtime.get_state(),
+                        };
+                        emit_state_changed(&app_handle, state);
+
+                        if let Ok(result) = &result {
+                            let generation = result.generation;
+                            let track_id = result.track_id.clone();
+                            let details_request = TrackParseRequest {
+                                generation,
+                                path: path.clone(),
+                                purpose: TrackParsePurpose::Details {
+                                    request_id,
+                                    track_id: track_id.clone(),
+                                },
+                            };
+                            tracing::info!(
+                                operation = "audio.track_details.begin",
+                                request_id,
+                                generation,
+                                track_id = %track_id,
+                                path = %path.display(),
+                                "audio track details hydration started",
+                            );
+                            if runtime_parser_tx.send(details_request).is_err() {
+                                let error = audio_error(
+                                    AudioErrorCode::InternalError,
+                                    "Audio parser is unavailable",
+                                    true,
+                                );
+                                if runtime.apply_track_details(
+                                    generation,
+                                    &track_id,
+                                    &Err(error.clone()),
+                                ) {
+                                    emit_track_details_changed(
+                                        &app_handle,
+                                        AudioTrackDetailsChanged::Error {
+                                            request_id,
+                                            generation,
+                                            track_id,
+                                            error,
+                                        },
+                                    );
+                                }
+                            }
+                        }
+                        let _ = reply.send(result);
                     }
                     AudioRuntimeRequest::TrackParsed {
                         generation,
@@ -165,6 +248,39 @@ impl AudioController {
                                 operation = "audio.track_parsed",
                                 generation,
                                 "ignored stale track parse result",
+                            );
+                        }
+                    }
+                    AudioRuntimeRequest::TrackDetailsHydrated {
+                        request_id,
+                        generation,
+                        track_id,
+                        result,
+                    } => {
+                        let result = *result;
+                        if runtime.apply_track_details(generation, &track_id, &result) {
+                            let event = match result {
+                                Ok(track) => AudioTrackDetailsChanged::Ready {
+                                    request_id,
+                                    generation,
+                                    track,
+                                },
+                                Err(error) => AudioTrackDetailsChanged::Error {
+                                    request_id,
+                                    generation,
+                                    track_id,
+                                    error,
+                                },
+                            };
+                            emit_track_details_changed(&app_handle, event);
+                        } else {
+                            tracing::info!(
+                                operation = "audio.track_details.end",
+                                request_id,
+                                generation,
+                                track_id = %track_id,
+                                status = "stale_suppressed",
+                                "audio track details hydration completed without emission",
                             );
                         }
                     }
@@ -277,6 +393,7 @@ impl AudioController {
             tx: Mutex::new(tx),
             _parser_tx: Mutex::new(parser_tx),
             cover_cache_dir,
+            lyrics_cache,
             _device_watcher: device_watcher,
         }
     }
@@ -403,7 +520,31 @@ impl AudioController {
             path = %input.path,
             "hydrate track command received",
         );
-        hydrate_track_ref(&input_path(&input.path)?, Some(&self.cover_cache_dir))
+        hydrate_track_ref(
+            &input_path(&input.path)?,
+            Some(&self.cover_cache_dir),
+            Some(&self.lyrics_cache),
+        )
+    }
+
+    pub fn load_and_play(
+        &self,
+        input: AudioLoadAndPlayInput,
+    ) -> Result<AudioLoadAndPlayResult, AudioCommandError> {
+        let path = input_path(&input.path)?;
+        let (reply, rx) = mpsc::channel();
+        self.send(AudioRuntimeRequest::LoadAndPlay {
+            path,
+            request_id: input.request_id,
+            reply,
+        })?;
+        rx.recv().map_err(|_| {
+            audio_error(
+                AudioErrorCode::InternalError,
+                "Audio runtime did not return load-and-play result",
+                true,
+            )
+        })?
     }
 
     pub fn list_folder_tracks(
@@ -416,6 +557,66 @@ impl AudioController {
             "folder playlist command received",
         );
         load_folder_playlist(&input_path(&input.selected_path)?)
+    }
+
+    /// Explicitly embeds `lyrics` into the audio file's primary tag — the
+    /// single production write entry point (via `tag_writer::embed_lyrics`).
+    /// Runs synchronously on the command thread and never enters the runtime
+    /// state machine. On success the lyrics cache is invalidated and the
+    /// track is re-hydrated so the returned `AudioTrackRef` carries the new
+    /// embedded lyrics.
+    pub fn embed_lyrics(
+        &self,
+        input: AudioEmbedLyricsInput,
+    ) -> Result<AudioTrackRef, AudioCommandError> {
+        let path = input_path(&input.path)?;
+        validate_existing_file(&path)?;
+        // Mirror `safe_update_tag`'s own path requirements up front so they
+        // surface as a stable INVALID_PATH instead of an unmapped message.
+        if path.parent().is_none() || path.extension().is_none() {
+            tracing::warn!(
+                operation = "audio.lyrics.embed",
+                path = %path.display(),
+                "audio path has no parent directory or extension",
+            );
+            return Err(audio_error(
+                AudioErrorCode::InvalidPath,
+                "Audio path has no parent directory or extension",
+                true,
+            ));
+        }
+
+        let started_at = Instant::now();
+        let result = tag_writer::embed_lyrics(&path, &input.lyrics)
+            .map_err(|message| map_embed_lyrics_error(&message));
+
+        match &result {
+            Ok(()) => {
+                tracing::info!(
+                    operation = "audio.lyrics.embed",
+                    path = %path.display(),
+                    lyric_byte_len = input.lyrics.len(),
+                    elapsed_ms = started_at.elapsed().as_millis() as u64,
+                    "lyrics embedded into audio file",
+                );
+                // Only invalidate after a successful, transactional write.
+                self.lyrics_cache.invalidate(&path);
+            }
+            Err(error) => {
+                tracing::warn!(
+                    operation = "audio.lyrics.embed",
+                    path = %path.display(),
+                    error_code = ?error.code,
+                    recoverable = error.recoverable,
+                    error = %error.message,
+                    elapsed_ms = started_at.elapsed().as_millis() as u64,
+                    "lyrics embedding failed",
+                );
+            }
+        }
+
+        result?;
+        hydrate_track_ref(&path, Some(&self.cover_cache_dir), Some(&self.lyrics_cache))
     }
 
     pub fn play(
@@ -582,6 +783,7 @@ fn emit_state_changed(app_handle: &AppHandle, state: AudioPlaybackState) {
         operation = "audio.controller.emit_state",
         event = AUDIO_STATE_CHANGED_EVENT,
         phase = ?state.phase,
+        generation = state.generation,
         position_ms = state.position_ms,
         duration_ms = state.duration_ms,
         volume = state.volume,
@@ -602,6 +804,42 @@ fn emit_state_changed(app_handle: &AppHandle, state: AudioPlaybackState) {
         elapsed_ms = started_at.elapsed().as_millis() as u64,
         "audio state event emission completed",
     );
+}
+
+fn emit_track_details_changed(app_handle: &AppHandle, event: AudioTrackDetailsChanged) {
+    let (request_id, generation, track_id, status) = match &event {
+        AudioTrackDetailsChanged::Ready {
+            request_id,
+            generation,
+            track,
+        } => (*request_id, *generation, track.id.clone(), "ready"),
+        AudioTrackDetailsChanged::Error {
+            request_id,
+            generation,
+            track_id,
+            ..
+        } => (*request_id, *generation, track_id.clone(), "error"),
+    };
+    tracing::info!(
+        operation = "audio.track_details.end",
+        event = AUDIO_TRACK_DETAILS_CHANGED_EVENT,
+        request_id,
+        generation,
+        track_id = %track_id,
+        status,
+        "audio track details hydration completed",
+    );
+    if let Err(error) = app_handle.emit(AUDIO_TRACK_DETAILS_CHANGED_EVENT, event) {
+        tracing::warn!(
+            operation = "audio.controller.emit_track_details",
+            event = AUDIO_TRACK_DETAILS_CHANGED_EVENT,
+            request_id,
+            generation,
+            track_id = %track_id,
+            error = %error,
+            "failed to emit audio track details",
+        );
+    }
 }
 
 fn run_audio_device_bridge(
@@ -781,6 +1019,7 @@ fn log_state_result(
             position_ms = state.position_ms,
             duration_ms = state.duration_ms,
             volume = state.volume,
+            generation = state.generation,
             track_id = state.current_track_id.as_deref(),
             "audio state request completed",
         ),
@@ -792,5 +1031,116 @@ fn log_state_result(
             error = %error.message,
             "audio state request failed",
         ),
+    }
+}
+
+/// Maps a `tag_writer` error message to the stable `AudioErrorCode` contract
+/// from the OPT-0002 architecture (see
+/// `docs/architecture/lyrics-cache-and-embed-boundary.md`, command error
+/// table). `tag_writer` returns a `String`, so classification is
+/// message-content based; the mapping must stay stable:
+///
+/// | scenario | code | recoverable |
+/// | --- | --- | --- |
+/// | no parent dir / no extension | INVALID_PATH | true |
+/// | copy / write / staging / cleanup I/O failure | UNREADABLE_FILE | true |
+/// | tag parse (lofty) / rewrite validation failure | UNSUPPORTED_FORMAT | true |
+/// | install failed and rollback failed (atomicity broken) | INTERNAL_ERROR | false |
+fn map_embed_lyrics_error(message: &str) -> AudioCommandError {
+    let lower = message.to_ascii_lowercase();
+    let (code, recoverable) = if lower.contains("failed to install rewritten audio") {
+        if message.contains("rollback=Err") {
+            // The original file could not be restored: atomicity is broken.
+            (AudioErrorCode::InternalError, false)
+        } else {
+            (AudioErrorCode::UnreadableFile, true)
+        }
+    } else if lower.contains("no parent directory") || lower.contains("no extension") {
+        (AudioErrorCode::InvalidPath, true)
+    } else if lower.contains("failed to create tag update copy")
+        || lower.contains("failed to write tag update copy")
+        || lower.contains("failed to stage original audio file")
+        || lower.contains("backup cleanup failed")
+    {
+        (AudioErrorCode::UnreadableFile, true)
+    } else if lower.contains("failed to read tag update copy")
+        || lower.contains("rewritten audio failed validation")
+    {
+        (AudioErrorCode::UnsupportedFormat, true)
+    } else {
+        // Unknown writer failure: surface as a recoverable format error
+        // rather than claiming broken atomicity.
+        (AudioErrorCode::UnsupportedFormat, true)
+    };
+    audio_error(
+        code,
+        format!("Failed to embed lyrics: {message}"),
+        recoverable,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn embed_error_mapping_covers_copy_write_staging_and_cleanup_io_failures() {
+        for message in [
+            "failed to create tag update copy: permission denied",
+            "failed to write tag update copy: disk full",
+            "failed to stage original audio file: access denied",
+            "tag update succeeded but backup cleanup failed: file locked",
+        ] {
+            let error = map_embed_lyrics_error(message);
+            assert_eq!(error.code, AudioErrorCode::UnreadableFile, "{message}");
+            assert!(error.recoverable, "{message}");
+        }
+    }
+
+    #[test]
+    fn embed_error_mapping_covers_tag_parse_and_rewrite_validation_failures() {
+        for message in [
+            "failed to read tag update copy: the file format could not be determined",
+            "rewritten audio failed validation: unsupported codec",
+        ] {
+            let error = map_embed_lyrics_error(message);
+            assert_eq!(error.code, AudioErrorCode::UnsupportedFormat, "{message}");
+            assert!(error.recoverable, "{message}");
+        }
+    }
+
+    #[test]
+    fn embed_error_mapping_marks_broken_atomicity_as_non_recoverable_internal_error() {
+        let broken = map_embed_lyrics_error(
+            "failed to install rewritten audio: disk full; rollback=Err(Os { code: 5, kind: PermissionDenied, message: \"Access is denied.\" })",
+        );
+        assert_eq!(broken.code, AudioErrorCode::InternalError);
+        assert!(!broken.recoverable);
+
+        let restored = map_embed_lyrics_error(
+            "failed to install rewritten audio: interrupted; rollback=Ok(())",
+        );
+        assert_eq!(restored.code, AudioErrorCode::UnreadableFile);
+        assert!(restored.recoverable);
+    }
+
+    #[test]
+    fn embed_error_mapping_keeps_path_validation_codes() {
+        for message in [
+            "audio path has no parent directory",
+            "audio path has no extension",
+        ] {
+            let error = map_embed_lyrics_error(message);
+            assert_eq!(error.code, AudioErrorCode::InvalidPath, "{message}");
+            assert!(error.recoverable, "{message}");
+        }
+    }
+
+    #[test]
+    fn embed_error_mapping_falls_back_to_recoverable_format_error_for_unknown_messages() {
+        let error = map_embed_lyrics_error("unexpected writer failure");
+        assert_eq!(error.code, AudioErrorCode::UnsupportedFormat);
+        assert!(error.recoverable);
+        assert!(error.message.contains("unexpected writer failure"));
     }
 }

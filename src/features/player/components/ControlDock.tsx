@@ -28,7 +28,10 @@ export function ControlDock({
   const pressEndRef = useRef<{ pointerId: number; reason: ProgressPressEndReason } | null>(null)
   const cancelProgressPreviewRef = useRef(timeline.onCancelPreview)
   const disabled = !playback.track
-  const commandBusy = playback.isAudioBusy || playback.isTransportBusy || timeline.interaction === 'seeking'
+  const navigationBusy = playback.isAudioBusy
+    || playback.isTransportBusy
+    || timeline.interaction === 'seeking'
+  const commandBusy = navigationBusy || playback.isSelectionPending
   const progressDisabled = commandBusy || disabled || timeline.durationSeconds <= 0
   const ShuffleIcon = playback.shuffleMode === 'shuffle-all'
     ? systemIcons.shuffleOff
@@ -230,8 +233,8 @@ export function ControlDock({
         <div className="control-auxiliary control-auxiliary-start"><IconButton icon={systemIcons.audioWave} label={appCopy.controls.openAudio} disabled={commandBusy} onClick={playback.onOpenAudio} /></div>
         <div className="control-primary">
           <IconButton className="control-optional" icon={ShuffleIcon} label={shuffleLabel} selected={playback.shuffleMode !== 'none'} disabled={disabled} onClick={playback.onShuffleCycle} />
-          <IconButton className="previous-button" icon={systemIcons.previous} label={appCopy.controls.previous} disabled={disabled || commandBusy} onClick={playback.onPrevious} />
-          <Button className="play-button" aria-busy={playback.isTransportBusy} aria-label={playback.isPlaying ? appCopy.controls.pause : appCopy.controls.play} aria-pressed={playback.isPlaying} disabled={commandBusy || disabled} size="icon-lg" onClick={playback.onPlayToggle}>
+          <IconButton className="previous-button" icon={systemIcons.previous} label={appCopy.controls.previous} disabled={disabled || navigationBusy} onClick={playback.onPrevious} />
+          <Button className="play-button" aria-busy={playback.isTransportBusy || playback.isSelectionPending} aria-label={playback.isPlaying ? appCopy.controls.pause : appCopy.controls.play} aria-pressed={playback.isPlaying} disabled={commandBusy || disabled} size="icon-lg" onClick={playback.onPlayToggle}>
             <span className="player-control-icon-swap">
               <AnimatePresence initial={false}>
                 <motion.span
@@ -248,7 +251,7 @@ export function ControlDock({
               </AnimatePresence>
             </span>
           </Button>
-          <IconButton className="next-button" icon={systemIcons.next} label={appCopy.controls.next} disabled={disabled || commandBusy} onClick={playback.onNext} />
+          <IconButton className="next-button" icon={systemIcons.next} label={appCopy.controls.next} disabled={disabled || navigationBusy} onClick={playback.onNext} />
           <IconButton className="control-optional" icon={RepeatIcon} label={repeatLabel} selected={playback.repeatMode !== 'list-loop'} disabled={disabled} onClick={playback.onRepeatCycle} />
         </div>
         <div className="control-auxiliary control-auxiliary-end">

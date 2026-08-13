@@ -5,9 +5,10 @@ use std::sync::Once;
 
 use app_paths::AppPaths;
 use audio::{
-    AudioCommandError, AudioController, AudioFolderPlaylist, AudioFolderPlaylistInput,
-    AudioLoadFileInput, AudioOpenFileInput, AudioOpenSourceResult, AudioPlayInput,
-    AudioPlaybackState, AudioSeekInput, AudioSetVolumeInput, AudioTrackRef,
+    AudioCommandError, AudioController, AudioEmbedLyricsInput, AudioFolderPlaylist,
+    AudioFolderPlaylistInput, AudioLoadAndPlayInput, AudioLoadAndPlayResult, AudioLoadFileInput,
+    AudioOpenFileInput, AudioOpenSourceResult, AudioPlayInput, AudioPlaybackState, AudioSeekInput,
+    AudioSetVolumeInput, AudioTrackRef,
 };
 use tauri::{Manager, State};
 use tracing_subscriber::EnvFilter;
@@ -54,6 +55,39 @@ fn audio_load_file(
 }
 
 #[tauri::command]
+fn audio_load_and_play(
+    state: State<'_, AudioController>,
+    input: AudioLoadAndPlayInput,
+) -> Result<AudioLoadAndPlayResult, AudioCommandError> {
+    tracing::info!(
+        command = "audio_load_and_play",
+        path = %input.path,
+        request_id = input.request_id,
+        "Tauri command invoked",
+    );
+    let result = state.load_and_play(input);
+    match &result {
+        Ok(result) => tracing::info!(
+            command = "audio_load_and_play",
+            request_id = result.request_id,
+            generation = result.generation,
+            track_id = %result.track_id,
+            file_name = %result.file_name,
+            phase = ?result.state.phase,
+            "Tauri command completed",
+        ),
+        Err(error) => tracing::warn!(
+            command = "audio_load_and_play",
+            error_code = ?error.code,
+            error = %error.message,
+            recoverable = error.recoverable,
+            "Tauri command failed",
+        ),
+    }
+    result
+}
+
+#[tauri::command]
 fn audio_hydrate_track(
     state: State<'_, AudioController>,
     input: AudioLoadFileInput,
@@ -79,6 +113,22 @@ fn audio_list_folder_tracks(
         "Tauri command invoked",
     );
     state.list_folder_tracks(input)
+}
+
+#[tauri::command]
+fn audio_embed_lyrics(
+    state: State<'_, AudioController>,
+    input: AudioEmbedLyricsInput,
+) -> Result<AudioTrackRef, AudioCommandError> {
+    tracing::info!(
+        command = "audio_embed_lyrics",
+        path = %input.path,
+        lyric_byte_len = input.lyrics.len(),
+        "Tauri command invoked",
+    );
+    let result = state.embed_lyrics(input);
+    log_track_command_result("audio_embed_lyrics", &result);
+    result
 }
 
 #[tauri::command]
@@ -191,8 +241,10 @@ pub fn run() {
             audio_open_file,
             audio_open_source,
             audio_load_file,
+            audio_load_and_play,
             audio_hydrate_track,
             audio_list_folder_tracks,
+            audio_embed_lyrics,
             audio_play,
             audio_pause,
             audio_stop,
@@ -280,6 +332,7 @@ fn log_state_command_result(
         Ok(state) => tracing::info!(
             command,
             phase = ?state.phase,
+            generation = state.generation,
             position_ms = state.position_ms,
             duration_ms = state.duration_ms,
             volume = state.volume,

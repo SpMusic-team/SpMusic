@@ -49,6 +49,14 @@ body[data-player-controls-density="comfortable"] .control-dock { --player-contro
 .control-progress-slider [data-slot="slider-range"] { top: 50%; border-radius: 50px; background: var(--player-progress-played); transform: translateY(-50%) scaleY(1); transform-origin: center; }
 .control-progress-slider[data-thumb-pressed] [data-slot="slider-range"] { transform: translateY(-50%) scaleY(1.75); }
 .control-progress-slider [data-slot="slider-thumb"] { width: var(--player-progress-thumb-size); height: var(--player-progress-thumb-size); border: 0; background: var(--player-progress-played); box-shadow: none; }
+.control-progress-slider[data-visual-clock][data-timeline-interaction="following"] [data-slot="slider-range"] {
+  inset-inline-start: 0 !important;
+  inline-size: var(--player-visual-progress, 0%) !important;
+}
+.control-progress-slider[data-visual-clock][data-timeline-interaction="following"] [data-slot="slider-thumb"] {
+  inset-inline-start: var(--player-visual-progress, 0%) !important;
+  inset-inline-end: auto !important;
+}
 .control-progress-slider[data-thumb-pressed] [data-slot="slider-thumb"] { transform: scale(1.18); }
 
 .control-row {

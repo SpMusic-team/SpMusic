@@ -1,10 +1,10 @@
-import { useEffect, useRef, type FocusEvent, type KeyboardEvent, type PointerEvent } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type FocusEvent, type KeyboardEvent, type PointerEvent } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
 import { Button } from '@/components/ui/button'
 import { Slider } from '@/components/ui/slider'
 import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { appCopy } from '@/features/player/model/playerCopy'
-import type { PlayerUiViewModel } from '@/features/player/model/playerUiViewModel'
+import type { PlayerTimelineViewModel, PlayerUiViewModel } from '@/features/player/model/playerUiViewModel'
 import { formatDuration } from '@/features/player/model/trackUtils'
 import { IconButton } from './IconButton'
 import { VolumeControl } from './VolumeControl'
@@ -12,55 +12,44 @@ import { VolumeControl } from './VolumeControl'
 type ControlDockProps = Pick<PlayerUiViewModel, 'playback' | 'timeline' | 'volume' | 'queue'>
 type ProgressPressEndReason = 'pointerup' | 'pointercancel' | 'blur'
 
-export function ControlDock({
-  playback,
-  timeline,
-  volume,
-  queue,
-}: ControlDockProps) {
-  const systemIcons = useSystemIcons()
-  const appearanceMotion = useAppearanceMotion()
+type ProgressControlProps = {
+  timeline: PlayerTimelineViewModel
+  disabled: boolean
+  isPlaying: boolean
+}
+
+const ProgressControl = memo(function ProgressControl({ timeline, disabled, isPlaying }: ProgressControlProps) {
+  const [semanticPosition, setSemanticPosition] = useState(timeline.positionSeconds)
   const pointerPreviewRef = useRef(false)
   const keyboardPreviewRef = useRef(false)
   const previewValueRef = useRef(timeline.positionSeconds)
   const progressSliderRef = useRef<HTMLDivElement>(null)
+  const progressTimeRef = useRef<HTMLTimeElement>(null)
+  const timelineInteractionRef = useRef(timeline.interaction)
+  const timelineDurationRef = useRef(timeline.durationSeconds)
+  const lastVisualSecondRef = useRef(Math.floor(timeline.positionSeconds))
   const pressedPointerIdRef = useRef<number | null>(null)
   const pressEndRef = useRef<{ pointerId: number; reason: ProgressPressEndReason } | null>(null)
   const cancelProgressPreviewRef = useRef(timeline.onCancelPreview)
-  const disabled = !playback.track
-  const navigationBusy = playback.isAudioBusy
-    || playback.isTransportBusy
-    || timeline.interaction === 'seeking'
-  const commandBusy = navigationBusy || playback.isSelectionPending
-  const progressDisabled = commandBusy || disabled || timeline.durationSeconds <= 0
-  const ShuffleIcon = playback.shuffleMode === 'shuffle-all'
-    ? systemIcons.shuffleOff
-    : playback.shuffleMode === 'shuffle-category-order'
-      ? systemIcons.shuffleCategoryOrder
-      : playback.shuffleMode === 'shuffle-category-random'
-        ? systemIcons.shuffleCategoryRandom
-        : systemIcons.shuffle
-  const shuffleLabel = playback.shuffleMode === 'shuffle-all'
-    ? appCopy.controls.shuffleOff
-    : playback.shuffleMode === 'shuffle-category-order'
-      ? appCopy.controls.shuffleCategoryOrder
-      : playback.shuffleMode === 'shuffle-category-random'
-        ? appCopy.controls.shuffleCategoryRandom
-        : appCopy.controls.shuffle
-  const RepeatIcon = playback.repeatMode === 'repeat-one'
-    ? systemIcons.repeatOne
-    : playback.repeatMode === 'sequential'
-      ? systemIcons.sequential
-      : playback.repeatMode === 'all-categories-until-stop'
-        ? systemIcons.playAllCategories
-        : systemIcons.repeat
-  const repeatLabel = playback.repeatMode === 'repeat-one'
-    ? appCopy.controls.repeatOne
-    : playback.repeatMode === 'sequential'
-      ? appCopy.controls.sequential
-      : playback.repeatMode === 'all-categories-until-stop'
-        ? appCopy.controls.playAllCategories
-        : appCopy.controls.repeat
+  const progressDisabled = disabled || timeline.durationSeconds <= 0
+  const sliderPosition = timeline.interaction === 'following' && timeline.visualClock
+    ? semanticPosition
+    : timeline.positionSeconds
+
+  const updateVisualProgress = useCallback(() => {
+    if (!timeline.visualClock || timelineInteractionRef.current !== 'following') return
+    const durationSeconds = timelineDurationRef.current
+    const positionSeconds = Math.min(
+      Math.max(timeline.visualClock.getPositionSeconds(), 0),
+      durationSeconds > 0 ? durationSeconds : 0,
+    )
+    const percentage = durationSeconds > 0 ? positionSeconds / durationSeconds * 100 : 0
+    progressSliderRef.current?.style.setProperty('--player-visual-progress', `${percentage}%`)
+    const wholeSecond = Math.floor(positionSeconds)
+    if (wholeSecond === lastVisualSecondRef.current) return
+    lastVisualSecondRef.current = wholeSecond
+    if (progressTimeRef.current) progressTimeRef.current.textContent = formatDuration(positionSeconds)
+  }, [timeline.visualClock])
 
   function readProgressValue(value: number | readonly number[]) {
     return Array.isArray(value) ? (value[0] ?? 0) : value as number
@@ -70,10 +59,7 @@ export function ControlDock({
     if (timeline.interaction === 'seeking') return
     const nextValue = readProgressValue(value)
     previewValueRef.current = nextValue
-
-    if (!pointerPreviewRef.current && !keyboardPreviewRef.current) {
-      timeline.onPreviewStart()
-    }
+    if (!pointerPreviewRef.current && !keyboardPreviewRef.current) timeline.onPreviewStart()
     if (reason === 'drag' || reason === 'track-press') {
       pointerPreviewRef.current = true
       keyboardPreviewRef.current = false
@@ -152,8 +138,42 @@ export function ControlDock({
   }, [timeline.onCancelPreview])
 
   useEffect(() => {
-    const progressSliderElement = progressSliderRef.current
+    let cancelled = false
+    queueMicrotask(() => {
+      if (!cancelled) setSemanticPosition(timeline.positionSeconds)
+    })
+    return () => { cancelled = true }
+  }, [timeline.interaction, timeline.positionSeconds])
 
+  useEffect(() => {
+    const visualClock = timeline.visualClock
+    if (!visualClock || !isPlaying || timeline.interaction !== 'following') return
+    const sampleSemanticPosition = () => {
+      const nextPosition = Math.min(
+        Math.max(visualClock.getPositionSeconds(), 0),
+        timeline.durationSeconds > 0 ? timeline.durationSeconds : 0,
+      )
+      setSemanticPosition((previous) => previous === nextPosition ? previous : nextPosition)
+    }
+    const intervalId = window.setInterval(sampleSemanticPosition, 500)
+    return () => window.clearInterval(intervalId)
+  }, [isPlaying, timeline.durationSeconds, timeline.interaction, timeline.visualClock])
+
+  useEffect(() => {
+    if (!timeline.visualClock) return
+    updateVisualProgress()
+    return timeline.visualClock.subscribe(updateVisualProgress)
+  }, [timeline.visualClock, updateVisualProgress])
+
+  useLayoutEffect(() => {
+    timelineInteractionRef.current = timeline.interaction
+    timelineDurationRef.current = timeline.durationSeconds
+    if (timeline.interaction !== 'following') lastVisualSecondRef.current = Math.floor(timeline.positionSeconds)
+    updateVisualProgress()
+  }, [timeline.durationSeconds, timeline.interaction, timeline.positionSeconds, updateVisualProgress])
+
+  useEffect(() => {
+    const progressSliderElement = progressSliderRef.current
     function clearOwnedPointer(pointerId: number, reason: ProgressPressEndReason) {
       if (pressedPointerIdRef.current !== pointerId) return
       pressEndRef.current = { pointerId, reason }
@@ -164,20 +184,16 @@ export function ControlDock({
         cancelProgressPreviewRef.current()
       }
     }
-
     function handleWindowPointerEnd(event: globalThis.PointerEvent) {
       clearOwnedPointer(event.pointerId, event.type === 'pointercancel' ? 'pointercancel' : 'pointerup')
     }
-
     function handleWindowBlur() {
       const pointerId = pressedPointerIdRef.current
       if (pointerId !== null) clearOwnedPointer(pointerId, 'blur')
     }
-
     window.addEventListener('pointerup', handleWindowPointerEnd)
     window.addEventListener('pointercancel', handleWindowPointerEnd)
     window.addEventListener('blur', handleWindowBlur)
-
     return () => {
       window.removeEventListener('pointerup', handleWindowPointerEnd)
       window.removeEventListener('pointercancel', handleWindowPointerEnd)
@@ -193,42 +209,91 @@ export function ControlDock({
   }, [])
 
   return (
-    <motion.footer
-      layout
-      className="control-dock"
-    >
+    <div className="progress-row control-progress" aria-label={appCopy.progress.label}>
+      <time ref={progressTimeRef} className="control-progress-time control-progress-time-start">{formatDuration(sliderPosition)}</time>
+      <Slider
+        ref={progressSliderRef}
+        className="control-progress-slider"
+        data-visual-clock={timeline.visualClock ? '' : undefined}
+        data-timeline-interaction={timeline.interaction}
+        data-seeking={timeline.interaction === 'seeking' ? '' : undefined}
+        disabled={progressDisabled}
+        getAriaLabel={() => appCopy.progress.label}
+        max={timeline.durationSeconds}
+        min={0}
+        onBlur={handleProgressBlur}
+        onKeyUp={handleProgressKeyUp}
+        onLostPointerCapture={handleProgressLostPointerCapture}
+        onPointerCancel={(event) => finishProgressThumbPress(event, 'pointercancel')}
+        onPointerDown={handleProgressPointerDown}
+        onPointerUp={(event) => finishProgressThumbPress(event, 'pointerup')}
+        onValueChange={(value, eventDetails) => handleProgressChange(value, eventDetails.reason)}
+        onValueCommitted={(value, eventDetails) => {
+          if (eventDetails.reason !== 'keyboard') {
+            const pressedPointerId = pressedPointerIdRef.current
+            if (pressedPointerId !== null) pressEndRef.current = { pointerId: pressedPointerId, reason: 'pointerup' }
+            commitPointerPreview(value)
+          }
+        }}
+        step={0.01}
+        value={sliderPosition}
+      />
+      <time className="control-progress-time control-progress-time-end">{formatDuration(timeline.durationSeconds)}</time>
+    </div>
+  )
+})
+
+export function ControlDock({
+  playback,
+  timeline,
+  volume,
+  queue,
+}: ControlDockProps) {
+  const systemIcons = useSystemIcons()
+  const appearanceMotion = useAppearanceMotion()
+  const disabled = !playback.track
+  const navigationBusy = playback.isAudioBusy
+    || playback.isTransportBusy
+    || timeline.interaction === 'seeking'
+  const commandBusy = navigationBusy || playback.isSelectionPending
+  const ShuffleIcon = playback.shuffleMode === 'shuffle-all'
+    ? systemIcons.shuffleOff
+    : playback.shuffleMode === 'shuffle-category-order'
+      ? systemIcons.shuffleCategoryOrder
+      : playback.shuffleMode === 'shuffle-category-random'
+        ? systemIcons.shuffleCategoryRandom
+        : systemIcons.shuffle
+  const shuffleLabel = playback.shuffleMode === 'shuffle-all'
+    ? appCopy.controls.shuffleOff
+    : playback.shuffleMode === 'shuffle-category-order'
+      ? appCopy.controls.shuffleCategoryOrder
+      : playback.shuffleMode === 'shuffle-category-random'
+        ? appCopy.controls.shuffleCategoryRandom
+        : appCopy.controls.shuffle
+  const RepeatIcon = playback.repeatMode === 'repeat-one'
+    ? systemIcons.repeatOne
+    : playback.repeatMode === 'sequential'
+      ? systemIcons.sequential
+      : playback.repeatMode === 'all-categories-until-stop'
+        ? systemIcons.playAllCategories
+        : systemIcons.repeat
+  const repeatLabel = playback.repeatMode === 'repeat-one'
+    ? appCopy.controls.repeatOne
+    : playback.repeatMode === 'sequential'
+      ? appCopy.controls.sequential
+      : playback.repeatMode === 'all-categories-until-stop'
+        ? appCopy.controls.playAllCategories
+        : appCopy.controls.repeat
+
+  return (
+    <motion.footer className="control-dock">
       <p className="audio-status" aria-live="polite">{playback.statusText}</p>
-      <div className="progress-row control-progress" aria-label={appCopy.progress.label}>
-        <time className="control-progress-time control-progress-time-start">{formatDuration(timeline.positionSeconds)}</time>
-        <Slider
-          ref={progressSliderRef}
-          className="control-progress-slider"
-          data-seeking={timeline.interaction === 'seeking' ? '' : undefined}
-          disabled={progressDisabled}
-          getAriaLabel={() => appCopy.progress.label}
-          max={timeline.durationSeconds}
-          min={0}
-          onBlur={handleProgressBlur}
-          onKeyUp={handleProgressKeyUp}
-          onLostPointerCapture={handleProgressLostPointerCapture}
-          onPointerCancel={(event) => finishProgressThumbPress(event, 'pointercancel')}
-          onPointerDown={handleProgressPointerDown}
-          onPointerUp={(event) => finishProgressThumbPress(event, 'pointerup')}
-          onValueChange={(value, eventDetails) => handleProgressChange(value, eventDetails.reason)}
-          onValueCommitted={(value, eventDetails) => {
-            if (eventDetails.reason !== 'keyboard') {
-              const pressedPointerId = pressedPointerIdRef.current
-              if (pressedPointerId !== null) {
-                pressEndRef.current = { pointerId: pressedPointerId, reason: 'pointerup' }
-              }
-              commitPointerPreview(value)
-            }
-          }}
-          step={0.01}
-          value={timeline.positionSeconds}
-        />
-        <time className="control-progress-time control-progress-time-end">{formatDuration(timeline.durationSeconds)}</time>
-      </div>
+      <ProgressControl
+        key={playback.track?.id ?? 'empty'}
+        timeline={timeline}
+        disabled={commandBusy || disabled}
+        isPlaying={playback.isPlaying}
+      />
       <div className="control-row">
         <div className="control-auxiliary control-auxiliary-start"><IconButton icon={systemIcons.audioWave} label={appCopy.controls.openAudio} disabled={commandBusy} onClick={playback.onOpenAudio} /></div>
         <div className="control-primary">

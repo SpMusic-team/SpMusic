@@ -13,7 +13,9 @@ export type Track = {
   lyrics: DemoLyricLine[]
 }
 
-export type TrackArtwork = Pick<Track, 'id' | 'coverTone' | 'coverImage' | 'coverImageFallback'>
+export type TrackArtwork = Pick<Track, 'id' | 'coverTone' | 'coverImage' | 'coverImageFallback'> & {
+  resourceKey: string
+}
 
 export type DemoLyricLine = {
   id: string

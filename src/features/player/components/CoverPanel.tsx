@@ -1,4 +1,4 @@
-import { useState, type CSSProperties } from 'react'
+import { memo, useState, type CSSProperties } from 'react'
 import { motion } from 'motion/react'
 import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { appCopy } from '@/features/player/model/playerCopy'
@@ -21,13 +21,13 @@ type CoverPanelProps = {
   onDislike: () => void
 }
 
-export function CoverPanel({ track, artwork, coverStyle, likeIcon, dislikeIcon, liked, disliked, onLike, onDislike }: CoverPanelProps) {
+export const CoverPanel = memo(function CoverPanel({ track, artwork, coverStyle, likeIcon, dislikeIcon, liked, disliked, onLike, onDislike }: CoverPanelProps) {
   const systemIcons = useSystemIcons()
   const appearanceMotion = useAppearanceMotion()
   const [coverImageSrc, setCoverImageSrc] = useState(artwork.coverImage)
 
   return (
-    <motion.article layout className="cover-column">
+    <motion.article className="cover-column">
       <motion.div
         className="cover-frame"
         variants={appearanceMotion.variants.track}
@@ -74,4 +74,4 @@ export function CoverPanel({ track, artwork, coverStyle, likeIcon, dislikeIcon, 
       </motion.div>
     </motion.article>
   )
-}
+})

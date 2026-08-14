@@ -6,7 +6,7 @@ status: "active"
 owner_agent: "Documentation Agent"
 version_scope: "project"
 created: "2026-07-08"
-updated: "2026-08-06"
+updated: "2026-08-14"
 source_documents:
   - "docs/requirements.md"
   - "docs/roadmap.md"
@@ -28,6 +28,13 @@ source_documents:
 SpMusic 是一个本地优先的桌面音乐播放器项目，目标是构建轻量、稳定、可维护、体验良好的本地音乐播放与管理工具。项目使用 Tauri + Rust + React + TypeScript + Vite，播放器界面基于 shadcn/ui 与 Tailwind CSS 构建。
 
 项目不提供在线音乐平台、在线曲库搜索、内容推荐或版权音乐服务；核心价值是播放和管理用户自有的本地音频内容。
+
+## 模块架构
+
+![SpMusic 模块架构](docs/architecture/spmusic-architecture.png)
+
+- 交互式架构图（深 / 浅主题切换、缩放、搜索、关系追踪、PNG/SVG 导出）：[spmusic-architecture.html](docs/architecture/spmusic-architecture.html)
+- 图规范文件（Archify JSON）：[spmusic-architecture.json](docs/architecture/spmusic-architecture.json)
 
 ## 当前状态
 

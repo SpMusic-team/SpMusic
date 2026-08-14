@@ -1,4 +1,4 @@
-import type { KeyboardEvent, MouseEvent, RefObject } from 'react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react'
 import { SettingsIcon } from 'lucide-react'
 import { motion } from 'motion/react'
 import { Button } from '@/components/ui/button'
@@ -12,16 +12,20 @@ import {
 } from '@/components/ui/empty'
 import { useAppearanceMotion } from '@/features/appearance/hooks/useAppearance'
 import { appCopy } from '@/features/player/model/playerCopy'
+import { useActiveLyricScroll } from '@/features/player/hooks/useActiveLyricScroll'
+import { locateLyricTimeline } from '@/features/player/model/lyricTimeline'
+import type { PlayerTimelineInteraction } from '@/features/player/model/playerUiViewModel'
 import type { Track } from '@/features/player/model/playerTypes'
+import type { PlayerVisualTimelineClock } from '@/features/player/model/visualTimelineClock'
 import { cn } from '@/lib/utils'
 
 type LyricsPanelProps = {
   track: Track
   detailsPending?: boolean
-  activeLyricId?: string
-  activeLyricIndex: number
-  lyricListRef: RefObject<HTMLOListElement | null>
-  lyricRefs: RefObject<Map<string, HTMLLIElement>>
+  positionSeconds: number
+  interaction: PlayerTimelineInteraction
+  visualClock?: PlayerVisualTimelineClock
+  lyricLayoutKey: string
   tightThresholdSeconds: number
   onLineSelect: (timeSeconds: number) => void
 }
@@ -35,8 +39,76 @@ function lyricPairSpacingForDelta(deltaSeconds: number | null, tightThresholdSec
     : 'normal'
 }
 
-export function LyricsPanel({ track, detailsPending = false, activeLyricId, activeLyricIndex, lyricListRef, lyricRefs, tightThresholdSeconds, onLineSelect }: LyricsPanelProps) {
+export function LyricsPanel({
+  track,
+  detailsPending = false,
+  positionSeconds,
+  interaction,
+  visualClock,
+  lyricLayoutKey,
+  tightThresholdSeconds,
+  onLineSelect,
+}: LyricsPanelProps) {
   const appearanceMotion = useAppearanceMotion()
+  const lyricListRef = useRef<HTMLOListElement>(null)
+  const lyricRefs = useRef(new Map<string, HTMLLIElement>())
+  const semanticTimeline = useMemo(
+    () => locateLyricTimeline(track.lyrics, positionSeconds),
+    [positionSeconds, track.lyrics],
+  )
+  const [followingTimeline, setFollowingTimeline] = useState(() => ({
+    lyrics: track.lyrics,
+    activeIndex: semanticTimeline?.currentIndex ?? -1,
+    positionSeconds: visualClock?.getPositionSeconds() ?? positionSeconds,
+  }))
+  const followingTimelineIdentityRef = useRef({
+    lyrics: track.lyrics,
+    activeIndex: semanticTimeline?.currentIndex ?? -1,
+  })
+  const useFollowingTimeline = Boolean(visualClock)
+    && interaction === 'following'
+    && followingTimeline.lyrics === track.lyrics
+  const activeLyricIndex = useFollowingTimeline
+    ? followingTimeline.activeIndex
+    : semanticTimeline?.currentIndex ?? -1
+  const activePositionSeconds = useFollowingTimeline
+    ? followingTimeline.positionSeconds
+    : positionSeconds
+  const activeLyricId = activeLyricIndex >= 0 ? track.lyrics[activeLyricIndex]?.id : undefined
+
+  useEffect(() => {
+    if (!visualClock) return
+    let disposed = false
+    const updateActiveLyric = () => {
+      if (disposed || interaction !== 'following') return
+      const nextPositionSeconds = visualClock.getPositionSeconds()
+      const nextTimeline = locateLyricTimeline(track.lyrics, nextPositionSeconds)
+      const nextActiveIndex = nextTimeline?.currentIndex ?? -1
+      const previousIdentity = followingTimelineIdentityRef.current
+      if (previousIdentity.lyrics === track.lyrics && previousIdentity.activeIndex === nextActiveIndex) return
+      followingTimelineIdentityRef.current = { lyrics: track.lyrics, activeIndex: nextActiveIndex }
+      setFollowingTimeline({
+        lyrics: track.lyrics,
+        activeIndex: nextActiveIndex,
+        positionSeconds: nextPositionSeconds,
+      })
+    }
+    const unsubscribe = visualClock.subscribe(updateActiveLyric)
+    queueMicrotask(updateActiveLyric)
+    return () => {
+      disposed = true
+      unsubscribe()
+    }
+  }, [interaction, track.lyrics, visualClock])
+
+  useActiveLyricScroll(
+    activePositionSeconds,
+    interaction,
+    track.lyrics,
+    lyricListRef,
+    lyricRefs,
+    lyricLayoutKey,
+  )
 
   function handleLineKeyDown(event: KeyboardEvent<HTMLLIElement>, timeSeconds: number) {
     if (event.key === 'Enter' || event.key === ' ') {

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import { DevAudioToolsAvailability, DevAudioToolsSlot } from '@/features/player/components/DevAudioToolsSlot'
 import { PlayerSurface } from '@/features/player/components/PlayerSurface'
 import { useAudioPlayer } from '@/features/player/hooks/useAudioPlayer'
@@ -7,6 +7,12 @@ import type { DevAudioToolsViewModel, PlayerUiViewModel } from '@/features/playe
 export function PlayerShell() {
   const player = useAudioPlayer()
   const [isDevAudioToolsOpen, setIsDevAudioToolsOpen] = useState(false)
+  const currentTrackId = player.track?.id ?? null
+  const toggleTrackFeedback = player.toggleTrackFeedback
+  const handleFeedbackToggle = useCallback((feedback: Parameters<typeof toggleTrackFeedback>[1]) => {
+    if (currentTrackId) toggleTrackFeedback(currentTrackId, feedback)
+  }, [currentTrackId, toggleTrackFeedback])
+  const handleDevAudioToolsClose = useCallback(() => setIsDevAudioToolsOpen(false), [])
 
   const viewModel: PlayerUiViewModel = {
     playback: {
@@ -32,6 +38,7 @@ export function PlayerShell() {
       positionSeconds: player.progress,
       durationSeconds: player.duration,
       interaction: player.timelineInteraction,
+      visualClock: player.visualTimelineClock,
       onPreviewStart: player.startProgressPreview,
       onPreview: player.setProgress,
       onCommit: player.commitProgress,
@@ -55,9 +62,7 @@ export function PlayerShell() {
     },
     feedback: {
       value: player.currentFeedback,
-      onToggle: (feedback) => {
-        if (player.track) player.toggleTrackFeedback(player.track.id, feedback)
-      },
+      onToggle: handleFeedbackToggle,
     },
   }
 
@@ -93,7 +98,7 @@ export function PlayerShell() {
               <DevAudioToolsSlot
                 viewModel={devAudioToolsViewModel}
                 isOpen={isDevAudioToolsOpen}
-                onClose={() => setIsDevAudioToolsOpen(false)}
+                onClose={handleDevAudioToolsClose}
               />
             ),
           } : undefined}

@@ -23,7 +23,6 @@
   background-repeat: no-repeat;
   background-size: cover;
   transform-origin: center;
-  will-change: opacity, transform;
 }
 
 .player-shell::before,

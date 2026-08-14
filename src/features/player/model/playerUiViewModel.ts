@@ -1,5 +1,6 @@
 import type { RepeatMode, ShuffleMode } from '@/features/player/model/playbackModes'
 import type { Track, TrackArtwork, TrackFeedback } from '@/features/player/model/playerTypes'
+import type { PlayerVisualTimelineClock } from '@/features/player/model/visualTimelineClock'
 
 export type PlayerContentState = 'empty' | 'loading' | 'track' | 'error'
 
@@ -29,6 +30,7 @@ export type PlayerTimelineViewModel = {
   positionSeconds: number
   durationSeconds: number
   interaction: PlayerTimelineInteraction
+  visualClock?: PlayerVisualTimelineClock
   onPreviewStart: () => void
   onPreview: (positionSeconds: number) => void
   onCommit: (positionSeconds: number) => void

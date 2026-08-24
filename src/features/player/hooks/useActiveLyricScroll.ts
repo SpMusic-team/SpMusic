@@ -25,7 +25,6 @@ export function useActiveLyricScroll(
   interaction: PlayerTimelineInteraction,
   lyrics: readonly DemoLyricLine[],
   lyricListRef: RefObject<HTMLOListElement | null>,
-  lyricRefs: RefObject<Map<string, HTMLLIElement>>,
   layoutKey: string,
 ) {
   const lineCentersRef = useRef<number[]>([])
@@ -172,10 +171,24 @@ export function useActiveLyricScroll(
 
     const measureLineCenters = () => {
       const measuredLyrics = latestLyricsRef.current
-      lineCentersRef.current = measuredLyrics.map((line) => {
-        const element = lyricRefs.current.get(line.id)
-        return element ? element.offsetTop + element.offsetHeight / 2 : 0
-      })
+      const children = lyricList.children
+      if (children.length !== measuredLyrics.length) {
+        lineCentersRef.current = []
+        return
+      }
+      const measuredCenters: number[] = []
+      for (let index = 0; index < measuredLyrics.length; index += 1) {
+        const element = children.item(index)
+        if (
+          !(element instanceof HTMLElement)
+          || element.dataset.lyricIndex !== String(index)
+        ) {
+          lineCentersRef.current = []
+          return
+        }
+        measuredCenters.push(element.offsetTop + element.offsetHeight / 2)
+      }
+      lineCentersRef.current = measuredCenters
       const timeline = locateLyricTimeline(measuredLyrics, latestPositionRef.current)
       if (!timeline || lineCentersRef.current.length !== measuredLyrics.length) return
 
@@ -188,17 +201,13 @@ export function useActiveLyricScroll(
     scheduleMeasurement()
     const observer = new ResizeObserver(scheduleMeasurement)
     observer.observe(lyricList)
-    for (const line of currentLyrics) {
-      const element = lyricRefs.current.get(line.id)
-      if (element) observer.observe(element)
-    }
 
     return () => {
       observer.disconnect()
       if (measureAndRecenterRef.current === measureLineCenters) measureAndRecenterRef.current = () => {}
       cancelScrollFrame()
     }
-  }, [cancelScrollFrame, lyricLayoutSignature, lyricListRef, lyricRefs, scheduleMeasurement, targetScrollTop])
+  }, [cancelScrollFrame, lyricLayoutSignature, lyricListRef, scheduleMeasurement, targetScrollTop])
 
   useLayoutEffect(() => {
     scheduleMeasurement()

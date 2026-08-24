@@ -1,4 +1,4 @@
-import type { Track } from './playerTypes'
+import type { TrackSummary } from './playerTypes'
 
 export type Direction = -1 | 1
 export type ShuffleMode = 'none' | 'shuffle-all' | 'shuffle-category-order' | 'shuffle-category-random'
@@ -18,11 +18,11 @@ export const nextRepeatMode: Record<RepeatMode, RepeatMode> = {
   'all-categories-until-stop': 'list-loop',
 }
 
-function getTrackCategory(track: Track) {
+function getTrackCategory(track: TrackSummary) {
   return track.category ?? track.album
 }
 
-function getCategoryOrder(tracks: Track[]) {
+function getCategoryOrder(tracks: readonly TrackSummary[]) {
   return Array.from(new Set(tracks.map(getTrackCategory)))
 }
 
@@ -35,11 +35,11 @@ function randomFromIndexes(indexes: number[], fallback: number, excludedIndex?: 
   return pool[Math.floor(Math.random() * pool.length)]
 }
 
-function resolveShuffleAllIndex(tracks: Track[], currentIndex: number) {
+function resolveShuffleAllIndex(tracks: readonly TrackSummary[], currentIndex: number) {
   return randomFromIndexes(tracks.map((_, index) => index), currentIndex, currentIndex)
 }
 
-function resolveCategoryOrderRandomIndex(tracks: Track[], currentIndex: number, direction: Direction) {
+function resolveCategoryOrderRandomIndex(tracks: readonly TrackSummary[], currentIndex: number, direction: Direction) {
   const current = tracks[currentIndex] ?? tracks[0]
   if (!current) return currentIndex
 
@@ -51,7 +51,7 @@ function resolveCategoryOrderRandomIndex(tracks: Track[], currentIndex: number, 
   return randomFromIndexes(indexes, currentIndex)
 }
 
-function resolveCategoryRandomSequentialIndex(tracks: Track[], currentIndex: number, direction: Direction) {
+function resolveCategoryRandomSequentialIndex(tracks: readonly TrackSummary[], currentIndex: number, direction: Direction) {
   const current = tracks[currentIndex] ?? tracks[0]
   if (!current) return currentIndex
 
@@ -70,7 +70,7 @@ function resolveCategoryRandomSequentialIndex(tracks: Track[], currentIndex: num
   return direction === 1 ? targetIndexes[0] ?? currentIndex : targetIndexes[targetIndexes.length - 1] ?? currentIndex
 }
 
-export function resolveNextTrackIndex(tracks: Track[], currentIndex: number, direction: Direction, mode: ShuffleMode) {
+export function resolveNextTrackIndex(tracks: readonly TrackSummary[], currentIndex: number, direction: Direction, mode: ShuffleMode) {
   if (mode === 'shuffle-all') return resolveShuffleAllIndex(tracks, currentIndex)
   if (mode === 'shuffle-category-order') return resolveCategoryOrderRandomIndex(tracks, currentIndex, direction)
   if (mode === 'shuffle-category-random') return resolveCategoryRandomSequentialIndex(tracks, currentIndex, direction)

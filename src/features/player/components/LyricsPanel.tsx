@@ -51,7 +51,6 @@ export function LyricsPanel({
 }: LyricsPanelProps) {
   const appearanceMotion = useAppearanceMotion()
   const lyricListRef = useRef<HTMLOListElement>(null)
-  const lyricRefs = useRef(new Map<string, HTMLLIElement>())
   const semanticTimeline = useMemo(
     () => locateLyricTimeline(track.lyrics, positionSeconds),
     [positionSeconds, track.lyrics],
@@ -106,20 +105,43 @@ export function LyricsPanel({
     interaction,
     track.lyrics,
     lyricListRef,
-    lyricRefs,
     lyricLayoutKey,
   )
 
-  function handleLineKeyDown(event: KeyboardEvent<HTMLLIElement>, timeSeconds: number) {
-    if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault()
-      onLineSelect(timeSeconds)
-    }
+  function lyricLineFromEventTarget(
+    list: HTMLOListElement,
+    target: EventTarget | null,
+  ): HTMLLIElement | null {
+    const targetElement = target instanceof Element
+      ? target
+      : target instanceof Node
+        ? target.parentElement
+        : null
+    const line = targetElement?.closest('li[data-lyric-index]')
+    return line instanceof HTMLLIElement && list.contains(line) ? line : null
   }
 
-  function handleLineClick(event: MouseEvent<HTMLLIElement>, timeSeconds: number) {
-    onLineSelect(timeSeconds)
-    if (event.detail > 0) event.currentTarget.blur()
+  function lyricForEventTarget(list: HTMLOListElement, target: EventTarget | null) {
+    const line = lyricLineFromEventTarget(list, target)
+    if (!line) return null
+    const index = Number.parseInt(line.dataset.lyricIndex ?? '', 10)
+    const lyric = Number.isInteger(index) ? track.lyrics[index] : undefined
+    return lyric ? { line, lyric } : null
+  }
+
+  function handleListKeyDown(event: KeyboardEvent<HTMLOListElement>) {
+    if (event.key !== 'Enter' && event.key !== ' ') return
+    const target = lyricForEventTarget(event.currentTarget, event.target)
+    if (!target) return
+    event.preventDefault()
+    onLineSelect(target.lyric.timeSeconds)
+  }
+
+  function handleListClick(event: MouseEvent<HTMLOListElement>) {
+    const target = lyricForEventTarget(event.currentTarget, event.target)
+    if (!target) return
+    onLineSelect(target.lyric.timeSeconds)
+    if (event.detail > 0) target.line.blur()
   }
 
   return (
@@ -145,7 +167,7 @@ export function LyricsPanel({
           </EmptyHeader>
         </Empty>
       ) : track.lyrics.length ? (
-        <ol ref={lyricListRef}>
+        <ol ref={lyricListRef} onClick={handleListClick} onKeyDown={handleListKeyDown}>
           {track.lyrics.map((line, index) => {
             const nextLine = track.lyrics[index + 1]
             const pairDeltaSeconds = nextLine ? nextLine.timeSeconds - line.timeSeconds : null
@@ -153,20 +175,15 @@ export function LyricsPanel({
             return (
               <li
                 key={line.id}
-                ref={(node) => {
-                  if (node) lyricRefs.current.set(line.id, node)
-                  else lyricRefs.current.delete(line.id)
-                }}
                 role="button"
                 tabIndex={0}
                 aria-current={line.id === activeLyricId ? 'true' : undefined}
                 data-active={line.id === activeLyricId}
+                data-lyric-index={index}
                 data-line-content={line.translation ? 'bilingual' : 'single'}
                 data-pair-delta-seconds={pairDeltaSeconds ?? undefined}
                 data-pair-spacing={lyricPairSpacingForDelta(pairDeltaSeconds, tightThresholdSeconds)}
                 data-position={index < activeLyricIndex ? 'past' : index === activeLyricIndex ? 'active' : 'future'}
-                onClick={(event) => handleLineClick(event, line.timeSeconds)}
-                onKeyDown={(event) => handleLineKeyDown(event, line.timeSeconds)}
               >
                 <span>{line.original}</span>
                 {line.translation ? <span className="translation-line" lang="zh-CN">{line.translation}</span> : null}

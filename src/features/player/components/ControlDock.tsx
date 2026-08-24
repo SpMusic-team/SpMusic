@@ -256,6 +256,9 @@ export function ControlDock({
     || playback.isTransportBusy
     || timeline.interaction === 'seeking'
   const commandBusy = navigationBusy || playback.isSelectionPending
+  const volumeControlDisabled = commandBusy
+    || disabled
+    || (volume.isDisabled && !volume.isBusy)
   const ShuffleIcon = playback.shuffleMode === 'shuffle-all'
     ? systemIcons.shuffleOff
     : playback.shuffleMode === 'shuffle-category-order'
@@ -332,7 +335,7 @@ export function ControlDock({
           <VolumeControl
             volume={volume.valuePercent}
             busy={volume.isBusy}
-            disabled={volume.isDisabled}
+            disabled={volumeControlDisabled}
             onVolumeChange={volume.onChange}
           />
           <IconButton className="control-optional" icon={systemIcons.queue} label={appCopy.controls.queue} selected={queue.isOpen} onClick={queue.onToggle} />

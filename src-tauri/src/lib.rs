@@ -1,17 +1,20 @@
 mod app_paths;
 mod audio;
+mod webview_memory;
 
 use std::sync::Once;
 
 use app_paths::AppPaths;
 use audio::{
-    AudioCommandError, AudioController, AudioEmbedLyricsInput, AudioFolderPlaylist,
-    AudioFolderPlaylistInput, AudioLoadAndPlayInput, AudioLoadAndPlayResult, AudioLoadFileInput,
-    AudioOpenFileInput, AudioOpenSourceResult, AudioPlayInput, AudioPlaybackState, AudioSeekInput,
-    AudioSetVolumeInput, AudioTrackRef,
+    load_cover_pixels, AudioCommandError, AudioController, AudioEmbedLyricsInput,
+    AudioFolderPlaylist, AudioFolderPlaylistInput, AudioLoadAndPlayInput, AudioLoadAndPlayResult,
+    AudioLoadCoverPixelsInput, AudioLoadFileInput, AudioOpenFileInput, AudioOpenSourceResult,
+    AudioPlayInput, AudioPlaybackState, AudioSeekInput, AudioSetVolumeInput, AudioTrackRef,
+    CoverPixelsError,
 };
-use tauri::{Manager, State};
+use tauri::{ipc::Response, Manager, State};
 use tracing_subscriber::EnvFilter;
+use webview_memory::{WebviewMemoryCoordinator, WebviewMemoryMaintenanceStatus};
 
 #[tauri::command]
 fn audio_open_file(
@@ -226,6 +229,43 @@ fn audio_get_current_track(
     track
 }
 
+#[tauri::command]
+async fn audio_load_cover_pixels(
+    state: State<'_, AppPaths>,
+    input: AudioLoadCoverPixelsInput,
+) -> Result<Response, CoverPixelsError> {
+    tracing::debug!(
+        command = "audio_load_cover_pixels",
+        path = %input.file_path,
+        max_edge = input.max_edge,
+        request_id = input.request_id,
+        "Tauri command invoked",
+    );
+    let app_cache_dir = state.cache_dir.clone();
+    let response = load_cover_pixels(app_cache_dir, input).await?;
+    tracing::debug!(
+        command = "audio_load_cover_pixels",
+        response_byte_len = response.len(),
+        "Tauri command completed",
+    );
+    Ok(Response::new(response))
+}
+
+#[tauri::command]
+fn webview_note_artwork_transition_settled(
+    state: State<'_, WebviewMemoryCoordinator>,
+) -> WebviewMemoryMaintenanceStatus {
+    state.note_artwork_transition_settled()
+}
+
+#[tauri::command]
+fn webview_note_ui_burst_settled(
+    state: State<'_, WebviewMemoryCoordinator>,
+    activity_units: u16,
+) -> WebviewMemoryMaintenanceStatus {
+    state.note_ui_burst_settled(activity_units)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     init_tracing();
@@ -252,6 +292,9 @@ pub fn run() {
             audio_set_volume,
             audio_get_state,
             audio_get_current_track,
+            audio_load_cover_pixels,
+            webview_note_artwork_transition_settled,
+            webview_note_ui_burst_settled,
         ])
         .setup(|app| {
             let app_paths = AppPaths::prepare()?;
@@ -265,6 +308,17 @@ pub fn run() {
             let audio_cache_dir = app_paths.cache_dir.clone();
             app.manage(app_paths);
             app.manage(AudioController::new(app.handle().clone(), audio_cache_dir));
+
+            if let Some(window) = app.get_webview_window("main") {
+                app.manage(WebviewMemoryCoordinator::install(&window));
+            } else {
+                app.manage(WebviewMemoryCoordinator::unsupported());
+                tracing::warn!(
+                    operation = "webview.memory_policy.install",
+                    window = "main",
+                    "main WebView window was not available during setup",
+                );
+            }
 
             if cfg!(debug_assertions) {
                 app.handle().plugin(

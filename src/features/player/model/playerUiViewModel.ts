@@ -1,5 +1,5 @@
 import type { RepeatMode, ShuffleMode } from '@/features/player/model/playbackModes'
-import type { Track, TrackArtwork, TrackFeedback } from '@/features/player/model/playerTypes'
+import type { Track, TrackArtwork, TrackArtworkPrefetchCandidate, TrackFeedback, TrackSummary } from '@/features/player/model/playerTypes'
 import type { PlayerVisualTimelineClock } from '@/features/player/model/visualTimelineClock'
 
 export type PlayerContentState = 'empty' | 'loading' | 'track' | 'error'
@@ -7,6 +7,8 @@ export type PlayerContentState = 'empty' | 'loading' | 'track' | 'error'
 export type PlayerPlaybackViewModel = {
   track: Track | null
   artwork?: TrackArtwork | null
+  artworkPrefetchCandidate?: TrackArtworkPrefetchCandidate | null
+  selectionActivitySequence?: number
   detailsPending?: boolean
   contentState?: PlayerContentState
   isPlaying: boolean
@@ -45,7 +47,7 @@ export type PlayerVolumeViewModel = {
 }
 
 export type PlayerQueueViewModel = {
-  tracks: Track[]
+  tracks: TrackSummary[]
   unavailableTrackIds?: ReadonlySet<string>
   playlistName?: string
   isOpen: boolean

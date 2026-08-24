@@ -1,4 +1,3 @@
-import type { CSSProperties } from 'react'
 import type { LucideIcon } from 'lucide-react'
 import {
   AlbumIcon,
@@ -28,16 +27,16 @@ import { Separator } from '@/components/ui/separator'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { appCopy } from '@/features/player/model/playerCopy'
+import type { ArtworkSourceView } from '@/features/player/hooks/useArtworkVisualResource'
 import type { Track } from '@/features/player/model/playerTypes'
 import { formatDuration } from '@/features/player/model/trackUtils'
 import type { SystemIcon } from '@/icons/systemIcons'
 import { cn } from '@/lib/utils'
-
-type CoverStyle = CSSProperties & { '--cover-art'?: string }
+import { ArtworkCanvas } from './ArtworkCanvas'
 
 type MoreActionsMenuProps = {
   track: Track
-  coverStyle?: CoverStyle
+  coverSource?: ArtworkSourceView
   likeIcon: SystemIcon
   dislikeIcon: SystemIcon
   liked: boolean
@@ -71,7 +70,7 @@ function UnavailableAction({ icon: Icon, label, wide = false }: UnavailableActio
 
 export function MoreActionsMenu({
   track,
-  coverStyle,
+  coverSource,
   likeIcon: LikeIcon,
   dislikeIcon: DislikeIcon,
   liked,
@@ -110,9 +109,9 @@ export function MoreActionsMenu({
 
         <section className="more-track-group" aria-label={appCopy.moreMenu.title}>
           <div className="more-track-summary">
-            <div className="more-menu-cover" data-tone={track.coverTone} style={coverStyle}>
-              {track.coverImage
-                ? <img src={track.coverImage} alt={`${track.title} 演示封面`} />
+            <div className="more-menu-cover" data-tone={track.coverTone}>
+              {coverSource
+                ? <ArtworkCanvas source={coverSource} label={`${track.title} 演示封面`} />
                 : <systemIcons.music aria-hidden="true" />}
             </div>
             <div className="more-track-details">

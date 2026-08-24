@@ -21,7 +21,7 @@ tauri-build = { version = "2.6.3", features = [] }
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
-tauri = { version = "2.11.3", features = ["protocol-asset"] }
+tauri = { version = "=2.11.5", features = ["protocol-asset"] }
 tauri-plugin-log = "2"
 rodio = { version = "0.19.0", default-features = false, features = [
   "symphonia-aac",
@@ -56,6 +56,13 @@ symphonia-adapter-libopus = { version = "0.2.0", features = ["bundled"] }
 matroska-demuxer = { path = "vendor/matroska-demuxer", version = "=0.8.0" }
 blake3 = "1.8.5"
 base64 = "0.22.1"
+image = { version = "0.25.10", default-features = false, features = [
+  "bmp",
+  "gif",
+  "jpeg",
+  "png",
+  "webp",
+] }
 windows = { version = "0.54.0", features = [
   "implement",
   "Win32_Foundation",
@@ -63,3 +70,7 @@ windows = { version = "0.54.0", features = [
   "Win32_System_Com",
   "Win32_UI_Shell_PropertiesSystem",
 ] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+webview2-com = "=0.38.2"
+windows-core-061 = { package = "windows-core", version = "=0.61.2" }

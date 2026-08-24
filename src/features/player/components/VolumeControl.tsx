@@ -11,6 +11,8 @@ type VolumeControlProps = {
   onVolumeChange: (volume: number) => void
 }
 
+const VOLUME_WHEEL_STEP = 1
+
 export function VolumeControl({
   volume,
   disabled = false,
@@ -20,6 +22,10 @@ export function VolumeControl({
   const systemIcons = useSystemIcons()
   const panelId = useId()
   const controlRef = useRef<HTMLDivElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
+  const latestVolumeRef = useRef(volume)
+  const disabledRef = useRef(disabled)
+  const onVolumeChangeRef = useRef(onVolumeChange)
   const [open, setOpen] = useState(false)
   const panelOpen = open && !disabled
   const muted = volume === 0
@@ -34,6 +40,12 @@ export function VolumeControl({
     if (disabled) return
     setOpen((value) => !value)
   }
+
+  useEffect(() => {
+    latestVolumeRef.current = volume
+    disabledRef.current = disabled
+    onVolumeChangeRef.current = onVolumeChange
+  }, [disabled, onVolumeChange, volume])
 
   useEffect(() => {
     if (!panelOpen) return undefined
@@ -56,6 +68,36 @@ export function VolumeControl({
     }
   }, [panelOpen])
 
+  useEffect(() => {
+    const panel = panelRef.current
+    if (!panel) return
+
+    function handleWheel(event: globalThis.WheelEvent) {
+      if (disabledRef.current) return
+      const delta = Math.abs(event.deltaY) >= Math.abs(event.deltaX)
+        ? event.deltaY
+        : event.deltaX
+      if (!Number.isFinite(delta) || delta === 0) return
+
+      // Keep wheel input owned by the open volume surface, including at 0/100,
+      // so a boundary gesture cannot scroll an underlying player surface.
+      event.preventDefault()
+      const currentVolume = Number.isFinite(latestVolumeRef.current)
+        ? Math.min(100, Math.max(0, Math.round(latestVolumeRef.current)))
+        : 0
+      const nextVolume = Math.min(
+        100,
+        Math.max(0, currentVolume + (delta < 0 ? VOLUME_WHEEL_STEP : -VOLUME_WHEEL_STEP)),
+      )
+      if (nextVolume === currentVolume) return
+      latestVolumeRef.current = nextVolume
+      onVolumeChangeRef.current(nextVolume)
+    }
+
+    panel.addEventListener('wheel', handleWheel, { passive: false })
+    return () => panel.removeEventListener('wheel', handleWheel)
+  }, [])
+
   return (
     <div className="volume-control" data-muted={muted} data-open={panelOpen} ref={controlRef}>
       <IconButton
@@ -68,6 +110,7 @@ export function VolumeControl({
         onClick={togglePanel}
       />
       <div
+        ref={panelRef}
         className="volume-panel"
         id={panelId}
         role="group"

@@ -18,6 +18,8 @@ export function PlayerShell() {
     playback: {
       track: player.track,
       artwork: player.artwork,
+      artworkPrefetchCandidate: player.artworkPrefetchCandidate,
+      selectionActivitySequence: player.selectionActivitySequence,
       detailsPending: player.detailsPending,
       contentState: player.contentState,
       isPlaying: player.playing,

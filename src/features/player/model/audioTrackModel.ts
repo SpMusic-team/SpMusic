@@ -134,6 +134,7 @@ export function audioTrackToTrack(track: AudioTrackRef): Track {
     category: 'local-audio',
     durationSeconds,
     coverTone: 'blue',
+    coverFilePath: track.metadata.coverArt?.filePath ?? undefined,
     coverImage: audioCoverArtUrl(track.metadata.coverArt),
     coverImageFallback: audioCoverArtFallbackUrl(track.metadata.coverArt),
     lyrics: metadataLyricsToLines(track, durationSeconds),
@@ -163,6 +164,7 @@ export function trackPresentationEqual(left: Track, right: Track): boolean {
     && left.category === right.category
     && left.durationSeconds === right.durationSeconds
     && left.coverTone === right.coverTone
+    && left.coverFilePath === right.coverFilePath
     && left.coverImage === right.coverImage
     && left.coverImageFallback === right.coverImageFallback
     && lyricLinesEqual(left.lyrics, right.lyrics)

@@ -1,6 +1,7 @@
 mod chapters;
 mod controller;
 mod cover_cache;
+mod cover_pixels;
 mod cue;
 mod device;
 mod duration;
@@ -21,6 +22,7 @@ mod types;
 mod source_tests;
 
 pub use controller::AudioController;
+pub use cover_pixels::{load_cover_pixels, AudioLoadCoverPixelsInput, CoverPixelsError};
 pub use error::AudioCommandError;
 pub use types::{
     AudioEmbedLyricsInput, AudioFolderPlaylist, AudioFolderPlaylistInput, AudioLoadAndPlayInput,

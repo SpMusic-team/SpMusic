@@ -56,6 +56,28 @@ export type AudioCoverArt = {
   byteLen: number
 }
 
+export type AudioLoadCoverPixelsInput = {
+  filePath: string
+  maxEdge: 1024 | 1536 | 2048 | 3072
+  requestId: number
+}
+
+export type AudioCoverPixels = {
+  width: number
+  height: number
+  stride: number
+  flags: number
+  sourceWidth: number
+  sourceHeight: number
+  pixels: Uint8ClampedArray<ArrayBuffer>
+}
+
+export type AudioCoverPixelsError = {
+  code: string
+  message: string
+  recoverable: boolean
+}
+
 export type AudioCommandError = {
   code: AudioErrorCode
   message: string
@@ -158,6 +180,95 @@ export async function hydrateAudioTrack(path: string): Promise<AudioTrackRef> {
 
 export async function embedAudioLyrics(input: AudioEmbedLyricsInput): Promise<AudioTrackRef> {
   return invoke<AudioTrackRef>('audio_embed_lyrics', { input })
+}
+
+const COVER_PIXELS_HEADER_LENGTH = 40
+const COVER_PIXELS_MAX_SOURCE_EDGE = 16_384
+const COVER_PIXELS_RGBA8 = 1
+const COVER_PIXELS_KNOWN_FLAGS = 0b11
+
+function coverPixelBytes(response: ArrayBuffer | Uint8Array): Uint8Array {
+  if (response instanceof Uint8Array) return response
+  if (response instanceof ArrayBuffer) return new Uint8Array(response)
+  throw new Error('Cover pixel response is not binary data')
+}
+
+function parseCoverPixels(
+  response: ArrayBuffer | Uint8Array,
+  maxEdge: AudioLoadCoverPixelsInput['maxEdge'],
+): AudioCoverPixels {
+  const bytes = coverPixelBytes(response)
+  if (bytes.byteLength < COVER_PIXELS_HEADER_LENGTH) throw new Error('Cover pixel response header is truncated')
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  if (
+    view.getUint8(0) !== 0x53
+    || view.getUint8(1) !== 0x50
+    || view.getUint8(2) !== 0x58
+    || view.getUint8(3) !== 0x52
+  ) throw new Error('Cover pixel response magic is invalid')
+  if (view.getUint16(4, true) !== 1 || view.getUint16(6, true) !== COVER_PIXELS_HEADER_LENGTH) {
+    throw new Error('Cover pixel response version is unsupported')
+  }
+
+  const width = view.getUint32(8, true)
+  const height = view.getUint32(12, true)
+  const stride = view.getUint32(16, true)
+  const pixelFormat = view.getUint32(20, true)
+  const pixelLen = view.getUint32(24, true)
+  const flags = view.getUint32(28, true)
+  const sourceWidth = view.getUint32(32, true)
+  const sourceHeight = view.getUint32(36, true)
+  const expectedStride = width * 4
+  const expectedPixelLen = expectedStride * height
+  if (
+    width === 0
+    || height === 0
+    || width > maxEdge
+    || height > maxEdge
+    || sourceWidth === 0
+    || sourceHeight === 0
+    || sourceWidth > COVER_PIXELS_MAX_SOURCE_EDGE
+    || sourceHeight > COVER_PIXELS_MAX_SOURCE_EDGE
+    || !Number.isSafeInteger(expectedStride)
+    || !Number.isSafeInteger(expectedPixelLen)
+    || stride !== expectedStride
+    || pixelFormat !== COVER_PIXELS_RGBA8
+    || pixelLen !== expectedPixelLen
+    || flags !== (flags & COVER_PIXELS_KNOWN_FLAGS)
+    || bytes.byteLength !== COVER_PIXELS_HEADER_LENGTH + pixelLen
+  ) throw new Error('Cover pixel response metadata is inconsistent')
+  if (!(bytes.buffer instanceof ArrayBuffer)) throw new Error('Cover pixel response buffer is unsupported')
+
+  return {
+    width,
+    height,
+    stride,
+    flags,
+    sourceWidth,
+    sourceHeight,
+    pixels: new Uint8ClampedArray(bytes.buffer, bytes.byteOffset + COVER_PIXELS_HEADER_LENGTH, pixelLen),
+  }
+}
+
+export async function loadAudioCoverPixels(input: AudioLoadCoverPixelsInput): Promise<AudioCoverPixels> {
+  const response = await invoke<ArrayBuffer | Uint8Array>('audio_load_cover_pixels', { input })
+  return parseCoverPixels(response, input.maxEdge)
+}
+
+export type WebviewUiBurstSettledInput = {
+  activityUnits: number
+}
+
+export async function noteWebviewUiBurstSettled(
+  input: WebviewUiBurstSettledInput,
+): Promise<void> {
+  return invoke<void>('webview_note_ui_burst_settled', input)
+}
+
+export function isAudioCoverPixelsError(error: unknown): error is AudioCoverPixelsError {
+  if (!error || typeof error !== 'object') return false
+  const candidate = error as Partial<AudioCoverPixelsError>
+  return typeof candidate.code === 'string' && typeof candidate.message === 'string'
 }
 
 export function audioCoverArtUrl(coverArt: AudioCoverArt | null): string | undefined {

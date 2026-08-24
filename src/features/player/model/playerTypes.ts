@@ -8,14 +8,23 @@ export type Track = {
   category?: string
   durationSeconds: number
   coverTone: CoverTone
+  coverFilePath?: string
   coverImage?: string
   coverImageFallback?: string
   lyrics: DemoLyricLine[]
 }
 
-export type TrackArtwork = Pick<Track, 'id' | 'coverTone' | 'coverImage' | 'coverImageFallback'> & {
+export type TrackSummary = Pick<Track, 'id' | 'title' | 'artist' | 'album' | 'category'>
+
+export type TrackArtwork = Pick<Track, 'id' | 'coverTone' | 'coverFilePath' | 'coverImage' | 'coverImageFallback'> & {
   resourceKey: string
 }
+
+export type TrackArtworkPrefetchCandidate = Readonly<{
+  afterTrackId: string
+  track: Track
+  artwork: TrackArtwork
+}>
 
 export type DemoLyricLine = {
   id: string

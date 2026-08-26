@@ -24,7 +24,7 @@
 .responsive-player-layout[data-player-layout="full"] .playback-info-button {
   box-sizing: border-box;
   width: fit-content;
-  max-width: min(400px, 100%);
+  max-width: min(332px, 100%);
   height: 40px;
   min-width: 0;
   padding: 0 20px;
@@ -66,6 +66,7 @@
 }
 
 .playback-info-button-text {
+  max-width: 248px;
   min-width: 0;
   overflow: hidden;
   font-size: 14px;

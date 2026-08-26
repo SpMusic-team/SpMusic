@@ -90,6 +90,51 @@
   height: calc(72 * var(--player-layout-unit));
 }
 
+/* Full-layout cover actions are fixed-size controls anchored to the artwork.
+   Only the flexible space between both action groups changes with the cover. */
+.responsive-player-layout[data-player-layout="full"] .cover-actions {
+  position: absolute;
+  z-index: 3;
+  left: 12px;
+  right: 12px;
+  bottom: 24px;
+  height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.responsive-player-layout[data-player-layout="full"] .cover-feedback {
+  position: static;
+  width: 236px;
+  height: 72px;
+  flex: 0 0 236px;
+  gap: 24px;
+}
+
+.responsive-player-layout[data-player-layout="full"] .cover-feedback button {
+  width: 106px;
+  height: 72px;
+  flex: 0 0 106px;
+}
+
+.responsive-player-layout[data-player-layout="full"] .cover-art .player-control-icon-frame {
+  width: 48px;
+  height: 48px;
+}
+
+.responsive-player-layout[data-player-layout="full"] .cover-actions .more-button {
+  position: static;
+  width: 72px;
+  height: 68px;
+  flex: 0 0 72px;
+}
+
+.responsive-player-layout[data-player-layout="full"] .cover-actions .more-button > svg {
+  width: 48px;
+  height: 48px;
+}
+
 .responsive-player-layout .track-pills {
   grid-area: meta;
   position: relative;

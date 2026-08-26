@@ -25,6 +25,7 @@
 .cover-mark strong { font-size: calc(62 * var(--prototype-unit)); letter-spacing: -.06em; }
 .cover-mark span { font-size: calc(12 * var(--prototype-unit)); font-weight: 700; letter-spacing: .22em; }
 
+.cover-actions { display: contents; }
 .cover-feedback { position: absolute; z-index: 3; left: calc(11 * var(--prototype-unit)); bottom: calc(23 * var(--prototype-unit)); display: flex; gap: calc(9 * var(--prototype-unit)); }
 .cover-art button { min-width: 0; padding: 0; border-radius: 999px; background: var(--player-blue-soft); color: var(--player-blue-ink); box-shadow: 0 calc(4 * var(--prototype-unit)) calc(4 * var(--prototype-unit)) rgba(0,0,0,.25); }
 .cover-art button svg { width: 100%; height: 100%; }

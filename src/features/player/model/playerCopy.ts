@@ -27,7 +27,7 @@ export const appCopy = {
     repeat: '列表循环',
     repeatOne: '单曲循环',
     sequential: '顺序播放',
-    playAllCategories: '播放所有分类直到停止',
+    playAllCategories: '播放当前分类并停止',
     captions: '桌面字幕',
     captionsUnavailable: '桌面字幕暂未接入',
     volume: '音量',

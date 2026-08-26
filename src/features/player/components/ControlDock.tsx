@@ -1,11 +1,19 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type FocusEvent, type KeyboardEvent, type PointerEvent } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Slider } from '@/components/ui/slider'
 import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { appCopy } from '@/features/player/model/playerCopy'
+import {
+  nextRepeatMode,
+  nextShuffleMode,
+  type RepeatMode,
+  type ShuffleMode,
+} from '@/features/player/model/playbackModes'
 import type { PlayerTimelineViewModel, PlayerUiViewModel } from '@/features/player/model/playerUiViewModel'
 import { formatDuration } from '@/features/player/model/trackUtils'
+import type { SystemIcon } from '@/icons/systemIcons'
 import { IconButton } from './IconButton'
 import { VolumeControl } from './VolumeControl'
 
@@ -16,6 +24,32 @@ type ProgressControlProps = {
   timeline: PlayerTimelineViewModel
   disabled: boolean
   isPlaying: boolean
+}
+
+type PlaybackModePresentation = {
+  icon: SystemIcon
+  label: string
+  pressed: boolean
+}
+
+const playbackModeToastId = 'player-playback-mode'
+
+function showPlaybackModeToast({ icon: ModeIcon, label }: PlaybackModePresentation) {
+  toast.custom(
+    () => (
+      <div className="playback-mode-toast">
+        <ModeIcon aria-hidden="true" />
+        <span>{label}</span>
+      </div>
+    ),
+    {
+      id: playbackModeToastId,
+      className: 'playback-mode-toast-shell',
+      duration: 2500,
+      position: 'top-center',
+      unstyled: true,
+    },
+  )
 }
 
 const ProgressControl = memo(function ProgressControl({ timeline, disabled, isPlaying }: ProgressControlProps) {
@@ -259,34 +293,32 @@ export function ControlDock({
   const volumeControlDisabled = commandBusy
     || disabled
     || (volume.isDisabled && !volume.isBusy)
-  const ShuffleIcon = playback.shuffleMode === 'shuffle-all'
-    ? systemIcons.shuffleOff
-    : playback.shuffleMode === 'shuffle-category-order'
-      ? systemIcons.shuffleCategoryOrder
-      : playback.shuffleMode === 'shuffle-category-random'
-        ? systemIcons.shuffleCategoryRandom
-        : systemIcons.shuffle
-  const shuffleLabel = playback.shuffleMode === 'shuffle-all'
-    ? appCopy.controls.shuffleOff
-    : playback.shuffleMode === 'shuffle-category-order'
-      ? appCopy.controls.shuffleCategoryOrder
-      : playback.shuffleMode === 'shuffle-category-random'
-        ? appCopy.controls.shuffleCategoryRandom
-        : appCopy.controls.shuffle
-  const RepeatIcon = playback.repeatMode === 'repeat-one'
-    ? systemIcons.repeatOne
-    : playback.repeatMode === 'sequential'
-      ? systemIcons.sequential
-      : playback.repeatMode === 'all-categories-until-stop'
-        ? systemIcons.playAllCategories
-        : systemIcons.repeat
-  const repeatLabel = playback.repeatMode === 'repeat-one'
-    ? appCopy.controls.repeatOne
-    : playback.repeatMode === 'sequential'
-      ? appCopy.controls.sequential
-      : playback.repeatMode === 'all-categories-until-stop'
-        ? appCopy.controls.playAllCategories
-        : appCopy.controls.repeat
+  const shuffleModePresentations: Record<ShuffleMode, PlaybackModePresentation> = {
+    none: { icon: systemIcons.shuffleOff, label: appCopy.controls.shuffleOff, pressed: false },
+    'shuffle-all': { icon: systemIcons.shuffle, label: appCopy.controls.shuffle, pressed: true },
+    'shuffle-category-order': { icon: systemIcons.shuffleCategoryOrder, label: appCopy.controls.shuffleCategoryOrder, pressed: true },
+    'shuffle-category-random': { icon: systemIcons.shuffleCategoryRandom, label: appCopy.controls.shuffleCategoryRandom, pressed: true },
+  }
+  const repeatModePresentations: Record<RepeatMode, PlaybackModePresentation> = {
+    'list-loop': { icon: systemIcons.repeat, label: appCopy.controls.repeat, pressed: false },
+    'repeat-one': { icon: systemIcons.repeatOne, label: appCopy.controls.repeatOne, pressed: true },
+    sequential: { icon: systemIcons.sequential, label: appCopy.controls.sequential, pressed: true },
+    'all-categories-until-stop': { icon: systemIcons.playAllCategories, label: appCopy.controls.playAllCategories, pressed: true },
+  }
+  const shufflePresentation = shuffleModePresentations[playback.shuffleMode]
+  const repeatPresentation = repeatModePresentations[playback.repeatMode]
+
+  function handleShuffleCycle() {
+    const nextMode = nextShuffleMode[playback.shuffleMode]
+    playback.onShuffleCycle()
+    showPlaybackModeToast(shuffleModePresentations[nextMode])
+  }
+
+  function handleRepeatCycle() {
+    const nextMode = nextRepeatMode[playback.repeatMode]
+    playback.onRepeatCycle()
+    showPlaybackModeToast(repeatModePresentations[nextMode])
+  }
 
   return (
     <motion.footer className="control-dock">
@@ -300,7 +332,7 @@ export function ControlDock({
       <div className="control-row">
         <div className="control-auxiliary control-auxiliary-start"><IconButton icon={systemIcons.audioWave} label={appCopy.controls.openAudio} disabled={commandBusy} onClick={playback.onOpenAudio} /></div>
         <div className="control-primary">
-          <IconButton className="control-optional" icon={ShuffleIcon} label={shuffleLabel} selected={playback.shuffleMode !== 'none'} disabled={disabled} onClick={playback.onShuffleCycle} />
+          <IconButton className="control-optional" icon={shufflePresentation.icon} label={shufflePresentation.label} selected={shufflePresentation.pressed} disabled={disabled} onClick={handleShuffleCycle} />
           <IconButton className="previous-button" icon={systemIcons.previous} label={appCopy.controls.previous} disabled={disabled || navigationBusy} onClick={playback.onPrevious} />
           <Button className="play-button" aria-busy={playback.isTransportBusy || playback.isSelectionPending} aria-label={playback.isPlaying ? appCopy.controls.pause : appCopy.controls.play} aria-pressed={playback.isPlaying} disabled={commandBusy || disabled} size="icon-lg" onClick={playback.onPlayToggle}>
             <span className="player-control-icon-swap">
@@ -320,7 +352,7 @@ export function ControlDock({
             </span>
           </Button>
           <IconButton className="next-button" icon={systemIcons.next} label={appCopy.controls.next} disabled={disabled || navigationBusy} onClick={playback.onNext} />
-          <IconButton className="control-optional" icon={RepeatIcon} label={repeatLabel} selected={playback.repeatMode !== 'list-loop'} disabled={disabled} onClick={playback.onRepeatCycle} />
+          <IconButton className="control-optional" icon={repeatPresentation.icon} label={repeatPresentation.label} selected={repeatPresentation.pressed} disabled={disabled} onClick={handleRepeatCycle} />
         </div>
         <div className="control-auxiliary control-auxiliary-end">
           <IconButton

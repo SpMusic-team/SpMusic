@@ -7,6 +7,7 @@ import { CoverPanel } from '@/features/player/components/CoverPanel'
 import { ControlDock } from '@/features/player/components/ControlDock'
 import { EmptyPlayerState } from '@/features/player/components/EmptyPlayerState'
 import { LyricsPanel } from '@/features/player/components/LyricsPanel'
+import { PlaybackInfoButton } from '@/features/player/components/PlaybackInfoButton'
 import { QueuePanel } from '@/features/player/components/QueuePanel'
 import { ResponsivePlayerLayout } from '@/features/player/components/ResponsivePlayerLayout'
 import { TrackMeta } from '@/features/player/components/TrackMeta'
@@ -235,12 +236,15 @@ export function PlayerSurface({
               </>
             ) : <EmptyPlayerState state={contentState === 'track' ? 'empty' : contentState} statusText={playback.statusText} />}
 
-            <ControlDock
-              playback={playback}
-              timeline={timeline}
-              volume={volume}
-              queue={queue}
-            />
+            <div className="player-control-region">
+              <PlaybackInfoButton visible={Boolean(track)} />
+              <ControlDock
+                playback={playback}
+                timeline={timeline}
+                volume={volume}
+                queue={queue}
+              />
+            </div>
           </section>
         </ResponsivePlayerLayout>
       </main>

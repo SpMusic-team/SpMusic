@@ -15,7 +15,10 @@
 }
 
 .responsive-player-layout .player-stage {
-  --full-cover-size: calc(100svh - 459 * var(--player-layout-unit));
+  --full-cover-size: min(
+    calc(100svh - 459 * var(--player-layout-unit)),
+    calc(100svh - 185 * var(--player-layout-unit) - 266px)
+  );
   position: absolute;
   inset:
     calc(126 * var(--player-layout-unit))
@@ -31,8 +34,8 @@
     calc(145 * var(--player-layout-unit))
     calc(9 * var(--player-layout-unit))
     minmax(0, 1fr)
-    calc(94 * var(--player-layout-unit))
-    calc(180 * var(--player-layout-unit));
+    36px
+    230px;
   grid-template-areas:
     "cover meta"
     "cover ."
@@ -41,6 +44,22 @@
     "dock dock";
   gap: 0;
   transform: none;
+}
+
+.responsive-player-layout .player-control-region {
+  display: contents;
+}
+
+.responsive-player-layout[data-player-layout="full"] .player-control-region {
+  grid-area: dock;
+  box-sizing: border-box;
+  width: 100%;
+  height: 230px;
+  min-height: 230px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
 }
 
 .responsive-player-layout .cover-column {
@@ -234,6 +253,9 @@
 
 .responsive-player-layout[data-player-layout="full"] .control-dock {
   width: calc(100vw - 338 * var(--player-layout-unit));
+  flex: 0 0 auto;
+  align-self: center;
+  justify-self: auto;
 }
 
 .responsive-player-layout[data-player-layout="full"] .control-progress-slider {

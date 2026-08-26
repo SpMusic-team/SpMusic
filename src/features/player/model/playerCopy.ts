@@ -86,6 +86,10 @@ export const appCopy = {
     elapsed: '已播放',
     total: '总时长',
   },
+  playbackInfo: {
+    label: '播放输出信息（演示数据）',
+    output: 'OPENSL ES OUTPUT 16 BIT 48 KHZ',
+  },
   audio: {
     statusLabel: '真实播放状态',
     idle: '真实音频后端空闲',

@@ -1,6 +1,6 @@
 import '@/features/player/styles/player.css'
-import { memo, useCallback, useEffect, useState, type ReactNode } from 'react'
-import { AnimatePresence, motion } from 'motion/react'
+import { memo, useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useAppearance, useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { CoverPanel } from '@/features/player/components/CoverPanel'
@@ -32,6 +32,20 @@ export type PlayerSurfaceProps = {
   viewModel: PlayerUiViewModel
   devAudioTools?: PlayerSurfaceDevAudioTools
 }
+
+type PlaybackVisualState = 'playing' | 'paused'
+
+type PlaybackTransitionRequest = {
+  source: PlaybackVisualState
+  target: PlaybackVisualState
+  trackId: string
+}
+
+type PlaybackTransitionStyle = CSSProperties & {
+  '--player-playback-transition-duration': string
+}
+
+const PLAYBACK_VISUAL_TRANSITION_MS = 500
 
 type AmbientArtworkProps = {
   layer: ArtworkVisualLayer | null
@@ -131,6 +145,7 @@ export function PlayerSurface({
   const { track } = playback
   const {
     slots: artworkSlots,
+    currentArtworkReady,
     markReady: markArtworkReady,
     markLoadError: markArtworkLoadError,
     markExitComplete: markArtworkExitComplete,
@@ -154,13 +169,166 @@ export function PlayerSurface({
     ?? artworkSlots.find((layer) => layer?.phase === 'exiting')
   const contentState = playback.contentState ?? (track ? 'track' : 'empty')
   const { appearance } = useAppearance()
+  const appearanceMotion = useAppearanceMotion()
+  const reduceMotion = useReducedMotion()
   const [nativeWindowState, setNativeWindowState] = useState<WindowLayoutState>({ maximized: false, fullscreen: false })
+  const realPlaybackState: PlaybackVisualState = playback.isPlaying ? 'playing' : 'paused'
+  const [pendingVisualPlaybackState, setPendingVisualPlaybackState] = useState<PlaybackVisualState | null>(null)
+  const visualPlaybackState = pendingVisualPlaybackState ?? realPlaybackState
+  const [playbackTransitionPending, setPlaybackTransitionPending] = useState(false)
+  const playerStageRef = useRef<HTMLElement>(null)
+  const playbackTransitionRequestRef = useRef<PlaybackTransitionRequest | null>(null)
+  const playbackTransitionTimerRef = useRef<number | null>(null)
+  const latestPlaybackContextRef = useRef({
+    trackId: track?.id ?? null,
+    state: realPlaybackState,
+    busy: playback.isAudioBusy || playback.isSelectionPending || playback.isTransportBusy,
+    seeking: timeline.interaction === 'seeking',
+    artworkReady: currentArtworkReady,
+    onPlayToggle: playback.onPlayToggle,
+  })
+  const playbackTransitionDuration = appearanceMotion.disabled || reduceMotion
+    ? 0
+    : PLAYBACK_VISUAL_TRANSITION_MS
+  const playbackTransitionStyle: PlaybackTransitionStyle = {
+    '--player-playback-transition-duration': `${playbackTransitionDuration}ms`,
+  }
   const lyricLayoutKey = [
     appearance.player.lyricsFontScale,
     appearance.player.lyricsTightSpacing,
     appearance.player.lyricsNormalSpacing,
     appearance.player.lyricsTightThresholdSeconds,
   ].join(':')
+
+  const clearPlaybackTransitionTimer = useCallback(() => {
+    if (playbackTransitionTimerRef.current === null) return
+    window.clearTimeout(playbackTransitionTimerRef.current)
+    playbackTransitionTimerRef.current = null
+  }, [])
+
+  const cancelPlaybackTransition = useCallback(() => {
+    clearPlaybackTransitionTimer()
+    playbackTransitionRequestRef.current = null
+    setPlaybackTransitionPending(false)
+    setPendingVisualPlaybackState(null)
+  }, [clearPlaybackTransitionTimer])
+
+  const handlePlayToggle = useCallback(() => {
+    if (playbackTransitionRequestRef.current) return
+    const trackId = track?.id
+    const busy = playback.isAudioBusy || playback.isSelectionPending || playback.isTransportBusy
+    if (!trackId || busy || timeline.interaction === 'seeking' || !currentArtworkReady) return
+
+    const target = realPlaybackState === 'playing' ? 'paused' : 'playing'
+    playbackTransitionRequestRef.current = {
+      source: realPlaybackState,
+      target,
+      trackId,
+    }
+    setPlaybackTransitionPending(true)
+    setPendingVisualPlaybackState(target)
+  }, [
+    playback.isAudioBusy,
+    playback.isSelectionPending,
+    playback.isTransportBusy,
+    currentArtworkReady,
+    realPlaybackState,
+    timeline.interaction,
+    track?.id,
+  ])
+
+  useEffect(() => {
+    latestPlaybackContextRef.current = {
+      trackId: track?.id ?? null,
+      state: realPlaybackState,
+      busy: playback.isAudioBusy || playback.isSelectionPending || playback.isTransportBusy,
+      seeking: timeline.interaction === 'seeking',
+      artworkReady: currentArtworkReady,
+      onPlayToggle: playback.onPlayToggle,
+    }
+  }, [
+    playback.isAudioBusy,
+    playback.isSelectionPending,
+    playback.isTransportBusy,
+    playback.onPlayToggle,
+    currentArtworkReady,
+    realPlaybackState,
+    timeline.interaction,
+    track?.id,
+  ])
+
+  useEffect(() => {
+    const request = playbackTransitionRequestRef.current
+    if (!playbackTransitionPending || !request || visualPlaybackState !== request.target) return
+
+    const layout = playerStageRef.current
+      ?.closest<HTMLElement>('.responsive-player-layout')
+      ?.dataset.playerLayout
+    const delay = layout === 'full' ? playbackTransitionDuration : 0
+
+    playbackTransitionTimerRef.current = window.setTimeout(() => {
+      playbackTransitionTimerRef.current = null
+      const activeRequest = playbackTransitionRequestRef.current
+      const context = latestPlaybackContextRef.current
+      if (
+        !activeRequest
+        || context.trackId !== activeRequest.trackId
+        || context.state !== activeRequest.source
+        || context.busy
+        || context.seeking
+        || !context.artworkReady
+      ) {
+        cancelPlaybackTransition()
+        return
+      }
+
+      playbackTransitionRequestRef.current = null
+      setPlaybackTransitionPending(false)
+      setPendingVisualPlaybackState(null)
+      try {
+        context.onPlayToggle()
+      } catch {
+        setPendingVisualPlaybackState(null)
+      }
+    }, delay)
+
+    return clearPlaybackTransitionTimer
+  }, [
+    cancelPlaybackTransition,
+    clearPlaybackTransitionTimer,
+    playbackTransitionDuration,
+    playbackTransitionPending,
+    visualPlaybackState,
+  ])
+
+  useEffect(() => {
+    const request = playbackTransitionRequestRef.current
+    if (!request) return
+
+    const contextInvalidated = request.trackId !== (track?.id ?? null)
+      || request.source !== realPlaybackState
+      || playback.isAudioBusy
+      || playback.isSelectionPending
+      || playback.isTransportBusy
+      || timeline.interaction === 'seeking'
+      || !currentArtworkReady
+    if (contextInvalidated) cancelPlaybackTransition()
+  }, [
+    cancelPlaybackTransition,
+    playback.isAudioBusy,
+    playback.isSelectionPending,
+    playback.isTransportBusy,
+    playbackTransitionPending,
+    currentArtworkReady,
+    realPlaybackState,
+    timeline.interaction,
+    track?.id,
+  ])
+
+  useEffect(() => () => {
+    clearPlaybackTransitionTimer()
+    playbackTransitionRequestRef.current = null
+  }, [clearPlaybackTransitionTimer])
 
   return (
     <TooltipProvider>
@@ -192,7 +360,13 @@ export function PlayerSurface({
             />
           )}
         >
-          <section className="player-stage" aria-label={appCopy.shellLabel}>
+          <section
+            ref={playerStageRef}
+            className="player-stage"
+            data-playback-state={visualPlaybackState}
+            style={playbackTransitionStyle}
+            aria-label={appCopy.shellLabel}
+          >
             {track ? (
               <>
                 {artworkSlots.map((layer, slot) => (
@@ -219,7 +393,7 @@ export function PlayerSurface({
                   visualClock={timeline.visualClock}
                   lyricLayoutKey={lyricLayoutKey}
                   tightThresholdSeconds={appearance.player.lyricsTightThresholdSeconds}
-                  onLineSelect={timeline.onCommit}
+                  onLineSelect={playbackTransitionPending ? () => undefined : timeline.onCommit}
                 />
 
                 <AnimatePresence initial={false}>
@@ -229,7 +403,7 @@ export function PlayerSurface({
                       unavailableTrackIds={queue.unavailableTrackIds}
                       currentTrackId={track.id}
                       playlistName={queue.playlistName}
-                      onTrackSelect={queue.onTrackSelect}
+                      onTrackSelect={playbackTransitionPending ? undefined : queue.onTrackSelect}
                     />
                   ) : null}
                 </AnimatePresence>
@@ -243,6 +417,10 @@ export function PlayerSurface({
                 timeline={timeline}
                 volume={volume}
                 queue={queue}
+                visualIsPlaying={visualPlaybackState === 'playing'}
+                playbackTransitionPending={playbackTransitionPending}
+                playbackVisualReady={currentArtworkReady}
+                onPlayToggle={handlePlayToggle}
               />
             </div>
           </section>

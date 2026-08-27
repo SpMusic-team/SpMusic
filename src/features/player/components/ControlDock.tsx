@@ -17,7 +17,12 @@ import type { SystemIcon } from '@/icons/systemIcons'
 import { IconButton } from './IconButton'
 import { VolumeControl } from './VolumeControl'
 
-type ControlDockProps = Pick<PlayerUiViewModel, 'playback' | 'timeline' | 'volume' | 'queue'>
+type ControlDockProps = Pick<PlayerUiViewModel, 'playback' | 'timeline' | 'volume' | 'queue'> & {
+  visualIsPlaying: boolean
+  playbackTransitionPending: boolean
+  playbackVisualReady: boolean
+  onPlayToggle: () => void
+}
 type ProgressPressEndReason = 'pointerup' | 'pointercancel' | 'blur'
 
 type ProgressControlProps = {
@@ -282,12 +287,20 @@ export function ControlDock({
   timeline,
   volume,
   queue,
+  visualIsPlaying,
+  playbackTransitionPending,
+  playbackVisualReady,
+  onPlayToggle,
 }: ControlDockProps) {
   const systemIcons = useSystemIcons()
   const appearanceMotion = useAppearanceMotion()
   const disabled = !playback.track
+  const playbackCommandBusy = playback.isAudioBusy
+    || playback.isTransportBusy
+    || playback.isSelectionPending
   const navigationBusy = playback.isAudioBusy
     || playback.isTransportBusy
+    || playbackTransitionPending
     || timeline.interaction === 'seeking'
   const commandBusy = navigationBusy || playback.isSelectionPending
   const volumeControlDisabled = commandBusy
@@ -321,7 +334,12 @@ export function ControlDock({
   }
 
   return (
-    <motion.footer className="control-dock">
+    <motion.footer
+      className="control-dock"
+      data-playback-transition-pending={playbackTransitionPending ? '' : undefined}
+      data-playback-command-busy={playbackCommandBusy ? '' : undefined}
+      data-playback-visual-ready={playbackVisualReady ? 'true' : 'false'}
+    >
       <p className="audio-status" aria-live="polite">{playback.statusText}</p>
       <ProgressControl
         key={playback.track?.id ?? 'empty'}
@@ -331,15 +349,15 @@ export function ControlDock({
       />
       <div className="control-row">
         <div className="control-auxiliary control-auxiliary-start"><IconButton icon={systemIcons.audioWave} label={appCopy.controls.openAudio} disabled={commandBusy} onClick={playback.onOpenAudio} /></div>
-        <div className="control-primary" data-playback-state={playback.isPlaying ? 'playing' : 'paused'}>
+        <div className="control-primary" data-playback-state={visualIsPlaying ? 'playing' : 'paused'}>
           <IconButton className="control-optional" icon={shufflePresentation.icon} label={shufflePresentation.label} selected={shufflePresentation.pressed} disabled={disabled} onClick={handleShuffleCycle} />
           <div className="control-transport">
             <IconButton className="previous-button" icon={systemIcons.previous} label={appCopy.controls.previous} disabled={disabled || navigationBusy} onClick={playback.onPrevious} />
-            <Button className="play-button" aria-busy={playback.isTransportBusy || playback.isSelectionPending} aria-label={playback.isPlaying ? appCopy.controls.pause : appCopy.controls.play} aria-pressed={playback.isPlaying} disabled={commandBusy || disabled} size="icon-lg" onClick={playback.onPlayToggle}>
+            <Button className="play-button" aria-busy={playback.isTransportBusy || playback.isSelectionPending || playbackTransitionPending || !playbackVisualReady} aria-label={visualIsPlaying ? appCopy.controls.pause : appCopy.controls.play} aria-pressed={visualIsPlaying} disabled={commandBusy || disabled || !playbackVisualReady} size="icon-lg" onClick={onPlayToggle}>
               <span className="player-control-icon-swap">
                 <AnimatePresence initial={false}>
                   <motion.span
-                    key={playback.isPlaying ? 'pause' : 'play'}
+                    key={visualIsPlaying ? 'pause' : 'play'}
                     className="player-control-icon-frame"
                     variants={appearanceMotion.variants.glyph}
                     initial="initial"
@@ -347,7 +365,7 @@ export function ControlDock({
                     exit="exit"
                     aria-hidden="true"
                   >
-                    {playback.isPlaying ? <systemIcons.pause /> : <systemIcons.play />}
+                    {visualIsPlaying ? <systemIcons.pause /> : <systemIcons.play />}
                   </motion.span>
                 </AnimatePresence>
               </span>

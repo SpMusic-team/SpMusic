@@ -201,6 +201,7 @@ export type ArtworkVisualLayer = {
 
 type UseArtworkVisualResourceResult = {
   slots: readonly [ArtworkVisualLayer | null, ArtworkVisualLayer | null]
+  currentArtworkReady: boolean
   markReady: (layerId: number) => void
   markLoadError: (layerId: number) => void
   markExitComplete: (layerId: number, consumer: ArtworkLayerConsumer) => void
@@ -306,10 +307,11 @@ function artworkIdentity(track: Track, artwork: TrackArtwork): string {
 function artworkResourceIdentity(
   track: Track,
   artwork: TrackArtwork,
-  maxEdge: AudioLoadCoverPixelsInput['maxEdge'],
 ): string {
-  const identity = artworkIdentity(track, artwork)
-  return artwork.coverFilePath ? `${identity}\u0000${maxEdge}` : identity
+  // Decode size is a resource-production detail, not visible artwork identity.
+  // Keeping it out of the layer key lets a resize retain the current active
+  // layer and its first decoded resource instead of fabricating a crossfade.
+  return artworkIdentity(track, artwork)
 }
 
 async function fetchArtworkBlob(source: string, signal: AbortSignal): Promise<Blob> {
@@ -823,7 +825,7 @@ export function useArtworkVisualResource(
     const isCurrent = () => {
       const latest = latestRequestRef.current
       const latestIdentity = latest.track && latest.requestedArtwork
-        ? artworkResourceIdentity(latest.track, latest.requestedArtwork, coverMaxEdge)
+        ? artworkResourceIdentity(latest.track, latest.requestedArtwork)
         : null
       return !controller.signal.aborted
         && generation === generationRef.current
@@ -898,7 +900,7 @@ export function useArtworkVisualResource(
   const requestPrimary = effectiveArtwork?.coverImage
   const requestFallback = effectiveArtwork?.coverImageFallback
   const requestIdentity = effectiveTrack && effectiveArtwork
-    ? artworkResourceIdentity(effectiveTrack, effectiveArtwork, coverMaxEdge)
+    ? artworkResourceIdentity(effectiveTrack, effectiveArtwork)
     : null
 
   useEffect(() => {
@@ -944,7 +946,6 @@ export function useArtworkVisualResource(
     const identity = artworkResourceIdentity(
       prefetchCandidate.track,
       prefetchCandidate.artwork,
-      coverMaxEdge,
     )
     if (prepared?.identity === identity) return
     if (prepared) {
@@ -1118,7 +1119,7 @@ export function useArtworkVisualResource(
       const installPromoted = (loaded: LoadedArtworkResource) => {
         const current = latestRequestRef.current
         const currentIdentity = current.track && current.requestedArtwork
-          ? artworkResourceIdentity(current.track, current.requestedArtwork, coverMaxEdge)
+          ? artworkResourceIdentity(current.track, current.requestedArtwork)
           : null
         if (promotionGeneration !== generationRef.current || currentIdentity !== identity) return false
         registryGet(identity)
@@ -1212,7 +1213,7 @@ export function useArtworkVisualResource(
     const coldRequestStillCurrent = () => {
       const current = latestRequestRef.current
       const currentIdentity = current.track && current.requestedArtwork
-        ? artworkResourceIdentity(current.track, current.requestedArtwork, coverMaxEdge)
+        ? artworkResourceIdentity(current.track, current.requestedArtwork)
         : null
       return isCurrent()
         && currentIdentity === identity
@@ -1369,5 +1370,12 @@ export function useArtworkVisualResource(
     layers.find((layer) => layer.slot === 0) ?? null,
     layers.find((layer) => layer.slot === 1) ?? null,
   ]
-  return { slots, markReady, markLoadError, markExitComplete }
+  const currentArtworkReady = !effectiveTrack
+    || (!effectiveArtwork && !detailsPending)
+    || Boolean(
+      requestIdentity
+      && layers.some((layer) => layer.identity === requestIdentity && layer.phase === 'active')
+      && !layers.some((layer) => layer.identity === requestIdentity && layer.phase === 'incoming'),
+    )
+  return { slots, currentArtworkReady, markReady, markLoadError, markExitComplete }
 }

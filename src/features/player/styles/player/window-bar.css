@@ -31,9 +31,18 @@
   border-radius: 0;
   color: var(--player-muted);
   background: transparent;
-  transition: color var(--app-motion-fast) ease, transform var(--app-motion-fast) ease;
-  transform-origin: center;
+  transition: color var(--app-motion-fast) ease;
   -webkit-app-region: no-drag;
 }
-.window-bar button:hover, .window-bar button:focus-visible, .window-bar button:active { background: transparent; color: var(--player-ink); transform: scale(1.16); }
-.window-bar button svg { width: 20px; height: 20px; }
+.window-bar button:hover, .window-bar button:focus-visible, .window-bar button:active { background: transparent; color: var(--player-ink); }
+.window-bar button svg {
+  width: 20px;
+  height: 20px;
+  transform-origin: center;
+  transition: transform var(--app-motion-fast) ease;
+}
+.window-bar button:hover svg, .window-bar button:focus-visible svg, .window-bar button:active svg { transform: scale(1.2); }
+
+@media (prefers-reduced-motion: reduce) {
+  .window-bar button svg { transition: none; }
+}

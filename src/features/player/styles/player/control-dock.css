@@ -17,6 +17,19 @@
   box-shadow: 0 calc(4 * var(--control-unit, var(--prototype-unit))) calc(4 * var(--control-unit, var(--prototype-unit))) rgba(0,0,0,var(--player-controls-shadow));
 }
 
+.control-dock:is([data-playback-transition-pending], [data-playback-command-busy]) :is(
+  .control-progress-slider [data-disabled],
+  .control-auxiliary-start button:disabled,
+  .previous-button:disabled,
+  .play-button:disabled,
+  .next-button:disabled,
+  .volume-control button:disabled,
+  .volume-slider [data-disabled]
+),
+.control-dock[data-playback-visual-ready="false"] .play-button:disabled {
+  opacity: 1;
+}
+
 .playback-info-button {
   display: none;
 }

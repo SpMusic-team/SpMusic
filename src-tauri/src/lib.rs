@@ -10,7 +10,7 @@ use audio::{
     AudioFolderPlaylist, AudioFolderPlaylistInput, AudioLoadAndPlayInput, AudioLoadAndPlayResult,
     AudioLoadCoverPixelsInput, AudioLoadFileInput, AudioOpenFileInput, AudioOpenSourceResult,
     AudioPlayInput, AudioPlaybackState, AudioSeekInput, AudioSetVolumeInput, AudioTrackRef,
-    CoverPixelsError,
+    AudioTransitionPlaybackInput, CoverPixelsError,
 };
 use tauri::{ipc::Response, Manager, State};
 use tracing_subscriber::EnvFilter;
@@ -158,6 +158,24 @@ fn audio_pause(state: State<'_, AudioController>) -> Result<AudioPlaybackState, 
 }
 
 #[tauri::command]
+fn audio_transition_playback(
+    state: State<'_, AudioController>,
+    input: AudioTransitionPlaybackInput,
+) -> Result<AudioPlaybackState, AudioCommandError> {
+    tracing::info!(
+        command = "audio_transition_playback",
+        request_id = input.request_id,
+        expected_track_id = %input.expected_track_id,
+        target = ?input.target,
+        duration_ms = input.duration_ms,
+        "Tauri command invoked",
+    );
+    let result = state.transition_playback(input);
+    log_state_command_result("audio_transition_playback", &result);
+    result
+}
+
+#[tauri::command]
 fn audio_stop(state: State<'_, AudioController>) -> Result<AudioPlaybackState, AudioCommandError> {
     tracing::info!(command = "audio_stop", "Tauri command invoked");
     let result = state.stop();
@@ -287,6 +305,7 @@ pub fn run() {
             audio_embed_lyrics,
             audio_play,
             audio_pause,
+            audio_transition_playback,
             audio_stop,
             audio_seek,
             audio_set_volume,

@@ -11,11 +11,13 @@ import {
 } from '@/features/player/model/playbackModes'
 import type { PlayerUiViewModel } from '@/features/player/model/playerUiViewModel'
 import type { TrackFeedback } from '@/features/player/model/playerTypes'
+import type { AudioTransportTransition } from '@/features/player/services/audioCommands'
 import { demoTracks } from './demoTracks'
 
 export function DemoPlayerPage() {
   const [currentTrackId, setCurrentTrackId] = useState(demoTracks[0]?.id ?? null)
   const [playing, setPlaying] = useState(false)
+  const [transportTransition, setTransportTransition] = useState<AudioTransportTransition | null>(null)
   const [progress, setProgress] = useState(0)
   const [timelineInteraction, setTimelineInteraction] = useState<'following' | 'previewing'>('following')
   const [volume, setVolume] = useState(72)
@@ -26,8 +28,13 @@ export function DemoPlayerPage() {
   const lastFrameRef = useRef<number | null>(null)
   const endingTrackRef = useRef<string | null>(null)
   const previewStartProgressRef = useRef(0)
+  const transportTimerRef = useRef<number | null>(null)
   const track = demoTracks.find((candidate) => candidate.id === currentTrackId) ?? demoTracks[0] ?? null
   const duration = track?.durationSeconds ?? 0
+
+  useEffect(() => () => {
+    if (transportTimerRef.current !== null) window.clearTimeout(transportTimerRef.current)
+  }, [])
 
   const changeTrack = useCallback((direction: Direction, automatic = false) => {
     if (!demoTracks.length) return
@@ -96,12 +103,35 @@ export function DemoPlayerPage() {
       shuffleMode,
       repeatMode,
       isAudioBusy: false,
-      isTransportBusy: false,
+      isTransportBusy: transportTransition !== null,
+      transportTransition,
       statusText: '演示模式：不调用 Tauri 音频后端',
       onOpenAudio: () => toast.info('独立演示页不会打开本地音频'),
       onPrevious: () => changeTrack(-1),
       onNext: () => changeTrack(1),
-      onPlayToggle: () => setPlaying((value) => !value),
+      onPlayToggle: (request) => {
+        if (request.expectedTrackId !== track?.id) {
+          return Promise.reject(new Error('Demo playback transition context is stale'))
+        }
+        if (transportTimerRef.current !== null) window.clearTimeout(transportTimerRef.current)
+        if (request.target === 'playing') setPlaying(true)
+        if (request.durationMs <= 0) {
+          setPlaying(request.target === 'playing')
+          setTransportTransition(null)
+          return Promise.resolve({ requestId: request.requestId, completed: true })
+        }
+        setTransportTransition({
+          requestId: request.requestId,
+          target: request.target,
+          durationMs: request.durationMs,
+        })
+        transportTimerRef.current = window.setTimeout(() => {
+          transportTimerRef.current = null
+          setPlaying(request.target === 'playing')
+          setTransportTransition(null)
+        }, request.durationMs)
+        return Promise.resolve({ requestId: request.requestId, completed: false })
+      },
       onShuffleCycle: () => setShuffleMode((value) => nextShuffleMode[value]),
       onRepeatCycle: () => setRepeatMode((value) => nextRepeatMode[value]),
     },

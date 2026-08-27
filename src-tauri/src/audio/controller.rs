@@ -27,7 +27,7 @@ use super::{
         AudioEmbedLyricsInput, AudioFolderPlaylist, AudioFolderPlaylistInput,
         AudioLoadAndPlayInput, AudioLoadAndPlayResult, AudioLoadFileInput, AudioOpenFileInput,
         AudioOpenSourceResult, AudioPlayInput, AudioPlaybackState, AudioSeekInput,
-        AudioSetVolumeInput, AudioTrackDetailsChanged, AudioTrackRef,
+        AudioSetVolumeInput, AudioTrackDetailsChanged, AudioTrackRef, AudioTransitionPlaybackInput,
     },
     AUDIO_STATE_CHANGED_EVENT, AUDIO_TRACK_DETAILS_CHANGED_EVENT,
 };
@@ -94,7 +94,24 @@ impl AudioController {
             let mut runtime = AudioRuntime::default();
             let mut pending_load: Option<PendingLoad> = None;
 
-            while let Ok(request) = rx.recv() {
+            loop {
+                let request = if runtime.has_transport_transition() {
+                    match rx.recv_timeout(super::runtime::TRANSPORT_TRANSITION_TICK) {
+                        Ok(request) => request,
+                        Err(RecvTimeoutError::Timeout) => {
+                            if runtime.advance_transport_transition(Instant::now()) {
+                                emit_state_changed(&app_handle, runtime.get_state());
+                            }
+                            continue;
+                        }
+                        Err(RecvTimeoutError::Disconnected) => break,
+                    }
+                } else {
+                    match rx.recv() {
+                        Ok(request) => request,
+                        Err(_) => break,
+                    }
+                };
                 match request {
                     AudioRuntimeRequest::LoadFile { path, reply } => {
                         tracing::info!(
@@ -306,6 +323,23 @@ impl AudioController {
                             "audio.pause",
                             reply,
                             AudioRuntime::pause,
+                        );
+                    }
+                    AudioRuntimeRequest::TransitionPlayback { input, reply } => {
+                        tracing::info!(
+                            operation = "audio.transition_playback",
+                            request_id = input.request_id,
+                            expected_track_id = %input.expected_track_id,
+                            target = ?input.target,
+                            duration_ms = input.duration_ms,
+                            "runtime playback transition request received",
+                        );
+                        dispatch_state_request(
+                            &app_handle,
+                            &mut runtime,
+                            "audio.transition_playback",
+                            reply,
+                            |runtime| runtime.transition_playback(input),
                         );
                     }
                     AudioRuntimeRequest::Stop { reply } => {
@@ -631,6 +665,15 @@ impl AudioController {
     pub fn pause(&self) -> Result<AudioPlaybackState, AudioCommandError> {
         self.request_state("audio.controller.pause_round_trip", |reply| {
             AudioRuntimeRequest::Pause { reply }
+        })
+    }
+
+    pub fn transition_playback(
+        &self,
+        input: AudioTransitionPlaybackInput,
+    ) -> Result<AudioPlaybackState, AudioCommandError> {
+        self.request_state("audio.controller.transition_playback_round_trip", |reply| {
+            AudioRuntimeRequest::TransitionPlayback { input, reply }
         })
     }
 

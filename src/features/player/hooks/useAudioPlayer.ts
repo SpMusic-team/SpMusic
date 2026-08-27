@@ -44,10 +44,12 @@ import {
   seekAudio,
   setAudioVolume,
   stopAudio,
+  transitionAudioPlayback,
   type AudioCommandError,
   type AudioFolderPlaylist,
   type AudioFolderTrackRef,
   type AudioPlaybackState,
+  type AudioTransitionPlaybackInput,
   type AudioTrackRef,
   type AudioTrackDetailsChanged,
 } from '@/features/player/services/audioCommands'
@@ -188,12 +190,21 @@ function audioCommandErrorEqual(left: AudioCommandError | null, right: AudioComm
 }
 
 function audioPlaybackUiStateEqual(left: AudioPlaybackState | null, right: AudioPlaybackState): boolean {
+  const leftTransition = left?.transportTransition ?? null
+  const rightTransition = right.transportTransition ?? null
   return left !== null
     && left.phase === right.phase
     && left.generation === right.generation
     && left.currentTrackId === right.currentTrackId
     && left.durationMs === right.durationMs
     && left.volume === right.volume
+    && (leftTransition === rightTransition || (
+      leftTransition !== null
+      && rightTransition !== null
+      && leftTransition.requestId === rightTransition.requestId
+      && leftTransition.target === rightTransition.target
+      && leftTransition.durationMs === rightTransition.durationMs
+    ))
     && audioCommandErrorEqual(left.error, right.error)
 }
 
@@ -254,6 +265,9 @@ export function useAudioPlayer() {
   const transportIntentRef = useRef<TransportIntentPhase | null>(null)
   const desiredTransportRequestRef = useRef<TransportRequest | null>(null)
   const transportCommandRunningRef = useRef(false)
+  const activePlaybackTransitionRef = useRef<AudioTransitionPlaybackInput | null>(null)
+  const observedPlaybackTransitionRequestIdRef = useRef<number | null>(null)
+  const completedPlaybackTransitionRequestIdRef = useRef<number | null>(null)
   const transportRollbackStateRef = useRef<AudioPlaybackState | null>(null)
   const confirmedVolumeRef = useRef(volume)
   const desiredVolumeRef = useRef<number | null>(null)
@@ -301,6 +315,12 @@ export function useAudioPlayer() {
     () => new Set(folderPlaylist?.tracks.filter((candidate) => !candidate.available).map((candidate) => candidate.id)),
     [folderPlaylist],
   )
+
+  function transportOperationInProgress() {
+    return transportCommandRunningRef.current
+      || activePlaybackTransitionRef.current !== null
+      || Boolean(latestAudioStateRef.current?.transportTransition)
+  }
 
   const commitDetailsPending = useCallback((pending: boolean) => {
     detailsPendingRef.current = pending
@@ -831,7 +851,14 @@ export function useAudioPlayer() {
     fromEvent = false,
   ) => {
     const pendingSelection = pendingSelectionRef.current
+    const activePlaybackTransition = activePlaybackTransitionRef.current
+    const nextTransportTransition = nextAudioState.transportTransition ?? null
     if (fromEvent) {
+      if (
+        nextTransportTransition
+        && activePlaybackTransition
+        && nextTransportTransition.requestId !== activePlaybackTransition.requestId
+      ) return
       if (pendingSelection?.usesLoadAndPlay) {
         const targetsPendingTrack = nextAudioState.currentTrackId === pendingSelection.targetTrackId
         const isNewerThanPrevious = pendingSelection.previousGeneration === null
@@ -879,10 +906,15 @@ export function useAudioPlayer() {
     ) pendingSelection.replacementStarted = true
 
     const transportIntent = transportIntentRef.current
+    const matchingPlaybackTransition = Boolean(
+      activePlaybackTransition
+      && nextTransportTransition?.requestId === activePlaybackTransition.requestId
+      && nextTransportTransition.target === activePlaybackTransition.target,
+    )
     const isConflictingTransportState = transportIntent !== null
       && (nextAudioState.phase === 'playing' || nextAudioState.phase === 'paused')
       && nextAudioState.phase !== transportIntent
-    if (!settleTransportIntent && isConflictingTransportState) return
+    if (!settleTransportIntent && isConflictingTransportState && !matchingPlaybackTransition) return
 
     const previousAudioState = latestAudioStateRef.current
     const previousTrackId = previousAudioState?.currentTrackId ?? null
@@ -895,12 +927,38 @@ export function useAudioPlayer() {
       timelineInteractionRef.current = 'following'
       setTimelineInteraction('following')
       seekTargetGuardRef.current = null
+      activePlaybackTransitionRef.current = null
+      observedPlaybackTransitionRequestIdRef.current = null
+      completedPlaybackTransitionRequestIdRef.current = null
+      transportIntentRef.current = null
     }
 
+    if (matchingPlaybackTransition && activePlaybackTransition) {
+      observedPlaybackTransitionRequestIdRef.current = activePlaybackTransition.requestId
+    }
     latestAudioStateRef.current = nextAudioState
     if (!audioPlaybackUiStateEqual(previousAudioState, nextAudioState)) {
       setAudioState(nextAudioState)
     }
+    const currentPlaybackTransition = activePlaybackTransitionRef.current
+    if (
+      currentPlaybackTransition
+      && nextAudioState.currentTrackId === currentPlaybackTransition.expectedTrackId
+      && nextTransportTransition === null
+      && nextAudioState.phase === currentPlaybackTransition.target
+      && (settleTransportIntent
+        || observedPlaybackTransitionRequestIdRef.current === currentPlaybackTransition.requestId)
+    ) {
+      completedPlaybackTransitionRequestIdRef.current = currentPlaybackTransition.requestId
+      activePlaybackTransitionRef.current = null
+      observedPlaybackTransitionRequestIdRef.current = null
+      transportIntentRef.current = null
+    }
+    setTransportBusy(
+      transportOperationInProgress()
+      || activePlaybackTransitionRef.current !== null
+      || nextTransportTransition !== null,
+    )
     commitAudioError(nextAudioState.error)
 
     const guard = seekTargetGuardRef.current
@@ -957,7 +1015,11 @@ export function useAudioPlayer() {
       clearPresentationTrack(nextAudioState.phase === 'error' || nextAudioState.error ? 'error' : 'empty')
     }
 
-    if (!volumeCommandRunningRef.current && desiredVolumeRef.current === null) {
+    if (
+      !volumeCommandRunningRef.current
+      && desiredVolumeRef.current === null
+      && nextTransportTransition === null
+    ) {
       const confirmedVolume = volumeScalarToPercent(nextAudioState.volume)
       if (confirmedVolumeRef.current !== confirmedVolume) setVolume(confirmedVolume)
       confirmedVolumeRef.current = confirmedVolume
@@ -984,7 +1046,7 @@ export function useAudioPlayer() {
     targetScope: string | null = playlistScopeRef.current,
   ) => {
     if (
-      transportCommandRunningRef.current
+      transportOperationInProgress()
       || timelineInteractionRef.current === 'seeking'
     ) return false
 
@@ -1273,6 +1335,70 @@ export function useAudioPlayer() {
     void runTransportCommandQueue()
   }
 
+  async function transitionPlayback(
+    request: AudioTransitionPlaybackInput,
+  ): Promise<{ requestId: number; completed: boolean }> {
+    if (
+      audioSelectionInProgressRef.current
+      || transportOperationInProgress()
+      || timelineInteractionRef.current === 'seeking'
+      || request.expectedTrackId !== latestAudioStateRef.current?.currentTrackId
+    ) throw new Error('Playback transition context is stale')
+
+    const rollbackState = latestAudioStateRef.current
+    activePlaybackTransitionRef.current = request
+    observedPlaybackTransitionRequestIdRef.current = null
+    completedPlaybackTransitionRequestIdRef.current = null
+    transportIntentRef.current = request.target
+    transportCommandRunningRef.current = true
+    setTransportBusy(true)
+    commitAudioError(null)
+
+    try {
+      const nextState = await transitionAudioPlayback(request)
+      const nextTransition = nextState.transportTransition ?? null
+      const completedWhileInvoking = completedPlaybackTransitionRequestIdRef.current === request.requestId
+      if (completedWhileInvoking) return { requestId: request.requestId, completed: true }
+      if (
+        activePlaybackTransitionRef.current?.requestId !== request.requestId
+        || nextState.currentTrackId !== request.expectedTrackId
+        || (nextTransition !== null
+          && nextTransition.requestId !== request.requestId)
+      ) throw new Error('Playback transition response is stale')
+
+      applyAudioState(nextState, nextTransition === null)
+      return {
+        requestId: request.requestId,
+        completed: nextTransition === null,
+      }
+    } catch (error) {
+      if (activePlaybackTransitionRef.current?.requestId === request.requestId) {
+        activePlaybackTransitionRef.current = null
+        observedPlaybackTransitionRequestIdRef.current = null
+        transportIntentRef.current = null
+      }
+      if (rollbackState && latestAudioStateRef.current?.currentTrackId === request.expectedTrackId) {
+        applyAudioState(rollbackState, true)
+      }
+      commitAudioError(commandError(error))
+      try {
+        const reconciledState = await getAudioState()
+        if (reconciledState.currentTrackId === latestAudioStateRef.current?.currentTrackId) {
+          applyAudioState(reconciledState, true)
+        }
+      } catch (refreshError) {
+        commitAudioError(commandError(refreshError))
+      }
+      throw error
+    } finally {
+      transportCommandRunningRef.current = false
+      setTransportBusy(
+        activePlaybackTransitionRef.current !== null
+        || Boolean(latestAudioStateRef.current?.transportTransition),
+      )
+    }
+  }
+
   useEffect(() => {
     let disposed = false
     let unlisten: (() => void) | undefined
@@ -1389,7 +1515,7 @@ export function useAudioPlayer() {
   async function openAndMaybePlay(autoplay: boolean) {
     if (
       audioSelectionInProgressRef.current
-      || transportCommandRunningRef.current
+      || transportOperationInProgress()
       || timelineInteractionRef.current === 'seeking'
     ) return
     seekRequestIdRef.current += 1
@@ -1539,7 +1665,7 @@ export function useAudioPlayer() {
   function startProgressPreview() {
     if (
       audioSelectionInProgressRef.current
-      || transportCommandRunningRef.current
+      || transportOperationInProgress()
       || !track
       || duration <= 0
       || timelineInteractionRef.current === 'seeking'
@@ -1554,7 +1680,7 @@ export function useAudioPlayer() {
   function setProgress(nextProgress: number) {
     if (
       audioSelectionInProgressRef.current
-      || transportCommandRunningRef.current
+      || transportOperationInProgress()
       || !track
       || duration <= 0
       || timelineInteractionRef.current === 'seeking'
@@ -1593,7 +1719,7 @@ export function useAudioPlayer() {
     endingTrackRef.current = null
     if (
       !audioSelectionInProgressRef.current
-      && !transportCommandRunningRef.current
+      && !transportOperationInProgress()
       && track
       && duration > 0
     ) requestRealAudioSeek(nextProgress)
@@ -1602,7 +1728,7 @@ export function useAudioPlayer() {
   function togglePlayback() {
     if (
       audioSelectionInProgressRef.current
-      || transportCommandRunningRef.current
+      || transportOperationInProgress()
       || timelineInteractionRef.current === 'seeking'
     ) return
     if (!track || !currentTrackId) {
@@ -1630,7 +1756,7 @@ export function useAudioPlayer() {
   function changeVolume(nextVolume: number) {
     if (
       audioSelectionInProgressRef.current
-      || transportCommandRunningRef.current
+      || transportOperationInProgress()
       || timelineInteractionRef.current === 'seeking'
     ) return
     const safeVolume = Math.min(100, Math.max(0, Math.round(nextVolume)))
@@ -1671,7 +1797,7 @@ export function useAudioPlayer() {
 
   const selectQueueTrack = useCallback((trackId: string) => {
     if (
-      transportCommandRunningRef.current
+      transportOperationInProgress()
       || timelineInteractionRef.current === 'seeking'
       || !folderPlaylist
     ) return
@@ -1682,7 +1808,7 @@ export function useAudioPlayer() {
   function refreshAudioState() {
     if (
       audioSelectionInProgressRef.current
-      || transportCommandRunningRef.current
+      || transportOperationInProgress()
       || timelineInteractionRef.current === 'seeking'
     ) return
     const requestGeneration = audioStateRequestGenerationRef.current
@@ -1698,7 +1824,7 @@ export function useAudioPlayer() {
   function stopAudioPlayback() {
     if (
       audioSelectionInProgressRef.current
-      || transportCommandRunningRef.current
+      || transportOperationInProgress()
       || timelineInteractionRef.current === 'seeking'
     ) return
     seekRequestIdRef.current += 1
@@ -1754,6 +1880,7 @@ export function useAudioPlayer() {
     selectionPending,
     statusText,
     transportBusy,
+    transportTransition: audioState?.transportTransition ?? null,
     audioState,
     currentAudioTrack,
     startProgressPreview,
@@ -1765,6 +1892,7 @@ export function useAudioPlayer() {
     previous: () => void changeFolderTrack(-1),
     next: () => void changeFolderTrack(1),
     togglePlayback,
+    transitionPlayback,
     cycleShuffleMode: () => setShuffleMode((value) => nextShuffleMode[value]),
     cycleRepeatMode: () => setRepeatMode((value) => nextRepeatMode[value]),
     toggleTrackFeedback,

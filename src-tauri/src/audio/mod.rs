@@ -28,6 +28,7 @@ pub use types::{
     AudioEmbedLyricsInput, AudioFolderPlaylist, AudioFolderPlaylistInput, AudioLoadAndPlayInput,
     AudioLoadAndPlayResult, AudioLoadFileInput, AudioOpenFileInput, AudioOpenSourceResult,
     AudioPlayInput, AudioPlaybackState, AudioSeekInput, AudioSetVolumeInput, AudioTrackRef,
+    AudioTransitionPlaybackInput,
 };
 
 pub const AUDIO_STATE_CHANGED_EVENT: &str = "audio_state_changed";

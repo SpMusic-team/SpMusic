@@ -1,6 +1,7 @@
 import type { RepeatMode, ShuffleMode } from '@/features/player/model/playbackModes'
 import type { Track, TrackArtwork, TrackArtworkPrefetchCandidate, TrackFeedback, TrackSummary } from '@/features/player/model/playerTypes'
 import type { PlayerVisualTimelineClock } from '@/features/player/model/visualTimelineClock'
+import type { AudioTransportTarget, AudioTransportTransition } from '@/features/player/services/audioCommands'
 
 export type PlayerContentState = 'empty' | 'loading' | 'track' | 'error'
 
@@ -17,13 +18,26 @@ export type PlayerPlaybackViewModel = {
   isAudioBusy: boolean
   isSelectionPending?: boolean
   isTransportBusy: boolean
+  transportTransition?: AudioTransportTransition | null
   statusText: string
   onOpenAudio: () => void
   onPrevious: () => void
   onNext: () => void
-  onPlayToggle: () => void
+  onPlayToggle: (request: PlayerPlaybackTransitionRequest) => Promise<PlayerPlaybackTransitionResult>
   onShuffleCycle: () => void
   onRepeatCycle: () => void
+}
+
+export type PlayerPlaybackTransitionRequest = {
+  requestId: number
+  expectedTrackId: string
+  target: AudioTransportTarget
+  durationMs: number
+}
+
+export type PlayerPlaybackTransitionResult = {
+  requestId: number
+  completed: boolean
 }
 
 export type PlayerTimelineInteraction = 'following' | 'previewing' | 'seeking'

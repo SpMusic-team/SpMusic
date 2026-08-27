@@ -24,9 +24,13 @@ use super::{
     },
     types::{
         AudioLoadAndPlayResult, AudioPlayInput, AudioPlaybackPhase, AudioPlaybackState,
-        AudioSeekInput, AudioSetVolumeInput, AudioTrackRef,
+        AudioSeekInput, AudioSetVolumeInput, AudioTrackRef, AudioTransitionPlaybackInput,
+        AudioTransportTarget, AudioTransportTransition,
     },
 };
+
+const MAX_TRANSPORT_TRANSITION_MS: u64 = 5_000;
+pub(crate) const TRANSPORT_TRANSITION_TICK: Duration = Duration::from_millis(12);
 
 trait RebuiltSink {
     fn pause_for_preparation(&self);
@@ -111,6 +115,10 @@ pub(crate) enum AudioRuntimeRequest {
         reply: Sender<Result<AudioPlaybackState, AudioCommandError>>,
     },
     Pause {
+        reply: Sender<Result<AudioPlaybackState, AudioCommandError>>,
+    },
+    TransitionPlayback {
+        input: AudioTransitionPlaybackInput,
         reply: Sender<Result<AudioPlaybackState, AudioCommandError>>,
     },
     Stop {
@@ -230,6 +238,8 @@ pub(crate) struct AudioRuntime {
     accumulated: Duration,
     started_at: Option<Instant>,
     volume: f32,
+    transport_gain: f32,
+    transport_envelope: Option<TransportEnvelope>,
     error: Option<AudioCommandError>,
     output_device_signature: Option<String>,
     output_device_change_pending: bool,
@@ -250,6 +260,8 @@ impl Default for AudioRuntime {
             accumulated: Duration::ZERO,
             started_at: None,
             volume: 1.0,
+            transport_gain: 1.0,
+            transport_envelope: None,
             error: None,
             output_device_signature: current_output_device_signature(),
             output_device_change_pending: false,
@@ -257,6 +269,49 @@ impl Default for AudioRuntime {
             load_generation: 0,
             current_generation: None,
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct TransportEnvelope {
+    transition: AudioTransportTransition,
+    from_gain: f32,
+    to_gain: f32,
+    started_at: Instant,
+    duration: Duration,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct TransportEnvelopeSample {
+    gain: f32,
+    completed_target: Option<AudioTransportTarget>,
+}
+
+impl TransportEnvelope {
+    fn sample_at(&self, now: Instant) -> TransportEnvelopeSample {
+        let elapsed = now.saturating_duration_since(self.started_at);
+        let progress = if self.duration.is_zero() {
+            1.0
+        } else {
+            (elapsed.as_secs_f64() / self.duration.as_secs_f64()).clamp(0.0, 1.0) as f32
+        };
+        let gain = self.from_gain + (self.to_gain - self.from_gain) * progress;
+        TransportEnvelopeSample {
+            gain: gain.clamp(0.0, 1.0),
+            completed_target: (progress >= 1.0).then_some(self.transition.target),
+        }
+    }
+}
+
+fn play_transition_start_gain(
+    was_already_playing: bool,
+    needs_rebuild: bool,
+    current_gain: f32,
+) -> f32 {
+    if needs_rebuild || !was_already_playing {
+        0.0
+    } else {
+        current_gain.clamp(0.0, 1.0)
     }
 }
 
@@ -344,7 +399,7 @@ impl AudioRuntime {
                     true,
                 )
             })?;
-            apply_volume_to_sink(Some(&sink), self.volume);
+            apply_volume_to_sink(Some(&sink), self.volume * self.transport_gain);
             configure_rebuilt_sink(&sink, source, Duration::ZERO, true).map_err(|error| {
                 audio_error(
                     AudioErrorCode::PlaybackFailed,
@@ -487,6 +542,7 @@ impl AudioRuntime {
         input: Option<AudioPlayInput>,
     ) -> Result<AudioPlaybackState, AudioCommandError> {
         let started_at = Instant::now();
+        self.cancel_transport_transition(true);
         self.clear_error();
         let restart = input.and_then(|value| value.restart).unwrap_or(false);
         tracing::info!(
@@ -542,6 +598,7 @@ impl AudioRuntime {
 
     pub(crate) fn pause(&mut self) -> Result<AudioPlaybackState, AudioCommandError> {
         let started_at = Instant::now();
+        self.cancel_transport_transition(true);
         self.clear_error();
         tracing::info!(
             operation = "audio.runtime.pause",
@@ -581,8 +638,207 @@ impl AudioRuntime {
         Ok(state)
     }
 
+    pub(crate) fn transition_playback(
+        &mut self,
+        input: AudioTransitionPlaybackInput,
+    ) -> Result<AudioPlaybackState, AudioCommandError> {
+        if input.duration_ms > MAX_TRANSPORT_TRANSITION_MS {
+            return Err(audio_error(
+                AudioErrorCode::UnsupportedOperation,
+                format!(
+                    "Playback transition duration must be between 0 and {MAX_TRANSPORT_TRANSITION_MS} ms"
+                ),
+                true,
+            ));
+        }
+        let current_track_id = self
+            .current_track
+            .as_ref()
+            .map(|track| track.id.as_str())
+            .ok_or_else(|| {
+                audio_error(
+                    AudioErrorCode::NoTrackLoaded,
+                    "No audio track is loaded",
+                    true,
+                )
+            })?;
+        if current_track_id != input.expected_track_id {
+            return Err(audio_error(
+                AudioErrorCode::UnsupportedOperation,
+                format!(
+                    "Playback transition targets stale track '{}' while '{}' is current",
+                    input.expected_track_id, current_track_id
+                ),
+                true,
+            ));
+        }
+
+        self.clear_error();
+        // Sample the old envelope before replacing it so opposite-direction
+        // requests continue from the audible gain without a discontinuity.
+        self.advance_transport_transition(Instant::now());
+        self.transport_envelope = None;
+
+        match input.target {
+            AudioTransportTarget::Playing => self.start_play_transition(input),
+            AudioTransportTarget::Paused => self.start_pause_transition(input),
+        }
+    }
+
+    fn start_play_transition(
+        &mut self,
+        input: AudioTransitionPlaybackInput,
+    ) -> Result<AudioPlaybackState, AudioCommandError> {
+        if matches!(self.phase, AudioPlaybackPhase::Playing)
+            && (self.transport_gain - 1.0).abs() <= f32::EPSILON
+        {
+            return Ok(self.state());
+        }
+
+        let was_already_playing = matches!(self.phase, AudioPlaybackPhase::Playing);
+        let previous_gain = self.transport_gain;
+        let needs_rebuild = self.sink.is_none()
+            || matches!(
+                self.phase,
+                AudioPlaybackPhase::Stopped | AudioPlaybackPhase::Ended
+            );
+        if needs_rebuild {
+            if matches!(
+                self.phase,
+                AudioPlaybackPhase::Stopped | AudioPlaybackPhase::Ended
+            ) {
+                self.accumulated = Duration::ZERO;
+            }
+            self.transport_gain = 0.0;
+            if let Err(error) = self.rebuild_sink(self.accumulated, false) {
+                self.transport_gain = 1.0;
+                self.apply_effective_volume();
+                return Err(error);
+            }
+        }
+
+        // A stable paused/stopped source always begins a fade-in from silence.
+        // Only an opposite-direction replacement while audio is already
+        // running inherits the current gain.
+        let from_gain =
+            play_transition_start_gain(was_already_playing, needs_rebuild, previous_gain);
+        self.transport_gain = from_gain;
+        self.apply_effective_volume();
+        if let Some(sink) = &self.sink {
+            // The effective gain is applied before resuming, preventing a
+            // full-volume first buffer on a fade-in.
+            sink.play();
+        } else {
+            self.transport_gain = 1.0;
+            return Err(audio_error(
+                AudioErrorCode::PlaybackInitFailed,
+                "Audio sink is unavailable after playback preparation",
+                true,
+            ));
+        }
+        self.phase = AudioPlaybackPhase::Playing;
+        self.started_at = Some(Instant::now());
+        self.install_transport_envelope(input, from_gain, 1.0);
+        Ok(self.state())
+    }
+
+    fn start_pause_transition(
+        &mut self,
+        input: AudioTransitionPlaybackInput,
+    ) -> Result<AudioPlaybackState, AudioCommandError> {
+        if matches!(self.phase, AudioPlaybackPhase::Paused) {
+            self.transport_gain = 0.0;
+            self.apply_effective_volume();
+            return Ok(self.state());
+        }
+        if !matches!(self.phase, AudioPlaybackPhase::Playing) {
+            // Match legacy pause behavior for ready/stopped sources without
+            // inventing an audible ramp when no source is advancing.
+            if let Some(sink) = &self.sink {
+                sink.pause();
+            }
+            self.started_at = None;
+            self.phase = AudioPlaybackPhase::Paused;
+            self.transport_gain = 0.0;
+            self.apply_effective_volume();
+            return Ok(self.state());
+        }
+
+        let from_gain = self.transport_gain;
+        self.install_transport_envelope(input, from_gain, 0.0);
+        Ok(self.state())
+    }
+
+    fn install_transport_envelope(
+        &mut self,
+        input: AudioTransitionPlaybackInput,
+        from_gain: f32,
+        to_gain: f32,
+    ) {
+        let transition = AudioTransportTransition {
+            request_id: input.request_id,
+            target: input.target,
+            duration_ms: input.duration_ms,
+        };
+        if input.duration_ms == 0 {
+            self.transport_gain = to_gain;
+            self.apply_effective_volume();
+            self.complete_transport_target(input.target);
+            return;
+        }
+        self.transport_envelope = Some(TransportEnvelope {
+            transition,
+            from_gain,
+            to_gain,
+            started_at: Instant::now(),
+            duration: Duration::from_millis(input.duration_ms),
+        });
+    }
+
+    pub(crate) fn has_transport_transition(&self) -> bool {
+        self.transport_envelope.is_some()
+    }
+
+    /// Advances the envelope on the runtime owner thread. Returns true only
+    /// when a transition completed and callers should emit the final state.
+    pub(crate) fn advance_transport_transition(&mut self, now: Instant) -> bool {
+        let Some(envelope) = self.transport_envelope.as_ref() else {
+            return false;
+        };
+        let sample = envelope.sample_at(now);
+        self.transport_gain = sample.gain;
+        self.apply_effective_volume();
+        let Some(target) = sample.completed_target else {
+            return false;
+        };
+        self.transport_envelope = None;
+        self.complete_transport_target(target);
+        true
+    }
+
+    fn complete_transport_target(&mut self, target: AudioTransportTarget) {
+        match target {
+            AudioTransportTarget::Playing => {
+                self.transport_gain = 1.0;
+                self.apply_effective_volume();
+                self.phase = AudioPlaybackPhase::Playing;
+            }
+            AudioTransportTarget::Paused => {
+                self.accumulated = self.position();
+                if let Some(sink) = &self.sink {
+                    sink.pause();
+                }
+                self.started_at = None;
+                self.phase = AudioPlaybackPhase::Paused;
+                self.transport_gain = 0.0;
+                self.apply_effective_volume();
+            }
+        }
+    }
+
     pub(crate) fn stop(&mut self) -> Result<AudioPlaybackState, AudioCommandError> {
         let started_at = Instant::now();
+        self.cancel_transport_transition(true);
         self.clear_error();
         tracing::info!(
             operation = "audio.runtime.stop",
@@ -616,6 +872,7 @@ impl AudioRuntime {
         input: AudioSeekInput,
     ) -> Result<AudioPlaybackState, AudioCommandError> {
         let started_at = Instant::now();
+        self.cancel_transport_transition(true);
         self.clear_error();
         if matches!(self.phase, AudioPlaybackPhase::Loading) {
             tracing::debug!(
@@ -731,8 +988,8 @@ impl AudioRuntime {
             return Err(error);
         }
 
-        apply_volume_to_sink(self.sink.as_ref(), volume);
         self.volume = volume;
+        self.apply_effective_volume();
         let state = self.state();
         tracing::info!(
             operation = "audio.runtime.set_volume",
@@ -752,6 +1009,8 @@ impl AudioRuntime {
     }
 
     fn invalidate_loaded_audio(&mut self) {
+        self.cancel_transport_transition(false);
+        self.transport_gain = 1.0;
         stop_and_take_sink(&mut self.sink);
         self.current_path = None;
         self.current_track = None;
@@ -759,8 +1018,24 @@ impl AudioRuntime {
         self.started_at = None;
     }
 
+    fn apply_effective_volume(&self) {
+        apply_volume_to_sink(
+            self.sink.as_ref(),
+            (self.volume * self.transport_gain).clamp(0.0, 1.0),
+        );
+    }
+
+    fn cancel_transport_transition(&mut self, restore_gain: bool) {
+        self.transport_envelope = None;
+        if restore_gain {
+            self.transport_gain = 1.0;
+            self.apply_effective_volume();
+        }
+    }
+
     pub(crate) fn handle_output_device_interruption(&mut self) -> AudioPlaybackState {
         let started_at = Instant::now();
+        self.cancel_transport_transition(true);
         let had_output =
             self.sink.is_some() || self.stream_handle.is_some() || self.stream.is_some();
         let was_playing = matches!(self.phase, AudioPlaybackPhase::Playing);
@@ -793,6 +1068,7 @@ impl AudioRuntime {
         current_signature: Option<String>,
     ) -> AudioPlaybackState {
         let started_at = Instant::now();
+        self.cancel_transport_transition(true);
         let previous_signature = self.output_device_signature.clone();
         let interruption_already_handled = std::mem::take(&mut self.output_device_change_pending);
         tracing::info!(
@@ -977,7 +1253,7 @@ impl AudioRuntime {
         if let Some(previous) = self.sink.take() {
             previous.stop();
         }
-        apply_volume_to_sink(Some(&sink), self.volume);
+        apply_volume_to_sink(Some(&sink), self.volume * self.transport_gain);
         configure_rebuilt_sink(&sink, source, position, play).map_err(|error| {
             tracing::warn!(
                 operation = "audio.runtime.rebuild_sink",
@@ -1007,6 +1283,8 @@ impl AudioRuntime {
         if matches!(self.phase, AudioPlaybackPhase::Playing) {
             if let Some(sink) = &self.sink {
                 if sink.empty() {
+                    self.transport_envelope = None;
+                    self.transport_gain = 1.0;
                     self.phase = AudioPlaybackPhase::Ended;
                     self.started_at = None;
                     if let Some(duration_ms) = self
@@ -1031,6 +1309,10 @@ impl AudioRuntime {
                 .as_ref()
                 .and_then(|track| track.duration_ms),
             volume: self.volume,
+            transport_transition: self
+                .transport_envelope
+                .as_ref()
+                .map(|envelope| envelope.transition.clone()),
             error: self.error.clone(),
         }
     }
@@ -1314,6 +1596,180 @@ mod tests {
             assert_eq!(runtime.phase, AudioPlaybackPhase::Paused);
             assert!(runtime.error.is_none());
         }
+    }
+
+    fn transition_input(
+        request_id: u64,
+        target: AudioTransportTarget,
+        duration_ms: u64,
+    ) -> AudioTransitionPlaybackInput {
+        AudioTransitionPlaybackInput {
+            request_id,
+            expected_track_id: "old-track".to_owned(),
+            target,
+            duration_ms,
+        }
+    }
+
+    #[test]
+    fn pause_transition_keeps_playing_until_ramp_deadline() {
+        let mut runtime = AudioRuntime {
+            current_track: Some(loaded_test_track()),
+            phase: AudioPlaybackPhase::Playing,
+            started_at: Some(Instant::now()),
+            ..AudioRuntime::default()
+        };
+        let accepted = runtime
+            .transition_playback(transition_input(1, AudioTransportTarget::Paused, 500))
+            .expect("pause transition should be accepted");
+        let started_at = runtime.transport_envelope.as_ref().unwrap().started_at;
+
+        assert_eq!(accepted.phase, AudioPlaybackPhase::Playing);
+        assert!(accepted.transport_transition.is_some());
+        assert!(!runtime.advance_transport_transition(started_at + Duration::from_millis(499)));
+        assert_eq!(runtime.phase, AudioPlaybackPhase::Playing);
+        assert!(runtime.advance_transport_transition(started_at + Duration::from_millis(500)));
+        assert_eq!(runtime.phase, AudioPlaybackPhase::Paused);
+        assert_eq!(runtime.transport_gain, 0.0);
+        assert!(runtime.get_state().transport_transition.is_none());
+    }
+
+    #[test]
+    fn play_envelope_has_no_full_volume_first_frame() {
+        let started_at = Instant::now();
+        let envelope = TransportEnvelope {
+            transition: AudioTransportTransition {
+                request_id: 2,
+                target: AudioTransportTarget::Playing,
+                duration_ms: 500,
+            },
+            from_gain: 0.0,
+            to_gain: 1.0,
+            started_at,
+            duration: Duration::from_millis(500),
+        };
+
+        assert_eq!(envelope.sample_at(started_at).gain, 0.0);
+        assert_eq!(play_transition_start_gain(false, false, 1.0), 0.0);
+        assert_eq!(play_transition_start_gain(false, true, 1.0), 0.0);
+        assert_eq!(play_transition_start_gain(true, false, 0.4), 0.4);
+        assert_eq!(
+            envelope
+                .sample_at(started_at + Duration::from_millis(250))
+                .gain,
+            0.5
+        );
+        assert_eq!(
+            envelope
+                .sample_at(started_at + Duration::from_millis(500))
+                .completed_target,
+            Some(AudioTransportTarget::Playing)
+        );
+    }
+
+    #[test]
+    fn user_volume_is_not_polluted_by_transport_gain() {
+        let mut runtime = AudioRuntime {
+            transport_gain: 0.25,
+            ..AudioRuntime::default()
+        };
+
+        let state = runtime
+            .set_volume(AudioSetVolumeInput { volume: 0.6 })
+            .expect("volume should remain independently writable during fade");
+
+        assert_eq!(runtime.transport_gain, 0.25);
+        assert_eq!(runtime.volume, 0.6);
+        assert_eq!(state.volume, 0.6);
+    }
+
+    #[test]
+    fn zero_duration_pause_is_immediate_and_has_no_transition_state() {
+        let mut runtime = AudioRuntime {
+            current_track: Some(loaded_test_track()),
+            phase: AudioPlaybackPhase::Playing,
+            started_at: Some(Instant::now()),
+            ..AudioRuntime::default()
+        };
+
+        let state = runtime
+            .transition_playback(transition_input(3, AudioTransportTarget::Paused, 0))
+            .expect("zero duration transition should be accepted");
+
+        assert_eq!(state.phase, AudioPlaybackPhase::Paused);
+        assert!(state.transport_transition.is_none());
+        assert_eq!(runtime.transport_gain, 0.0);
+    }
+
+    #[test]
+    fn legacy_cancel_restores_transport_gain() {
+        let mut runtime = AudioRuntime {
+            current_track: Some(loaded_test_track()),
+            phase: AudioPlaybackPhase::Playing,
+            started_at: Some(Instant::now()),
+            ..AudioRuntime::default()
+        };
+        runtime
+            .transition_playback(transition_input(4, AudioTransportTarget::Paused, 500))
+            .expect("pause transition should be accepted");
+        let started_at = runtime.transport_envelope.as_ref().unwrap().started_at;
+        runtime.advance_transport_transition(started_at + Duration::from_millis(250));
+        assert!((runtime.transport_gain - 0.5).abs() < 0.001);
+
+        runtime.stop().expect("legacy stop should cancel fade");
+
+        assert_eq!(runtime.transport_gain, 1.0);
+        assert!(runtime.transport_envelope.is_none());
+    }
+
+    #[test]
+    fn latest_same_target_restarts_continuously_from_current_gain() {
+        let mut runtime = AudioRuntime {
+            current_track: Some(loaded_test_track()),
+            phase: AudioPlaybackPhase::Playing,
+            started_at: Some(Instant::now()),
+            ..AudioRuntime::default()
+        };
+        runtime
+            .transition_playback(transition_input(5, AudioTransportTarget::Paused, 500))
+            .expect("first pause transition should be accepted");
+        runtime.transport_envelope.as_mut().unwrap().started_at =
+            Instant::now() - Duration::from_millis(200);
+        runtime.advance_transport_transition(Instant::now());
+        let continuous_gain = runtime.transport_gain;
+
+        let state = runtime
+            .transition_playback(transition_input(6, AudioTransportTarget::Paused, 500))
+            .expect("latest transition should replace the prior request");
+
+        let envelope = runtime.transport_envelope.as_ref().unwrap();
+        assert_eq!(envelope.transition.request_id, 6);
+        assert!((envelope.from_gain - continuous_gain).abs() < 0.01);
+        assert_eq!(state.transport_transition.unwrap().request_id, 6);
+    }
+
+    #[test]
+    fn stale_track_transition_is_rejected_without_mutating_runtime() {
+        let mut runtime = AudioRuntime {
+            current_track: Some(loaded_test_track()),
+            phase: AudioPlaybackPhase::Playing,
+            transport_gain: 0.7,
+            ..AudioRuntime::default()
+        };
+        let before_phase = runtime.phase;
+        let before_gain = runtime.transport_gain;
+        let mut input = transition_input(7, AudioTransportTarget::Paused, 500);
+        input.expected_track_id = "stale-track".to_owned();
+
+        let error = runtime
+            .transition_playback(input)
+            .expect_err("stale track transition should be rejected");
+
+        assert_eq!(error.code, AudioErrorCode::UnsupportedOperation);
+        assert_eq!(runtime.phase, before_phase);
+        assert_eq!(runtime.transport_gain, before_gain);
+        assert!(runtime.transport_envelope.is_none());
+        assert!(runtime.error.is_none());
     }
 
     #[test]

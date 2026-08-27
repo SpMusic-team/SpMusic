@@ -92,6 +92,19 @@ export type AudioPlaybackState = {
   durationMs: number | null
   volume: number
   error: AudioCommandError | null
+  transportTransition: AudioTransportTransition | null
+}
+
+export type AudioTransportTarget = 'playing' | 'paused'
+
+export type AudioTransportTransition = {
+  requestId: number
+  target: AudioTransportTarget
+  durationMs: number
+}
+
+export type AudioTransitionPlaybackInput = AudioTransportTransition & {
+  expectedTrackId: string
 }
 
 export type AudioOpenFileInput = {
@@ -293,6 +306,12 @@ export async function playAudio(input?: AudioPlayInput): Promise<AudioPlaybackSt
 
 export async function pauseAudio(): Promise<AudioPlaybackState> {
   return invoke<AudioPlaybackState>('audio_pause')
+}
+
+export async function transitionAudioPlayback(
+  input: AudioTransitionPlaybackInput,
+): Promise<AudioPlaybackState> {
+  return invoke<AudioPlaybackState>('audio_transition_playback', { input })
 }
 
 export async function stopAudio(): Promise<AudioPlaybackState> {

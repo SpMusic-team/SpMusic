@@ -54,7 +54,36 @@ pub struct AudioPlaybackState {
     #[ts(type = "number | null")]
     pub duration_ms: Option<u64>,
     pub volume: f32,
+    pub transport_transition: Option<AudioTransportTransition>,
     pub error: Option<AudioCommandError>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioTransportTransition {
+    #[ts(type = "number")]
+    pub request_id: u64,
+    pub target: AudioTransportTarget,
+    #[ts(type = "number")]
+    pub duration_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum AudioTransportTarget {
+    Playing,
+    Paused,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioTransitionPlaybackInput {
+    #[ts(type = "number")]
+    pub request_id: u64,
+    pub expected_track_id: String,
+    pub target: AudioTransportTarget,
+    #[ts(type = "number")]
+    pub duration_ms: u64,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, TS)]
@@ -221,6 +250,7 @@ mod tests {
         assert!(exported.contains("generation: number | null"));
         assert!(exported.contains("positionMs: number"));
         assert!(exported.contains("durationMs: number | null"));
+        assert!(exported.contains("transportTransition: AudioTransportTransition | null"));
         assert!(!exported.contains("currentTrack: AudioTrackRef"));
     }
 
@@ -233,6 +263,7 @@ mod tests {
             position_ms: 1_250,
             duration_ms: Some(60_000),
             volume: 0.75,
+            transport_transition: None,
             error: None,
         };
 
@@ -245,6 +276,31 @@ mod tests {
         assert!(serialized.get("metadata").is_none());
         assert!(serialized.get("coverArt").is_none());
         assert!(serialized.get("lyrics").is_none());
+        assert!(serialized["transportTransition"].is_null());
+    }
+
+    #[test]
+    fn transition_playback_contract_is_camel_case_and_tag_free() {
+        let input = AudioTransitionPlaybackInput::export_to_string(&Config::default())
+            .expect("AudioTransitionPlaybackInput should export");
+        let transition = AudioTransportTransition::export_to_string(&Config::default())
+            .expect("AudioTransportTransition should export");
+
+        assert!(input.contains("requestId: number"));
+        assert!(input.contains("expectedTrackId: string"));
+        assert!(input.contains("target: AudioTransportTarget"));
+        assert!(input.contains("durationMs: number"));
+        assert!(transition.contains("requestId: number"));
+
+        let value = serde_json::to_value(AudioTransportTransition {
+            request_id: 9,
+            target: AudioTransportTarget::Paused,
+            duration_ms: 500,
+        })
+        .expect("transition should serialize");
+        assert_eq!(value["requestId"], 9);
+        assert_eq!(value["target"], "paused");
+        assert_eq!(value["durationMs"], 500);
     }
 
     #[test]

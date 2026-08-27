@@ -20,7 +20,7 @@ import {
   useArtworkVisualResource,
   type ArtworkVisualLayer,
 } from '@/features/player/hooks/useArtworkVisualResource'
-import type { PlayerUiViewModel } from '@/features/player/model/playerUiViewModel'
+import type { PlayerPlaybackViewModel, PlayerUiViewModel } from '@/features/player/model/playerUiViewModel'
 
 export type PlayerSurfaceDevAudioTools = {
   isOpen: boolean
@@ -36,9 +36,14 @@ export type PlayerSurfaceProps = {
 type PlaybackVisualState = 'playing' | 'paused'
 
 type PlaybackTransitionRequest = {
+  requestId: number
   source: PlaybackVisualState
   target: PlaybackVisualState
   trackId: string
+  durationMs: number
+  visualComplete: boolean
+  backendObserved: boolean
+  backendComplete: boolean
 }
 
 type PlaybackTransitionStyle = CSSProperties & {
@@ -46,6 +51,13 @@ type PlaybackTransitionStyle = CSSProperties & {
 }
 
 const PLAYBACK_VISUAL_TRANSITION_MS = 500
+let lastPlaybackTransitionRequestId = 0
+
+function nextPlaybackTransitionRequestId(): number {
+  const candidate = Math.max(lastPlaybackTransitionRequestId + 1, Date.now() * 1000)
+  lastPlaybackTransitionRequestId = Number.isSafeInteger(candidate) ? candidate : lastPlaybackTransitionRequestId + 1
+  return lastPlaybackTransitionRequestId
+}
 
 type AmbientArtworkProps = {
   layer: ArtworkVisualLayer | null
@@ -179,14 +191,6 @@ export function PlayerSurface({
   const playerStageRef = useRef<HTMLElement>(null)
   const playbackTransitionRequestRef = useRef<PlaybackTransitionRequest | null>(null)
   const playbackTransitionTimerRef = useRef<number | null>(null)
-  const latestPlaybackContextRef = useRef({
-    trackId: track?.id ?? null,
-    state: realPlaybackState,
-    busy: playback.isAudioBusy || playback.isSelectionPending || playback.isTransportBusy,
-    seeking: timeline.interaction === 'seeking',
-    artworkReady: currentArtworkReady,
-    onPlayToggle: playback.onPlayToggle,
-  })
   const playbackTransitionDuration = appearanceMotion.disabled || reduceMotion
     ? 0
     : PLAYBACK_VISUAL_TRANSITION_MS
@@ -213,6 +217,15 @@ export function PlayerSurface({
     setPendingVisualPlaybackState(null)
   }, [clearPlaybackTransitionTimer])
 
+  const settlePlaybackTransitionIfComplete = useCallback(() => {
+    const request = playbackTransitionRequestRef.current
+    if (!request?.visualComplete || !request.backendComplete) return
+    clearPlaybackTransitionTimer()
+    playbackTransitionRequestRef.current = null
+    setPlaybackTransitionPending(false)
+    setPendingVisualPlaybackState(null)
+  }, [clearPlaybackTransitionTimer])
+
   const handlePlayToggle = useCallback(() => {
     if (playbackTransitionRequestRef.current) return
     const trackId = track?.id
@@ -220,96 +233,89 @@ export function PlayerSurface({
     if (!trackId || busy || timeline.interaction === 'seeking' || !currentArtworkReady) return
 
     const target = realPlaybackState === 'playing' ? 'paused' : 'playing'
-    playbackTransitionRequestRef.current = {
+    const layout = playerStageRef.current
+      ?.closest<HTMLElement>('.responsive-player-layout')
+      ?.dataset.playerLayout
+    const durationMs = layout === 'full' ? playbackTransitionDuration : 0
+    const request: PlaybackTransitionRequest = {
+      requestId: nextPlaybackTransitionRequestId(),
       source: realPlaybackState,
       target,
       trackId,
+      durationMs,
+      visualComplete: false,
+      backendObserved: false,
+      backendComplete: false,
     }
+    playbackTransitionRequestRef.current = request
     setPlaybackTransitionPending(true)
     setPendingVisualPlaybackState(target)
-  }, [
-    playback.isAudioBusy,
-    playback.isSelectionPending,
-    playback.isTransportBusy,
-    currentArtworkReady,
-    realPlaybackState,
-    timeline.interaction,
-    track?.id,
-  ])
 
-  useEffect(() => {
-    latestPlaybackContextRef.current = {
-      trackId: track?.id ?? null,
-      state: realPlaybackState,
-      busy: playback.isAudioBusy || playback.isSelectionPending || playback.isTransportBusy,
-      seeking: timeline.interaction === 'seeking',
-      artworkReady: currentArtworkReady,
-      onPlayToggle: playback.onPlayToggle,
+    playbackTransitionTimerRef.current = window.setTimeout(() => {
+      playbackTransitionTimerRef.current = null
+      const activeRequest = playbackTransitionRequestRef.current
+      if (!activeRequest || activeRequest.requestId !== request.requestId) return
+      activeRequest.visualComplete = true
+      settlePlaybackTransitionIfComplete()
+    }, durationMs)
+
+    let transitionResult: ReturnType<PlayerPlaybackViewModel['onPlayToggle']>
+    try {
+      transitionResult = playback.onPlayToggle({
+        requestId: request.requestId,
+        expectedTrackId: trackId,
+        target,
+        durationMs,
+      })
+    } catch {
+      cancelPlaybackTransition()
+      return
     }
+    void Promise.resolve(transitionResult)
+      .then((result) => {
+        const activeRequest = playbackTransitionRequestRef.current
+        if (!activeRequest || activeRequest.requestId !== request.requestId) return
+        if (result && result.requestId !== request.requestId) {
+          cancelPlaybackTransition()
+          return
+        }
+        if (result?.completed) activeRequest.backendComplete = true
+        else activeRequest.backendObserved = true
+        settlePlaybackTransitionIfComplete()
+      })
+      .catch(cancelPlaybackTransition)
   }, [
-    playback.isAudioBusy,
-    playback.isSelectionPending,
-    playback.isTransportBusy,
-    playback.onPlayToggle,
+    cancelPlaybackTransition,
+    playback,
+    playbackTransitionDuration,
     currentArtworkReady,
     realPlaybackState,
+    settlePlaybackTransitionIfComplete,
     timeline.interaction,
     track?.id,
   ])
 
   useEffect(() => {
     const request = playbackTransitionRequestRef.current
-    if (!playbackTransitionPending || !request || visualPlaybackState !== request.target) return
-
-    const layout = playerStageRef.current
-      ?.closest<HTMLElement>('.responsive-player-layout')
-      ?.dataset.playerLayout
-    const delay = layout === 'full' ? playbackTransitionDuration : 0
-
-    playbackTransitionTimerRef.current = window.setTimeout(() => {
-      playbackTransitionTimerRef.current = null
-      const activeRequest = playbackTransitionRequestRef.current
-      const context = latestPlaybackContextRef.current
-      if (
-        !activeRequest
-        || context.trackId !== activeRequest.trackId
-        || context.state !== activeRequest.source
-        || context.busy
-        || context.seeking
-        || !context.artworkReady
-      ) {
-        cancelPlaybackTransition()
-        return
-      }
-
-      playbackTransitionRequestRef.current = null
-      setPlaybackTransitionPending(false)
-      setPendingVisualPlaybackState(null)
-      try {
-        context.onPlayToggle()
-      } catch {
-        setPendingVisualPlaybackState(null)
-      }
-    }, delay)
-
-    return clearPlaybackTransitionTimer
-  }, [
-    cancelPlaybackTransition,
-    clearPlaybackTransitionTimer,
-    playbackTransitionDuration,
-    playbackTransitionPending,
-    visualPlaybackState,
-  ])
+    if (!request) return
+    const backendTransition = playback.transportTransition ?? null
+    if (backendTransition?.requestId === request.requestId) {
+      request.backendObserved = true
+      return
+    }
+    if (backendTransition === null && request.backendObserved) {
+      request.backendComplete = true
+      settlePlaybackTransitionIfComplete()
+    }
+  }, [playback.transportTransition, settlePlaybackTransitionIfComplete])
 
   useEffect(() => {
     const request = playbackTransitionRequestRef.current
     if (!request) return
 
     const contextInvalidated = request.trackId !== (track?.id ?? null)
-      || request.source !== realPlaybackState
       || playback.isAudioBusy
       || playback.isSelectionPending
-      || playback.isTransportBusy
       || timeline.interaction === 'seeking'
       || !currentArtworkReady
     if (contextInvalidated) cancelPlaybackTransition()
@@ -317,10 +323,8 @@ export function PlayerSurface({
     cancelPlaybackTransition,
     playback.isAudioBusy,
     playback.isSelectionPending,
-    playback.isTransportBusy,
     playbackTransitionPending,
     currentArtworkReady,
-    realPlaybackState,
     timeline.interaction,
     track?.id,
   ])

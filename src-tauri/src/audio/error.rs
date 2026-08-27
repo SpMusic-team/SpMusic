@@ -50,6 +50,7 @@ pub(crate) fn unavailable_state(message: impl Into<String>) -> AudioPlaybackStat
         position_ms: 0,
         duration_ms: None,
         volume: 1.0,
+        transport_transition: None,
         error: Some(audio_error(AudioErrorCode::InternalError, message, true)),
     }
 }

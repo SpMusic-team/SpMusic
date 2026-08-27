@@ -339,6 +339,7 @@ export function ControlDock({
       data-playback-transition-pending={playbackTransitionPending ? '' : undefined}
       data-playback-command-busy={playbackCommandBusy ? '' : undefined}
       data-playback-visual-ready={playbackVisualReady ? 'true' : 'false'}
+      data-timeline-seeking={timeline.interaction === 'seeking' ? '' : undefined}
     >
       <p className="audio-status" aria-live="polite">{playback.statusText}</p>
       <ProgressControl

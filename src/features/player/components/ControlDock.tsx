@@ -331,27 +331,29 @@ export function ControlDock({
       />
       <div className="control-row">
         <div className="control-auxiliary control-auxiliary-start"><IconButton icon={systemIcons.audioWave} label={appCopy.controls.openAudio} disabled={commandBusy} onClick={playback.onOpenAudio} /></div>
-        <div className="control-primary">
+        <div className="control-primary" data-playback-state={playback.isPlaying ? 'playing' : 'paused'}>
           <IconButton className="control-optional" icon={shufflePresentation.icon} label={shufflePresentation.label} selected={shufflePresentation.pressed} disabled={disabled} onClick={handleShuffleCycle} />
-          <IconButton className="previous-button" icon={systemIcons.previous} label={appCopy.controls.previous} disabled={disabled || navigationBusy} onClick={playback.onPrevious} />
-          <Button className="play-button" aria-busy={playback.isTransportBusy || playback.isSelectionPending} aria-label={playback.isPlaying ? appCopy.controls.pause : appCopy.controls.play} aria-pressed={playback.isPlaying} disabled={commandBusy || disabled} size="icon-lg" onClick={playback.onPlayToggle}>
-            <span className="player-control-icon-swap">
-              <AnimatePresence initial={false}>
-                <motion.span
-                  key={playback.isPlaying ? 'pause' : 'play'}
-                  className="player-control-icon-frame"
-                  variants={appearanceMotion.variants.glyph}
-                  initial="initial"
-                  animate="animate"
-                  exit="exit"
-                  aria-hidden="true"
-                >
-                  {playback.isPlaying ? <systemIcons.pause /> : <systemIcons.play />}
-                </motion.span>
-              </AnimatePresence>
-            </span>
-          </Button>
-          <IconButton className="next-button" icon={systemIcons.next} label={appCopy.controls.next} disabled={disabled || navigationBusy} onClick={playback.onNext} />
+          <div className="control-transport">
+            <IconButton className="previous-button" icon={systemIcons.previous} label={appCopy.controls.previous} disabled={disabled || navigationBusy} onClick={playback.onPrevious} />
+            <Button className="play-button" aria-busy={playback.isTransportBusy || playback.isSelectionPending} aria-label={playback.isPlaying ? appCopy.controls.pause : appCopy.controls.play} aria-pressed={playback.isPlaying} disabled={commandBusy || disabled} size="icon-lg" onClick={playback.onPlayToggle}>
+              <span className="player-control-icon-swap">
+                <AnimatePresence initial={false}>
+                  <motion.span
+                    key={playback.isPlaying ? 'pause' : 'play'}
+                    className="player-control-icon-frame"
+                    variants={appearanceMotion.variants.glyph}
+                    initial="initial"
+                    animate="animate"
+                    exit="exit"
+                    aria-hidden="true"
+                  >
+                    {playback.isPlaying ? <systemIcons.pause /> : <systemIcons.play />}
+                  </motion.span>
+                </AnimatePresence>
+              </span>
+            </Button>
+            <IconButton className="next-button" icon={systemIcons.next} label={appCopy.controls.next} disabled={disabled || navigationBusy} onClick={playback.onNext} />
+          </div>
           <IconButton className="control-optional" icon={repeatPresentation.icon} label={repeatPresentation.label} selected={repeatPresentation.pressed} disabled={disabled} onClick={handleRepeatCycle} />
         </div>
         <div className="control-auxiliary control-auxiliary-end">

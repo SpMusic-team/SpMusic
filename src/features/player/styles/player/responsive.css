@@ -14,6 +14,10 @@
   min-height: 0;
 }
 
+.control-transport {
+  display: contents;
+}
+
 .responsive-player-layout .player-stage {
   --full-cover-size: min(
     calc(100svh - 459 * var(--player-layout-unit)),
@@ -305,6 +309,22 @@
   transform: translateX(2px);
 }
 
+.responsive-player-layout[data-player-layout="full"] .control-transport {
+  box-sizing: border-box;
+  width: 276px;
+  min-width: 276px;
+  flex: 0 0 276px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 36px;
+  transition: gap var(--app-motion-fast) var(--app-motion-easing);
+}
+
+.responsive-player-layout[data-player-layout="full"] .control-primary[data-playback-state="paused"] .control-transport {
+  gap: 12px;
+}
+
 .responsive-player-layout[data-player-layout="full"] .control-auxiliary-start {
   width: 208px;
   padding-inline: 16px;
@@ -334,10 +354,19 @@
 
 .responsive-player-layout[data-player-layout="full"] .control-primary .previous-button,
 .responsive-player-layout[data-player-layout="full"] .control-primary .next-button {
-  width: 72px;
-  height: 72px;
-  flex-basis: 72px;
+  width: 64px;
+  height: 64px;
+  flex-basis: 64px;
   border-width: 1px;
+  transition-duration: var(--app-motion-fast);
+  transition-timing-function: var(--app-motion-easing);
+}
+
+.responsive-player-layout[data-player-layout="full"] .control-primary[data-playback-state="paused"] .previous-button,
+.responsive-player-layout[data-player-layout="full"] .control-primary[data-playback-state="paused"] .next-button {
+  width: 56px;
+  height: 56px;
+  flex-basis: 56px;
 }
 
 .responsive-player-layout[data-player-layout="full"] .control-primary .previous-button svg,
@@ -349,6 +378,14 @@
 }
 
 .responsive-player-layout[data-player-layout="full"] .control-primary .play-button {
+  width: 76px;
+  height: 76px;
+  flex-basis: 76px;
+  transition-duration: var(--app-motion-fast);
+  transition-timing-function: var(--app-motion-easing);
+}
+
+.responsive-player-layout[data-player-layout="full"] .control-primary[data-playback-state="paused"] .play-button {
   width: 84px;
   height: 84px;
   flex-basis: 84px;
@@ -837,6 +874,10 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .responsive-player-layout[data-player-layout="full"] .control-transport,
+  .responsive-player-layout[data-player-layout="full"] .control-primary .previous-button,
+  .responsive-player-layout[data-player-layout="full"] .control-primary .next-button,
+  .responsive-player-layout[data-player-layout="full"] .control-primary .play-button,
   .control-optional,
   .window-settings-trigger,
   .lyrics-panel li {

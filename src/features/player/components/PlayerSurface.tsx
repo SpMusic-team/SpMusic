@@ -45,9 +45,11 @@ type PlaybackTransitionRequest = {
 
 type PlaybackTransitionStyle = CSSProperties & {
   '--player-playback-transition-duration': string
+  '--player-control-transition-duration': string
 }
 
 const PLAYBACK_VISUAL_TRANSITION_MS = 500
+const PLAYBACK_CONTROL_TRANSITION_MS = 250
 let lastPlaybackTransitionRequestId = 0
 
 function nextPlaybackTransitionRequestId(): number {
@@ -192,6 +194,7 @@ export function PlayerSurface({
     : PLAYBACK_VISUAL_TRANSITION_MS
   const playbackTransitionStyle: PlaybackTransitionStyle = {
     '--player-playback-transition-duration': `${playbackTransitionDuration}ms`,
+    '--player-control-transition-duration': `${playbackTransitionDuration === 0 ? 0 : PLAYBACK_CONTROL_TRANSITION_MS}ms`,
   }
   const lyricLayoutKey = [
     appearance.player.lyricsFontScale,
@@ -423,7 +426,10 @@ export function PlayerSurface({
             ) : <EmptyPlayerState state={contentState === 'track' ? 'empty' : contentState} statusText={playback.statusText} />}
 
             <div className="player-control-region">
-              <PlaybackInfoButton visible={Boolean(track)} />
+              <PlaybackInfoButton
+                visible={Boolean(track)}
+                visualIsPlaying={visualPlaybackState === 'playing'}
+              />
               <ControlDock
                 playback={playback}
                 timeline={timeline}

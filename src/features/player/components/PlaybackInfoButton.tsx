@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button'
 
 type PlaybackInfoButtonProps = {
   visible: boolean
+  visualIsPlaying: boolean
 }
 
 type PlaybackInfoVariant = {
@@ -46,7 +47,7 @@ const playbackInfoVariants: readonly PlaybackInfoVariant[] = [
   },
 ]
 
-export function PlaybackInfoButton({ visible }: PlaybackInfoButtonProps) {
+export function PlaybackInfoButton({ visible, visualIsPlaying }: PlaybackInfoButtonProps) {
   const [variantIndex, setVariantIndex] = useState(0)
   const currentVariant = playbackInfoVariants[variantIndex]
   const CurrentIcon = currentVariant.icon
@@ -61,6 +62,7 @@ export function PlaybackInfoButton({ visible }: PlaybackInfoButtonProps) {
       type="button"
       variant="secondary"
       data-visible={visible}
+      data-playback-state={visualIsPlaying ? 'playing' : 'paused'}
       aria-hidden={!visible || undefined}
       aria-label={`当前播放信息：${currentVariant.text}。点击切换播放信息。`}
       disabled={!visible}

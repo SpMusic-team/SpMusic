@@ -1,5 +1,5 @@
 import '@/features/player/styles/player.css'
-import { memo, useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { memo, useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode, type TransitionEvent } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useAppearance, useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
@@ -37,13 +37,10 @@ type PlaybackVisualState = 'playing' | 'paused'
 
 type PlaybackTransitionRequest = {
   requestId: number
-  source: PlaybackVisualState
   target: PlaybackVisualState
   trackId: string
   durationMs: number
   visualComplete: boolean
-  backendObserved: boolean
-  backendComplete: boolean
 }
 
 type PlaybackTransitionStyle = CSSProperties & {
@@ -190,7 +187,6 @@ export function PlayerSurface({
   const [playbackTransitionPending, setPlaybackTransitionPending] = useState(false)
   const playerStageRef = useRef<HTMLElement>(null)
   const playbackTransitionRequestRef = useRef<PlaybackTransitionRequest | null>(null)
-  const playbackTransitionTimerRef = useRef<number | null>(null)
   const playbackTransitionDuration = appearanceMotion.disabled || reduceMotion
     ? 0
     : PLAYBACK_VISUAL_TRANSITION_MS
@@ -204,60 +200,75 @@ export function PlayerSurface({
     appearance.player.lyricsTightThresholdSeconds,
   ].join(':')
 
-  const clearPlaybackTransitionTimer = useCallback(() => {
-    if (playbackTransitionTimerRef.current === null) return
-    window.clearTimeout(playbackTransitionTimerRef.current)
-    playbackTransitionTimerRef.current = null
-  }, [])
-
   const cancelPlaybackTransition = useCallback(() => {
-    clearPlaybackTransitionTimer()
     playbackTransitionRequestRef.current = null
     setPlaybackTransitionPending(false)
     setPendingVisualPlaybackState(null)
-  }, [clearPlaybackTransitionTimer])
+  }, [])
 
   const settlePlaybackTransitionIfComplete = useCallback(() => {
     const request = playbackTransitionRequestRef.current
-    if (!request?.visualComplete || !request.backendComplete) return
-    clearPlaybackTransitionTimer()
+    const backendPhaseMatches = playback.isPlaying === (request?.target === 'playing')
+    if (
+      !request?.visualComplete
+      || (playback.transportTransition ?? null) !== null
+      || playback.transportSettledRequestId !== request.requestId
+      || !backendPhaseMatches
+    ) return
     playbackTransitionRequestRef.current = null
     setPlaybackTransitionPending(false)
     setPendingVisualPlaybackState(null)
-  }, [clearPlaybackTransitionTimer])
+  }, [playback.isPlaying, playback.transportSettledRequestId, playback.transportTransition])
+
+  const completePlaybackVisualTransition = useCallback((requestId: number) => {
+    const request = playbackTransitionRequestRef.current
+    if (!request || request.requestId !== requestId) return
+    request.visualComplete = true
+    settlePlaybackTransitionIfComplete()
+  }, [settlePlaybackTransitionIfComplete])
+
+  const playbackCoverTransitionTarget = useCallback((event: TransitionEvent<HTMLElement>) => {
+    const target = event.target
+    if (
+      event.propertyName !== 'width'
+      || !(target instanceof HTMLElement)
+      || !target.classList.contains('cover-frame')
+    ) return null
+    return target
+  }, [])
+
+  const handlePlaybackVisualTransitionEnd = useCallback((event: TransitionEvent<HTMLElement>) => {
+    const target = playbackCoverTransitionTarget(event)
+    if (!target) return
+    const request = playbackTransitionRequestRef.current
+    if (request) completePlaybackVisualTransition(request.requestId)
+  }, [completePlaybackVisualTransition, playbackCoverTransitionTarget])
 
   const handlePlayToggle = useCallback(() => {
-    if (playbackTransitionRequestRef.current) return
     const trackId = track?.id
-    const busy = playback.isAudioBusy || playback.isSelectionPending || playback.isTransportBusy
+    const busy = playback.isAudioBusy || playback.isSelectionPending
     if (!trackId || busy || timeline.interaction === 'seeking' || !currentArtworkReady) return
 
-    const target = realPlaybackState === 'playing' ? 'paused' : 'playing'
+    const source = playbackTransitionRequestRef.current?.target ?? visualPlaybackState
+    const target = source === 'playing' ? 'paused' : 'playing'
     const layout = playerStageRef.current
       ?.closest<HTMLElement>('.responsive-player-layout')
       ?.dataset.playerLayout
     const durationMs = layout === 'full' ? playbackTransitionDuration : 0
     const request: PlaybackTransitionRequest = {
       requestId: nextPlaybackTransitionRequestId(),
-      source: realPlaybackState,
       target,
       trackId,
       durationMs,
       visualComplete: false,
-      backendObserved: false,
-      backendComplete: false,
     }
     playbackTransitionRequestRef.current = request
     setPlaybackTransitionPending(true)
     setPendingVisualPlaybackState(target)
 
-    playbackTransitionTimerRef.current = window.setTimeout(() => {
-      playbackTransitionTimerRef.current = null
-      const activeRequest = playbackTransitionRequestRef.current
-      if (!activeRequest || activeRequest.requestId !== request.requestId) return
-      activeRequest.visualComplete = true
-      settlePlaybackTransitionIfComplete()
-    }, durationMs)
+    if (durationMs === 0) {
+      queueMicrotask(() => completePlaybackVisualTransition(request.requestId))
+    }
 
     let transitionResult: ReturnType<PlayerPlaybackViewModel['onPlayToggle']>
     try {
@@ -275,39 +286,36 @@ export function PlayerSurface({
       .then((result) => {
         const activeRequest = playbackTransitionRequestRef.current
         if (!activeRequest || activeRequest.requestId !== request.requestId) return
-        if (result && result.requestId !== request.requestId) {
-          cancelPlaybackTransition()
-          return
-        }
-        if (result?.completed) activeRequest.backendComplete = true
-        else activeRequest.backendObserved = true
+        if (result && result.requestId !== request.requestId) return
         settlePlaybackTransitionIfComplete()
       })
-      .catch(cancelPlaybackTransition)
+      .catch(() => {
+        if (playbackTransitionRequestRef.current?.requestId === request.requestId) {
+          cancelPlaybackTransition()
+        }
+      })
   }, [
     cancelPlaybackTransition,
+    completePlaybackVisualTransition,
     playback,
     playbackTransitionDuration,
     currentArtworkReady,
-    realPlaybackState,
     settlePlaybackTransitionIfComplete,
     timeline.interaction,
     track?.id,
+    visualPlaybackState,
   ])
 
   useEffect(() => {
     const request = playbackTransitionRequestRef.current
     if (!request) return
-    const backendTransition = playback.transportTransition ?? null
-    if (backendTransition?.requestId === request.requestId) {
-      request.backendObserved = true
-      return
-    }
-    if (backendTransition === null && request.backendObserved) {
-      request.backendComplete = true
-      settlePlaybackTransitionIfComplete()
-    }
-  }, [playback.transportTransition, settlePlaybackTransitionIfComplete])
+    settlePlaybackTransitionIfComplete()
+  }, [
+    playback.isPlaying,
+    playback.transportSettledRequestId,
+    playback.transportTransition,
+    settlePlaybackTransitionIfComplete,
+  ])
 
   useEffect(() => {
     const request = playbackTransitionRequestRef.current
@@ -330,9 +338,8 @@ export function PlayerSurface({
   ])
 
   useEffect(() => () => {
-    clearPlaybackTransitionTimer()
     playbackTransitionRequestRef.current = null
-  }, [clearPlaybackTransitionTimer])
+  }, [])
 
   return (
     <TooltipProvider>
@@ -369,6 +376,7 @@ export function PlayerSurface({
             className="player-stage"
             data-playback-state={visualPlaybackState}
             style={playbackTransitionStyle}
+            onTransitionEnd={handlePlaybackVisualTransitionEnd}
             aria-label={appCopy.shellLabel}
           >
             {track ? (

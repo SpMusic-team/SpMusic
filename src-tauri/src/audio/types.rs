@@ -55,6 +55,8 @@ pub struct AudioPlaybackState {
     pub duration_ms: Option<u64>,
     pub volume: f32,
     pub transport_transition: Option<AudioTransportTransition>,
+    #[ts(type = "number | null")]
+    pub transport_settled_request_id: Option<u64>,
     pub error: Option<AudioCommandError>,
 }
 
@@ -251,6 +253,7 @@ mod tests {
         assert!(exported.contains("positionMs: number"));
         assert!(exported.contains("durationMs: number | null"));
         assert!(exported.contains("transportTransition: AudioTransportTransition | null"));
+        assert!(exported.contains("transportSettledRequestId: number | null"));
         assert!(!exported.contains("currentTrack: AudioTrackRef"));
     }
 
@@ -264,6 +267,7 @@ mod tests {
             duration_ms: Some(60_000),
             volume: 0.75,
             transport_transition: None,
+            transport_settled_request_id: Some(6),
             error: None,
         };
 
@@ -277,6 +281,7 @@ mod tests {
         assert!(serialized.get("coverArt").is_none());
         assert!(serialized.get("lyrics").is_none());
         assert!(serialized["transportTransition"].is_null());
+        assert_eq!(serialized["transportSettledRequestId"], 6);
     }
 
     #[test]

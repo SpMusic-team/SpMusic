@@ -18,6 +18,7 @@ export function DemoPlayerPage() {
   const [currentTrackId, setCurrentTrackId] = useState(demoTracks[0]?.id ?? null)
   const [playing, setPlaying] = useState(false)
   const [transportTransition, setTransportTransition] = useState<AudioTransportTransition | null>(null)
+  const [transportSettledRequestId, setTransportSettledRequestId] = useState<number | null>(null)
   const [progress, setProgress] = useState(0)
   const [timelineInteraction, setTimelineInteraction] = useState<'following' | 'previewing'>('following')
   const [volume, setVolume] = useState(72)
@@ -29,6 +30,7 @@ export function DemoPlayerPage() {
   const endingTrackRef = useRef<string | null>(null)
   const previewStartProgressRef = useRef(0)
   const transportTimerRef = useRef<number | null>(null)
+  const transportEnvelopeRef = useRef({ source: 0, target: 0, startedAt: 0, durationMs: 0 })
   const track = demoTracks.find((candidate) => candidate.id === currentTrackId) ?? demoTracks[0] ?? null
   const duration = track?.durationSeconds ?? 0
 
@@ -105,6 +107,7 @@ export function DemoPlayerPage() {
       isAudioBusy: false,
       isTransportBusy: transportTransition !== null,
       transportTransition,
+      transportSettledRequestId,
       statusText: '演示模式：不调用 Tauri 音频后端',
       onOpenAudio: () => toast.info('独立演示页不会打开本地音频'),
       onPrevious: () => changeTrack(-1),
@@ -114,22 +117,41 @@ export function DemoPlayerPage() {
           return Promise.reject(new Error('Demo playback transition context is stale'))
         }
         if (transportTimerRef.current !== null) window.clearTimeout(transportTimerRef.current)
+        const now = window.performance.now()
+        const previousEnvelope = transportEnvelopeRef.current
+        const elapsed = Math.max(0, now - previousEnvelope.startedAt)
+        const previousProgress = previousEnvelope.durationMs > 0
+          ? Math.min(1, elapsed / previousEnvelope.durationMs)
+          : 1
+        const currentLevel = previousEnvelope.source
+          + (previousEnvelope.target - previousEnvelope.source) * previousProgress
+        const targetLevel = request.target === 'playing' ? 1 : 0
+        const actualDurationMs = request.durationMs * Math.abs(targetLevel - currentLevel)
+        transportEnvelopeRef.current = {
+          source: currentLevel,
+          target: targetLevel,
+          startedAt: now,
+          durationMs: actualDurationMs,
+        }
+        setTransportSettledRequestId(null)
         if (request.target === 'playing') setPlaying(true)
         if (request.durationMs <= 0) {
           setPlaying(request.target === 'playing')
           setTransportTransition(null)
+          setTransportSettledRequestId(request.requestId)
           return Promise.resolve({ requestId: request.requestId, completed: true })
         }
         setTransportTransition({
           requestId: request.requestId,
           target: request.target,
-          durationMs: request.durationMs,
+          durationMs: actualDurationMs,
         })
         transportTimerRef.current = window.setTimeout(() => {
           transportTimerRef.current = null
           setPlaying(request.target === 'playing')
           setTransportTransition(null)
-        }, request.durationMs)
+          setTransportSettledRequestId(request.requestId)
+        }, actualDurationMs)
         return Promise.resolve({ requestId: request.requestId, completed: false })
       },
       onShuffleCycle: () => setShuffleMode((value) => nextShuffleMode[value]),

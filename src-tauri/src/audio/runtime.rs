@@ -240,6 +240,8 @@ pub(crate) struct AudioRuntime {
     volume: f32,
     transport_gain: f32,
     transport_envelope: Option<TransportEnvelope>,
+    latest_transport_request_id: Option<u64>,
+    transport_settled_request_id: Option<u64>,
     error: Option<AudioCommandError>,
     output_device_signature: Option<String>,
     output_device_change_pending: bool,
@@ -262,6 +264,8 @@ impl Default for AudioRuntime {
             volume: 1.0,
             transport_gain: 1.0,
             transport_envelope: None,
+            latest_transport_request_id: None,
+            transport_settled_request_id: None,
             error: None,
             output_device_signature: current_output_device_signature(),
             output_device_change_pending: false,
@@ -313,6 +317,11 @@ fn play_transition_start_gain(
     } else {
         current_gain.clamp(0.0, 1.0)
     }
+}
+
+fn scaled_transport_duration_ms(base_duration_ms: u64, from_gain: f32, to_gain: f32) -> u64 {
+    ((base_duration_ms as f64) * f64::from((to_gain - from_gain).abs().clamp(0.0, 1.0))).round()
+        as u64
 }
 
 impl AudioRuntime {
@@ -673,6 +682,16 @@ impl AudioRuntime {
             ));
         }
 
+        // Request ids are a per-track monotonic fence. An out-of-order reply
+        // from the frontend must never rewind a newer audible envelope.
+        if self
+            .latest_transport_request_id
+            .is_some_and(|latest_request_id| input.request_id <= latest_request_id)
+        {
+            return Ok(self.state());
+        }
+        self.latest_transport_request_id = Some(input.request_id);
+
         self.clear_error();
         // Sample the old envelope before replacing it so opposite-direction
         // requests continue from the audible gain without a discontinuity.
@@ -692,6 +711,7 @@ impl AudioRuntime {
         if matches!(self.phase, AudioPlaybackPhase::Playing)
             && (self.transport_gain - 1.0).abs() <= f32::EPSILON
         {
+            self.settle_transport_request(input.request_id);
             return Ok(self.state());
         }
 
@@ -749,6 +769,7 @@ impl AudioRuntime {
         if matches!(self.phase, AudioPlaybackPhase::Paused) {
             self.transport_gain = 0.0;
             self.apply_effective_volume();
+            self.settle_transport_request(input.request_id);
             return Ok(self.state());
         }
         if !matches!(self.phase, AudioPlaybackPhase::Playing) {
@@ -761,6 +782,7 @@ impl AudioRuntime {
             self.phase = AudioPlaybackPhase::Paused;
             self.transport_gain = 0.0;
             self.apply_effective_volume();
+            self.settle_transport_request(input.request_id);
             return Ok(self.state());
         }
 
@@ -775,15 +797,17 @@ impl AudioRuntime {
         from_gain: f32,
         to_gain: f32,
     ) {
+        let actual_duration_ms =
+            scaled_transport_duration_ms(input.duration_ms, from_gain, to_gain);
         let transition = AudioTransportTransition {
             request_id: input.request_id,
             target: input.target,
-            duration_ms: input.duration_ms,
+            duration_ms: actual_duration_ms,
         };
-        if input.duration_ms == 0 {
+        if actual_duration_ms == 0 {
             self.transport_gain = to_gain;
             self.apply_effective_volume();
-            self.complete_transport_target(input.target);
+            self.complete_transport_target(input.target, input.request_id);
             return;
         }
         self.transport_envelope = Some(TransportEnvelope {
@@ -791,7 +815,7 @@ impl AudioRuntime {
             from_gain,
             to_gain,
             started_at: Instant::now(),
-            duration: Duration::from_millis(input.duration_ms),
+            duration: Duration::from_millis(actual_duration_ms),
         });
     }
 
@@ -805,18 +829,26 @@ impl AudioRuntime {
         let Some(envelope) = self.transport_envelope.as_ref() else {
             return false;
         };
+        if self.latest_transport_request_id != Some(envelope.transition.request_id) {
+            self.transport_envelope = None;
+            return false;
+        }
         let sample = envelope.sample_at(now);
         self.transport_gain = sample.gain;
         self.apply_effective_volume();
         let Some(target) = sample.completed_target else {
             return false;
         };
+        let request_id = envelope.transition.request_id;
         self.transport_envelope = None;
-        self.complete_transport_target(target);
+        self.complete_transport_target(target, request_id);
         true
     }
 
-    fn complete_transport_target(&mut self, target: AudioTransportTarget) {
+    fn complete_transport_target(&mut self, target: AudioTransportTarget, request_id: u64) {
+        if self.latest_transport_request_id != Some(request_id) {
+            return;
+        }
         match target {
             AudioTransportTarget::Playing => {
                 self.transport_gain = 1.0;
@@ -833,6 +865,13 @@ impl AudioRuntime {
                 self.transport_gain = 0.0;
                 self.apply_effective_volume();
             }
+        }
+        self.settle_transport_request(request_id);
+    }
+
+    fn settle_transport_request(&mut self, request_id: u64) {
+        if self.latest_transport_request_id == Some(request_id) {
+            self.transport_settled_request_id = Some(request_id);
         }
     }
 
@@ -1011,6 +1050,8 @@ impl AudioRuntime {
     fn invalidate_loaded_audio(&mut self) {
         self.cancel_transport_transition(false);
         self.transport_gain = 1.0;
+        self.latest_transport_request_id = None;
+        self.transport_settled_request_id = None;
         stop_and_take_sink(&mut self.sink);
         self.current_path = None;
         self.current_track = None;
@@ -1313,6 +1354,7 @@ impl AudioRuntime {
                 .transport_envelope
                 .as_ref()
                 .map(|envelope| envelope.transition.clone()),
+            transport_settled_request_id: self.transport_settled_request_id,
             error: self.error.clone(),
         }
     }
@@ -1698,7 +1740,170 @@ mod tests {
 
         assert_eq!(state.phase, AudioPlaybackPhase::Paused);
         assert!(state.transport_transition.is_none());
+        assert_eq!(state.transport_settled_request_id, Some(3));
         assert_eq!(runtime.transport_gain, 0.0);
+    }
+
+    #[test]
+    fn interrupted_envelopes_reverse_continuously_with_remaining_distance_duration() {
+        let mut runtime = AudioRuntime {
+            current_track: Some(loaded_test_track()),
+            phase: AudioPlaybackPhase::Playing,
+            started_at: Some(Instant::now()),
+            volume: 0.63,
+            ..AudioRuntime::default()
+        };
+
+        runtime.latest_transport_request_id = Some(10);
+        runtime.install_transport_envelope(
+            transition_input(10, AudioTransportTarget::Paused, 500),
+            1.0,
+            0.0,
+        );
+        let pause_started_at = runtime.transport_envelope.as_ref().unwrap().started_at;
+        assert!(
+            !runtime.advance_transport_transition(pause_started_at + Duration::from_millis(250))
+        );
+        assert!((runtime.transport_gain - 0.5).abs() < 0.001);
+
+        runtime.latest_transport_request_id = Some(11);
+        runtime.install_transport_envelope(
+            transition_input(11, AudioTransportTarget::Playing, 500),
+            runtime.transport_gain,
+            1.0,
+        );
+        let play_envelope = runtime.transport_envelope.as_ref().unwrap();
+        assert!((play_envelope.from_gain - 0.5).abs() < 0.001);
+        assert_eq!(play_envelope.transition.duration_ms, 250);
+        assert_eq!(play_envelope.duration, Duration::from_millis(250));
+        let play_started_at = play_envelope.started_at;
+        assert!(!runtime.advance_transport_transition(play_started_at + Duration::from_millis(125)));
+        assert!((runtime.transport_gain - 0.75).abs() < 0.001);
+
+        runtime.latest_transport_request_id = Some(12);
+        runtime.install_transport_envelope(
+            transition_input(12, AudioTransportTarget::Paused, 500),
+            runtime.transport_gain,
+            0.0,
+        );
+        let second_pause = runtime.transport_envelope.as_ref().unwrap();
+        assert!((second_pause.from_gain - 0.75).abs() < 0.001);
+        assert_eq!(second_pause.transition.duration_ms, 375);
+        assert_eq!(runtime.volume, 0.63);
+    }
+
+    #[test]
+    fn out_of_order_or_duplicate_request_cannot_replace_latest_envelope() {
+        let mut runtime = AudioRuntime {
+            current_track: Some(loaded_test_track()),
+            phase: AudioPlaybackPhase::Playing,
+            started_at: Some(Instant::now()),
+            ..AudioRuntime::default()
+        };
+        runtime
+            .transition_playback(transition_input(22, AudioTransportTarget::Paused, 500))
+            .expect("latest transition should be accepted");
+        let started_at = runtime.transport_envelope.as_ref().unwrap().started_at;
+        runtime.advance_transport_transition(started_at + Duration::from_millis(100));
+        let gain_before_stale_request = runtime.transport_gain;
+        let envelope_before_stale_request = runtime.transport_envelope.clone().unwrap();
+
+        for stale_request_id in [21, 22] {
+            let state = runtime
+                .transition_playback(transition_input(
+                    stale_request_id,
+                    AudioTransportTarget::Playing,
+                    500,
+                ))
+                .expect("stale transition should be suppressed as a no-op");
+            let envelope = runtime.transport_envelope.as_ref().unwrap();
+            assert_eq!(envelope.transition.request_id, 22);
+            assert_eq!(
+                envelope.started_at,
+                envelope_before_stale_request.started_at
+            );
+            assert!((runtime.transport_gain - gain_before_stale_request).abs() < f32::EPSILON);
+            assert_eq!(state.transport_transition.unwrap().request_id, 22);
+        }
+    }
+
+    #[test]
+    fn only_latest_completion_updates_settled_request_id() {
+        let mut runtime = AudioRuntime {
+            current_track: Some(loaded_test_track()),
+            phase: AudioPlaybackPhase::Playing,
+            started_at: Some(Instant::now()),
+            ..AudioRuntime::default()
+        };
+        runtime.latest_transport_request_id = Some(31);
+        runtime.install_transport_envelope(
+            transition_input(31, AudioTransportTarget::Paused, 500),
+            1.0,
+            0.0,
+        );
+        let started_at = runtime.transport_envelope.as_ref().unwrap().started_at;
+
+        runtime.latest_transport_request_id = Some(32);
+        let phase_before_stale_completion = runtime.phase;
+        let gain_before_stale_completion = runtime.transport_gain;
+        runtime.complete_transport_target(AudioTransportTarget::Paused, 31);
+        assert_eq!(runtime.transport_settled_request_id, None);
+        assert_eq!(runtime.phase, phase_before_stale_completion);
+        assert_eq!(runtime.transport_gain, gain_before_stale_completion);
+
+        runtime.phase = AudioPlaybackPhase::Playing;
+        runtime.started_at = Some(Instant::now());
+        runtime.transport_gain = 1.0;
+        runtime.latest_transport_request_id = Some(31);
+        runtime.transport_envelope = Some(TransportEnvelope {
+            transition: AudioTransportTransition {
+                request_id: 31,
+                target: AudioTransportTarget::Paused,
+                duration_ms: 500,
+            },
+            from_gain: 1.0,
+            to_gain: 0.0,
+            started_at,
+            duration: Duration::from_millis(500),
+        });
+        assert!(runtime.advance_transport_transition(started_at + Duration::from_millis(500)));
+        assert_eq!(runtime.transport_settled_request_id, Some(31));
+        assert_eq!(runtime.get_state().transport_settled_request_id, Some(31));
+    }
+
+    #[test]
+    fn cancellation_preserves_request_fence_until_track_is_replaced() {
+        let mut runtime = AudioRuntime {
+            current_track: Some(loaded_test_track()),
+            phase: AudioPlaybackPhase::Playing,
+            started_at: Some(Instant::now()),
+            ..AudioRuntime::default()
+        };
+        runtime
+            .transition_playback(transition_input(40, AudioTransportTarget::Paused, 500))
+            .expect("transition should start");
+        runtime.stop().expect("stop should cancel transition");
+        let phase_after_stop = runtime.phase;
+
+        runtime
+            .transition_playback(transition_input(40, AudioTransportTarget::Playing, 500))
+            .expect("duplicate request after cancellation should be ignored");
+        assert_eq!(runtime.phase, phase_after_stop);
+        assert!(runtime.transport_envelope.is_none());
+        assert_eq!(runtime.latest_transport_request_id, Some(40));
+
+        runtime.invalidate_loaded_audio();
+        assert_eq!(runtime.latest_transport_request_id, None);
+        assert_eq!(runtime.transport_settled_request_id, None);
+    }
+
+    #[test]
+    fn duration_scales_to_remaining_normalized_gain_distance() {
+        assert_eq!(scaled_transport_duration_ms(500, 0.5, 1.0), 250);
+        assert_eq!(scaled_transport_duration_ms(500, 0.25, 0.0), 125);
+        assert_eq!(scaled_transport_duration_ms(500, 0.333, 1.0), 333);
+        assert_eq!(scaled_transport_duration_ms(0, 0.0, 1.0), 0);
+        assert_eq!(scaled_transport_duration_ms(500, 0.4, 0.4), 0);
     }
 
     #[test]

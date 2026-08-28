@@ -29,6 +29,7 @@ export function PlayerShell() {
       isSelectionPending: player.selectionPending,
       isTransportBusy: player.transportBusy,
       transportTransition: player.transportTransition,
+      transportSettledRequestId: player.transportSettledRequestId,
       statusText: player.statusText,
       onOpenAudio: player.openAudio,
       onPrevious: player.previous,

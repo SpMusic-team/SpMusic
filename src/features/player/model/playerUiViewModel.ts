@@ -19,6 +19,7 @@ export type PlayerPlaybackViewModel = {
   isSelectionPending?: boolean
   isTransportBusy: boolean
   transportTransition?: AudioTransportTransition | null
+  transportSettledRequestId?: number | null
   statusText: string
   onOpenAudio: () => void
   onPrevious: () => void

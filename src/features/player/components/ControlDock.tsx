@@ -303,6 +303,10 @@ export function ControlDock({
     || playbackTransitionPending
     || timeline.interaction === 'seeking'
   const commandBusy = navigationBusy || playback.isSelectionPending
+  const playToggleBusy = playback.isAudioBusy
+    || playback.isSelectionPending
+    || timeline.interaction === 'seeking'
+    || (playback.isTransportBusy && !playbackTransitionPending)
   const volumeControlDisabled = commandBusy
     || disabled
     || (volume.isDisabled && !volume.isBusy)
@@ -354,7 +358,7 @@ export function ControlDock({
           <IconButton className="control-optional" icon={shufflePresentation.icon} label={shufflePresentation.label} selected={shufflePresentation.pressed} disabled={disabled} onClick={handleShuffleCycle} />
           <div className="control-transport">
             <IconButton className="previous-button" icon={systemIcons.previous} label={appCopy.controls.previous} disabled={disabled || navigationBusy} onClick={playback.onPrevious} />
-            <Button className="play-button" aria-busy={playback.isTransportBusy || playback.isSelectionPending || playbackTransitionPending || !playbackVisualReady} aria-label={visualIsPlaying ? appCopy.controls.pause : appCopy.controls.play} aria-pressed={visualIsPlaying} disabled={commandBusy || disabled || !playbackVisualReady} size="icon-lg" onClick={onPlayToggle}>
+            <Button className="play-button" aria-busy={playback.isTransportBusy || playback.isSelectionPending || playbackTransitionPending || !playbackVisualReady} aria-label={visualIsPlaying ? appCopy.controls.pause : appCopy.controls.play} aria-pressed={visualIsPlaying} disabled={playToggleBusy || disabled || !playbackVisualReady} size="icon-lg" onClick={onPlayToggle}>
               <span className="player-control-icon-swap">
                 <AnimatePresence initial={false}>
                   <motion.span

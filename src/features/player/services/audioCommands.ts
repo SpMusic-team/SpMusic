@@ -93,6 +93,7 @@ export type AudioPlaybackState = {
   volume: number
   error: AudioCommandError | null
   transportTransition: AudioTransportTransition | null
+  transportSettledRequestId: number | null
 }
 
 export type AudioTransportTarget = 'playing' | 'paused'

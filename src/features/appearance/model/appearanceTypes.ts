@@ -32,6 +32,7 @@ export type AppearanceColors = {
   playerLyrics: string
   playerOverlay: string
   playerDock: string
+  playerSurfaceVariant: string
   playerProgressPlayed: string
   playerProgressUnplayed: string
 }
@@ -179,6 +180,7 @@ export type AppearanceCssVars = CSSProperties & {
   '--player-lyrics-color': string
   '--player-overlay': string
   '--player-dock': string
+  '--player-surface-variant': string
   '--player-controls-radius': string
   '--player-controls-radius-short': string
   '--player-controls-shadow': number

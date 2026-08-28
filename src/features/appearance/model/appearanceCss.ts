@@ -77,6 +77,7 @@ export function createAppearanceCssVars(appearance: AppearancePreset, resolvedCo
     '--player-lyrics-color': colors.playerLyrics,
     '--player-overlay': colors.playerOverlay,
     '--player-dock': colors.playerDock,
+    '--player-surface-variant': colors.playerSurfaceVariant,
     '--player-controls-radius': controlLength(appearance.player.controls.radius * 0.6),
     '--player-controls-radius-short': `${compactNumber(appearance.player.controls.radius * 0.52)}px`,
     '--player-controls-shadow': appearance.player.controls.shadow / 200,

@@ -36,7 +36,7 @@ export type AppearanceThemeDocumentV3 = {
   theme: Record<string, unknown>
 }
 
-export type AppearanceThemeColorSchemesV4 = Record<'light' | 'dark', Omit<AppearanceColors, 'playerProgressPlayed' | 'playerProgressUnplayed'>>
+export type AppearanceThemeColorSchemesV4 = Record<'light' | 'dark', Omit<AppearanceColors, 'playerSurfaceVariant' | 'playerProgressPlayed' | 'playerProgressUnplayed'>>
 export type AppearanceThemePayloadV4 = Record<string, unknown>
 export type AppearanceThemeDocumentV4 = {
   schemaVersion: 4
@@ -73,6 +73,7 @@ const colorKeys = [
   'background', 'surface', 'surfaceMuted', 'text', 'textMuted', 'textStrong', 'border',
   'accent', 'accentSoft', 'accentContrast', 'playerBlue', 'playerBlueSoft', 'playerBlueInk',
   'playerInk', 'playerMuted', 'playerLyrics', 'playerOverlay', 'playerDock',
+  'playerSurfaceVariant',
   'playerProgressPlayed', 'playerProgressUnplayed',
 ] as const satisfies readonly (keyof AppearanceColors)[]
 const radiusKeys = ['sm', 'md', 'lg', 'pill'] as const satisfies readonly (keyof AppearanceRadii)[]

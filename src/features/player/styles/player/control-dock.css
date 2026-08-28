@@ -53,14 +53,61 @@
   color: var(--player-blue);
   box-shadow: none;
   interpolate-size: allow-keywords;
-  transition-property: width, height, border-radius, color, background-color;
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  transform: none;
+  translate: none;
+  scale: none;
+  --tw-translate-x: 0px;
+  --tw-translate-y: 0px;
+  transition-property: width, height, border-radius, color;
   transition-duration: var(--player-control-transition-duration);
   transition-timing-function: var(--app-motion-easing);
 }
 
-.responsive-player-layout[data-player-layout="full"] .playback-info-button:hover {
-  background: color-mix(in srgb, var(--player-volume-surface) 92%, var(--player-blue));
+.responsive-player-layout[data-player-layout="full"] .playback-info-button:hover,
+.responsive-player-layout[data-player-layout="full"] .playback-info-button:active {
+  background: var(--player-volume-surface);
   color: var(--player-blue);
+  transform: none;
+  translate: none;
+  scale: none;
+  --tw-translate-x: 0px;
+  --tw-translate-y: 0px;
+}
+
+.playback-info-button-press-feedback {
+  position: absolute;
+  top: var(--playback-info-feedback-y);
+  left: var(--playback-info-feedback-x);
+  z-index: 1;
+  display: block;
+  width: var(--playback-info-feedback-diameter);
+  height: var(--playback-info-feedback-diameter);
+  border-radius: 50%;
+  background: var(--player-surface-variant, #dde3ea);
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(0);
+  transform-origin: center;
+  pointer-events: none;
+  will-change: transform, opacity;
+  animation: playback-info-button-press-feedback 250ms ease-out both;
+}
+
+@keyframes playback-info-button-press-feedback {
+  0% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(0);
+  }
+  82% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(1);
+  }
 }
 
 .playback-info-button[data-visible="false"] {
@@ -76,6 +123,8 @@
   min-width: 0;
   padding: 10px 20px;
   display: flex;
+  position: relative;
+  z-index: 2;
   align-items: center;
   gap: 10px;
   transition: padding var(--player-control-transition-duration) var(--app-motion-easing);

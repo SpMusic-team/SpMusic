@@ -25,6 +25,7 @@ const colorLabels: Record<keyof AppearanceColors, string> = {
   playerLyrics: '播放器歌词',
   playerOverlay: '背景遮罩',
   playerDock: '控制面板',
+  playerSurfaceVariant: '播放器表面变体',
   playerProgressPlayed: '进度已播放',
   playerProgressUnplayed: '进度未播放',
 }

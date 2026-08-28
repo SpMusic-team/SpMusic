@@ -34,6 +34,7 @@
   --player-muted: #72777f;
   --player-overlay: #ffffff99;
   --player-dock: #f7f9ff99;
+  --player-surface-variant: #dde3ea;
   --color-bg: var(--app-bg);
   --color-surface: var(--app-surface);
   --color-surface-muted: var(--app-surface-muted);

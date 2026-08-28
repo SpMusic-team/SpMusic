@@ -1,6 +1,7 @@
 .volume-control { position: relative; display: flex; align-items: center; }
 .volume-panel {
   --volume-surface: var(--player-volume-surface);
+  --volume-overscroll-distance: 20px;
   position: absolute;
   left: 50%;
   bottom: calc(100% + 14px);
@@ -23,7 +24,9 @@
   clip-path: path("M0 13.1594C0 4.38647 2.66667 0 8 0H56C61.3333 0 64 4.38647 64 13.1594V197.391C64 205.616 54 210.551 40 213.841C35 217.13 33 220.42 32 227C31 220.42 29 217.13 24 213.841C10 210.551 0 205.616 0 197.391V13.1594Z");
   pointer-events: none;
 }
-.volume-control[data-open="true"] .volume-panel { transform: translate(-50%, 0); visibility: visible; opacity: 1; pointer-events: auto; transition: none; }
+.volume-control[data-open="true"] .volume-panel { transform: translate(-50%, 0); visibility: visible; opacity: 1; pointer-events: auto; transition: transform 160ms ease-out; }
+.volume-control[data-open="true"] .volume-panel[data-overscroll="above"] { transform: translate(-50%, calc(-1 * var(--volume-overscroll-distance))); }
+.volume-control[data-open="true"] .volume-panel[data-overscroll="below"] { transform: translate(-50%, var(--volume-overscroll-distance)); }
 .volume-slider { position: absolute; top: 28px; left: 15px; z-index: 1; width: 34px; height: 144px; }
 .volume-slider > div { width: 100%; height: 100%; min-height: 0; }
 .volume-slider [data-slot="slider-track"] { width: 34px; border-radius: 17px; background: var(--player-volume-track); }

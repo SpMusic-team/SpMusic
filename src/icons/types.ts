@@ -29,6 +29,9 @@ export type SystemIconProvider = {
   captions: SystemIcon
   captionsSelected: SystemIcon
   volume: SystemIcon
+  volumeMedium: SystemIcon
+  volumeLow: SystemIcon
+  volumeMuted: SystemIcon
   audioWave: SystemIcon
   queue: SystemIcon
   music: SystemIcon

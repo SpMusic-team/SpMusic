@@ -90,8 +90,8 @@ export const CoverPanel = memo(function CoverPanel({
             {!coverSource ? <div className="cover-mark"><systemIcons.music /><strong>{appCopy.productName}</strong><span>LOCAL LISTENING</span></div> : null}
             <div className="cover-actions">
               <div className="cover-feedback">
-                <IconButton animated icon={likeIcon} label={appCopy.controls.like} selected={liked} onClick={onLike} />
-                <IconButton animated icon={dislikeIcon} label={appCopy.controls.dislike} selected={disliked} onClick={onDislike} />
+                <IconButton animated pressFeedback icon={likeIcon} label={appCopy.controls.like} selected={liked} onClick={onLike} />
+                <IconButton animated pressFeedback icon={dislikeIcon} label={appCopy.controls.dislike} selected={disliked} onClick={onDislike} />
               </div>
               <MoreActionsMenu
                 track={track}

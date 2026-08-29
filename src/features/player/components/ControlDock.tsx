@@ -357,7 +357,15 @@ export function ControlDock({
         <div className="control-primary" data-playback-state={visualIsPlaying ? 'playing' : 'paused'}>
           <IconButton className="control-optional" icon={shufflePresentation.icon} label={shufflePresentation.label} selected={shufflePresentation.pressed} disabled={disabled} onClick={handleShuffleCycle} />
           <div className="control-transport">
-            <IconButton className="previous-button" icon={systemIcons.previous} label={appCopy.controls.previous} disabled={disabled || navigationBusy} onClick={playback.onPrevious} />
+            <IconButton
+              className="previous-button"
+              icon={systemIcons.previous}
+              label={appCopy.controls.previous}
+              disabled={disabled || navigationBusy}
+              pressFeedback
+              pressFeedbackTone="surface-variant"
+              onClick={playback.onPrevious}
+            />
             <Button className="play-button" aria-busy={playback.isTransportBusy || playback.isSelectionPending || playbackTransitionPending || !playbackVisualReady} aria-label={visualIsPlaying ? appCopy.controls.pause : appCopy.controls.play} aria-pressed={visualIsPlaying} disabled={playToggleBusy || disabled || !playbackVisualReady} size="icon-lg" onClick={onPlayToggle}>
               <span className="player-control-icon-swap">
                 <AnimatePresence initial={false}>
@@ -375,7 +383,15 @@ export function ControlDock({
                 </AnimatePresence>
               </span>
             </Button>
-            <IconButton className="next-button" icon={systemIcons.next} label={appCopy.controls.next} disabled={disabled || navigationBusy} onClick={playback.onNext} />
+            <IconButton
+              className="next-button"
+              icon={systemIcons.next}
+              label={appCopy.controls.next}
+              disabled={disabled || navigationBusy}
+              pressFeedback
+              pressFeedbackTone="surface-variant"
+              onClick={playback.onNext}
+            />
           </div>
           <IconButton className="control-optional" icon={repeatPresentation.icon} label={repeatPresentation.label} selected={repeatPresentation.pressed} disabled={disabled} onClick={handleRepeatCycle} />
         </div>

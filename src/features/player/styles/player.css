@@ -3,6 +3,7 @@
 @import "./player/settings-dialog.css";
 @import "./player/cover-panel.css";
 @import "./player/more-actions-menu.css";
+@import "./player/press-feedback-button.css";
 @import "./player/track-pills.css";
 @import "./player/lyrics-panel.css";
 @import "./player/control-dock.css";

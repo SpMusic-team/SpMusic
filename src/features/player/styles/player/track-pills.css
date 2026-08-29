@@ -25,6 +25,27 @@
   white-space: nowrap;
 }
 
+button.track-pill {
+  border: 0;
+  text-align: start;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.track-pill:hover,
+.track-pill:active {
+  background: var(--player-blue-soft);
+  color: var(--player-blue-ink);
+  transform: none;
+  translate: none;
+  scale: none;
+}
+
+.track-pill .ping-pong-text {
+  position: relative;
+  z-index: 2;
+}
+
 .track-pills .title-pill {
   max-width: min(100%, var(--player-track-title-max-width));
   font-size: calc(32 * var(--prototype-unit));

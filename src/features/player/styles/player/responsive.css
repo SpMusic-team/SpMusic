@@ -225,7 +225,12 @@
 }
 
 .responsive-player-layout[data-player-layout="full"] .cover-actions .more-button {
-  position: static;
+  /* Keep the button in normal flex flow while preserving it as the absolute
+     ripple's containing block. The generic cover rule supplies right/bottom
+     offsets for absolutely positioned layouts, so neutralize those here. */
+  position: relative;
+  right: auto;
+  bottom: auto;
   width: 72px;
   height: 68px;
   flex: 0 0 72px;
@@ -386,6 +391,8 @@
 .responsive-player-layout[data-player-layout="full"] .control-progress-slider [data-slot="slider-thumb"] {
   width: calc(23 * var(--player-layout-unit));
   height: calc(23 * var(--player-layout-unit));
+  width: round(nearest, calc(23 * var(--player-layout-unit)), 1px);
+  height: round(nearest, calc(23 * var(--player-layout-unit)), 1px);
 }
 
 .responsive-player-layout[data-player-layout="full"] .control-row {

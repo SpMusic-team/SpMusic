@@ -15,7 +15,7 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { PingPongText } from '@/components/PingPongText'
-import { Button } from '@/components/ui/button'
+import { buttonVariants } from '@/components/ui/button'
 import {
   Dialog,
   DialogContent,
@@ -26,6 +26,7 @@ import {
 import { Separator } from '@/components/ui/separator'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useSystemIcons } from '@/features/appearance/hooks/useAppearance'
+import { PressFeedbackButton } from '@/features/player/components/PressFeedbackButton'
 import { appCopy } from '@/features/player/model/playerCopy'
 import type { ArtworkSourceView } from '@/features/player/hooks/useArtworkVisualResource'
 import type { Track } from '@/features/player/model/playerTypes'
@@ -97,9 +98,25 @@ export function MoreActionsMenu({
   return (
     <Dialog>
       <Tooltip>
-        <TooltipTrigger render={<DialogTrigger render={<Button className="more-button" aria-label={appCopy.controls.more} size="icon" variant="ghost" />} />}>
-          <systemIcons.more />
-        </TooltipTrigger>
+        <TooltipTrigger
+          render={
+            <DialogTrigger
+              render={
+                <PressFeedbackButton
+                  className={cn(
+                    buttonVariants({ variant: 'ghost', size: 'icon' }),
+                    'cover-press-feedback-button more-button',
+                  )}
+                  aria-label={appCopy.controls.more}
+                  data-slot="button"
+                  tone="secondary-container"
+                >
+                  <systemIcons.more />
+                </PressFeedbackButton>
+              }
+            />
+          }
+        />
         <TooltipContent>{appCopy.controls.more}</TooltipContent>
       </Tooltip>
 

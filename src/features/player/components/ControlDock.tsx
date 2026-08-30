@@ -364,9 +364,12 @@ export function ControlDock({
               disabled={disabled || navigationBusy}
               pressFeedback
               pressFeedbackTone="surface-variant"
+              onPointerEnter={() => playback.onPrimeTrackArtwork?.(-1)}
+              onFocus={() => playback.onPrimeTrackArtwork?.(-1)}
+              onPointerDown={() => playback.onPrimeTrackArtwork?.(-1)}
               onClick={playback.onPrevious}
             />
-            <Button className="play-button" aria-busy={playback.isTransportBusy || playback.isSelectionPending || playbackTransitionPending || !playbackVisualReady} aria-label={visualIsPlaying ? appCopy.controls.pause : appCopy.controls.play} aria-pressed={visualIsPlaying} disabled={playToggleBusy || disabled || !playbackVisualReady} size="icon-lg" onClick={onPlayToggle}>
+            <Button className="play-button" aria-busy={playback.isTransportBusy || playback.isSelectionPending || playbackTransitionPending} aria-label={visualIsPlaying ? appCopy.controls.pause : appCopy.controls.play} aria-pressed={visualIsPlaying} disabled={playToggleBusy || disabled} size="icon-lg" onClick={onPlayToggle}>
               <span className="player-control-icon-swap">
                 <AnimatePresence initial={false}>
                   <motion.span
@@ -390,6 +393,9 @@ export function ControlDock({
               disabled={disabled || navigationBusy}
               pressFeedback
               pressFeedbackTone="surface-variant"
+              onPointerEnter={() => playback.onPrimeTrackArtwork?.(1)}
+              onFocus={() => playback.onPrimeTrackArtwork?.(1)}
+              onPointerDown={() => playback.onPrimeTrackArtwork?.(1)}
               onClick={playback.onNext}
             />
           </div>

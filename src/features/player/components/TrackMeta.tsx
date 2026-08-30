@@ -1,27 +1,23 @@
-import { motion } from 'motion/react'
 import { PingPongText } from '@/components/PingPongText'
-import { useAppearanceMotion } from '@/features/appearance/hooks/useAppearance'
-import type { Track } from '@/features/player/model/playerTypes'
+import type { ArtworkVisualLayer } from '@/features/player/hooks/useArtworkVisualResource'
 
 type TrackMetaProps = {
-  track: Track
+  layer: ArtworkVisualLayer | null
 }
 
-export function TrackMeta({ track }: TrackMetaProps) {
-  const appearanceMotion = useAppearanceMotion()
+export function TrackMeta({ layer }: TrackMetaProps) {
+  const track = layer?.track
+  const phase = layer?.phase
 
   return (
-    <motion.div
-      layout
+    <div
       className="track-pills"
-      variants={appearanceMotion.variants.track}
-      initial="initial"
-      animate="animate"
-      exit="exit"
-      aria-live="polite"
+      aria-live={phase === 'active' ? 'polite' : undefined}
     >
-      <PingPongText className="track-pill title-pill" text={track.title} />
-      <PingPongText className="track-pill artist-pill" text={`${track.artist} - ${track.album}`} />
-    </motion.div>
+      {track ? <>
+        <PingPongText className="track-pill title-pill" text={track.title} />
+        <PingPongText className="track-pill artist-pill" text={`${track.artist} - ${track.album}`} />
+      </> : null}
+    </div>
   )
 }

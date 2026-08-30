@@ -44,6 +44,8 @@ type MoreActionsMenuProps = {
   disliked: boolean
   onLike: () => void
   onDislike: () => void
+  onOpenChange?: (open: boolean) => void
+  open?: boolean
 }
 
 type UnavailableActionProps = {
@@ -78,6 +80,8 @@ export function MoreActionsMenu({
   disliked,
   onLike,
   onDislike,
+  onOpenChange,
+  open,
 }: MoreActionsMenuProps) {
   const systemIcons = useSystemIcons()
 
@@ -96,7 +100,7 @@ export function MoreActionsMenu({
   }
 
   return (
-    <Dialog>
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <Tooltip>
         <TooltipTrigger
           render={

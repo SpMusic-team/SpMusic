@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { Track, TrackArtwork, TrackArtworkPrefetchCandidate } from '@/features/player/model/playerTypes'
+import type { TrackCardPreviewToken, TrackSelectionVisualIntent } from '@/features/player/model/playerUiViewModel'
 import {
   isAudioCoverPixelsError,
   loadAudioCoverPixels,
@@ -8,7 +9,7 @@ import {
   type AudioLoadCoverPixelsInput,
 } from '@/features/player/services/audioCommands'
 
-export type ArtworkLayerPhase = 'incoming' | 'active' | 'exiting'
+export type ArtworkLayerPhase = 'incoming' | 'active' | 'exiting' | 'preview'
 export type ArtworkLayerConsumer = 'ambient' | 'cover'
 
 export type ArtworkSourceView = Readonly<{
@@ -61,6 +62,9 @@ type ArtworkCanvasPool = {
 }
 
 function createArtworkCanvasPool(): ArtworkCanvasPool {
+  // The two-entry registry can retain the current and previous resources while
+  // the next target is decoding. Keep one additional lease available so that
+  // third decode can complete and trigger registry eviction.
   const entries = Array.from({ length: 3 }, (_, debugIndex): ArtworkCanvasPoolEntry => ({
     canvas: document.createElement('canvas'),
     backingEdge: 0,
@@ -195,6 +199,8 @@ export type ArtworkVisualLayer = {
   resource: OwnedArtworkResource
   requestedArtwork: TrackArtwork
   fallbackSource?: string
+  transitionIntent: TrackSelectionVisualIntent | null
+  previewTokenId?: number
   slot: 0 | 1 | null
   releaseLayerLease: () => void
 }
@@ -202,6 +208,7 @@ export type ArtworkVisualLayer = {
 type UseArtworkVisualResourceResult = {
   slots: readonly [ArtworkVisualLayer | null, ArtworkVisualLayer | null]
   currentArtworkReady: boolean
+  previewArtworkReady: boolean
   markReady: (layerId: number) => void
   markLoadError: (layerId: number) => void
   markExitComplete: (layerId: number, consumer: ArtworkLayerConsumer) => void
@@ -443,8 +450,10 @@ export function useArtworkVisualResource(
   requestedArtwork: TrackArtwork | null,
   track: Track | null,
   detailsPending: boolean,
-  prefetchCandidate: TrackArtworkPrefetchCandidate | null,
+  prefetchCandidates: readonly TrackArtworkPrefetchCandidate[],
   selectionActivitySequence: number,
+  selectionVisualIntent: TrackSelectionVisualIntent | null,
+  previewToken: TrackCardPreviewToken | null = null,
 ): UseArtworkVisualResourceResult {
   const [layers, setLayers] = useState<ArtworkVisualLayer[]>([])
   const [coverMaxEdge, setCoverMaxEdge] = useState(selectCoverMaxEdge)
@@ -455,6 +464,8 @@ export function useArtworkVisualResource(
   const queuedLayerRef = useRef<ArtworkVisualLayer | null>(null)
   const generationRef = useRef(0)
   const requestControllerRef = useRef<AbortController | null>(null)
+  const previewControllerRef = useRef<AbortController | null>(null)
+  const previewGenerationRef = useRef(0)
   const foregroundRequestRef = useRef<{
     identity: string
     controller: AbortController
@@ -469,12 +480,39 @@ export function useArtworkVisualResource(
   const clearingSlotsRef = useRef(new Set<0 | 1>())
   const layerIdRef = useRef(0)
   const exitCompletionsRef = useRef(new Map<number, Set<ArtworkLayerConsumer>>())
-  const matchingPrefetchCandidate = track && prefetchCandidate?.track.id === track.id
-    ? prefetchCandidate
+  // `artwork` is optional in the public playback view model. Derive the same
+  // stable artwork contract from Track so a cover-less/demo track still owns a
+  // real visual layer (empty OwnedArtworkResource + fallback cover + metadata).
+  // When an equivalent explicit artwork object arrives later, artworkIdentity
+  // stays unchanged and the active layer is updated rather than duplicated.
+  const trackArtworkFallback = useMemo<TrackArtwork | null>(() => track ? {
+    id: track.id,
+    coverTone: track.coverTone,
+    coverFilePath: track.coverFilePath,
+    coverImage: track.coverImage,
+    coverImageFallback: track.coverImageFallback,
+    resourceKey: `track-fallback:${track.id}`,
+  } : null, [track])
+  const matchingPrefetchCandidate = track
+    ? prefetchCandidates.find((candidate) => candidate.track.id === track.id) ?? null
+    : null
+  const standbyCandidate = track
+    ? prefetchCandidates.find((candidate) => candidate.afterTrackId === track.id && candidate.track.id !== track.id) ?? null
     : null
   const effectiveTrack = matchingPrefetchCandidate?.track ?? track
-  const effectiveArtwork = matchingPrefetchCandidate?.artwork ?? requestedArtwork
-  const latestRequestRef = useRef({ requestedArtwork: effectiveArtwork, track: effectiveTrack })
+  const effectiveArtwork = matchingPrefetchCandidate?.artwork ?? requestedArtwork ?? trackArtworkFallback
+  // A successful selection can settle before its artwork decode creates a
+  // layer, so retain the intent in the view model. The monotonically increasing
+  // activity sequence prevents that retained intent from being reused by a
+  // later non-animated selection that happens to target the same track id.
+  const currentTransitionIntent = selectionVisualIntent?.sequence === selectionActivitySequence
+    ? selectionVisualIntent
+    : null
+  const latestRequestRef = useRef({
+    requestedArtwork: effectiveArtwork,
+    track: effectiveTrack,
+    transitionIntent: currentTransitionIntent,
+  })
   const latestArtworkDetailsReadyRef = useRef(!detailsPending || Boolean(matchingPrefetchCandidate))
   const prefetchDebugRef = useRef<ArtworkPrefetchDebug>({
     prepared: 0,
@@ -629,9 +667,13 @@ export function useArtworkVisualResource(
   }, [commitCanvasLease, coverMaxEdge, getCanvasPool])
 
   useLayoutEffect(() => {
-    latestRequestRef.current = { requestedArtwork: effectiveArtwork, track: effectiveTrack }
+    latestRequestRef.current = {
+      requestedArtwork: effectiveArtwork,
+      track: effectiveTrack,
+      transitionIntent: currentTransitionIntent,
+    }
     latestArtworkDetailsReadyRef.current = !detailsPending || Boolean(matchingPrefetchCandidate)
-  }, [detailsPending, effectiveArtwork, effectiveTrack, matchingPrefetchCandidate])
+  }, [currentTransitionIntent, detailsPending, effectiveArtwork, effectiveTrack, matchingPrefetchCandidate])
 
   useLayoutEffect(() => {
     latestActivitySequenceRef.current = selectionActivitySequence
@@ -754,6 +796,17 @@ export function useArtworkVisualResource(
       if (incoming.slot !== null) scheduleSlotRelease(incoming.slot)
     }
 
+    // Keep the visible active card, but retire an obsolete outgoing card so a
+    // newer ready target can interrupt the handoff instead of waiting for it.
+    const obsoleteExiting = currentLayers.filter((layer) => layer.phase === 'exiting')
+    if (obsoleteExiting.length) {
+      currentLayers = currentLayers.filter((layer) => layer.phase !== 'exiting')
+      for (const layer of obsoleteExiting) {
+        releaseLayerOwner(layer)
+        if (layer.slot !== null) scheduleSlotRelease(layer.slot)
+      }
+    }
+
     const availableSlot = ([0, 1] as const).find(
       (slot) => !clearingSlotsRef.current.has(slot) && !currentLayers.some((layer) => layer.slot === slot),
     )
@@ -774,6 +827,8 @@ export function useArtworkVisualResource(
     identity: string,
     resource: OwnedArtworkResource,
     fallbackSource?: string,
+    transitionIntent: TrackSelectionVisualIntent | null = null,
+    previewTokenId?: number,
   ): ArtworkVisualLayer => {
     layerIdRef.current += 1
     const releaseLayerLease = resource.retain()
@@ -788,23 +843,142 @@ export function useArtworkVisualResource(
       resource,
       requestedArtwork: artwork,
       fallbackSource,
+      transitionIntent: transitionIntent?.targetTrackId === currentTrack.id
+        ? transitionIntent
+        : null,
+      previewTokenId,
       slot: null,
       releaseLayerLease,
     }
   }, [])
+
+  useEffect(() => {
+    previewGenerationRef.current += 1
+    const generation = previewGenerationRef.current
+    previewControllerRef.current?.abort()
+    previewControllerRef.current = null
+
+    const previousPreview = layersRef.current.find((layer) => layer.phase === 'preview')
+    if (previousPreview && previousPreview.previewTokenId !== previewToken?.id) {
+      releaseLayerOwner(previousPreview)
+      replaceLayers(layersRef.current.filter((layer) => layer.id !== previousPreview.id))
+      if (previousPreview.slot !== null) scheduleSlotRelease(previousPreview.slot)
+    }
+    if (!previewToken) return
+    if (layersRef.current.some((layer) => layer.previewTokenId === previewToken.id)) return
+
+    const identity = artworkResourceIdentity(previewToken.track, previewToken.artwork)
+    const installPreview = (loaded: LoadedArtworkResource) => {
+      if (
+        generation !== previewGenerationRef.current
+        || previewControllerRef.current?.signal.aborted
+        || latestRequestRef.current.track?.id !== previewToken.originTrackId
+      ) {
+        loaded.resource.releaseCache()
+        return
+      }
+      if (loaded.resource.view) registrySet(identity, loaded)
+      const currentLayers = layersRef.current.filter((layer) => layer.phase !== 'preview')
+      const availableSlot = ([0, 1] as const).find(
+        (slot) => !currentLayers.some((layer) => layer.slot === slot),
+      )
+      if (availableSlot === undefined) {
+        loaded.resource.releaseCache()
+        return
+      }
+      const layer = createLayer(
+        previewToken.track,
+        previewToken.artwork,
+        identity,
+        loaded.resource,
+        loaded.fallbackSource,
+        null,
+        previewToken.id,
+      )
+      replaceLayers([...currentLayers, { ...layer, phase: 'preview', slot: availableSlot }])
+    }
+
+    const cached = registryGet(identity)
+    if (cached) {
+      installPreview(cached)
+      return
+    }
+    const prepared = preparedArtworkRef.current
+    if (prepared?.identity === identity && !prepared.controller.signal.aborted) {
+      void prepared.promise.then((loaded) => {
+        if (loaded) installPreview(loaded)
+      })
+      return
+    }
+    const controller = new AbortController()
+    previewControllerRef.current = controller
+    const loadOrPromotePrepared = () => {
+      const newlyPrepared = preparedArtworkRef.current
+      const promise = newlyPrepared?.identity === identity && !newlyPrepared.controller.signal.aborted
+        ? newlyPrepared.promise
+        : loadArtworkResource(previewToken.artwork, controller, 'foreground')
+      void promise.then((loaded) => {
+        if (loaded && !controller.signal.aborted) installPreview(loaded)
+      }).finally(() => {
+        if (previewControllerRef.current === controller) previewControllerRef.current = null
+      })
+    }
+    // A prime and preview token commonly land in the same React commit. Let the
+    // standby effect publish its single shared promise before deciding whether
+    // a foreground decode is actually needed.
+    if (standbyCandidate && artworkResourceIdentity(standbyCandidate.track, standbyCandidate.artwork) === identity) {
+      queueMicrotask(loadOrPromotePrepared)
+    } else {
+      loadOrPromotePrepared()
+    }
+  }, [
+    createLayer,
+    loadArtworkResource,
+    previewToken,
+    registryGet,
+    registrySet,
+    releaseLayerOwner,
+    replaceLayers,
+    scheduleSlotRelease,
+    standbyCandidate,
+  ])
 
   const markReady = useCallback((layerId: number) => {
     const currentLayers = layersRef.current
     const incoming = currentLayers.find((layer) => layer.id === layerId && layer.phase === 'incoming')
     if (!incoming) return
 
+    if (!incoming.transitionIntent) {
+      previewGenerationRef.current += 1
+      previewControllerRef.current?.abort()
+      previewControllerRef.current = null
+      const queued = queuedLayerRef.current
+      if (queued) {
+        queuedLayerRef.current = null
+        releaseLayerOwner(queued)
+      }
+      for (const layer of currentLayers) {
+        if (layer.id !== incoming.id) releaseLayerOwner(layer)
+      }
+      exitCompletionsRef.current.clear()
+      clearingSlotsRef.current.clear()
+      replaceLayers([{ ...incoming, phase: 'active', previewTokenId: undefined }])
+      return
+    }
+
     const nextLayers = currentLayers.map((layer): ArtworkVisualLayer => {
       if (layer.id === layerId) return { ...layer, phase: 'active' }
-      if (layer.phase === 'active') return { ...layer, phase: 'exiting' }
+      if (layer.phase === 'active') {
+        return {
+          ...layer,
+          phase: 'exiting',
+          transitionIntent: incoming.transitionIntent,
+        }
+      }
       return layer
     })
     replaceLayers(nextLayers)
-  }, [replaceLayers])
+  }, [releaseLayerOwner, replaceLayers])
 
   const markLoadError = useCallback((layerId: number) => {
     const failedLayer = layersRef.current.find(
@@ -843,6 +1017,8 @@ export function useArtworkVisualResource(
         failedLayer.requestedArtwork,
         failedLayer.identity,
         resource,
+        undefined,
+        failedLayer.transitionIntent,
       ))
     }
 
@@ -931,21 +1107,21 @@ export function useArtworkVisualResource(
     const currentTrackId = track?.id
     const prepared = preparedArtworkRef.current
     const candidateStillRelevant = Boolean(
-      prefetchCandidate
+      standbyCandidate
       && currentTrackId
       && (
-        prefetchCandidate.afterTrackId === currentTrackId
-        || prefetchCandidate.track.id === currentTrackId
+        standbyCandidate.afterTrackId === currentTrackId
+        || standbyCandidate.track.id === currentTrackId
       ),
     )
-    if (!candidateStillRelevant || !prefetchCandidate || !currentTrackId) {
+    if (!candidateStillRelevant || !standbyCandidate || !currentTrackId) {
       if (prepared && prepared.track.id !== currentTrackId) evictPreparedArtwork(prepared)
       return
     }
 
     const identity = artworkResourceIdentity(
-      prefetchCandidate.track,
-      prefetchCandidate.artwork,
+      standbyCandidate.track,
+      standbyCandidate.artwork,
     )
     if (prepared?.identity === identity) return
     if (prepared) {
@@ -960,16 +1136,16 @@ export function useArtworkVisualResource(
       && queuedLayerRef.current === null
     if (
       !stableActiveLayer
-      || prefetchCandidate.afterTrackId !== currentTrackId
-      || prefetchCandidate.track.id === currentTrackId
+      || standbyCandidate.afterTrackId !== currentTrackId
+      || standbyCandidate.track.id === currentTrackId
     ) return
 
     const controller = new AbortController()
     const nextPrepared: PreparedArtwork = {
       identity,
-      afterTrackId: prefetchCandidate.afterTrackId,
-      track: prefetchCandidate.track,
-      artwork: prefetchCandidate.artwork,
+      afterTrackId: standbyCandidate.afterTrackId,
+      track: standbyCandidate.track,
+      artwork: standbyCandidate.artwork,
       controller,
       promise: Promise.resolve(null),
       promoted: false,
@@ -1001,7 +1177,7 @@ export function useArtworkVisualResource(
     evictPreparedArtwork,
     layers,
     loadArtworkResource,
-    prefetchCandidate,
+    standbyCandidate,
     registrySet,
     track?.id,
   ])
@@ -1058,6 +1234,22 @@ export function useArtworkVisualResource(
       return
     }
     if (promotedArtworkRef.current?.identity === identity) return
+    const existingPreview = layersRef.current.find(
+      (layer) => layer.phase === 'preview' && layer.identity === identity,
+    )
+    if (
+      existingPreview
+      && latest.transitionIntent?.previewTokenId === existingPreview.previewTokenId
+    ) {
+      previewControllerRef.current?.abort()
+      previewControllerRef.current = null
+      replaceLayers(layersRef.current.map((layer): ArtworkVisualLayer => (
+        layer.id === existingPreview.id
+          ? { ...layer, phase: 'incoming', transitionIntent: latest.transitionIntent }
+          : layer
+      )))
+      return
+    }
     const existingActive = layersRef.current.find(
       (layer) => layer.phase === 'active' && layer.identity === identity,
     )
@@ -1090,11 +1282,14 @@ export function useArtworkVisualResource(
         releaseLayerOwner(queued)
       }
       exitCompletionsRef.current.delete(existingExiting.id)
+      const transitionIntent = latest.transitionIntent?.targetTrackId === existingExiting.track.id
+        ? latest.transitionIntent
+        : null
       replaceLayers(layersRef.current
         .filter((layer) => layer.phase !== 'incoming')
         .map((layer): ArtworkVisualLayer => {
-          if (layer.id === existingExiting.id) return { ...layer, phase: 'active' }
-          if (layer.phase === 'active') return { ...layer, phase: 'exiting' }
+          if (layer.id === existingExiting.id) return { ...layer, phase: 'active', transitionIntent }
+          if (layer.phase === 'active') return { ...layer, phase: 'exiting', transitionIntent }
           return layer
         }))
       return
@@ -1129,6 +1324,7 @@ export function useArtworkVisualResource(
           identity,
           loaded.resource,
           loaded.fallbackSource,
+          current.transitionIntent,
         ))
         return true
       }
@@ -1179,6 +1375,7 @@ export function useArtworkVisualResource(
         identity,
         cached.resource,
         cached.fallbackSource,
+        latest.transitionIntent,
       ))
       return
     }
@@ -1232,6 +1429,7 @@ export function useArtworkVisualResource(
         identity,
         loaded.resource,
         loaded.fallbackSource,
+        latestRequestRef.current.transitionIntent,
       )
       enqueueOrInstall(nextLayer)
     }
@@ -1348,6 +1546,8 @@ export function useArtworkVisualResource(
   useEffect(() => () => {
     generationRef.current += 1
     requestControllerRef.current?.abort()
+    previewGenerationRef.current += 1
+    previewControllerRef.current?.abort()
     foregroundRequestRef.current = null
     prefetchDebugRef.current.foregroundInFlight = 0
     promotedArtworkRef.current?.controller.abort()
@@ -1377,5 +1577,8 @@ export function useArtworkVisualResource(
       && layers.some((layer) => layer.identity === requestIdentity && layer.phase === 'active')
       && !layers.some((layer) => layer.identity === requestIdentity && layer.phase === 'incoming'),
     )
-  return { slots, currentArtworkReady, markReady, markLoadError, markExitComplete }
+  const previewArtworkReady = previewToken !== null && layers.some(
+    (layer) => layer.phase === 'preview' && layer.previewTokenId === previewToken.id,
+  )
+  return { slots, currentArtworkReady, previewArtworkReady, markReady, markLoadError, markExitComplete }
 }

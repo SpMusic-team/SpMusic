@@ -19,7 +19,9 @@ export function PlayerShell() {
       track: player.track,
       artwork: player.artwork,
       artworkPrefetchCandidate: player.artworkPrefetchCandidate,
+      artworkPrefetchCandidates: player.artworkPrefetchCandidates,
       selectionActivitySequence: player.selectionActivitySequence,
+      selectionVisualIntent: player.selectionVisualIntent,
       detailsPending: player.detailsPending,
       contentState: player.contentState,
       isPlaying: player.playing,
@@ -34,6 +36,10 @@ export function PlayerShell() {
       onOpenAudio: player.openAudio,
       onPrevious: player.previous,
       onNext: player.next,
+      onPrepareTrackPreview: player.prepareTrackCardPreview,
+      onPrimeTrackArtwork: player.primeTrackArtwork,
+      onCommitTrackPreview: player.commitTrackCardPreview,
+      onDiscardTrackPreview: player.discardTrackCardPreview,
       onPlayToggle: player.transitionPlayback,
       onShuffleCycle: player.cycleShuffleMode,
       onRepeatCycle: player.cycleRepeatMode,
@@ -66,6 +72,7 @@ export function PlayerShell() {
     },
     feedback: {
       value: player.currentFeedback,
+      valuesByTrackId: player.feedbackByTrackId,
       onToggle: handleFeedbackToggle,
     },
   }

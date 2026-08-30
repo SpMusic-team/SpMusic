@@ -22,6 +22,7 @@ export type TrackArtwork = Pick<Track, 'id' | 'coverTone' | 'coverFilePath' | 'c
 
 export type TrackArtworkPrefetchCandidate = Readonly<{
   afterTrackId: string
+  direction: -1 | 1
   track: Track
   artwork: TrackArtwork
 }>

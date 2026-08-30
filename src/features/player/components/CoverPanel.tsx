@@ -1,6 +1,5 @@
 import { memo, useEffect } from 'react'
-import { motion } from 'motion/react'
-import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
+import { useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { appCopy } from '@/features/player/model/playerCopy'
 import type { SystemIcon } from '@/icons/systemIcons'
 import type { ArtworkVisualLayer } from '@/features/player/hooks/useArtworkVisualResource'
@@ -18,7 +17,8 @@ type CoverPanelProps = {
   onDislike: () => void
   onReady: () => void
   onLoadError: () => void
-  onExitComplete: () => void
+  onMoreOpenChange?: (open: boolean) => void
+  moreOpen?: boolean
 }
 
 export const CoverPanel = memo(function CoverPanel({
@@ -31,47 +31,24 @@ export const CoverPanel = memo(function CoverPanel({
   onDislike,
   onReady,
   onLoadError,
-  onExitComplete,
+  onMoreOpenChange,
+  moreOpen,
 }: CoverPanelProps) {
   const systemIcons = useSystemIcons()
-  const appearanceMotion = useAppearanceMotion()
   const track = layer?.track
   const artwork = layer?.artwork
   const phase = layer?.phase
   const coverSource = layer?.resource.view
 
   useEffect(() => {
-    if (!layer || !appearanceMotion.disabled || phase !== 'exiting') return
-    let cancelled = false
-    queueMicrotask(() => {
-      if (!cancelled) onExitComplete()
-    })
-    return () => { cancelled = true }
-  }, [appearanceMotion.disabled, layer, onExitComplete, phase])
-
-  useEffect(() => {
     if (phase === 'incoming' && !coverSource) onReady()
   }, [coverSource, onReady, phase])
 
   return (
-    <motion.article
+    <article
       className="cover-column"
-      aria-hidden={!layer || phase === 'exiting' || undefined}
-      style={!layer
-        ? { pointerEvents: 'none', visibility: 'hidden' }
-        : phase === 'exiting'
-          ? { pointerEvents: 'none' }
-          : undefined}
     >
-      <motion.div
-        className="cover-frame"
-        variants={appearanceMotion.variants.track}
-        initial={false}
-        animate={!layer || phase === 'exiting' ? 'exit' : phase === 'incoming' ? 'initial' : 'animate'}
-        onAnimationComplete={(definition) => {
-          if (layer && definition === 'exit') onExitComplete()
-        }}
-      >
+      <div className="cover-frame">
         <div
           className="cover-art"
           data-tone={artwork?.coverTone ?? 'blue'}
@@ -102,11 +79,13 @@ export const CoverPanel = memo(function CoverPanel({
                 disliked={disliked}
                 onLike={onLike}
                 onDislike={onDislike}
+                onOpenChange={onMoreOpenChange}
+                open={moreOpen}
               />
             </div>
           </> : null}
         </div>
-      </motion.div>
-    </motion.article>
+      </div>
+    </article>
   )
 })

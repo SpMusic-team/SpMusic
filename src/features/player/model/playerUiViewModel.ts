@@ -5,11 +5,33 @@ import type { AudioTransportTarget, AudioTransportTransition } from '@/features/
 
 export type PlayerContentState = 'empty' | 'loading' | 'track' | 'error'
 
+export type TrackSelectionVisualSource = 'previous' | 'next' | 'automatic' | 'queue'
+
+export type TrackSelectionVisualIntent = {
+  requestId: number
+  sequence: number
+  targetTrackId: string
+  direction: -1 | 1
+  source: TrackSelectionVisualSource
+  previewTokenId?: number
+}
+
+export type TrackCardPreviewToken = Readonly<{
+  id: number
+  originTrackId: string
+  targetTrackId: string
+  direction: -1 | 1
+  track: Track
+  artwork: TrackArtwork
+}>
+
 export type PlayerPlaybackViewModel = {
   track: Track | null
   artwork?: TrackArtwork | null
   artworkPrefetchCandidate?: TrackArtworkPrefetchCandidate | null
+  artworkPrefetchCandidates?: readonly TrackArtworkPrefetchCandidate[]
   selectionActivitySequence?: number
+  selectionVisualIntent?: TrackSelectionVisualIntent | null
   detailsPending?: boolean
   contentState?: PlayerContentState
   isPlaying: boolean
@@ -24,6 +46,10 @@ export type PlayerPlaybackViewModel = {
   onOpenAudio: () => void
   onPrevious: () => void
   onNext: () => void
+  onPrepareTrackPreview?: (direction: -1 | 1) => Promise<TrackCardPreviewToken | null>
+  onPrimeTrackArtwork?: (direction: -1 | 1) => void
+  onCommitTrackPreview?: (tokenId: number) => boolean
+  onDiscardTrackPreview?: (tokenId: number) => void
   onPlayToggle: (request: PlayerPlaybackTransitionRequest) => Promise<PlayerPlaybackTransitionResult>
   onShuffleCycle: () => void
   onRepeatCycle: () => void
@@ -72,6 +98,7 @@ export type PlayerQueueViewModel = {
 
 export type PlayerFeedbackViewModel = {
   value?: TrackFeedback
+  valuesByTrackId?: Readonly<Record<string, TrackFeedback>>
   onToggle: (feedback: TrackFeedback) => void
 }
 

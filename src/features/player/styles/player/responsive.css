@@ -157,7 +157,11 @@
     calc(6 * var(--player-layout-unit))
     calc(4 * var(--player-layout-unit))
     rgba(0, 0, 0, 0.25);
+  touch-action: pan-y;
+  cursor: grab;
 }
+
+.responsive-player-layout .cover-frame:active { cursor: grabbing; }
 
 .responsive-player-layout[data-player-layout="full"] .cover-frame {
   width: var(--full-cover-size);
@@ -558,6 +562,10 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
   width: min(100%, var(--horizontal-cover-size));
 }
 
+.responsive-player-layout[data-player-layout="horizontal"] .track-card-deck {
+  height: var(--horizontal-cover-size);
+}
+
 .responsive-player-layout[data-player-layout="horizontal"] .track-pills {
   /* 横向半屏：胶囊左缘距封面右缘 36（列间隙 12 + 左 margin 24），
      右缘最大延伸到“窗口右 - 36”，两侧间距相等。
@@ -670,6 +678,10 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
   width: min(100%, var(--vertical-cover-size));
 }
 
+.responsive-player-layout[data-player-layout="vertical"] .track-card-deck {
+  height: calc(var(--vertical-cover-size) + 179 * var(--player-layout-unit));
+}
+
 .responsive-player-layout[data-player-layout="vertical"] .track-pills {
   width: min(
     calc(100% - 200 * var(--player-layout-unit)),
@@ -727,6 +739,10 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
 .responsive-player-layout[data-player-layout="quarter"] .cover-frame {
   width: min(100%, var(--quarter-cover-size));
   max-height: 100%;
+}
+
+.responsive-player-layout[data-player-layout="quarter"] .track-card-deck {
+  height: calc(var(--quarter-cover-size) + 179 * var(--player-layout-unit));
 }
 
 .responsive-player-layout[data-player-layout="quarter"] .track-pills {
@@ -840,6 +856,10 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
 
 .responsive-player-layout[data-player-layout="quarter"][data-player-short="true"] .cover-frame {
   width: min(100%, var(--short-cover-size));
+}
+
+.responsive-player-layout[data-player-layout="quarter"][data-player-short="true"] .track-card-deck {
+  height: calc(var(--short-cover-size) + 90px);
 }
 
 .responsive-player-layout[data-player-layout="quarter"][data-player-short="true"] .cover-feedback {

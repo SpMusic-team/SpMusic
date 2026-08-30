@@ -5,6 +5,7 @@ import type { DemoLyricLine } from '@/features/player/model/playerTypes'
 
 const FOLLOW_SCROLL_FALLBACK_MS = 240
 const INTERACTIVE_SCROLL_FALLBACK_MS = 160
+const USER_SCROLL_IDLE_MS = 5000
 
 function prefersReducedMotion() {
   const motionRoot = document.querySelector('.spmusic-app') ?? document.documentElement
@@ -29,8 +30,11 @@ export function useActiveLyricScroll(
 ) {
   const lineCentersRef = useRef<number[]>([])
   const scrollFrameRef = useRef<number | null>(null)
+  const userScrollTimerRef = useRef<number | null>(null)
+  const userScrollingRef = useRef(false)
   const activeIndexRef = useRef<number | null>(null)
   const previousInteractionRef = useRef<PlayerTimelineInteraction>(interaction)
+  const latestInteractionRef = useRef<PlayerTimelineInteraction>(interaction)
   const latestPositionRef = useRef(positionSeconds)
   const latestLyricsRef = useRef(lyrics)
   const measureAndRecenterRef = useRef<() => void>(() => {})
@@ -43,6 +47,13 @@ export function useActiveLyricScroll(
     if (scrollFrameRef.current !== null) {
       window.cancelAnimationFrame(scrollFrameRef.current)
       scrollFrameRef.current = null
+    }
+  }, [])
+
+  const cancelUserScrollTimer = useCallback(() => {
+    if (userScrollTimerRef.current !== null) {
+      window.clearTimeout(userScrollTimerRef.current)
+      userScrollTimerRef.current = null
     }
   }, [])
 
@@ -124,6 +135,22 @@ export function useActiveLyricScroll(
     )
   }, [animateScroll])
 
+  const resumeFollowingAfterUserScroll = useCallback(() => {
+    userScrollTimerRef.current = null
+    if (!userScrollingRef.current) return
+
+    userScrollingRef.current = false
+    if (latestInteractionRef.current !== 'following') return
+
+    const currentLyrics = latestLyricsRef.current
+    const timeline = locateLyricTimeline(currentLyrics, latestPositionRef.current)
+    if (!timeline || lineCentersRef.current.length !== currentLyrics.length) return
+
+    const targetTop = targetScrollTop(timeline.currentIndex)
+    if (targetTop !== null) animateFollowingScroll(targetTop)
+    activeIndexRef.current = timeline.currentIndex
+  }, [animateFollowingScroll, targetScrollTop])
+
   const animateInteractiveScroll = useCallback((targetTop: number, currentIndex: number) => {
     const lyricList = lyricListRef.current
     const currentCenter = lineCentersRef.current[currentIndex]
@@ -156,7 +183,8 @@ export function useActiveLyricScroll(
   useLayoutEffect(() => {
     latestPositionRef.current = positionSeconds
     latestLyricsRef.current = lyrics
-  }, [lyrics, positionSeconds])
+    latestInteractionRef.current = interaction
+  }, [interaction, lyrics, positionSeconds])
 
   useLayoutEffect(() => {
     const lyricList = lyricListRef.current
@@ -191,6 +219,7 @@ export function useActiveLyricScroll(
       lineCentersRef.current = measuredCenters
       const timeline = locateLyricTimeline(measuredLyrics, latestPositionRef.current)
       if (!timeline || lineCentersRef.current.length !== measuredLyrics.length) return
+      if (userScrollingRef.current) return
 
       const targetTop = targetScrollTop(timeline.currentIndex)
       if (targetTop !== null && lyricListRef.current) lyricListRef.current.scrollTop = targetTop
@@ -214,6 +243,35 @@ export function useActiveLyricScroll(
   }, [layoutKey, scheduleMeasurement])
 
   useEffect(() => {
+    const lyricList = lyricListRef.current
+    if (!lyricList) return
+
+    const handleWheel = () => {
+      if (latestInteractionRef.current !== 'following') return
+
+      userScrollingRef.current = true
+      cancelScrollFrame()
+      cancelUserScrollTimer()
+      userScrollTimerRef.current = window.setTimeout(
+        resumeFollowingAfterUserScroll,
+        USER_SCROLL_IDLE_MS,
+      )
+    }
+
+    lyricList.addEventListener('wheel', handleWheel, { passive: true })
+    return () => {
+      lyricList.removeEventListener('wheel', handleWheel)
+      cancelUserScrollTimer()
+      userScrollingRef.current = false
+    }
+  }, [cancelScrollFrame, cancelUserScrollTimer, lyricLayoutSignature, lyricListRef, resumeFollowingAfterUserScroll])
+
+  useEffect(() => {
+    if (interaction === 'previewing' || interaction === 'seeking') {
+      userScrollingRef.current = false
+      cancelUserScrollTimer()
+    }
+
     const currentLyrics = latestLyricsRef.current
     const timeline = locateLyricTimeline(currentLyrics, positionSeconds)
     if (!timeline || lineCentersRef.current.length !== currentLyrics.length) return
@@ -233,6 +291,8 @@ export function useActiveLyricScroll(
       activeIndexRef.current = timeline.currentIndex
       return
     }
+
+    if (userScrollingRef.current) return
 
     if (previousInteraction !== 'following') {
       if (activeIndexRef.current === timeline.currentIndex) return
@@ -255,7 +315,10 @@ export function useActiveLyricScroll(
     activeIndexRef.current = timeline.currentIndex
     const targetTop = targetScrollTop(timeline.currentIndex)
     if (targetTop !== null) animateFollowingScroll(targetTop)
-  }, [animateFollowingScroll, animateInteractiveScroll, cancelScrollFrame, interaction, lyricLayoutSignature, lyricListRef, positionSeconds, scheduleDirectScroll, targetScrollTop])
+  }, [animateFollowingScroll, animateInteractiveScroll, cancelScrollFrame, cancelUserScrollTimer, interaction, lyricLayoutSignature, lyricListRef, positionSeconds, scheduleDirectScroll, targetScrollTop])
 
-  useEffect(() => () => cancelScrollFrame(), [cancelScrollFrame])
+  useEffect(() => () => {
+    cancelScrollFrame()
+    cancelUserScrollTimer()
+  }, [cancelScrollFrame, cancelUserScrollTimer])
 }

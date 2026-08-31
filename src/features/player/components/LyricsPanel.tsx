@@ -126,12 +126,13 @@ export function LyricsPanel({
     : positionSeconds
   const activeLyricId = activeLyricIndex >= 0 ? track.lyrics[activeLyricIndex]?.id : undefined
 
-  const { notifyLyricNavigation, prepareFollowingStep } = useActiveLyricScroll(
+  const { navigateToLyric, prepareFollowingStep } = useActiveLyricScroll(
     activePositionSeconds,
     interaction,
     track.lyrics,
     lyricListRef,
     `${lyricLayoutKey}:${visualLinesLayoutKey}`,
+    track.id,
   )
 
   const measureStableVisualLines = useCallback(() => {
@@ -261,15 +262,13 @@ export function LyricsPanel({
     const target = lyricForEventTarget(event.currentTarget, event.target)
     if (!target) return
     event.preventDefault()
-    notifyLyricNavigation(target.index)
-    onLineSelect(target.lyric.timeSeconds)
+    navigateToLyric(target.index, () => onLineSelect(target.lyric.timeSeconds))
   }
 
   function handleListClick(event: MouseEvent<HTMLOListElement>) {
     const target = lyricForEventTarget(event.currentTarget, event.target)
     if (!target) return
-    notifyLyricNavigation(target.index)
-    onLineSelect(target.lyric.timeSeconds)
+    navigateToLyric(target.index, () => onLineSelect(target.lyric.timeSeconds))
     if (event.detail > 0) target.line.blur()
   }
 
@@ -314,6 +313,7 @@ export function LyricsPanel({
                 aria-label={line.translation ? `${line.original}\n${line.translation}` : line.original}
                 aria-current={line.id === activeLyricId ? 'true' : undefined}
                 data-active={line.id === activeLyricId}
+                data-lyric-id={line.id}
                 data-lyric-index={index}
                 data-line-content={line.translation ? 'bilingual' : 'single'}
                 data-pair-delta-seconds={pairDeltaSeconds ?? undefined}

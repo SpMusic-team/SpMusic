@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react'
 import { SettingsIcon } from 'lucide-react'
 import { motion } from 'motion/react'
 import { Button } from '@/components/ui/button'
@@ -32,11 +32,60 @@ type LyricsPanelProps = {
 
 type LyricPairSpacing = 'tight' | 'normal' | 'none'
 
+type LyricVisualLines = {
+  original: string[]
+  translation?: string[]
+}
+
+type LyricVisualLinesById = Record<string, LyricVisualLines>
+
 function lyricPairSpacingForDelta(deltaSeconds: number | null, tightThresholdSeconds: number): LyricPairSpacing {
   if (deltaSeconds === null) return 'none'
   return Number.isFinite(deltaSeconds) && deltaSeconds >= 0 && deltaSeconds < tightThresholdSeconds
     ? 'tight'
     : 'normal'
+}
+
+function splitTextByRenderedLines(element: HTMLElement, text: string): string[] {
+  const textNode = element.firstChild
+  if (!(textNode instanceof Text) || !text) return text ? [text] : []
+
+  const range = document.createRange()
+  const segments: string[] = []
+  let lineStart = 0
+  let currentLineTop: number | null = null
+  let offset = 0
+
+  for (const character of text) {
+    const nextOffset = offset + character.length
+    range.setStart(textNode, offset)
+    range.setEnd(textNode, nextOffset)
+    const rect = range.getClientRects().item(0)
+    const lineTop: number | null = rect ? rect.top : currentLineTop
+    if (lineTop !== null && currentLineTop !== null && Math.abs(lineTop - currentLineTop) > 1) {
+      segments.push(text.slice(lineStart, offset))
+      lineStart = offset
+    }
+    if (lineTop !== null) currentLineTop = lineTop
+    offset = nextOffset
+  }
+
+  segments.push(text.slice(lineStart))
+  range.detach()
+  return segments.filter((segment) => segment.length > 0)
+}
+
+function visualLinesEqual(left: LyricVisualLinesById, right: LyricVisualLinesById): boolean {
+  const leftIds = Object.keys(left)
+  const rightIds = Object.keys(right)
+  if (leftIds.length !== rightIds.length) return false
+  return leftIds.every((id) => {
+    const leftLine = left[id]
+    const rightLine = right[id]
+    return rightLine
+      && leftLine.original.join('\n') === rightLine.original.join('\n')
+      && (leftLine.translation ?? []).join('\n') === (rightLine.translation ?? []).join('\n')
+  })
 }
 
 export function LyricsPanel({
@@ -51,6 +100,8 @@ export function LyricsPanel({
 }: LyricsPanelProps) {
   const appearanceMotion = useAppearanceMotion()
   const lyricListRef = useRef<HTMLOListElement>(null)
+  const [visualLinesById, setVisualLinesById] = useState<LyricVisualLinesById>({})
+  const visualLinesLayoutKey = useMemo(() => JSON.stringify(visualLinesById), [visualLinesById])
   const semanticTimeline = useMemo(
     () => locateLyricTimeline(track.lyrics, positionSeconds),
     [positionSeconds, track.lyrics],
@@ -75,6 +126,89 @@ export function LyricsPanel({
     : positionSeconds
   const activeLyricId = activeLyricIndex >= 0 ? track.lyrics[activeLyricIndex]?.id : undefined
 
+  const { notifyLyricNavigation, prepareFollowingStep } = useActiveLyricScroll(
+    activePositionSeconds,
+    interaction,
+    track.lyrics,
+    lyricListRef,
+    `${lyricLayoutKey}:${visualLinesLayoutKey}`,
+  )
+
+  const measureStableVisualLines = useCallback(() => {
+    const lyricList = lyricListRef.current
+    if (!lyricList || lyricList.children.length !== track.lyrics.length) return
+
+    const nextVisualLines: LyricVisualLinesById = {}
+    track.lyrics.forEach((line, index) => {
+      const renderedLine = lyricList.children.item(index)
+      if (!(renderedLine instanceof HTMLLIElement)) return
+
+      const measurementLine = renderedLine.cloneNode(true)
+      if (!(measurementLine instanceof HTMLLIElement)) return
+      measurementLine.dataset.active = 'true'
+      measurementLine.dataset.position = 'active'
+      measurementLine.setAttribute('aria-hidden', 'true')
+      measurementLine.style.position = 'fixed'
+      measurementLine.style.inset = '0 auto auto -100000px'
+      measurementLine.style.width = `${renderedLine.clientWidth}px`
+      measurementLine.style.height = 'auto'
+      measurementLine.style.minHeight = '0'
+      measurementLine.style.pointerEvents = 'none'
+      measurementLine.style.transition = 'none'
+
+      const originalElement = measurementLine.querySelector<HTMLElement>('.lyric-original-line')
+      const translationElement = measurementLine.querySelector<HTMLElement>('.translation-line')
+      if (!originalElement) return
+      originalElement.textContent = line.original
+      if (translationElement) translationElement.textContent = line.translation ?? ''
+      lyricList.append(measurementLine)
+
+      nextVisualLines[line.id] = {
+        original: splitTextByRenderedLines(originalElement, line.original),
+        translation: line.translation && translationElement
+          ? splitTextByRenderedLines(translationElement, line.translation)
+          : undefined,
+      }
+      measurementLine.remove()
+    })
+
+    setVisualLinesById((current) => visualLinesEqual(current, nextVisualLines) ? current : nextVisualLines)
+  }, [track.lyrics])
+
+  useLayoutEffect(() => {
+    const lyricList = lyricListRef.current
+    if (!lyricList) return
+    let disposed = false
+    let measurementFrame: number | null = null
+    const scheduleMeasurement = () => {
+      if (disposed) return
+      if (measurementFrame !== null) window.cancelAnimationFrame(measurementFrame)
+      measurementFrame = window.requestAnimationFrame(() => {
+        if (disposed) return
+        measurementFrame = null
+        measureStableVisualLines()
+      })
+    }
+
+    measureStableVisualLines()
+    const observer = new ResizeObserver(scheduleMeasurement)
+    observer.observe(lyricList)
+    const appearanceRoot = document.querySelector('.spmusic-app') ?? document.documentElement
+    const appearanceObserver = new MutationObserver(scheduleMeasurement)
+    appearanceObserver.observe(appearanceRoot, { attributes: true })
+    document.fonts?.addEventListener('loadingdone', scheduleMeasurement)
+    void document.fonts?.ready.then(() => {
+      if (!disposed) scheduleMeasurement()
+    })
+    return () => {
+      disposed = true
+      observer.disconnect()
+      appearanceObserver.disconnect()
+      document.fonts?.removeEventListener('loadingdone', scheduleMeasurement)
+      if (measurementFrame !== null) window.cancelAnimationFrame(measurementFrame)
+    }
+  }, [lyricLayoutKey, measureStableVisualLines])
+
   useEffect(() => {
     if (!visualClock) return
     let disposed = false
@@ -85,6 +219,7 @@ export function LyricsPanel({
       const nextActiveIndex = nextTimeline?.currentIndex ?? -1
       const previousIdentity = followingTimelineIdentityRef.current
       if (previousIdentity.lyrics === track.lyrics && previousIdentity.activeIndex === nextActiveIndex) return
+      prepareFollowingStep(nextActiveIndex)
       followingTimelineIdentityRef.current = { lyrics: track.lyrics, activeIndex: nextActiveIndex }
       setFollowingTimeline({
         lyrics: track.lyrics,
@@ -98,15 +233,7 @@ export function LyricsPanel({
       disposed = true
       unsubscribe()
     }
-  }, [interaction, track.lyrics, visualClock])
-
-  const notifyLyricNavigation = useActiveLyricScroll(
-    activePositionSeconds,
-    interaction,
-    track.lyrics,
-    lyricListRef,
-    lyricLayoutKey,
-  )
+  }, [interaction, prepareFollowingStep, track.lyrics, visualClock])
 
   function lyricLineFromEventTarget(
     list: HTMLOListElement,
@@ -171,19 +298,20 @@ export function LyricsPanel({
       ) : track.lyrics.length ? (
         <ol
           ref={lyricListRef}
-          data-interaction={interaction}
           onClick={handleListClick}
           onKeyDown={handleListKeyDown}
         >
           {track.lyrics.map((line, index) => {
             const nextLine = track.lyrics[index + 1]
             const pairDeltaSeconds = nextLine ? nextLine.timeSeconds - line.timeSeconds : null
+            const visualLines = visualLinesById[line.id]
 
             return (
               <li
                 key={line.id}
                 role="button"
                 tabIndex={0}
+                aria-label={line.translation ? `${line.original}\n${line.translation}` : line.original}
                 aria-current={line.id === activeLyricId ? 'true' : undefined}
                 data-active={line.id === activeLyricId}
                 data-lyric-index={index}
@@ -192,8 +320,18 @@ export function LyricsPanel({
                 data-pair-spacing={lyricPairSpacingForDelta(pairDeltaSeconds, tightThresholdSeconds)}
                 data-position={index < activeLyricIndex ? 'past' : index === activeLyricIndex ? 'active' : 'future'}
               >
-                <span>{line.original}</span>
-                {line.translation ? <span className="translation-line" lang="zh-CN">{line.translation}</span> : null}
+                <span className="lyric-original-line">
+                  {(visualLines?.original ?? [line.original]).map((visualLine, visualLineIndex) => (
+                    <span className="lyric-visual-line" aria-hidden="true" key={`${line.id}:original:${visualLineIndex}`}>{visualLine}</span>
+                  ))}
+                </span>
+                {line.translation ? (
+                  <span className="translation-line" lang="zh-CN">
+                    {(visualLines?.translation ?? [line.translation]).map((visualLine, visualLineIndex) => (
+                      <span className="lyric-visual-line" aria-hidden="true" key={`${line.id}:translation:${visualLineIndex}`}>{visualLine}</span>
+                    ))}
+                  </span>
+                ) : null}
               </li>
             )
           })}

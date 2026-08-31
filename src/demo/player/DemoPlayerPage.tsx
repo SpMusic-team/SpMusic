@@ -9,6 +9,7 @@ import {
   type RepeatMode,
   type ShuffleMode,
 } from '@/features/player/model/playbackModes'
+import { fakePlaylistName, fakePlaylistTotalSeconds, fakePlaylistTracks } from '@/features/player/model/fakePlaylist'
 import type { PlayerUiViewModel } from '@/features/player/model/playerUiViewModel'
 import type { TrackFeedback } from '@/features/player/model/playerTypes'
 import type { AudioTransportTransition } from '@/features/player/services/audioCommands'
@@ -191,6 +192,18 @@ export function DemoPlayerPage() {
         setCurrentTrackId(trackId)
         setProgress(0)
       },
+    },
+    playlist: {
+      isOpen: queueOpen,
+      onOpenChange: setQueueOpen,
+      tracks: fakePlaylistTracks,
+      playlistName: fakePlaylistName,
+      totalDurationSeconds: fakePlaylistTotalSeconds,
+      currentTrackId: track?.id ?? null,
+      shuffleMode,
+      onShuffleCycle: () => setShuffleMode((value) => nextShuffleMode[value]),
+      // 假数据阶段：点任意歌曲只返回播放页.
+      onTrackSelect: () => setQueueOpen(false),
     },
     feedback: {
       value: track ? feedbackByTrackId[track.id] : undefined,

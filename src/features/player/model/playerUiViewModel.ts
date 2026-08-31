@@ -96,6 +96,19 @@ export type PlayerQueueViewModel = {
   onTrackSelect?: (trackId: string) => void
 }
 
+export type PlayerPlaylistViewModel = {
+  isOpen: boolean
+  onOpenChange: (isOpen: boolean) => void
+  tracks: TrackSummary[]
+  unavailableTrackIds?: ReadonlySet<string>
+  playlistName?: string
+  currentTrackId?: string | null
+  totalDurationSeconds?: number
+  shuffleMode: ShuffleMode
+  onShuffleCycle: () => void
+  onTrackSelect?: (trackId: string) => void
+}
+
 export type PlayerFeedbackViewModel = {
   value?: TrackFeedback
   valuesByTrackId?: Readonly<Record<string, TrackFeedback>>
@@ -107,6 +120,7 @@ export type PlayerUiViewModel = {
   timeline: PlayerTimelineViewModel
   volume: PlayerVolumeViewModel
   queue: PlayerQueueViewModel
+  playlist: PlayerPlaylistViewModel
   feedback: PlayerFeedbackViewModel
 }
 

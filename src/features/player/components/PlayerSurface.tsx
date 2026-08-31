@@ -8,6 +8,7 @@ import { ControlDock } from '@/features/player/components/ControlDock'
 import { EmptyPlayerState } from '@/features/player/components/EmptyPlayerState'
 import { LyricsPanel } from '@/features/player/components/LyricsPanel'
 import { PlaybackInfoButton } from '@/features/player/components/PlaybackInfoButton'
+import { PlaylistPanel } from '@/features/player/components/PlaylistPanel'
 import { QueuePanel } from '@/features/player/components/QueuePanel'
 import { ResponsivePlayerLayout } from '@/features/player/components/ResponsivePlayerLayout'
 import { TrackMeta } from '@/features/player/components/TrackMeta'
@@ -378,7 +379,7 @@ export function PlayerSurface({
   viewModel,
   devAudioTools,
 }: PlayerSurfaceProps) {
-  const { playback, timeline, volume, queue, feedback } = viewModel
+  const { playback, timeline, volume, queue, playlist, feedback } = viewModel
   const { track } = playback
   const prepareTrackPreview = playback.onPrepareTrackPreview
   const commitTrackPreview = playback.onCommitTrackPreview
@@ -1249,6 +1250,8 @@ export function PlayerSurface({
               debugToolsEnabled={devAudioTools !== undefined}
               debugToolsOpen={devAudioTools?.isOpen ?? false}
               onDebugToolsOpenChange={devAudioTools?.onOpenChange}
+              playlistOpen={playlist.isOpen}
+              onTogglePlaylist={() => playlist.onOpenChange(!playlist.isOpen)}
             />
           )}
         >
@@ -1348,6 +1351,23 @@ export function PlayerSurface({
             </div>
           </section>
         </ResponsivePlayerLayout>
+
+        <AnimatePresence initial={false}>
+          {playlist.isOpen ? (
+            <PlaylistPanel
+              key={`${playlist.playlistName ?? 'playlist'}:${playlist.tracks.length}:${playlist.tracks[0]?.id ?? ''}:${playlist.tracks[playlist.tracks.length - 1]?.id ?? ''}`}
+              tracks={playlist.tracks}
+              unavailableTrackIds={playlist.unavailableTrackIds}
+              playlistName={playlist.playlistName}
+              currentTrackId={playlist.currentTrackId}
+              totalDurationSeconds={playlist.totalDurationSeconds}
+              shuffleMode={playlist.shuffleMode}
+              onShuffleCycle={playlist.onShuffleCycle}
+              onTrackSelect={playlist.onTrackSelect}
+              onClose={() => playlist.onOpenChange(false)}
+            />
+          ) : null}
+        </AnimatePresence>
       </main>
     </TooltipProvider>
   )

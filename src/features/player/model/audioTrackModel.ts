@@ -1,5 +1,5 @@
 import { splitLyricTranslation } from '@/features/player/model/lyrics'
-import type { DemoLyricLine, Track } from '@/features/player/model/playerTypes'
+import type { CoverTone, DemoLyricLine, Track } from '@/features/player/model/playerTypes'
 import {
   audioCoverArtFallbackUrl,
   audioCoverArtUrl,
@@ -15,6 +15,16 @@ function nonEmptyText(value: string | null | undefined): string | undefined {
 
 export function fileNameTitle(fileName: string): string {
   return fileName.replace(/\.[^.]+$/u, '') || fileName
+}
+
+const COVER_TONES: readonly CoverTone[] = ['lagoon', 'violet', 'rose', 'amber', 'blue']
+
+export function coverToneForTrackId(id: string): CoverTone {
+  let hash = 0
+  for (let index = 0; index < id.length; index += 1) {
+    hash = (hash * 31 + id.charCodeAt(index)) >>> 0
+  }
+  return COVER_TONES[hash % COVER_TONES.length] ?? 'blue'
 }
 
 export function playlistDisplayName(playlist: AudioFolderPlaylist): string {

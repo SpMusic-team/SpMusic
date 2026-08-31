@@ -100,7 +100,7 @@ export function LyricsPanel({
     }
   }, [interaction, track.lyrics, visualClock])
 
-  useActiveLyricScroll(
+  const notifyLyricNavigation = useActiveLyricScroll(
     activePositionSeconds,
     interaction,
     track.lyrics,
@@ -126,7 +126,7 @@ export function LyricsPanel({
     if (!line) return null
     const index = Number.parseInt(line.dataset.lyricIndex ?? '', 10)
     const lyric = Number.isInteger(index) ? track.lyrics[index] : undefined
-    return lyric ? { line, lyric } : null
+    return lyric ? { line, lyric, index } : null
   }
 
   function handleListKeyDown(event: KeyboardEvent<HTMLOListElement>) {
@@ -134,12 +134,14 @@ export function LyricsPanel({
     const target = lyricForEventTarget(event.currentTarget, event.target)
     if (!target) return
     event.preventDefault()
+    notifyLyricNavigation(target.index)
     onLineSelect(target.lyric.timeSeconds)
   }
 
   function handleListClick(event: MouseEvent<HTMLOListElement>) {
     const target = lyricForEventTarget(event.currentTarget, event.target)
     if (!target) return
+    notifyLyricNavigation(target.index)
     onLineSelect(target.lyric.timeSeconds)
     if (event.detail > 0) target.line.blur()
   }
@@ -167,7 +169,12 @@ export function LyricsPanel({
           </EmptyHeader>
         </Empty>
       ) : track.lyrics.length ? (
-        <ol ref={lyricListRef} onClick={handleListClick} onKeyDown={handleListKeyDown}>
+        <ol
+          ref={lyricListRef}
+          data-interaction={interaction}
+          onClick={handleListClick}
+          onKeyDown={handleListKeyDown}
+        >
           {track.lyrics.map((line, index) => {
             const nextLine = track.lyrics[index + 1]
             const pairDeltaSeconds = nextLine ? nextLine.timeSeconds - line.timeSeconds : null

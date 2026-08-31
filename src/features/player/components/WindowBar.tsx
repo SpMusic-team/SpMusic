@@ -17,6 +17,8 @@ type WindowBarProps = {
   debugToolsEnabled?: boolean
   debugToolsOpen?: boolean
   onDebugToolsOpenChange?: (open: boolean) => void
+  playlistOpen?: boolean
+  onTogglePlaylist?: () => void
 }
 
 function getTauriWindow(): TauriWindow | null {
@@ -29,6 +31,8 @@ export function WindowBar({
   debugToolsEnabled = false,
   debugToolsOpen = false,
   onDebugToolsOpenChange,
+  playlistOpen = false,
+  onTogglePlaylist,
 }: WindowBarProps) {
   const systemIcons = useSystemIcons()
   const [maximized, setMaximized] = useState(false)
@@ -123,7 +127,12 @@ export function WindowBar({
   return (
     <header className="window-bar" data-fullscreen={fullscreen} data-tauri-drag-region={!fullscreen || undefined} onDoubleClick={fullscreen ? undefined : toggleMaximize} onPointerDown={startWindowDrag}>
       <div className="window-leading" onDoubleClick={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
-        <IconButton icon={systemIcons.collapse} label={appCopy.controls.collapse} />
+        <IconButton
+          icon={systemIcons.collapse}
+          label={appCopy.controls.playlistPage}
+          selected={playlistOpen}
+          onClick={onTogglePlaylist}
+        />
       </div>
       <h1 id="app-title" className="sr-only">{appCopy.appTitle}</h1>
       <div className="window-actions" onDoubleClick={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>

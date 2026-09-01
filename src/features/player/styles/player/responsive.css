@@ -1,0 +1,1040 @@
+.responsive-player-layout {
+  /* Full is height-driven. Horizontal-half inherits this structural scale for
+     cover and lyrics, while its controller uses the fixed unit below. */
+  --player-layout-unit: 0.0694444444svh;
+  --control-unit: var(--player-layout-unit);
+  --player-lyrics-item-height: calc(53.333333 * var(--player-lyrics-font-scale) * var(--player-layout-unit));
+  --player-lyrics-font-size: calc(20 * var(--player-lyrics-font-scale) * var(--player-layout-unit));
+  --player-lyrics-line-height: calc(26.666667 * var(--player-lyrics-font-scale) * var(--player-layout-unit));
+  --player-lyrics-translation-font-size: calc(20 * var(--player-lyrics-font-scale) * var(--player-layout-unit));
+  --player-lyrics-translation-line-height: calc(26.666667 * var(--player-lyrics-font-scale) * var(--player-layout-unit));
+  position: absolute;
+  inset: 0;
+  min-width: 0;
+  min-height: 0;
+}
+
+.control-transport {
+  display: contents;
+}
+
+.responsive-player-layout .player-stage {
+  --full-cover-size: min(
+    calc(100svh - 459 * var(--player-layout-unit)),
+    calc(100svh - 185 * var(--player-layout-unit) - 266px)
+  );
+  position: absolute;
+  inset:
+    calc(126 * var(--player-layout-unit))
+    calc(120 * var(--player-layout-unit))
+    calc(59 * var(--player-layout-unit));
+  box-sizing: border-box;
+  width: auto;
+  height: auto;
+  padding: 0;
+  display: grid;
+  grid-template-columns: calc(var(--full-cover-size) + 24 * var(--player-layout-unit)) minmax(0, 1fr);
+  grid-template-rows:
+    calc(145 * var(--player-layout-unit))
+    calc(9 * var(--player-layout-unit))
+    minmax(0, 1fr)
+    36px
+    230px;
+  grid-template-areas:
+    "cover meta"
+    "cover ."
+    "cover lyrics"
+    ". ."
+    "dock dock";
+  gap: 0;
+  transform: none;
+}
+
+.responsive-player-layout[data-player-layout="full"] .player-stage {
+  --full-stage-top: max(40px, calc(56 * var(--player-layout-unit)));
+  --full-stage-bottom: max(24px, calc(56 * var(--player-layout-unit)));
+  --full-control-region-size: calc(230 * var(--player-layout-unit));
+  --full-content-control-gap: calc(36 * var(--player-layout-unit));
+  --full-cover-size: min(
+    calc(1062 * var(--player-layout-unit)),
+    calc(
+      100svh
+      - var(--full-stage-top)
+      - var(--full-stage-bottom)
+      - var(--full-content-control-gap)
+      - var(--full-control-region-size)
+    )
+  );
+  inset:
+    var(--full-stage-top)
+    calc(128 * var(--player-layout-unit))
+    var(--full-stage-bottom);
+  grid-template-columns: var(--full-cover-size) minmax(0, 1fr);
+  grid-template-rows:
+    calc(155 * var(--player-layout-unit))
+    calc(9 * var(--player-layout-unit))
+    minmax(0, 1fr)
+    var(--full-content-control-gap)
+    var(--full-control-region-size);
+  column-gap: calc(24 * var(--player-layout-unit));
+  row-gap: 0;
+}
+
+.responsive-player-layout .player-control-region {
+  display: contents;
+}
+
+.responsive-player-layout[data-player-layout="full"] .player-control-region {
+  grid-area: dock;
+  box-sizing: border-box;
+  width: 100%;
+  height: var(--full-control-region-size);
+  min-height: var(--full-control-region-size);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.responsive-player-layout[data-player-layout="full"] .playback-info-button {
+  max-width: min(calc(332 * var(--player-layout-unit)), 100%);
+  height: fit-content;
+  padding-inline: 0;
+  border-radius: calc(30 * var(--player-layout-unit));
+}
+
+.responsive-player-layout[data-player-layout="full"] .playback-info-button-content {
+  height: auto;
+  padding: calc(10 * var(--player-layout-unit)) calc(20 * var(--player-layout-unit));
+  gap: calc(10 * var(--player-layout-unit));
+}
+
+.responsive-player-layout[data-player-layout="full"] .playback-info-button-content > svg {
+  width: calc(16 * var(--player-layout-unit));
+  height: calc(16 * var(--player-layout-unit));
+  flex-basis: calc(16 * var(--player-layout-unit));
+}
+
+.responsive-player-layout[data-player-layout="full"] .playback-info-button-text {
+  max-width: calc(248 * var(--player-layout-unit));
+  font-size: calc(14 * var(--player-layout-unit));
+  line-height: calc(20 * var(--player-layout-unit));
+}
+
+.responsive-player-layout[data-player-layout="full"] .playback-info-button[data-playback-state="paused"] {
+}
+
+.responsive-player-layout[data-player-layout="full"] .playback-info-button[data-playback-state="paused"] .playback-info-button-content > svg {
+  width: calc(14 * var(--player-layout-unit));
+  height: calc(14 * var(--player-layout-unit));
+  flex-basis: calc(14 * var(--player-layout-unit));
+}
+
+.responsive-player-layout[data-player-layout="full"] .playback-info-button[data-playback-state="paused"] .playback-info-button-text {
+  font-size: calc(12 * var(--player-layout-unit));
+  line-height: calc(16 * var(--player-layout-unit));
+}
+
+.responsive-player-layout .cover-column {
+  grid-area: cover;
+  position: relative;
+  inset: auto;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+}
+
+.responsive-player-layout .cover-frame {
+  position: relative;
+  inset: auto;
+  width: min(100%, var(--full-cover-size));
+  height: auto;
+  aspect-ratio: 1;
+  border-radius: calc(30 * var(--player-layout-unit));
+  box-shadow:
+    calc(-6 * var(--player-layout-unit))
+    calc(6 * var(--player-layout-unit))
+    calc(4 * var(--player-layout-unit))
+    rgba(0, 0, 0, 0.25);
+  touch-action: pan-y;
+  cursor: grab;
+}
+
+.responsive-player-layout .cover-frame:active { cursor: grabbing; }
+
+.responsive-player-layout[data-player-layout="full"] .cover-frame {
+  width: var(--full-cover-size);
+  transition: width var(--player-playback-transition-duration) var(--app-motion-easing);
+}
+
+.responsive-player-layout[data-player-layout="full"] .player-stage[data-playback-state="paused"] .cover-frame {
+  width: calc(var(--full-cover-size) - 30 * var(--player-layout-unit));
+}
+
+.responsive-player-layout .cover-feedback {
+  left: 0;
+  bottom: calc(23 * var(--player-layout-unit));
+  gap: calc(24 * var(--player-layout-unit));
+}
+
+.responsive-player-layout .cover-feedback button {
+  width: calc(106 * var(--player-layout-unit));
+  height: calc(72 * var(--player-layout-unit));
+}
+
+.responsive-player-layout .cover-art .player-control-icon-frame {
+  width: calc(48 * var(--player-layout-unit));
+  height: calc(48 * var(--player-layout-unit));
+}
+
+.responsive-player-layout .cover-art .more-button {
+  right: calc(13 * var(--player-layout-unit));
+  bottom: calc(23 * var(--player-layout-unit));
+  width: calc(72 * var(--player-layout-unit));
+  height: calc(72 * var(--player-layout-unit));
+}
+
+/* Full-layout cover actions are fixed-size controls anchored to the artwork.
+   Only the flexible space between both action groups changes with the cover. */
+.responsive-player-layout[data-player-layout="full"] .cover-actions {
+  position: absolute;
+  z-index: 3;
+  left: 12px;
+  right: 12px;
+  bottom: 24px;
+  height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.responsive-player-layout[data-player-layout="full"] .cover-feedback {
+  position: static;
+  width: 236px;
+  height: 72px;
+  flex: 0 0 236px;
+  gap: 24px;
+}
+
+.responsive-player-layout[data-player-layout="full"] .cover-feedback button {
+  width: 106px;
+  height: 72px;
+  flex: 0 0 106px;
+}
+
+.responsive-player-layout[data-player-layout="full"] .cover-art .player-control-icon-frame {
+  width: 48px;
+  height: 48px;
+}
+
+.responsive-player-layout[data-player-layout="full"] .cover-actions .more-button {
+  /* Keep the button in normal flex flow while preserving it as the absolute
+     ripple's containing block. The generic cover rule supplies right/bottom
+     offsets for absolutely positioned layouts, so neutralize those here. */
+  position: relative;
+  right: auto;
+  bottom: auto;
+  width: 72px;
+  height: 68px;
+  flex: 0 0 72px;
+}
+
+.responsive-player-layout[data-player-layout="full"] .cover-actions .more-button > svg {
+  width: 48px;
+  height: 48px;
+}
+
+.responsive-player-layout .track-pills {
+  grid-area: meta;
+  position: relative;
+  inset: auto;
+  /* 完整布局：胶囊右缘最大延伸到“窗口右 - 24”；
+     左缘保持距封面右缘 24（列间隙 12 + 左 margin 12），两侧间距相等。
+     信息列右缘 = 窗口右 - 120（舞台内边距），故容器右缘需再向右扩展 96：
+     宽度 = 100% + 96 - 12(左 margin) = 100% + 84。 */
+  width: calc(100% + 84 * var(--player-layout-unit));
+  margin-left: calc(12 * var(--player-layout-unit));
+  margin-right: 0;
+  align-self: start;
+  gap: calc(29 * var(--player-layout-unit));
+}
+
+.responsive-player-layout[data-player-layout="full"] .track-pills {
+  width: 100%;
+  margin-top: calc(10 * var(--player-layout-unit));
+  margin-left: 0;
+}
+
+.responsive-player-layout[data-player-layout="full"] .track-pill,
+.responsive-player-layout[data-player-layout="horizontal"] .track-pill {
+  max-width: 100%;
+}
+
+.responsive-player-layout[data-player-layout="full"] .track-pills .title-pill,
+.responsive-player-layout[data-player-layout="horizontal"] .track-pills .title-pill {
+  max-width: 100%;
+}
+
+.responsive-player-layout .track-pills .track-pill {
+  height: auto;
+  padding:
+    calc(10 * var(--player-layout-unit))
+    calc(20 * var(--player-layout-unit));
+  border-radius: calc(30 * var(--player-layout-unit));
+  font-size: calc(28 * var(--player-layout-unit));
+  line-height: calc(36 * var(--player-layout-unit));
+}
+
+.responsive-player-layout .track-pills .title-pill {
+  font-size: calc(32 * var(--player-layout-unit));
+  line-height: calc(40 * var(--player-layout-unit));
+}
+
+.responsive-player-layout .lyrics-panel {
+  --lyrics-spacing-unit: var(--player-layout-unit);
+  --lyrics-bilingual-block-size: max(
+    var(--player-lyrics-item-height),
+    calc(60 * var(--player-lyrics-font-scale) * var(--player-layout-unit))
+  );
+  grid-area: lyrics;
+  position: relative;
+  inset: auto;
+  width: min(
+    calc(100% - 24 * var(--player-layout-unit)),
+    calc(762 * var(--player-layout-unit))
+  );
+  height: 100%;
+  min-height: 0;
+  align-self: center;
+  justify-self: center;
+}
+
+.responsive-player-layout[data-player-layout="full"] .lyrics-panel {
+  height: calc(100% - 10 * var(--player-layout-unit));
+  align-self: start;
+}
+
+.responsive-player-layout .lyrics-panel ol {
+  gap: 0;
+}
+
+.responsive-player-layout .lyrics-panel li {
+  gap: 0;
+  transform: none;
+}
+
+.responsive-player-layout .lyrics-panel li[data-position="past"],
+.responsive-player-layout .lyrics-panel li[data-position="future"] {
+  transform: none;
+}
+
+.responsive-player-layout .lyrics-panel li[data-active="true"] {
+  font-size: calc(23.333333 * var(--player-lyrics-font-scale) * var(--player-layout-unit));
+  line-height: calc(30 * var(--player-lyrics-font-scale) * var(--player-layout-unit));
+  transform: none;
+}
+
+.responsive-player-layout .lyrics-panel li[data-active="true"] .translation-line {
+  font-size: calc(23.333333 * var(--player-lyrics-font-scale) * var(--player-layout-unit));
+  line-height: calc(30 * var(--player-lyrics-font-scale) * var(--player-layout-unit));
+}
+
+.responsive-player-layout .control-dock {
+  grid-area: dock;
+  position: relative;
+  inset: auto;
+  width: calc(100vw - 338 * var(--player-layout-unit));
+  height: calc(180 * var(--player-layout-unit));
+  margin: 0;
+  padding: calc(23 * var(--player-controls-density-unit)) 0;
+  align-self: end;
+  justify-self: center;
+  transform: none;
+}
+
+.responsive-player-layout[data-player-layout="full"] .control-dock {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: calc(1080 * var(--player-layout-unit));
+  height: calc(145 * var(--player-layout-unit));
+  padding: calc(23 * var(--player-layout-unit)) 0;
+  flex: 0 0 auto;
+  align-self: center;
+  justify-self: auto;
+  border-radius: calc(30 * var(--player-layout-unit));
+  box-shadow:
+    0
+    calc(4 * var(--player-layout-unit))
+    calc(4 * var(--player-layout-unit))
+    rgba(0, 0, 0, var(--player-controls-shadow));
+}
+
+.responsive-player-layout[data-player-layout="full"] .progress-row {
+  height: calc(28 * var(--player-layout-unit));
+  padding-inline: calc(81 * var(--player-layout-unit));
+  grid-template-columns:
+    calc(72 * var(--player-layout-unit))
+    minmax(calc(300 * var(--player-layout-unit)), 1fr)
+    calc(72 * var(--player-layout-unit));
+  gap: calc(88 * var(--player-layout-unit));
+  font-size: calc(22 * var(--player-layout-unit));
+  line-height: calc(28 * var(--player-layout-unit));
+  transition-property: font-size, line-height;
+  transition-duration: var(--player-control-transition-duration);
+  transition-timing-function: var(--app-motion-easing);
+}
+
+.responsive-player-layout[data-player-layout="full"] .control-dock[data-playback-state="paused"] .progress-row {
+  font-size: calc(16 * var(--player-layout-unit));
+  line-height: calc(24 * var(--player-layout-unit));
+}
+
+.responsive-player-layout[data-player-layout="full"] .control-progress-slider {
+  width: 100%;
+  min-width: calc(300 * var(--player-layout-unit));
+  height: calc(28 * var(--player-layout-unit));
+}
+
+.responsive-player-layout[data-player-layout="full"] .control-progress-slider [data-slot="slider-track"] {
+  height: calc(6 * var(--player-layout-unit));
+}
+
+.responsive-player-layout[data-player-layout="full"] .control-progress-slider [data-slot="slider-thumb"] {
+  width: calc(23 * var(--player-layout-unit));
+  height: calc(23 * var(--player-layout-unit));
+  width: round(nearest, calc(23 * var(--player-layout-unit)), 1px);
+  height: round(nearest, calc(23 * var(--player-layout-unit)), 1px);
+}
+
+.responsive-player-layout[data-player-layout="full"] .control-row {
+  height: calc(63 * var(--player-layout-unit));
+  margin-top: calc(8 * var(--player-layout-unit));
+  padding-inline: calc(59 * var(--player-layout-unit));
+  grid-template-columns:
+    calc(208 * var(--player-layout-unit))
+    minmax(calc(540 * var(--player-layout-unit)), 1fr)
+    calc(212 * var(--player-layout-unit));
+}
+
+.responsive-player-layout[data-player-layout="full"] .control-primary {
+  width: calc(540 * var(--player-layout-unit));
+  max-width: none;
+  padding-inline: calc(36 * var(--player-layout-unit));
+  flex: 0 0 calc(540 * var(--player-layout-unit));
+  gap: calc(36 * var(--player-layout-unit));
+  justify-content: center;
+  transform: translateX(calc(2 * var(--player-layout-unit)));
+}
+
+.responsive-player-layout[data-player-layout="full"] .control-transport {
+  box-sizing: border-box;
+  width: calc(276 * var(--player-layout-unit));
+  min-width: calc(276 * var(--player-layout-unit));
+  flex: 0 0 calc(276 * var(--player-layout-unit));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: calc(36 * var(--player-layout-unit));
+  transition-property: gap;
+  transition-duration: var(--player-control-transition-duration);
+  transition-timing-function: var(--app-motion-easing);
+}
+
+.responsive-player-layout[data-player-layout="full"] .control-primary[data-playback-state="paused"] .control-transport {
+  gap: calc(12 * var(--player-layout-unit));
+}
+
+.responsive-player-layout[data-player-layout="full"] .control-auxiliary-start {
+  width: calc(208 * var(--player-layout-unit));
+  padding-inline: calc(16 * var(--player-layout-unit));
+}
+
+.responsive-player-layout[data-player-layout="full"] .control-auxiliary-end {
+  width: calc(212 * var(--player-layout-unit));
+  padding-inline: calc(18 * var(--player-layout-unit));
+  gap: calc(16 * var(--player-layout-unit));
+}
+
+.responsive-player-layout[data-player-layout="full"] .control-primary button,
+.responsive-player-layout[data-player-layout="full"] .control-auxiliary button {
+  width: calc(48 * var(--player-layout-unit));
+  height: calc(48 * var(--player-layout-unit));
+  flex: 0 0 calc(48 * var(--player-layout-unit));
+}
+
+.responsive-player-layout[data-player-layout="full"] .control-primary button svg,
+.responsive-player-layout[data-player-layout="full"] .control-auxiliary button svg,
+.responsive-player-layout[data-player-layout="full"] .control-primary .player-control-icon-frame,
+.responsive-player-layout[data-player-layout="full"] .control-auxiliary .player-control-icon-frame {
+  width: calc(48 * var(--player-layout-unit));
+  height: calc(48 * var(--player-layout-unit));
+  transform: none;
+}
+
+.responsive-player-layout[data-player-layout="full"] .control-primary .previous-button,
+.responsive-player-layout[data-player-layout="full"] .control-primary .next-button {
+  width: calc(64 * var(--player-layout-unit));
+  height: calc(64 * var(--player-layout-unit));
+  flex-basis: calc(64 * var(--player-layout-unit));
+  transition-property: width, height, flex-basis;
+  border-width: calc(1 * var(--player-layout-unit));
+  transition-duration: var(--player-control-transition-duration);
+  transition-timing-function: var(--app-motion-easing);
+}
+
+.responsive-player-layout[data-player-layout="full"] .control-primary[data-playback-state="paused"] .previous-button,
+.responsive-player-layout[data-player-layout="full"] .control-primary[data-playback-state="paused"] .next-button {
+  width: calc(56 * var(--player-layout-unit));
+  height: calc(56 * var(--player-layout-unit));
+  flex-basis: calc(56 * var(--player-layout-unit));
+}
+
+.responsive-player-layout[data-player-layout="full"] .control-primary .previous-button svg,
+.responsive-player-layout[data-player-layout="full"] .control-primary .next-button svg,
+.responsive-player-layout[data-player-layout="full"] .control-primary .previous-button .player-control-icon-frame,
+.responsive-player-layout[data-player-layout="full"] .control-primary .next-button .player-control-icon-frame {
+  width: calc(32 * var(--player-layout-unit));
+  height: calc(32 * var(--player-layout-unit));
+}
+
+.responsive-player-layout[data-player-layout="full"] .control-primary .play-button {
+  width: calc(76 * var(--player-layout-unit));
+  height: calc(76 * var(--player-layout-unit));
+  flex-basis: calc(76 * var(--player-layout-unit));
+  transition-property: width, height, flex-basis;
+  transition-duration: var(--player-control-transition-duration);
+  transition-timing-function: var(--app-motion-easing);
+}
+
+.responsive-player-layout[data-player-layout="full"] .control-primary[data-playback-state="paused"] .play-button {
+  width: calc(84 * var(--player-layout-unit));
+  height: calc(84 * var(--player-layout-unit));
+  flex-basis: calc(84 * var(--player-layout-unit));
+}
+
+.responsive-player-layout[data-player-layout="full"] .control-primary .play-button svg,
+.responsive-player-layout[data-player-layout="full"] .control-primary .play-button .player-control-icon-frame {
+  width: calc(48 * var(--player-layout-unit));
+  height: calc(48 * var(--player-layout-unit));
+}
+
+body[data-player-controls-time-labels="false"] .responsive-player-layout[data-player-layout="full"] .progress-row {
+  grid-template-columns: minmax(calc(300 * var(--player-layout-unit)), 1fr);
+  gap: 0;
+}
+
+.responsive-player-layout[data-player-layout="vertical"] .control-primary {
+  gap: 0;
+  justify-content: space-between;
+}
+
+.control-optional {
+  opacity: 1;
+  transition: opacity 300ms ease-out;
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] {
+  /* Figma 615:1332 keeps the horizontal-half controller and lyric typography
+     at their reference sizes while the available content height changes. */
+  --horizontal-control-unit: 1px;
+  --control-unit: var(--horizontal-control-unit);
+  --player-lyrics-item-height: calc(53.333333px * var(--player-lyrics-font-scale));
+  --player-lyrics-font-size: calc(20px * var(--player-lyrics-font-scale));
+  --player-lyrics-line-height: calc(26.666667px * var(--player-lyrics-font-scale));
+  --player-lyrics-translation-font-size: calc(20px * var(--player-lyrics-font-scale));
+  --player-lyrics-translation-line-height: calc(26.666667px * var(--player-lyrics-font-scale));
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .player-stage {
+  --horizontal-cover-size: calc(100svh - 126 * var(--player-layout-unit));
+  inset:
+    calc(67 * var(--player-layout-unit))
+    calc(60 * var(--player-layout-unit))
+    calc(59 * var(--player-layout-unit));
+  grid-template-columns: calc(var(--horizontal-cover-size) + 24 * var(--player-layout-unit)) minmax(0, 1fr);
+  grid-template-rows:
+    calc(145 * var(--player-layout-unit))
+    calc(9 * var(--player-layout-unit))
+    minmax(0, 1fr)
+    calc(145 * var(--horizontal-control-unit));
+  grid-template-areas:
+    "cover meta"
+    "cover ."
+    "cover lyrics"
+    "cover dock";
+  gap: 0;
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .cover-frame {
+  width: min(100%, var(--horizontal-cover-size));
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .track-card-deck {
+  height: var(--horizontal-cover-size);
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .track-pills {
+  /* 横向半屏：胶囊左缘距封面右缘 36（列间隙 12 + 左 margin 24），
+     右缘最大延伸到“窗口右 - 36”，两侧间距相等。
+     信息列右缘 = 窗口右 - 60，需再向右扩展 24：
+     宽度 = 100% + 24 - 24(左 margin) = 100%。 */
+  width: 100%;
+  margin-left: calc(24 * var(--player-layout-unit));
+  margin-right: 0;
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .lyrics-panel {
+  --lyrics-bilingual-block-size: max(
+    var(--player-lyrics-item-height),
+    calc(60px * var(--player-lyrics-font-scale))
+  );
+  width: min(
+    calc(100% - 48 * var(--player-layout-unit)),
+    762px
+  );
+  height: 100%;
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .lyrics-panel li[data-active="true"],
+.responsive-player-layout[data-player-layout="horizontal"] .lyrics-panel li[data-active="true"] .translation-line {
+  font-size: calc(23.333333px * var(--player-lyrics-font-scale));
+  line-height: calc(30px * var(--player-lyrics-font-scale));
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .control-dock {
+  width: auto;
+  height: calc(145 * var(--horizontal-control-unit));
+  margin: 0 calc(12 * var(--player-layout-unit));
+  padding: calc(23 * var(--horizontal-control-unit)) 0;
+  justify-self: stretch;
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .control-progress-slider {
+  width: 100%;
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .control-row {
+  height: calc(63 * var(--horizontal-control-unit));
+  padding-inline: 0;
+  grid-template-columns: 66px minmax(0, 1fr) 66px;
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .control-primary {
+  width: min(100%, calc(144px + 84px * var(--player-primary-size-scale) + 72px * var(--player-controls-density-factor)));
+  padding-inline: 0;
+  gap: calc(36px * var(--player-controls-density-factor));
+  justify-content: center;
+  transform: translateY(min(0px, calc((1 - var(--player-primary-size-scale)) * 2px)));
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .control-optional {
+  display: none;
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .control-auxiliary,
+.responsive-player-layout[data-player-layout="horizontal"] .control-auxiliary-start,
+.responsive-player-layout[data-player-layout="horizontal"] .control-auxiliary-end {
+  width: 100%;
+  padding-inline: 0;
+  gap: 0;
+}
+
+.responsive-player-layout[data-player-layout="quarter"] .player-stage {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "cover"
+    "meta"
+    "lyrics"
+    "dock";
+}
+
+.responsive-player-layout[data-player-layout="vertical"] {
+  /* Vertical half-screen reference frame: 1120 x 1440. */
+  --player-layout-unit: min(0.0892857143vw, 0.0694444444svh);
+}
+
+.responsive-player-layout[data-player-layout="vertical"] .player-stage {
+  --vertical-cover-size: min(
+    calc(802 * var(--player-layout-unit)),
+    calc(100svh - 638 * var(--player-layout-unit)),
+    calc(100vw - 264 * var(--player-layout-unit))
+  );
+  inset:
+    calc(126 * var(--player-layout-unit))
+    calc(20 * var(--player-layout-unit))
+    calc(59 * var(--player-layout-unit));
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows:
+    var(--vertical-cover-size)
+    calc(34 * var(--player-layout-unit))
+    calc(145 * var(--player-layout-unit))
+    minmax(0, 1fr)
+    calc(94 * var(--player-layout-unit))
+    calc(180 * var(--player-layout-unit));
+  grid-template-areas:
+    "cover"
+    "."
+    "meta"
+    "."
+    "."
+    "dock";
+  gap: 0;
+}
+
+.responsive-player-layout[data-player-layout="vertical"] .cover-frame {
+  width: min(100%, var(--vertical-cover-size));
+}
+
+.responsive-player-layout[data-player-layout="vertical"] .track-card-deck {
+  height: calc(var(--vertical-cover-size) + 179 * var(--player-layout-unit));
+}
+
+.responsive-player-layout[data-player-layout="vertical"] .track-pills {
+  width: min(
+    calc(100% - 200 * var(--player-layout-unit)),
+    calc(880 * var(--player-layout-unit))
+  );
+  margin-inline: 0;
+  justify-self: center;
+}
+
+.responsive-player-layout[data-player-layout="vertical"] .lyrics-panel,
+.responsive-player-layout[data-player-layout="quarter"][data-player-short="true"] .lyrics-panel {
+  display: none;
+}
+
+.responsive-player-layout[data-player-layout="vertical"] .control-dock {
+  width: auto;
+  height: calc(180 * var(--player-layout-unit));
+  margin: 0;
+  justify-self: stretch;
+}
+
+.responsive-player-layout[data-player-layout="quarter"] .window-settings-trigger,
+.responsive-player-layout[data-player-layout="horizontal"] .window-settings-trigger,
+.responsive-player-layout[data-player-short="true"] .window-settings-trigger {
+  display: none;
+}
+
+.responsive-player-layout[data-player-layout="quarter"] {
+  /* Quarter-screen reference frame: 640 x 1440. */
+  --player-layout-unit: clamp(0.8px, min(0.15625vw, 0.0694444444svh), 1px);
+}
+
+.responsive-player-layout[data-player-layout="quarter"] .player-stage {
+  --quarter-cover-size: min(
+    calc(100vw - 34 * var(--player-layout-unit)),
+    calc(100svh - 514 * var(--player-layout-unit)),
+    calc(802 * var(--player-layout-unit))
+  );
+  inset:
+    calc(97 * var(--player-layout-unit))
+    calc(17 * var(--player-layout-unit))
+    calc(30 * var(--player-layout-unit));
+  grid-template-rows: var(--quarter-cover-size) auto minmax(0, 1fr) calc(180 * var(--player-layout-unit));
+  row-gap: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+
+.responsive-player-layout[data-player-layout="quarter"] .player-stage::-webkit-scrollbar,
+.responsive-player-layout[data-player-short="true"] .player-stage::-webkit-scrollbar {
+  display: none;
+}
+
+.responsive-player-layout[data-player-layout="quarter"] .cover-frame {
+  width: min(100%, var(--quarter-cover-size));
+  max-height: 100%;
+}
+
+.responsive-player-layout[data-player-layout="quarter"] .track-card-deck {
+  height: calc(var(--quarter-cover-size) + 179 * var(--player-layout-unit));
+}
+
+.responsive-player-layout[data-player-layout="quarter"] .track-pills {
+  width: min(
+    calc(100% - 42 * var(--player-layout-unit)),
+    calc(880 * var(--player-layout-unit))
+  );
+  margin-top: calc(34 * var(--player-layout-unit));
+  margin-inline: 0;
+  padding-inline: 0;
+  justify-self: center;
+}
+
+.responsive-player-layout[data-player-layout="quarter"] .lyrics-panel {
+  /* Figma 766:997: the lyric viewport fills the 26px-padded body at 640px
+     (588px), then grows with the window until its 762px mask limit. */
+  display: block;
+  width: min(
+    calc(100% - 18 * var(--player-layout-unit)),
+    calc(762 * var(--player-layout-unit))
+  );
+  height: auto;
+  margin-block:
+    calc(34 * var(--player-layout-unit))
+    calc(28 * var(--player-layout-unit));
+  align-self: stretch;
+  justify-self: center;
+}
+
+.responsive-player-layout[data-player-layout="quarter"] .control-dock {
+  width: auto;
+  height: calc(180 * var(--player-layout-unit));
+  margin: 0 calc(3 * var(--player-layout-unit));
+  justify-self: stretch;
+}
+
+.responsive-player-layout[data-player-layout="quarter"] .progress-row {
+  grid-template-columns:
+    calc(72 * var(--player-layout-unit))
+    minmax(calc(300 * var(--player-layout-unit)), 1fr)
+    calc(72 * var(--player-layout-unit));
+  gap: calc(24 * var(--player-layout-unit));
+  height: calc(28 * var(--player-layout-unit));
+  padding: 0 calc(54 * var(--player-layout-unit));
+  font-size: calc(22 * var(--player-layout-unit));
+  line-height: calc(28 * var(--player-layout-unit));
+}
+
+.responsive-player-layout[data-player-layout="quarter"] .control-progress-slider {
+  width: 100%;
+}
+
+.responsive-player-layout[data-player-layout="quarter"] .control-row {
+  height: calc(98 * var(--player-layout-unit));
+  margin-top: calc(8 * var(--player-layout-unit));
+  padding: 0 calc(46 * var(--player-layout-unit) * var(--player-controls-density-factor));
+  grid-template-columns:
+    calc(66 * var(--player-layout-unit))
+    minmax(0, 1fr)
+    calc(66 * var(--player-layout-unit));
+}
+
+.responsive-player-layout[data-player-layout="quarter"] .control-primary {
+  width: min(100%, calc(144 * var(--player-layout-unit) + 84 * var(--player-layout-unit) * var(--player-primary-size-scale) + 72 * var(--player-layout-unit) * var(--player-controls-density-factor)));
+  padding: 0;
+  gap: calc(36 * var(--player-layout-unit) * var(--player-controls-density-factor));
+}
+
+.responsive-player-layout[data-player-layout="quarter"] .control-optional {
+  display: none;
+}
+
+.responsive-player-layout[data-player-layout="quarter"] .control-auxiliary-start {
+  width: 100%;
+  padding: 0 calc(16 * var(--player-layout-unit)) 0 0;
+}
+
+.responsive-player-layout[data-player-layout="quarter"] .control-auxiliary-end {
+  width: 100%;
+  padding: 0 0 0 calc(18 * var(--player-layout-unit));
+}
+
+/* Keep the wide edge of the quarter layout geometrically continuous with
+   the 1120 x 1440 vertical-half reference before its composition changes. */
+@media (min-width: 640px) and (min-height: 800px) {
+  .responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .player-stage {
+    top: clamp(97px, calc(6.04166667vw + 58.333333px), 126px);
+    bottom: clamp(30px, calc(6.04166667vw - 8.666667px), 59px);
+  }
+}
+
+.responsive-player-layout[data-player-layout="quarter"][data-player-short="true"] .player-stage {
+  --short-cover-size: clamp(160px, calc(100svh - 411px), 220px);
+  --short-dock-size: clamp(126px, calc(28.125svh - 20.25px), 144px);
+  inset:
+    clamp(52px, calc(40svh - 156px), calc(97 * var(--player-layout-unit)))
+    12px
+    clamp(12px, calc(18.75svh - 85.5px), calc(30 * var(--player-layout-unit)));
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: var(--short-cover-size) auto minmax(0, 1fr) var(--short-dock-size);
+  grid-template-areas:
+    "cover"
+    "meta"
+    "spacer"
+    "dock";
+  row-gap: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+
+.responsive-player-layout[data-player-layout="quarter"][data-player-short="true"] .cover-frame {
+  width: min(100%, var(--short-cover-size));
+}
+
+.responsive-player-layout[data-player-layout="quarter"][data-player-short="true"] .track-card-deck {
+  height: calc(var(--short-cover-size) + 90px);
+}
+
+.responsive-player-layout[data-player-layout="quarter"][data-player-short="true"] .cover-feedback {
+  left: 8px;
+  bottom: 8px;
+  gap: 6px;
+}
+
+.responsive-player-layout[data-player-layout="quarter"][data-player-short="true"] .cover-feedback button {
+  width: 48px;
+  height: 38px;
+}
+
+.responsive-player-layout[data-player-layout="quarter"][data-player-short="true"] .cover-art .player-control-icon-frame {
+  width: 24px;
+  height: 24px;
+}
+
+.responsive-player-layout[data-player-layout="quarter"][data-player-short="true"] .cover-art .more-button {
+  right: 8px;
+  bottom: 8px;
+  width: 38px;
+  height: 38px;
+}
+
+.responsive-player-layout[data-player-layout="quarter"][data-player-short="true"] .track-pills {
+  width: min(100%, 680px);
+  gap: 8px;
+  padding-inline: 0;
+  margin-inline: 0;
+  margin-top: 12px;
+  justify-self: center;
+}
+
+.responsive-player-layout[data-player-layout="quarter"][data-player-short="true"] .track-pills .track-pill {
+  padding: 6px 14px;
+  font-size: 15px;
+  line-height: 22px;
+}
+
+.responsive-player-layout[data-player-layout="quarter"][data-player-short="true"] .track-pills .title-pill {
+  font-size: 17px;
+  line-height: 24px;
+}
+
+.responsive-player-layout[data-player-layout="quarter"][data-player-short="true"] .control-dock {
+  width: auto;
+  height: var(--short-dock-size);
+  margin: 0;
+  padding: calc(10px * var(--player-controls-density-factor)) calc(16px * var(--player-controls-density-factor)) calc(12px * var(--player-controls-density-factor));
+  border-radius: var(--player-controls-radius-short);
+  justify-self: stretch;
+}
+
+.responsive-player-layout[data-player-layout="quarter"][data-player-short="true"] .progress-row {
+  grid-template-columns: 48px minmax(0, 1fr) 48px;
+  gap: 8px;
+  height: 24px;
+  padding: 0;
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.responsive-player-layout[data-player-layout="quarter"][data-player-short="true"] .control-progress-slider {
+  width: 100%;
+  height: max(24px, var(--player-progress-thumb-size));
+}
+
+.responsive-player-layout[data-player-layout="quarter"][data-player-short="true"] .control-row {
+  height: 76px;
+  margin-top: 4px;
+  padding: 0;
+  grid-template-columns: 1fr auto 1fr;
+}
+
+.responsive-player-layout[data-player-layout="quarter"][data-player-short="true"] .control-primary {
+  width: auto;
+  gap: calc(4px * var(--player-controls-density-factor));
+}
+
+.responsive-player-layout[data-player-layout="quarter"][data-player-short="true"] .control-auxiliary {
+  width: auto;
+  padding: 0;
+}
+
+.responsive-player-layout[data-player-layout="quarter"][data-player-short="true"] .control-auxiliary-end {
+  gap: calc(2px * var(--player-controls-density-factor));
+}
+
+.responsive-player-layout[data-player-layout="quarter"][data-player-short="true"] .control-primary button,
+.responsive-player-layout[data-player-layout="quarter"][data-player-short="true"] .control-auxiliary button {
+  width: 38px;
+  height: 38px;
+}
+
+.responsive-player-layout[data-player-layout="quarter"][data-player-short="true"] .control-primary button svg,
+.responsive-player-layout[data-player-layout="quarter"][data-player-short="true"] .control-auxiliary button svg {
+  width: 28px;
+  height: 28px;
+}
+
+.responsive-player-layout[data-player-layout="quarter"][data-player-short="true"] .control-primary .previous-button,
+.responsive-player-layout[data-player-layout="quarter"][data-player-short="true"] .control-primary .next-button {
+  width: 50px;
+  height: 50px;
+}
+
+.responsive-player-layout[data-player-layout="quarter"][data-player-short="true"] .control-primary .play-button {
+  width: calc(62px * var(--player-primary-size-scale));
+  height: calc(62px * var(--player-primary-size-scale));
+}
+
+.responsive-player-layout[data-player-layout="quarter"][data-player-short="true"] .control-primary .play-button svg {
+  width: 34px;
+  height: 34px;
+}
+
+.responsive-player-layout[data-player-layout="quarter"] .debug-queue-panel,
+.responsive-player-layout[data-player-layout="vertical"] .debug-queue-panel {
+  display: none;
+}
+
+@media (max-width: 700px) {
+  .more-actions-menu[data-slot="dialog-content"] { --more-unit: 1px; width: min(360px, calc(100vw - 16px)); height: min(520px, calc(100svh - 16px)); max-width: calc(100vw - 16px); max-height: calc(100svh - 16px); padding: 14px; border-radius: 20px; }
+  .more-track-summary { grid-template-columns: 88px minmax(0, 1fr); gap: 12px; padding: 8px 0 14px; }
+  .more-menu-cover { width: 88px; border-radius: 16px; }
+  .more-track-details { gap: 6px; }
+  .more-track-title { font-size: 14px; line-height: 20px; }
+  .more-track-byline { font-size: 12px; line-height: 18px; }
+  .more-track-meta { gap: 8px; font-size: 11px; }
+  .more-track-meta > span { gap: 3px; }
+  .more-track-meta > span svg { width: 14px; height: 14px; }
+  .more-copy-action { width: 28px; height: 28px; }
+  .more-feedback-actions { gap: 6px; }
+  .more-feedback-action { width: 48px; height: 34px; }
+  .more-feedback-action svg { width: 22px; height: 22px; }
+  .more-action-grid { gap: 6px 12px; padding: 10px 0; }
+  .more-action { min-height: 42px; }
+  .more-action > svg { width: 24px; height: 24px; }
+  .more-action-copy strong { font-size: 13px; line-height: 18px; }
+  .more-action-copy small { font-size: 10px; line-height: 14px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .responsive-player-layout[data-player-layout="full"] .cover-frame,
+  .responsive-player-layout[data-player-layout="full"] .control-transport,
+  .responsive-player-layout[data-player-layout="full"] .control-primary .previous-button,
+  .responsive-player-layout[data-player-layout="full"] .control-primary .next-button,
+  .responsive-player-layout[data-player-layout="full"] .control-primary .play-button,
+  .control-optional,
+  .window-settings-trigger,
+  .lyrics-panel li {
+    transition: none;
+  }
+
+  .lyrics-panel li[data-active="true"],
+  .lyrics-panel li .translation-line {
+    animation: none;
+    filter: none;
+  }
+
+  .lyrics-panel ol {
+    scroll-behavior: auto;
+  }
+}
+
+body[data-player-controls-time-labels="false"] .responsive-player-layout .progress-row {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+}

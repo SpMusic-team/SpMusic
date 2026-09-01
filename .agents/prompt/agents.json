@@ -1,0 +1,438 @@
+{
+  "schemaVersion": 1,
+  "project": "SpMusic",
+  "metadata": {
+    "doc_id": "AGENT-REGISTRY",
+    "title": "Agent 注册表",
+    "doc_type": "agent-registry",
+    "status": "active",
+    "owner_agent": "PM Agent",
+    "version_scope": "project",
+    "created": "2026-07-09",
+    "updated": "2026-08-10",
+    "source_documents": [
+      ".agents/prompt/PM_Agent.md",
+      ".agents/prompt/Requirements_Agent.md",
+      ".agents/prompt/Architecture_Agent.md",
+      ".agents/prompt/UI_UX_Agent.md",
+      ".agents/prompt/Frontend_Agent.md",
+      ".agents/prompt/Rust_Tauri_Agent.md",
+      ".agents/prompt/Test_Agent.md",
+      ".agents/prompt/Documentation_Agent.md",
+      ".agents/prompt/templates/Agent_Prompt_Template.md",
+      ".agents/prompt/Audio_Compatibility_Agent.md",
+      "user request: activate Audio Compatibility Agent",
+      "user request: 优化需求 Excel 转文档时提取并压缩图片",
+      "user request: 核心 Agent 提示词治理审计 P0/P1/P2 修复"
+    ]
+  },
+  "purpose": "Registry of available project agents for PM task assignment and cross-agent collaboration.",
+  "assignmentRules": {
+    "defaultPool": "core",
+    "coreAssignmentRule": "PM Agent should assign tasks to core agents by default unless a specialized capability is explicitly approved.",
+    "scopeRule": "If a task exceeds the approved scope, PM Agent should mark it as P3 or Deferred instead of assigning it for implementation.",
+    "fallbackRule": "If no agent clearly owns a task, assign it to PM Agent for clarification or to Architecture Agent for boundary assessment."
+  },
+  "agents": [
+    {
+      "id": "pm",
+      "name": "PM Agent",
+      "pool": "core",
+      "status": "active",
+      "promptFile": ".agents/prompt/PM_Agent.md",
+      "role": "Project and product owner",
+      "responsibilities": [
+        "Define project and version goals",
+        "Control approved scope",
+        "Prioritize requirements and tasks",
+        "Break approved requirements into task cards",
+        "Assign tasks to suitable agents",
+        "Maintain roadmap, sprint plan, release plan, and retrospectives",
+        "Maintain the requirements index, scope-decision summary, and status rollup without authoring or approving requirement-analysis content",
+        "Maintain the canonical Agent registry, core prompts, and prompt templates"
+      ],
+      "notResponsibleFor": [
+        "Frontend implementation",
+        "Rust/Tauri implementation",
+        "Detailed architecture design",
+        "Code review as an implementation reviewer",
+        "Authoring or approving requirement-analysis content owned by Requirements Agent"
+      ],
+      "allowedOutputs": [
+        "docs/roadmap.md",
+        "docs/requirements.md",
+        "docs/sprint-plan.md",
+        "docs/tasks/*.md",
+        "docs/decisions/*.md",
+        "docs/release-plan.md",
+        "docs/retrospectives/*.md",
+        ".agents/prompt/agents.json",
+        ".agents/prompt/*_Agent.md",
+        ".agents/prompt/templates/*.md"
+      ]
+    },
+    {
+      "id": "requirements",
+      "name": "Requirements Agent",
+      "pool": "core",
+      "status": "active",
+      "promptFile": ".agents/prompt/Requirements_Agent.md",
+      "role": "Requirement analysis owner",
+      "responsibilities": [
+        "Clarify user problems",
+        "Define requirement scope",
+        "Identify functional and non-functional requirements",
+        "Define acceptance criteria",
+        "List open questions, risks, assumptions, and dependencies",
+        "Provide priority and target-version scope recommendations for PM Agent",
+        "Analyze whether a requirement fits the target version while leaving the final scope decision to PM Agent"
+      ],
+      "notResponsibleFor": [
+        "Sprint planning",
+        "Task card creation",
+        "Task assignment",
+        "Business code implementation",
+        "Final target-version scope or priority decisions"
+      ],
+      "allowedOutputs": [
+        "docs/requirements.md",
+        "docs/requirements/*.md",
+        "docs/requirements/open-questions.md",
+        "docs/requirements/archive/*.md"
+      ]
+    },
+    {
+      "id": "architecture",
+      "name": "Architecture Agent",
+      "pool": "core",
+      "status": "active",
+      "promptFile": ".agents/prompt/Architecture_Agent.md",
+      "role": "Architecture and module boundary owner",
+      "responsibilities": [
+        "Define frontend, Tauri, Rust, and local capability module boundaries",
+        "Design data models, state contracts, and interface contracts",
+        "Design Tauri command boundaries and cross-module data flow",
+        "Assess cross-module impact",
+        "Prevent premature over-engineering",
+        "Record architecture decisions"
+      ],
+      "notResponsibleFor": [
+        "Product priority decisions",
+        "Sprint planning",
+        "Full business implementation",
+        "User-facing documentation"
+      ],
+      "allowedOutputs": [
+        "docs/architecture/*.md",
+        "docs/decisions/*.md"
+      ]
+    },
+    {
+      "id": "ui-ux",
+      "name": "UI/UX Agent",
+      "pool": "core",
+      "status": "active",
+      "promptFile": ".agents/prompt/UI_UX_Agent.md",
+      "role": "Interface and interaction design owner",
+      "responsibilities": [
+        "Design information architecture, user flows, and screen structure",
+        "Define visual hierarchy, layout density, responsive behavior, and desktop interaction ergonomics",
+        "Specify component behavior, shadcn/ui component mapping, and UI state coverage",
+        "Define empty, loading, error, disabled, accessibility, and copy states",
+        "Produce implementable and verifiable UI specifications for Frontend Agent and Test Agent"
+      ],
+      "notResponsibleFor": [
+        "Product priority decisions",
+        "Architecture ownership",
+        "Frontend implementation",
+        "Dependency installation or UI framework migration",
+        "Rust/Tauri implementation"
+      ],
+      "allowedOutputs": [
+        "docs/ui/*.md",
+        "docs/decisions/*.md"
+      ]
+    },
+    {
+      "id": "frontend",
+      "name": "Frontend Agent",
+      "pool": "core",
+      "status": "active",
+      "promptFile": ".agents/prompt/Frontend_Agent.md",
+      "role": "React and TypeScript implementation owner",
+      "responsibilities": [
+        "Implement approved React UI and interaction behavior",
+        "Manage frontend state, TypeScript types, and component structure",
+        "Integrate approved Tauri commands from the frontend",
+        "Implement styling and layout behavior",
+        "Maintain the theme-first frontend customization model for appearance, motion, icon, and component variant work",
+        "Maintain TypeScript correctness"
+      ],
+      "notResponsibleFor": [
+        "Requirement approval",
+        "Sprint planning",
+        "Rust command implementation",
+        "Architecture decisions beyond assigned scope"
+      ],
+      "allowedOutputs": [
+        "src/**/*",
+        "docs/implementation/*.md"
+      ]
+    },
+    {
+      "id": "rust-tauri",
+      "name": "Rust/Tauri Agent",
+      "pool": "core",
+      "status": "active",
+      "promptFile": ".agents/prompt/Rust_Tauri_Agent.md",
+      "role": "Rust backend and Tauri command implementation owner",
+      "responsibilities": [
+        "Implement approved Rust commands",
+        "Manage Tauri backend boundaries and startup logic",
+        "Define safe command inputs and outputs",
+        "Handle approved local desktop capabilities",
+        "Maintain cargo check compatibility"
+      ],
+      "notResponsibleFor": [
+        "Frontend UI implementation",
+        "Product priority decisions",
+        "Unapproved database or audio engine design"
+      ],
+      "allowedOutputs": [
+        "src-tauri/src/**/*",
+        "src-tauri/Cargo.toml",
+        "src-tauri/capabilities/*.json",
+        "docs/implementation/*.md"
+      ]
+    },
+    {
+      "id": "test",
+      "name": "Test Agent",
+      "pool": "core",
+      "status": "active",
+      "promptFile": ".agents/prompt/Test_Agent.md",
+      "role": "Verification and quality owner",
+      "responsibilities": [
+        "Define test and verification strategy",
+        "Create test cases from acceptance criteria",
+        "Run or specify appropriate verification commands",
+        "Check regressions and edge cases",
+        "Independently assess implementation-agent reproduction evidence, hypotheses, and causal chains",
+        "Falsify root-cause claims and detect symptom-masking fixes",
+        "Verify cross-layer contracts and performance or timing evidence when applicable",
+        "Report evidence gaps, temporary mitigations, and residual risks"
+      ],
+      "notResponsibleFor": [
+        "Product priority decisions",
+        "Architecture ownership",
+        "Feature implementation unless explicitly requested",
+        "Accepting implementation-agent self-test claims without independent verification"
+      ],
+      "allowedOutputs": [
+        "docs/test/*.md",
+        "src/**/*.test.*",
+        "src-tauri/tests/**/*"
+      ]
+    },
+    {
+      "id": "documentation",
+      "name": "Documentation Agent",
+      "pool": "core",
+      "status": "active",
+      "promptFile": ".agents/prompt/Documentation_Agent.md",
+      "role": "README, change-intake, and assigned cross-cutting documentation owner; read-only consistency reviewer for specialist documentation by default",
+      "responsibilities": [
+        "Maintain README and Documentation-owned change-intake records",
+        "Maintain cross-cutting developer or collaboration documentation only when explicitly assigned at file level",
+        "Update README, setup instructions, and capability notes",
+        "Document Tauri commands and project conventions only under explicit file-level assignment",
+        "Keep assigned documentation aligned with approved requirements and implementation",
+        "Perform read-only consistency checks of specialist-owned documents and report findings to their owners",
+        "Convert user-provided bug and optimization spreadsheets into traceable change documents",
+        "Extract, compress, and reference row-associated screenshots from change spreadsheets"
+      ],
+      "notResponsibleFor": [
+        "Requirement approval",
+        "Sprint planning",
+        "Architecture decisions",
+        "Business implementation",
+        "Modifying requirements, plans, tasks, decisions, architecture, UI, implementation, test, or extension-owned documents without explicit file-level assignment"
+      ],
+      "allowedOutputs": [
+        "README.md",
+        "docs/changes/bugs/*.md",
+        "docs/changes/optimizations/*.md",
+        "docs/changes/assets/*.{png,jpg,jpeg,webp}"
+      ],
+      "conditionalOutputRule": "A Markdown file outside allowedOutputs may be modified only under an explicit file-level assignment from the user, PM Agent, or that file's owner_agent; the authorization does not extend to sibling files or transfer ownership."
+    },
+    {
+      "id": "media-library",
+      "name": "Media Library Agent",
+      "pool": "extension",
+      "status": "deferred",
+      "promptFile": ".agents/prompt/Media_Library_Agent.md",
+      "role": "Local media library capability owner",
+      "responsibilities": [
+        "Design and implement local media scanning when approved",
+        "Define track metadata ingestion",
+        "Handle library indexing strategy"
+      ],
+      "activationCondition": "Only after PM Agent explicitly approves local library work.",
+      "notResponsibleFor": [
+        "Core player shell unless media library work is explicitly approved",
+        "Online music services"
+      ],
+      "allowedOutputs": [
+        "docs/media-library/*.md",
+        "src/**/*",
+        "src-tauri/src/**/*"
+      ]
+    },
+    {
+      "id": "audio-engine",
+      "name": "Audio Engine Agent",
+      "pool": "extension",
+      "status": "deferred",
+      "promptFile": ".agents/prompt/Audio_Engine_Agent.md",
+      "role": "Real audio playback capability owner",
+      "responsibilities": [
+        "Design real audio playback integration when approved",
+        "Define playback engine boundaries",
+        "Handle playback state synchronization"
+      ],
+      "activationCondition": "Only after PM Agent approves real audio playback work.",
+      "notResponsibleFor": [
+        "Frontend playback state unless real audio work is explicitly approved",
+        "Plugin system",
+        "Online music services"
+      ],
+      "allowedOutputs": [
+        "docs/audio/*.md",
+        "src-tauri/src/**/*"
+      ]
+    },
+    {
+      "id": "audio-compatibility",
+      "name": "Audio Compatibility Agent",
+      "pool": "extension",
+      "status": "active",
+      "promptFile": ".agents/prompt/Audio_Compatibility_Agent.md",
+      "role": "Audio format corpus, decoder compatibility, and regression evidence owner",
+      "responsibilities": [
+        "Maintain the container, codec, sample-parameter, and capability matrix",
+        "Build deterministic and legally distributable synthetic audio fixtures",
+        "Implement compatibility regression tests for probing, decoding, duration, channels, sample rate, seek, and stable failures",
+        "Extend backend audio parsing only within explicitly approved implementation tasks",
+        "Prepare evidence for Symphonia coverage and any fallback decision gate"
+      ],
+      "activationCondition": "Active for PM-approved audio compatibility tasks; phase 1 is limited to synthetic fixtures and the capability baseline.",
+      "notResponsibleFor": [
+        "Product scope or release commitments",
+        "Frontend player UI, media library, playlists, or online services",
+        "Unapproved FFmpeg or external codec integration",
+        "DRM, encrypted media, MIDI, tracker modules, DSD, or private formats by default",
+        "Shared Rust/Tauri refactors without coordination"
+      ],
+      "allowedOutputs": [
+        "docs/audio-compatibility/*.md",
+        "tools/audio-compatibility/**/*",
+        "test-fixtures/audio/**/*",
+        "src-tauri/tests/audio_compatibility.rs",
+        "src-tauri/tests/audio_compatibility/**/*",
+        "src-tauri/src/audio/**/*",
+        "src-tauri/Cargo.toml",
+        "src-tauri/Cargo.lock",
+        ".github/workflows/audio-compatibility.yml"
+      ]
+    },
+    {
+      "id": "data-layer",
+      "name": "Data Layer Agent",
+      "pool": "extension",
+      "status": "deferred",
+      "promptFile": ".agents/prompt/Data_Layer_Agent.md",
+      "role": "Persistence and database capability owner",
+      "responsibilities": [
+        "Design persistence only after approval",
+        "Define storage schema and migrations",
+        "Manage data access boundaries"
+      ],
+      "activationCondition": "Only after PM Agent and Architecture Agent approve persistent storage.",
+      "notResponsibleFor": [
+        "In-memory frontend state unless persistence work is explicitly approved",
+        "UI implementation"
+      ],
+      "allowedOutputs": [
+        "docs/data/*.md",
+        "src-tauri/src/**/*"
+      ]
+    },
+    {
+      "id": "plugin-system",
+      "name": "Plugin System Agent",
+      "pool": "extension",
+      "status": "deferred",
+      "promptFile": ".agents/prompt/Plugin_System_Agent.md",
+      "role": "Plugin architecture capability owner",
+      "responsibilities": [
+        "Design plugin boundaries after explicit approval",
+        "Define plugin lifecycle and extension points",
+        "Assess plugin security and compatibility"
+      ],
+      "activationCondition": "Only after explicit PM approval.",
+      "notResponsibleFor": [
+        "Core player shell",
+        "Basic frontend UI"
+      ],
+      "allowedOutputs": [
+        "docs/plugins/*.md",
+        "docs/architecture/*.md"
+      ]
+    },
+    {
+      "id": "code-review",
+      "name": "Code Review Agent",
+      "pool": "extension",
+      "status": "deferred",
+      "promptFile": ".agents/prompt/Code_Review_Agent.md",
+      "role": "Code review and regression risk owner",
+      "responsibilities": [
+        "Review code changes for bugs, regressions, and missing tests",
+        "Check implementation against acceptance criteria",
+        "Report findings with file and line references"
+      ],
+      "activationCondition": "Use when reviewing completed implementation or before merge.",
+      "notResponsibleFor": [
+        "Product planning",
+        "Feature ownership",
+        "Direct implementation unless explicitly requested"
+      ],
+      "allowedOutputs": [
+        "docs/reviews/*.md"
+      ]
+    },
+    {
+      "id": "security",
+      "name": "Security Agent",
+      "pool": "extension",
+      "status": "deferred",
+      "promptFile": ".agents/prompt/Security_Agent.md",
+      "role": "Security and permission review owner",
+      "responsibilities": [
+        "Review Tauri permissions",
+        "Assess file system and command exposure risks",
+        "Review handling of secrets and local data"
+      ],
+      "activationCondition": "Use when adding sensitive local capabilities, external integrations, plugin execution, or release hardening.",
+      "notResponsibleFor": [
+        "Product planning",
+        "General feature implementation"
+      ],
+      "allowedOutputs": [
+        "docs/security/*.md",
+        "docs/decisions/*.md"
+      ]
+    }
+  ]
+}

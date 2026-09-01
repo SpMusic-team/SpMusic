@@ -64,12 +64,15 @@ type AmbientArtworkProps = {
   layer: ArtworkVisualLayer | null
   role: TrackCardRole | null
   progress: MotionValue<number>
+  preserveOutgoingOpacity: boolean
 }
 
-const AmbientArtwork = memo(function AmbientArtwork({ layer, role, progress }: AmbientArtworkProps) {
+const AmbientArtwork = memo(function AmbientArtwork({ layer, role, progress, preserveOutgoingOpacity }: AmbientArtworkProps) {
   useArtworkResourceConsumer(layer?.resource)
   const transitionOpacity = useTransform(progress, (value) => role === 'outgoing' ? 1 - value : value)
-  const opacity = role ? transitionOpacity : layer?.phase === 'active' ? 1 : 0
+  const opacity = role === 'outgoing' && preserveOutgoingOpacity
+    ? 1
+    : role ? transitionOpacity : layer?.phase === 'active' ? 1 : 0
   return (
     <motion.div
       className="ambient-cover"
@@ -99,6 +102,7 @@ type TrackCardMotionLayerProps = {
   reducedMotion: boolean
   coverGeometry: { width: number; height: number; centerX: number; centerY: number; perspective: number } | null
   acceptsDrag: boolean
+  preserveOutgoingOpacity: boolean
   onMoreOpenChange?: (open: boolean) => void
   moreOpen?: boolean
 }
@@ -115,6 +119,7 @@ const TrackCardMotionLayer = memo(function TrackCardMotionLayer({
   reducedMotion,
   coverGeometry,
   acceptsDrag,
+  preserveOutgoingOpacity,
   onMoreOpenChange,
   moreOpen,
 }: TrackCardMotionLayerProps) {
@@ -147,7 +152,9 @@ const TrackCardMotionLayer = memo(function TrackCardMotionLayer({
           measuredPerspective,
         ))
         : 'none')
-      contentOpacity.set(role ? getTrackCardOpacity(role, value) : 1)
+      contentOpacity.set(role === 'outgoing' && preserveOutgoingOpacity
+        ? 1
+        : role ? getTrackCardOpacity(role, value) : 1)
     }
     update(progress.get())
     return progress.on('change', update)
@@ -160,6 +167,7 @@ const TrackCardMotionLayer = memo(function TrackCardMotionLayer({
     measuredPerspective,
     planeTransform,
     progress,
+    preserveOutgoingOpacity,
     reducedMotion,
     role,
   ])
@@ -1220,6 +1228,11 @@ export function PlayerSurface({
     playbackTransitionRequestRef.current = null
   }, [])
 
+  const preservePendingOutgoingOpacity = Boolean(
+    renderedTrackCardSession?.kind === 'drag'
+    && renderedTrackCardSession.incomingLayerId < 0,
+  )
+
   return (
     <TooltipProvider>
       <main
@@ -1238,6 +1251,7 @@ export function PlayerSurface({
               ? 'outgoing'
               : layer && renderedTrackCardSession?.incomingLayerId === layer.id ? 'incoming' : null}
             progress={trackCardProgress}
+            preserveOutgoingOpacity={preservePendingOutgoingOpacity}
           />
         ))}
         {devAudioTools?.content}
@@ -1296,6 +1310,7 @@ export function PlayerSurface({
                           ? trackCardCoverGeometry
                           : null}
                         acceptsDrag={acceptsDrag}
+                        preserveOutgoingOpacity={preservePendingOutgoingOpacity}
                         onMoreOpenChange={layer.phase === 'active' ? handleMoreOpenChange : undefined}
                         moreOpen={layer.phase === 'active' && role === null && moreMenuOpen}
                       />

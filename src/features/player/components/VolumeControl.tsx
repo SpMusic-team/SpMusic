@@ -84,11 +84,15 @@ export function VolumeControl({
       }
     }
 
-    document.addEventListener('pointerdown', handlePointerDown)
+    // The cover deck takes pointer capture while it is dragged and may suppress
+    // the follow-up click. Close on the initial capture-phase press instead of
+    // relying on that later bubbling/click path, while keeping presses inside
+    // the volume control owned by this component.
+    document.addEventListener('pointerdown', handlePointerDown, true)
     document.addEventListener('keydown', handleKeyDown)
 
     return () => {
-      document.removeEventListener('pointerdown', handlePointerDown)
+      document.removeEventListener('pointerdown', handlePointerDown, true)
       document.removeEventListener('keydown', handleKeyDown)
     }
   }, [panelOpen])

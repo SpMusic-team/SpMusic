@@ -380,6 +380,14 @@
   gap: calc(88 * var(--player-layout-unit));
   font-size: calc(22 * var(--player-layout-unit));
   line-height: calc(28 * var(--player-layout-unit));
+  transition-property: font-size, line-height;
+  transition-duration: var(--player-control-transition-duration);
+  transition-timing-function: var(--app-motion-easing);
+}
+
+.responsive-player-layout[data-player-layout="full"] .control-dock[data-playback-state="paused"] .progress-row {
+  font-size: calc(16 * var(--player-layout-unit));
+  line-height: calc(24 * var(--player-layout-unit));
 }
 
 .responsive-player-layout[data-player-layout="full"] .control-progress-slider {

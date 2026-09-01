@@ -340,6 +340,7 @@ export function ControlDock({
   return (
     <motion.footer
       className="control-dock"
+      data-playback-state={visualIsPlaying ? 'playing' : 'paused'}
       data-playback-transition-pending={playbackTransitionPending ? '' : undefined}
       data-playback-command-busy={playbackCommandBusy ? '' : undefined}
       data-playback-visual-ready={playbackVisualReady ? 'true' : 'false'}

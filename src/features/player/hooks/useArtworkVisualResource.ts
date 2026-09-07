@@ -62,10 +62,10 @@ type ArtworkCanvasPool = {
 }
 
 function createArtworkCanvasPool(): ArtworkCanvasPool {
-  // The two-entry registry can retain the current and previous resources while
-  // the next target is decoding. Keep one additional lease available so that
-  // third decode can complete and trigger registry eviction.
-  const entries = Array.from({ length: 3 }, (_, debugIndex): ArtworkCanvasPoolEntry => ({
+  // Three logical resources (previous/current/next) remain warm. Keep one
+  // additional lease available so an interrupted hand-off can decode its new
+  // edge without waiting for the retired visible pair.
+  const entries = Array.from({ length: 4 }, (_, debugIndex): ArtworkCanvasPoolEntry => ({
     canvas: document.createElement('canvas'),
     backingEdge: 0,
     debugIndex,
@@ -201,12 +201,12 @@ export type ArtworkVisualLayer = {
   fallbackSource?: string
   transitionIntent: TrackSelectionVisualIntent | null
   previewTokenId?: number
-  slot: 0 | 1 | null
+  slot: 0 | 1 | 2 | null
   releaseLayerLease: () => void
 }
 
 type UseArtworkVisualResourceResult = {
-  slots: readonly [ArtworkVisualLayer | null, ArtworkVisualLayer | null]
+  slots: readonly [ArtworkVisualLayer | null, ArtworkVisualLayer | null, ArtworkVisualLayer | null]
   currentArtworkReady: boolean
   previewArtworkReady: boolean
   markReady: (layerId: number) => void
@@ -472,12 +472,13 @@ export function useArtworkVisualResource(
   } | null>(null)
   const preparedArtworkRef = useRef<PreparedArtwork | null>(null)
   const promotedArtworkRef = useRef<PreparedArtwork | null>(null)
+  const adjacentWarmControllersRef = useRef(new Map<string, AbortController>())
   const lastReportedActivitySequenceRef = useRef(0)
   const latestActivitySequenceRef = useRef(selectionActivitySequence)
   const uiBurstReportInFlightRef = useRef(false)
   const resourceRegistryRef = useRef(new Map<string, ArtworkResourceRegistryEntry>())
   const slotFlushFrameRef = useRef<number | null>(null)
-  const clearingSlotsRef = useRef(new Set<0 | 1>())
+  const clearingSlotsRef = useRef(new Set<0 | 1 | 2>())
   const layerIdRef = useRef(0)
   const exitCompletionsRef = useRef(new Map<number, Set<ArtworkLayerConsumer>>())
   // `artwork` is optional in the public playback view model. Derive the same
@@ -736,7 +737,7 @@ export function useArtworkVisualResource(
     if (previous && previous.resource !== entry.resource) previous.resource.releaseCache()
     registry.delete(identity)
     registry.set(identity, entry)
-    while (registry.size > 2) {
+    while (registry.size > 3) {
       const oldestIdentity = registry.keys().next().value
       if (oldestIdentity === undefined) break
       const oldest = registry.get(oldestIdentity)
@@ -763,7 +764,7 @@ export function useArtworkVisualResource(
 
   const installQueuedLayer = useCallback((baseLayers: ArtworkVisualLayer[]) => {
     const queued = queuedLayerRef.current
-    const availableSlot = ([0, 1] as const).find(
+    const availableSlot = ([0, 1, 2] as const).find(
       (slot) => !clearingSlotsRef.current.has(slot) && !baseLayers.some((layer) => layer.slot === slot),
     )
     if (
@@ -777,7 +778,7 @@ export function useArtworkVisualResource(
     return [...baseLayers, { ...queued, slot: availableSlot }]
   }, [])
 
-  const scheduleSlotRelease = useCallback((slot: 0 | 1) => {
+  const scheduleSlotRelease = useCallback((slot: 0 | 1 | 2) => {
     clearingSlotsRef.current.add(slot)
     if (slotFlushFrameRef.current !== null) return
     slotFlushFrameRef.current = requestAnimationFrame(() => {
@@ -807,7 +808,7 @@ export function useArtworkVisualResource(
       }
     }
 
-    const availableSlot = ([0, 1] as const).find(
+    const availableSlot = ([0, 1, 2] as const).find(
       (slot) => !clearingSlotsRef.current.has(slot) && !currentLayers.some((layer) => layer.slot === slot),
     )
     if (availableSlot !== undefined && !currentLayers.some((layer) => layer.phase === 'exiting')) {
@@ -879,7 +880,7 @@ export function useArtworkVisualResource(
       }
       if (loaded.resource.view) registrySet(identity, loaded)
       const currentLayers = layersRef.current.filter((layer) => layer.phase !== 'preview')
-      const availableSlot = ([0, 1] as const).find(
+      const availableSlot = ([0, 1, 2] as const).find(
         (slot) => !currentLayers.some((layer) => layer.slot === slot),
       )
       if (availableSlot === undefined) {
@@ -1183,6 +1184,58 @@ export function useArtworkVisualResource(
   ])
 
   useEffect(() => {
+    const currentTrackId = track?.id
+    const stableActiveLayer = layersRef.current.length === 1
+      && layersRef.current[0]?.phase === 'active'
+      && layersRef.current[0].track.id === currentTrackId
+      && queuedLayerRef.current === null
+    const candidates = stableActiveLayer && currentTrackId
+      ? prefetchCandidates
+        .filter((candidate) => candidate.afterTrackId === currentTrackId && candidate.track.id !== currentTrackId)
+        .slice(0, 2)
+      : []
+    const desiredIdentities = new Set(candidates.map((candidate) => (
+      artworkResourceIdentity(candidate.track, candidate.artwork)
+    )))
+
+    for (const [identity, controller] of adjacentWarmControllersRef.current) {
+      if (desiredIdentities.has(identity)) continue
+      controller.abort()
+      adjacentWarmControllersRef.current.delete(identity)
+    }
+
+    for (const candidate of candidates) {
+      const identity = artworkResourceIdentity(candidate.track, candidate.artwork)
+      if (
+        resourceRegistryRef.current.has(identity)
+        || preparedArtworkRef.current?.identity === identity
+        || adjacentWarmControllersRef.current.has(identity)
+      ) continue
+      const controller = new AbortController()
+      adjacentWarmControllersRef.current.set(identity, controller)
+      void loadArtworkResource(candidate.artwork, controller, 'prefetch')
+        .then((loaded) => {
+          if (!loaded) return
+          const latestCurrentId = latestRequestRef.current.track?.id
+          const stillAdjacent = prefetchCandidates.some((entry) => (
+            entry.afterTrackId === latestCurrentId
+            && artworkResourceIdentity(entry.track, entry.artwork) === identity
+          ))
+          if (controller.signal.aborted || !stillAdjacent) {
+            loaded.resource.releaseCache()
+            return
+          }
+          registrySet(identity, loaded)
+        })
+        .finally(() => {
+          if (adjacentWarmControllersRef.current.get(identity) === controller) {
+            adjacentWarmControllersRef.current.delete(identity)
+          }
+        })
+    }
+  }, [layers, loadArtworkResource, prefetchCandidates, registrySet, track?.id])
+
+  useEffect(() => {
     const latest = latestRequestRef.current
     const foregroundRequest = foregroundRequestRef.current
     if (foregroundRequest && foregroundRequest.identity !== requestIdentity) {
@@ -1217,7 +1270,9 @@ export function useArtworkVisualResource(
       return
     }
     if (
-      (detailsPending && !matchingPrefetchCandidate)
+      (detailsPending
+        && !matchingPrefetchCandidate
+        && Boolean(requestFilePath || requestPrimary || requestFallback))
       || !requestIdentity
       || !latest.track
       || !latest.requestedArtwork
@@ -1435,11 +1490,16 @@ export function useArtworkVisualResource(
     }
 
     void (async () => {
-      prefetchDebugRef.current.coldDebounceWaits += 1
-      const isTrailingSelection = await waitForColdArtworkRapidSelection(controller.signal)
-      if (!isTrailingSelection || !coldRequestStillCurrent()) {
-        prefetchDebugRef.current.coldDebounced += 1
-        return
+      const isPlaceholder = !currentArtwork.coverFilePath
+        && !currentArtwork.coverImage
+        && !currentArtwork.coverImageFallback
+      if (!isPlaceholder) {
+        prefetchDebugRef.current.coldDebounceWaits += 1
+        const isTrailingSelection = await waitForColdArtworkRapidSelection(controller.signal)
+        if (!isTrailingSelection || !coldRequestStillCurrent()) {
+          prefetchDebugRef.current.coldDebounced += 1
+          return
+        }
       }
       while (isCurrent()) {
         const loaded = await loadArtworkResource(currentArtwork, controller, 'foreground')
@@ -1552,6 +1612,8 @@ export function useArtworkVisualResource(
     prefetchDebugRef.current.foregroundInFlight = 0
     promotedArtworkRef.current?.controller.abort()
     promotedArtworkRef.current = null
+    for (const controller of adjacentWarmControllersRef.current.values()) controller.abort()
+    adjacentWarmControllersRef.current.clear()
     evictPreparedArtwork()
     if (slotFlushFrameRef.current !== null) cancelAnimationFrame(slotFlushFrameRef.current)
     for (const layer of layersRef.current) layer.releaseLayerLease()
@@ -1566,9 +1628,10 @@ export function useArtworkVisualResource(
     canvasPoolRef.current = null
   }, [clearRegistry, evictPreparedArtwork])
 
-  const slots: readonly [ArtworkVisualLayer | null, ArtworkVisualLayer | null] = [
+  const slots: readonly [ArtworkVisualLayer | null, ArtworkVisualLayer | null, ArtworkVisualLayer | null] = [
     layers.find((layer) => layer.slot === 0) ?? null,
     layers.find((layer) => layer.slot === 1) ?? null,
+    layers.find((layer) => layer.slot === 2) ?? null,
   ]
   const currentArtworkReady = !effectiveTrack
     || (!effectiveArtwork && !detailsPending)

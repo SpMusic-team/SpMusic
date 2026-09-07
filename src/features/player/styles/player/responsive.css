@@ -165,7 +165,20 @@
 
 .responsive-player-layout[data-player-layout="full"] .cover-frame {
   width: var(--full-cover-size);
+  align-self: center;
+  justify-self: center;
   transition: width var(--player-playback-transition-duration) var(--app-motion-easing);
+}
+
+.responsive-player-layout[data-player-layout="full"] .cover-column {
+  align-items: center;
+  justify-items: center;
+}
+
+/* The full-screen card deck used to stop at the cover's height, leaving the
+   cover column with no vertical space in which to center a shrunken cover. */
+.responsive-player-layout[data-player-layout="full"] .track-card-deck {
+  height: 100%;
 }
 
 .responsive-player-layout[data-player-layout="full"] .player-stage[data-playback-state="paused"] .cover-frame {
@@ -258,6 +271,10 @@
   margin-right: 0;
   align-self: start;
   gap: calc(29 * var(--player-layout-unit));
+}
+
+.track-lyrics-region {
+  display: contents;
 }
 
 .responsive-player-layout[data-player-layout="full"] .track-pills {
@@ -546,28 +563,167 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
   --player-lyrics-translation-line-height: calc(26.666667px * var(--player-lyrics-font-scale));
 }
 
+/* Horizontal half-screen keeps the playback information badge in the same
+   right-hand control region as the dock. It sits immediately above the dock,
+   leaving the track metadata and lyrics rows unobstructed. */
+.responsive-player-layout[data-player-layout="horizontal"] .player-control-region {
+  position: absolute;
+  z-index: 4;
+  inset: 0 0 0 calc(var(--horizontal-cover-size) + 24 * var(--player-layout-unit));
+  display: block;
+  pointer-events: none;
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .playback-info-button {
+  box-sizing: border-box;
+  width: fit-content;
+  max-width: 100%;
+  min-width: 0;
+  height: fit-content;
+  padding: 0;
+  display: inline-flex;
+  border: 0;
+  border-radius: 30px;
+  background: var(--player-volume-surface);
+  color: var(--player-blue);
+  position: absolute;
+  left: 0;
+  bottom: calc(145px + 10px);
+  pointer-events: auto;
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .playback-info-button-content {
+  padding: 10px 20px;
+  transition: padding var(--player-control-transition-duration) var(--app-motion-easing);
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .playback-info-button {
+  interpolate-size: allow-keywords;
+  transition-property: width, height, border-radius, color;
+  transition-duration: var(--player-control-transition-duration);
+  transition-timing-function: var(--app-motion-easing);
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .playback-info-button-content > svg {
+  transition-property: width, height, flex-basis;
+  transition-duration: var(--player-control-transition-duration);
+  transition-timing-function: var(--app-motion-easing);
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .playback-info-button-text {
+  transition-property: font-size, line-height;
+  transition-duration: var(--player-control-transition-duration);
+  transition-timing-function: var(--app-motion-easing);
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .playback-info-button[data-playback-state="paused"] .playback-info-button-content > svg {
+  width: 14px;
+  height: 14px;
+  flex-basis: 14px;
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .playback-info-button[data-playback-state="paused"] {
+  color: var(--player-blue-soft);
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .playback-info-button[data-playback-state="paused"] .playback-info-button-text {
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .control-dock {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: auto;
+}
+
 .responsive-player-layout[data-player-layout="horizontal"] .player-stage {
-  --horizontal-cover-size: calc(100svh - 126 * var(--player-layout-unit));
+  /* Design boundary for the 2560px-wide horizontal half-screen:
+     window bar 40px + 8px top gap, and 48px bottom/side clearance. */
+  --horizontal-cover-size: calc(max(100svh, 595px) - 96px);
+  --horizontal-control-region-height: 209px;
   inset:
-    calc(67 * var(--player-layout-unit))
-    calc(60 * var(--player-layout-unit))
-    calc(59 * var(--player-layout-unit));
-  grid-template-columns: calc(var(--horizontal-cover-size) + 24 * var(--player-layout-unit)) minmax(0, 1fr);
+    48px
+    60px
+    48px;
+  grid-template-columns: var(--horizontal-cover-size) minmax(0, 1fr);
   grid-template-rows:
     calc(145 * var(--player-layout-unit))
     calc(9 * var(--player-layout-unit))
     minmax(0, 1fr)
-    calc(145 * var(--horizontal-control-unit));
+    24px
+    var(--horizontal-control-region-height);
   grid-template-areas:
     "cover meta"
     "cover ."
     "cover lyrics"
+    "cover ."
     "cover dock";
-  gap: 0;
+  column-gap: 24px;
+  row-gap: 0;
 }
 
 .responsive-player-layout[data-player-layout="horizontal"] .cover-frame {
   width: min(100%, var(--horizontal-cover-size));
+  align-self: center;
+  justify-self: center;
+  transition: width var(--player-playback-transition-duration) var(--app-motion-easing);
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .player-stage[data-playback-state="paused"] .cover-frame {
+  width: calc(var(--horizontal-cover-size) - 30 * var(--player-layout-unit));
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .cover-column {
+  align-items: center;
+  justify-items: center;
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .cover-actions {
+  position: absolute;
+  z-index: 3;
+  left: 12px;
+  right: 12px;
+  bottom: 24px;
+  height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .cover-feedback {
+  position: static;
+  width: 236px;
+  height: 72px;
+  flex: 0 0 236px;
+  gap: 24px;
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .cover-feedback button {
+  width: 106px;
+  height: 72px;
+  flex: 0 0 106px;
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .cover-art .player-control-icon-frame {
+  width: 48px;
+  height: 48px;
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .cover-actions .more-button {
+  position: relative;
+  right: auto;
+  bottom: auto;
+  width: 72px;
+  height: 68px;
+  flex: 0 0 72px;
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .cover-actions .more-button > svg {
+  width: 48px;
+  height: 48px;
 }
 
 .responsive-player-layout[data-player-layout="horizontal"] .track-card-deck {
@@ -580,8 +736,47 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
      信息列右缘 = 窗口右 - 60，需再向右扩展 24：
      宽度 = 100% + 24 - 24(左 margin) = 100%。 */
   width: 100%;
-  margin-left: calc(24 * var(--player-layout-unit));
+  margin-left: 24px;
   margin-right: 0;
+  gap: 29px;
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .track-lyrics-region {
+  grid-column: 2;
+  grid-row: 1 / 4;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  align-self: start;
+  justify-self: center;
+  gap: 4px;
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .track-lyrics-region .track-pills {
+  width: 100%;
+  margin: 0;
+  flex: 0 0 auto;
+  align-self: stretch;
+  gap: 29px;
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .track-pills .track-pill {
+  height: auto;
+  padding: 10px 20px;
+  border-radius: 30px;
+  font-size: 28px;
+  line-height: 36px;
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .track-pills .title-pill {
+  font-size: 32px;
+  line-height: 40px;
 }
 
 .responsive-player-layout[data-player-layout="horizontal"] .lyrics-panel {
@@ -596,6 +791,15 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
   height: 100%;
 }
 
+.responsive-player-layout[data-player-layout="horizontal"] .track-lyrics-region .lyrics-panel {
+  width: 100%;
+  height: auto;
+  min-height: 0;
+  flex: 1 1 auto;
+  align-self: stretch;
+  justify-self: stretch;
+}
+
 .responsive-player-layout[data-player-layout="horizontal"] .lyrics-panel li[data-active="true"],
 .responsive-player-layout[data-player-layout="horizontal"] .lyrics-panel li[data-active="true"] .translation-line {
   font-size: calc(23.333333px * var(--player-lyrics-font-scale));
@@ -603,41 +807,199 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
 }
 
 .responsive-player-layout[data-player-layout="horizontal"] .control-dock {
+  box-sizing: border-box;
   width: auto;
+  min-width: 1080px;
   height: calc(145 * var(--horizontal-control-unit));
-  margin: 0 calc(12 * var(--player-layout-unit));
+  margin: 0;
   padding: calc(23 * var(--horizontal-control-unit)) 0;
   justify-self: stretch;
+  border-radius: 30px;
+  box-shadow: 0 4px 4px rgba(0, 0, 0, var(--player-controls-shadow));
 }
 
 .responsive-player-layout[data-player-layout="horizontal"] .control-progress-slider {
   width: 100%;
 }
 
+.responsive-player-layout[data-player-layout="horizontal"] .progress-row {
+  height: 28px;
+  padding-inline: 81px;
+  grid-template-columns: 72px minmax(300px, 1fr) 72px;
+  gap: 88px;
+  font-size: 22px;
+  line-height: 28px;
+  transition-property: font-size, line-height;
+  transition-duration: var(--player-control-transition-duration);
+  transition-timing-function: var(--app-motion-easing);
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .control-dock[data-playback-state="paused"] .progress-row {
+  font-size: 16px;
+  line-height: 24px;
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .control-progress-slider {
+  min-width: 300px;
+  height: 28px;
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .control-progress-slider [data-slot="slider-track"] {
+  height: 6px;
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .control-progress-slider [data-slot="slider-thumb"] {
+  width: 23px;
+  height: 23px;
+}
+
 .responsive-player-layout[data-player-layout="horizontal"] .control-row {
   height: calc(63 * var(--horizontal-control-unit));
-  padding-inline: 0;
-  grid-template-columns: 66px minmax(0, 1fr) 66px;
+  margin-top: 8px;
+  padding-inline: 59px;
+  grid-template-columns: 208px minmax(540px, 1fr) 212px;
 }
 
 .responsive-player-layout[data-player-layout="horizontal"] .control-primary {
-  width: min(100%, calc(144px + 84px * var(--player-primary-size-scale) + 72px * var(--player-controls-density-factor)));
-  padding-inline: 0;
-  gap: calc(36px * var(--player-controls-density-factor));
+  width: 540px;
+  max-width: none;
+  padding-inline: 36px;
+  flex: 0 0 540px;
+  gap: 36px;
   justify-content: center;
-  transform: translateY(min(0px, calc((1 - var(--player-primary-size-scale)) * 2px)));
+  transform: translateX(2px);
 }
 
-.responsive-player-layout[data-player-layout="horizontal"] .control-optional {
-  display: none;
+.responsive-player-layout[data-player-layout="horizontal"] .control-transport {
+  box-sizing: border-box;
+  width: 276px;
+  min-width: 276px;
+  flex: 0 0 276px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 36px;
+  transition-property: gap;
+  transition-duration: var(--player-control-transition-duration);
+  transition-timing-function: var(--app-motion-easing);
 }
 
-.responsive-player-layout[data-player-layout="horizontal"] .control-auxiliary,
+.responsive-player-layout[data-player-layout="horizontal"] .control-primary[data-playback-state="paused"] .control-transport {
+  gap: 12px;
+}
+
 .responsive-player-layout[data-player-layout="horizontal"] .control-auxiliary-start,
 .responsive-player-layout[data-player-layout="horizontal"] .control-auxiliary-end {
+  box-sizing: border-box;
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .control-auxiliary-start {
+  width: 208px;
+  padding-inline: 16px;
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .control-auxiliary-end {
+  width: 212px;
+  padding-inline: 18px;
+  gap: 16px;
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .control-primary button,
+.responsive-player-layout[data-player-layout="horizontal"] .control-auxiliary button {
+  width: 48px;
+  height: 48px;
+  flex: 0 0 48px;
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .control-primary button svg,
+.responsive-player-layout[data-player-layout="horizontal"] .control-auxiliary button svg,
+.responsive-player-layout[data-player-layout="horizontal"] .control-primary .player-control-icon-frame,
+.responsive-player-layout[data-player-layout="horizontal"] .control-auxiliary .player-control-icon-frame {
+  width: 48px;
+  height: 48px;
+  transform: none;
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .control-primary .previous-button,
+.responsive-player-layout[data-player-layout="horizontal"] .control-primary .next-button {
+  width: 64px;
+  height: 64px;
+  flex-basis: 64px;
+  border-width: 1px;
+  transition-property: width, height, flex-basis;
+  transition-duration: var(--player-control-transition-duration);
+  transition-timing-function: var(--app-motion-easing);
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .control-primary[data-playback-state="paused"] .previous-button,
+.responsive-player-layout[data-player-layout="horizontal"] .control-primary[data-playback-state="paused"] .next-button {
+  width: 56px;
+  height: 56px;
+  flex-basis: 56px;
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .control-primary .previous-button svg,
+.responsive-player-layout[data-player-layout="horizontal"] .control-primary .next-button svg,
+.responsive-player-layout[data-player-layout="horizontal"] .control-primary .previous-button .player-control-icon-frame,
+.responsive-player-layout[data-player-layout="horizontal"] .control-primary .next-button .player-control-icon-frame {
+  width: 32px;
+  height: 32px;
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .control-primary .play-button {
+  width: 76px;
+  height: 76px;
+  flex-basis: 76px;
+  transition-property: width, height, flex-basis;
+  transition-duration: var(--player-control-transition-duration);
+  transition-timing-function: var(--app-motion-easing);
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .control-primary[data-playback-state="paused"] .play-button {
+  width: 84px;
+  height: 84px;
+  flex-basis: 84px;
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .control-primary .play-button svg,
+.responsive-player-layout[data-player-layout="horizontal"] .control-primary .play-button .player-control-icon-frame {
+  width: 48px;
+  height: 48px;
+}
+
+/* The badge and dock share one bottom-aligned container. Keeping both in
+   normal flex flow makes the 24px separation invariant across heights. */
+.responsive-player-layout[data-player-layout="horizontal"] .player-control-region {
+  grid-area: dock;
+  position: relative;
+  inset: auto;
+  box-sizing: border-box;
   width: 100%;
-  padding-inline: 0;
-  gap: 0;
+  min-width: 1080px;
+  height: var(--horizontal-control-region-height);
+  min-height: var(--horizontal-control-region-height);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 24px;
+  pointer-events: none;
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .player-control-region .playback-info-button {
+  position: relative;
+  left: auto;
+  bottom: auto;
+  flex: 0 0 auto;
+}
+
+.responsive-player-layout[data-player-layout="horizontal"] .player-control-region .control-dock {
+  position: relative;
+  left: auto;
+  right: auto;
+  bottom: auto;
+  width: 100%;
+  flex: 0 0 auto;
 }
 
 .responsive-player-layout[data-player-layout="quarter"] .player-stage {
@@ -1013,6 +1375,7 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
 
 @media (prefers-reduced-motion: reduce) {
   .responsive-player-layout[data-player-layout="full"] .cover-frame,
+  .responsive-player-layout[data-player-layout="horizontal"] .cover-frame,
   .responsive-player-layout[data-player-layout="full"] .control-transport,
   .responsive-player-layout[data-player-layout="full"] .control-primary .previous-button,
   .responsive-player-layout[data-player-layout="full"] .control-primary .next-button,

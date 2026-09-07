@@ -15,11 +15,12 @@ use super::{
         current_output_device_signature, start_audio_device_watcher, AudioDeviceEvent,
         AudioDeviceWatcherHandle,
     },
-    error::{audio_error, unavailable_state, AudioCommandError, AudioErrorCode},
+    error::{audio_error, superseded_error, unavailable_state, AudioCommandError, AudioErrorCode},
     lyrics_cache::LyricsCache,
     playlist::{default_filters, load_folder_playlist, source_filters},
     runtime::{
-        start_track_parser, AudioRuntime, AudioRuntimeRequest, TrackParsePurpose, TrackParseRequest,
+        start_track_parser, AudioRuntime, AudioRuntimeRequest, LatestLoadAndPlayIntent,
+        TrackParsePurpose, TrackParseRequest,
     },
     source::{hydrate_track_ref, input_path, validate_existing_file},
     tag_writer,
@@ -41,6 +42,88 @@ struct PendingLoad {
     reply: Sender<Result<AudioTrackRef, AudioCommandError>>,
 }
 
+struct PendingLoadAndPlay {
+    path: PathBuf,
+    request_id: u64,
+    reply: Sender<Result<AudioLoadAndPlayResult, AudioCommandError>>,
+}
+
+#[derive(Default)]
+struct LoadAndPlayQueueState {
+    pending: Option<PendingLoadAndPlay>,
+    wake_scheduled: bool,
+}
+
+#[derive(Default)]
+struct LoadAndPlayQueue {
+    latest_intent: LatestLoadAndPlayIntent,
+    state: Mutex<LoadAndPlayQueueState>,
+}
+
+impl LoadAndPlayQueue {
+    fn lock_state(&self) -> std::sync::MutexGuard<'_, LoadAndPlayQueueState> {
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn register(&self, pending: PendingLoadAndPlay) -> Result<bool, AudioCommandError> {
+        self.latest_intent.register(pending.request_id)?;
+
+        let request_id = pending.request_id;
+        let (replaced, needs_wake) = {
+            let mut state = self.lock_state();
+            let replaced = state.pending.replace(pending);
+            let needs_wake = !state.wake_scheduled;
+            if needs_wake {
+                state.wake_scheduled = true;
+            }
+            (replaced, needs_wake)
+        };
+
+        if let Some(replaced) = replaced {
+            let _ = replaced
+                .reply
+                .send(Err(superseded_error(replaced.request_id, request_id)));
+        }
+        Ok(needs_wake)
+    }
+
+    fn take_next_or_idle(&self) -> Option<PendingLoadAndPlay> {
+        let mut state = self.lock_state();
+        match state.pending.take() {
+            Some(pending) => Some(pending),
+            None => {
+                state.wake_scheduled = false;
+                None
+            }
+        }
+    }
+
+    fn fail_pending(&self, error: AudioCommandError) {
+        let pending = {
+            let mut state = self.lock_state();
+            state.wake_scheduled = false;
+            state.pending.take()
+        };
+        if let Some(pending) = pending {
+            let _ = pending.reply.send(Err(error));
+        }
+    }
+}
+
+struct LoadAndPlayQueueShutdownGuard(Arc<LoadAndPlayQueue>);
+
+impl Drop for LoadAndPlayQueueShutdownGuard {
+    fn drop(&mut self) {
+        self.0.fail_pending(audio_error(
+            AudioErrorCode::InternalError,
+            "Audio runtime stopped before processing the latest load-and-play request",
+            true,
+        ));
+    }
+}
+
 pub struct AudioController {
     tx: Mutex<Sender<AudioRuntimeRequest>>,
     // Held for the process lifetime so the parser worker keeps receiving
@@ -50,6 +133,7 @@ pub struct AudioController {
     // Shared sidecar-lyrics cache: cloned into the parser worker thread and
     // invalidated after a successful `audio_embed_lyrics`.
     lyrics_cache: Arc<LyricsCache>,
+    load_and_play_queue: Arc<LoadAndPlayQueue>,
     _device_watcher: AudioDeviceWatcherHandle,
 }
 
@@ -85,6 +169,8 @@ impl AudioController {
         );
 
         let runtime_parser_tx = parser_tx.clone();
+        let load_and_play_queue = Arc::new(LoadAndPlayQueue::default());
+        let runtime_load_and_play_queue = Arc::clone(&load_and_play_queue);
 
         thread::spawn(move || {
             tracing::info!(
@@ -93,6 +179,8 @@ impl AudioController {
             );
             let mut runtime = AudioRuntime::default();
             let mut pending_load: Option<PendingLoad> = None;
+            let _load_and_play_shutdown_guard =
+                LoadAndPlayQueueShutdownGuard(Arc::clone(&runtime_load_and_play_queue));
 
             loop {
                 let request = if runtime.has_transport_transition() {
@@ -168,72 +256,90 @@ impl AudioController {
                             emit_state_changed(&app_handle, runtime.get_state());
                         }
                     }
-                    AudioRuntimeRequest::LoadAndPlay {
-                        path,
-                        request_id,
-                        reply,
-                    } => {
-                        if let Some(previous) = pending_load.take() {
-                            let superseded_error = audio_error(
-                                AudioErrorCode::InternalError,
-                                format!(
-                                    "Audio load superseded by a newer request: {}",
-                                    previous.path.display()
-                                ),
-                                true,
-                            );
-                            let _ = previous.reply.send(Err(superseded_error));
-                        }
-                        let result = runtime.load_and_play(path.clone(), request_id);
-                        let state = match &result {
-                            Ok(result) => result.state.clone(),
-                            Err(_) => runtime.get_state(),
-                        };
-                        emit_state_changed(&app_handle, state);
-
-                        if let Ok(result) = &result {
-                            let generation = result.generation;
-                            let track_id = result.track_id.clone();
-                            let details_request = TrackParseRequest {
-                                generation,
-                                path: path.clone(),
-                                purpose: TrackParsePurpose::Details {
-                                    request_id,
-                                    track_id: track_id.clone(),
-                                },
-                            };
-                            tracing::info!(
-                                operation = "audio.track_details.begin",
+                    AudioRuntimeRequest::ProcessLatestLoadAndPlay => {
+                        while let Some(pending) = runtime_load_and_play_queue.take_next_or_idle() {
+                            let PendingLoadAndPlay {
+                                path,
                                 request_id,
-                                generation,
-                                track_id = %track_id,
-                                path = %path.display(),
-                                "audio track details hydration started",
-                            );
-                            if runtime_parser_tx.send(details_request).is_err() {
-                                let error = audio_error(
+                                reply,
+                            } = pending;
+                            if let Some(previous) = pending_load.take() {
+                                let superseded_error = audio_error(
                                     AudioErrorCode::InternalError,
-                                    "Audio parser is unavailable",
+                                    format!(
+                                        "Audio load superseded by a newer request: {}",
+                                        previous.path.display()
+                                    ),
                                     true,
                                 );
-                                if runtime.apply_track_details(
-                                    generation,
-                                    &track_id,
-                                    &Err(error.clone()),
-                                ) {
-                                    emit_track_details_changed(
-                                        &app_handle,
-                                        AudioTrackDetailsChanged::Error {
-                                            request_id,
-                                            generation,
-                                            track_id,
-                                            error,
-                                        },
-                                    );
-                                }
+                                let _ = previous.reply.send(Err(superseded_error));
                             }
+
+                            let result = runtime.load_and_play(
+                                path.clone(),
+                                request_id,
+                                &runtime_load_and_play_queue.latest_intent,
+                            );
+                            let superseded = result
+                                .as_ref()
+                                .is_err_and(|error| error.code == AudioErrorCode::Superseded);
+                            if !superseded {
+                                let _ = runtime_load_and_play_queue.latest_intent.commit_if_latest(
+                                    request_id,
+                                    || {
+                                        let state = match &result {
+                                            Ok(result) => result.state.clone(),
+                                            Err(_) => runtime.get_state(),
+                                        };
+                                        emit_state_changed(&app_handle, state);
+
+                                        if let Ok(result) = &result {
+                                            let generation = result.generation;
+                                            let track_id = result.track_id.clone();
+                                            let details_request = TrackParseRequest {
+                                                generation,
+                                                path: path.clone(),
+                                                purpose: TrackParsePurpose::Details {
+                                                    request_id,
+                                                    track_id: track_id.clone(),
+                                                },
+                                            };
+                                            tracing::info!(
+                                                operation = "audio.track_details.begin",
+                                                request_id,
+                                                generation,
+                                                track_id = %track_id,
+                                                path = %path.display(),
+                                                "audio track details hydration started",
+                                            );
+                                            if runtime_parser_tx.send(details_request).is_err() {
+                                                let error = audio_error(
+                                                    AudioErrorCode::InternalError,
+                                                    "Audio parser is unavailable",
+                                                    true,
+                                                );
+                                                if runtime.apply_track_details(
+                                                    generation,
+                                                    &track_id,
+                                                    &Err(error.clone()),
+                                                ) {
+                                                    emit_track_details_changed(
+                                                        &app_handle,
+                                                        AudioTrackDetailsChanged::Error {
+                                                            request_id,
+                                                            generation,
+                                                            track_id,
+                                                            error,
+                                                        },
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    },
+                                );
+                            }
+                            let _ = reply.send(result);
                         }
-                        let _ = reply.send(result);
                     }
                     AudioRuntimeRequest::TrackParsed {
                         generation,
@@ -275,22 +381,30 @@ impl AudioController {
                         result,
                     } => {
                         let result = *result;
-                        if runtime.apply_track_details(generation, &track_id, &result) {
-                            let event = match result {
-                                Ok(track) => AudioTrackDetailsChanged::Ready {
-                                    request_id,
-                                    generation,
-                                    track,
-                                },
-                                Err(error) => AudioTrackDetailsChanged::Error {
-                                    request_id,
-                                    generation,
-                                    track_id,
-                                    error,
-                                },
-                            };
-                            emit_track_details_changed(&app_handle, event);
-                        } else {
+                        let applied = runtime_load_and_play_queue
+                            .latest_intent
+                            .commit_if_latest(request_id, || {
+                                if !runtime.apply_track_details(generation, &track_id, &result) {
+                                    return false;
+                                }
+                                let event = match result {
+                                    Ok(track) => AudioTrackDetailsChanged::Ready {
+                                        request_id,
+                                        generation,
+                                        track,
+                                    },
+                                    Err(error) => AudioTrackDetailsChanged::Error {
+                                        request_id,
+                                        generation,
+                                        track_id: track_id.clone(),
+                                        error,
+                                    },
+                                };
+                                emit_track_details_changed(&app_handle, event);
+                                true
+                            })
+                            .unwrap_or(false);
+                        if !applied {
                             tracing::info!(
                                 operation = "audio.track_details.end",
                                 request_id,
@@ -428,6 +542,7 @@ impl AudioController {
             _parser_tx: Mutex::new(parser_tx),
             cover_cache_dir,
             lyrics_cache,
+            load_and_play_queue,
             _device_watcher: device_watcher,
         }
     }
@@ -567,11 +682,16 @@ impl AudioController {
     ) -> Result<AudioLoadAndPlayResult, AudioCommandError> {
         let path = input_path(&input.path)?;
         let (reply, rx) = mpsc::channel();
-        self.send(AudioRuntimeRequest::LoadAndPlay {
+        let needs_wake = self.load_and_play_queue.register(PendingLoadAndPlay {
             path,
             request_id: input.request_id,
             reply,
         })?;
+        if needs_wake {
+            if let Err(error) = self.send(AudioRuntimeRequest::ProcessLatestLoadAndPlay) {
+                self.load_and_play_queue.fail_pending(error);
+            }
+        }
         rx.recv().map_err(|_| {
             audio_error(
                 AudioErrorCode::InternalError,
@@ -1125,6 +1245,152 @@ fn map_embed_lyrics_error(message: &str) -> AudioCommandError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn pending_load_and_play(
+        request_id: u64,
+        path: &str,
+    ) -> (
+        PendingLoadAndPlay,
+        Receiver<Result<AudioLoadAndPlayResult, AudioCommandError>>,
+    ) {
+        let (reply, rx) = mpsc::channel();
+        (
+            PendingLoadAndPlay {
+                path: PathBuf::from(path),
+                request_id,
+                reply,
+            },
+            rx,
+        )
+    }
+
+    #[test]
+    fn rapid_a_b_c_keeps_only_executing_and_latest_pending_intents() {
+        let queue = LoadAndPlayQueue::default();
+        let (a, _a_rx) = pending_load_and_play(1, "a.flac");
+        assert!(queue.register(a).expect("A should schedule the actor"));
+        let executing_a = queue.take_next_or_idle().expect("A should execute");
+
+        let (b, b_rx) = pending_load_and_play(2, "b.flac");
+        assert!(!queue.register(b).expect("the actor is already scheduled"));
+        let (c, _c_rx) = pending_load_and_play(3, "c.flac");
+        assert!(!queue.register(c).expect("the actor is already scheduled"));
+
+        let b_error = b_rx
+            .recv()
+            .expect("B should be settled when C replaces it")
+            .expect_err("B should be superseded");
+        assert_eq!(b_error.code, AudioErrorCode::Superseded);
+
+        let mut committed_request = None;
+        let a_commit = queue
+            .latest_intent
+            .commit_if_latest(executing_a.request_id, || {
+                committed_request = Some(executing_a.request_id);
+            });
+        assert_eq!(
+            a_commit.expect_err("A must not commit").code,
+            AudioErrorCode::Superseded
+        );
+        assert_eq!(committed_request, None);
+
+        let executing_c = queue.take_next_or_idle().expect("C should replace B");
+        assert_eq!(executing_c.request_id, 3);
+        assert_eq!(executing_c.path, PathBuf::from("c.flac"));
+        queue
+            .latest_intent
+            .commit_if_latest(executing_c.request_id, || {
+                committed_request = Some(executing_c.request_id);
+            })
+            .expect("C should commit");
+        assert_eq!(committed_request, Some(3));
+        assert!(queue.take_next_or_idle().is_none());
+        assert!(!queue.lock_state().wake_scheduled);
+    }
+
+    #[test]
+    fn rapid_a_b_a_uses_request_order_instead_of_path_identity() {
+        let queue = LoadAndPlayQueue::default();
+        let (first_a, _first_a_rx) = pending_load_and_play(10, "a.flac");
+        assert!(queue.register(first_a).expect("first A should schedule"));
+        let executing_first_a = queue.take_next_or_idle().expect("first A should execute");
+
+        let (b, b_rx) = pending_load_and_play(11, "b.flac");
+        assert!(!queue
+            .register(b)
+            .expect("B should share the scheduled wake"));
+        let (second_a, _second_a_rx) = pending_load_and_play(12, "a.flac");
+        assert!(!queue.register(second_a).expect("second A should replace B"));
+
+        assert_eq!(
+            b_rx.recv()
+                .expect("B should settle")
+                .expect_err("B should be stale")
+                .code,
+            AudioErrorCode::Superseded,
+        );
+        assert_eq!(
+            queue
+                .latest_intent
+                .commit_if_latest(executing_first_a.request_id, || ())
+                .expect_err("the first A should be stale")
+                .code,
+            AudioErrorCode::Superseded,
+        );
+        let executing_second_a = queue.take_next_or_idle().expect("second A should execute");
+        assert_eq!(executing_second_a.request_id, 12);
+        assert_eq!(executing_second_a.path, PathBuf::from("a.flac"));
+    }
+
+    #[test]
+    fn stale_failure_cannot_run_its_error_state_commit() {
+        let latest_intent = LatestLoadAndPlayIntent::default();
+        latest_intent
+            .register(20)
+            .expect("old request should register");
+        latest_intent
+            .register(21)
+            .expect("new request should register");
+        let mut error_state_written = false;
+
+        let result = latest_intent.commit_if_latest(20, || {
+            error_state_written = true;
+            audio_error(AudioErrorCode::UnsupportedFormat, "old failure", true)
+        });
+
+        assert_eq!(
+            result.expect_err("old failure must be superseded").code,
+            AudioErrorCode::Superseded,
+        );
+        assert!(!error_state_written);
+    }
+
+    #[test]
+    fn closed_actor_settles_the_single_pending_request_and_reopens_the_wake_slot() {
+        let queue = LoadAndPlayQueue::default();
+        let (pending, rx) = pending_load_and_play(30, "closing.flac");
+        assert!(queue.register(pending).expect("request should schedule"));
+        let unavailable = audio_error(
+            AudioErrorCode::InternalError,
+            "Audio runtime is unavailable",
+            true,
+        );
+
+        queue.fail_pending(unavailable);
+
+        let error = rx
+            .recv()
+            .expect("closed queue should settle the caller")
+            .expect_err("closed queue should fail the request");
+        assert_eq!(error.code, AudioErrorCode::InternalError);
+        assert!(queue.lock_state().pending.is_none());
+        assert!(!queue.lock_state().wake_scheduled);
+
+        let (next, _next_rx) = pending_load_and_play(31, "next.flac");
+        assert!(queue
+            .register(next)
+            .expect("a later request should schedule a new wake"));
+    }
 
     #[test]
     fn embed_error_mapping_covers_copy_write_staging_and_cleanup_io_failures() {

@@ -327,6 +327,11 @@ export function useAudioPlayer() {
   const playlistScopeEpochRef = useRef(0)
   const trackCardPreviewIdRef = useRef(0)
   const preparedTrackCardPreviewRef = useRef<PreparedTrackCardPreview | null>(null)
+  // Visual navigation is intentionally ahead of the audio engine during a burst.
+  // It is the origin for subsequent gestures; audioState remains the confirmed
+  // backend cursor and requestId fencing reconciles the two independently.
+  const logicalCursorTrackIdRef = useRef<string | null>(null)
+  const desiredAudioTrackIdRef = useRef<string | null>(null)
   const artworkRevisionRef = useRef(0)
   const latestAudioStateRef = useRef<AudioPlaybackState | null>(null)
   const audioErrorRef = useRef<AudioCommandError | null>(null)
@@ -563,6 +568,10 @@ export function useAudioPlayer() {
         previewTokenId: visualNavigation.previewTokenId,
       })
     }
+    if (targetTrackId) {
+      logicalCursorTrackIdRef.current = targetTrackId
+      desiredAudioTrackIdRef.current = targetTrackId
+    }
     stagedTrackDetailsRef.current = null
     pendingSelectionRef.current = {
       requestId,
@@ -595,6 +604,7 @@ export function useAudioPlayer() {
     const pending = pendingSelectionRef.current
     return pending?.requestId === requestId
       && (targetTrackId === undefined || pending.targetTrackId === targetTrackId)
+      && (targetTrackId === undefined || desiredAudioTrackIdRef.current === targetTrackId)
   }, [])
 
   const selectionTransactionIsCurrent = useCallback((
@@ -646,6 +656,14 @@ export function useAudioPlayer() {
 
   const settleSelectionFailure = useCallback((requestId: number, error: AudioCommandError) => {
     if (!selectionIsCurrent(requestId)) return
+    if (error.code === 'SUPERSEDED') {
+      pendingSelectionRef.current = null
+      audioSelectionInProgressRef.current = false
+      setSelectionPending(false)
+      setAudioBusy(false)
+      commitDetailsPending(false)
+      return
+    }
     const pending = pendingSelectionRef.current
     if (stagedTrackDetailsRef.current?.requestId === requestId) {
       stagedTrackDetailsRef.current = null
@@ -801,7 +819,6 @@ export function useAudioPlayer() {
     // Metadata is cheap and bounded separately from decoded artwork: retain at
     // most one descriptor per direction, while the artwork hook decodes only
     // the currently primed direction.
-    if (detailsPendingRef.current) return
     if (shuffleMode !== 'none') {
       setArtworkPrefetchCandidates([])
       return
@@ -836,7 +853,10 @@ export function useAudioPlayer() {
           generation !== artworkPrefetchGenerationRef.current
           || playlistScopeEpochRef.current !== playlistEpoch
           || playlistScopeRef.current !== scope
-          || (latestAudioStateRef.current?.currentTrackId ?? audioTrackRef.current?.id) !== trackId
+          || (logicalCursorTrackIdRef.current
+            ?? presentationTrackRef.current?.id
+            ?? latestAudioStateRef.current?.currentTrackId
+            ?? audioTrackRef.current?.id) !== trackId
           || hydratedTrack.id !== target.id
         ) return
         const presentationTrack = audioTrackToTrack(hydratedTrack)
@@ -1019,7 +1039,7 @@ export function useAudioPlayer() {
       || activePlaybackTransitionRef.current !== null
       || nextTransportTransition !== null,
     )
-    commitAudioError(nextAudioState.error)
+    if (nextAudioState.error?.code !== 'SUPERSEDED') commitAudioError(nextAudioState.error)
 
     const guard = seekTargetGuardRef.current
     const now = window.performance.now()
@@ -1145,7 +1165,10 @@ export function useAudioPlayer() {
       targetScope,
       visualNavigation,
     )
-    const placeholderAudioTrack = audioFolderTrackPlaceholder(folderTrack)
+    const placeholderAudioTrack = hydratedCacheGet(
+      hydratedAudioTrackCacheRef.current,
+      folderTrack.sourcePath,
+    ) ?? audioFolderTrackPlaceholder(folderTrack)
     audioTrackRequestIdRef.current += 1
     audioTrackRequestTrackIdRef.current = null
     audioTrackRef.current = placeholderAudioTrack
@@ -1305,14 +1328,17 @@ export function useAudioPlayer() {
     }
   }, [])
 
-  const prepareTrackCardPreview = useCallback(async (
+  const prepareTrackCardPreview = useCallback((
     direction: Direction,
   ): Promise<TrackCardPreviewToken | null> => {
     primeTrackArtwork(direction)
     const playlist = folderPlaylistRef.current
-    const originTrackId = latestAudioStateRef.current?.currentTrackId ?? audioTrackRef.current?.id
+    const originTrackId = logicalCursorTrackIdRef.current
+      ?? presentationTrackRef.current?.id
+      ?? latestAudioStateRef.current?.currentTrackId
+      ?? audioTrackRef.current?.id
     const originIndex = originTrackId ? queueTrackIndexRef.current.get(originTrackId) : undefined
-    if (!playlist?.tracks.length || !originTrackId || originIndex === undefined) return null
+    if (!playlist?.tracks.length || !originTrackId || originIndex === undefined) return Promise.resolve(null)
 
     const playlistEpoch = playlistScopeEpochRef.current
     const scope = playlistScope(playlist)
@@ -1324,41 +1350,38 @@ export function useAudioPlayer() {
       direction,
       shuffleMode,
     )
-    if (!resolved) return null
+    if (!resolved) return Promise.resolve(null)
     const { index: targetIndex, track: target } = resolved
 
     const previewId = trackCardPreviewIdRef.current + 1
     trackCardPreviewIdRef.current = previewId
     preparedTrackCardPreviewRef.current = null
-    try {
-      const hydratedTrack = await requestHydratedAudioTrack(target.sourcePath, playlistEpoch)
-      const stillCurrent = playlistScopeEpochRef.current === playlistEpoch
-        && playlistScopeRef.current === scope
-        && (latestAudioStateRef.current?.currentTrackId ?? audioTrackRef.current?.id) === originTrackId
-        && trackCardPreviewIdRef.current === previewId
-        && hydratedTrack.id === target.id
-        && normalizeAudioSourcePath(hydratedTrack.sourcePath) === normalizeAudioSourcePath(target.sourcePath)
-      if (!stillCurrent) return null
-      const previewTrack = audioTrackToTrack(hydratedTrack)
-      const token: PreparedTrackCardPreview = {
-        id: previewId,
-        originTrackId,
-        targetTrackId: target.id,
-        direction,
-        track: previewTrack,
-        artwork: prefetchArtworkFromTrack(previewTrack),
-        playlistEpoch,
-        playlistScope: scope,
-        targetIndex,
-      }
-      preparedTrackCardPreviewRef.current = token
-      return token
-    } catch (error) {
-      if (trackCardPreviewIdRef.current === previewId) {
-        console.debug('Track-card preview preparation failed', error)
-      }
-      return null
+    const cachedTrack = hydratedCacheGet(hydratedAudioTrackCacheRef.current, target.sourcePath)
+    const previewAudioTrack = cachedTrack ?? audioFolderTrackPlaceholder(target)
+    const previewTrack = audioTrackToTrack(previewAudioTrack)
+    const token: PreparedTrackCardPreview = {
+      id: previewId,
+      originTrackId,
+      targetTrackId: target.id,
+      direction,
+      track: previewTrack,
+      artwork: prefetchArtworkFromTrack(previewTrack),
+      playlistEpoch,
+      playlistScope: scope,
+      targetIndex,
     }
+    preparedTrackCardPreviewRef.current = token
+
+    // A cache miss renders the deterministic filename/tone placeholder now and
+    // warms metadata for a later binding. It never delays the gesture contract.
+    if (!cachedTrack) {
+      void requestHydratedAudioTrack(target.sourcePath, playlistEpoch).catch((error: unknown) => {
+        if (trackCardPreviewIdRef.current === previewId) {
+          console.debug('Track-card preview hydration failed', error)
+        }
+      })
+    }
+    return Promise.resolve(token)
   }, [primeTrackArtwork, queueTracks, requestHydratedAudioTrack, shuffleMode])
 
   const commitTrackCardPreview = useCallback((tokenId: number) => {
@@ -1370,12 +1393,26 @@ export function useAudioPlayer() {
       playlist
       && playlistScopeEpochRef.current === token.playlistEpoch
       && playlistScopeRef.current === token.playlistScope
-      && (latestAudioStateRef.current?.currentTrackId ?? audioTrackRef.current?.id) === token.originTrackId
+      && (logicalCursorTrackIdRef.current
+        ?? presentationTrackRef.current?.id
+        ?? latestAudioStateRef.current?.currentTrackId
+        ?? audioTrackRef.current?.id) === token.originTrackId
       && target?.available
       && target.id === token.targetTrackId,
     )
     preparedTrackCardPreviewRef.current = null
     if (!valid || !playlist || !target) return false
+    const hydratedTarget = hydratedCacheGet(hydratedAudioTrackCacheRef.current, target.sourcePath)
+    const committedTrack = hydratedTarget ? audioTrackToTrack(hydratedTarget) : token.track
+    const committedArtwork = hydratedTarget ? prefetchArtworkFromTrack(committedTrack) : token.artwork
+    logicalCursorTrackIdRef.current = token.targetTrackId
+    desiredAudioTrackIdRef.current = token.targetTrackId
+    presentationTrackRef.current = committedTrack
+    presentationArtworkRef.current = committedArtwork
+    setPresentationTrack(committedTrack)
+    setPresentationArtwork(committedArtwork)
+    setContentState('track')
+    prefetchAdjacentPlaylistTracks(token.targetTrackId)
     const autoplay = latestAudioStateRef.current?.phase === 'playing'
     void loadFolderAudioTrack(
       target,
@@ -1389,7 +1426,7 @@ export function useAudioPlayer() {
       },
     )
     return true
-  }, [loadFolderAudioTrack])
+  }, [loadFolderAudioTrack, prefetchAdjacentPlaylistTracks])
 
   const loadFolderPlaylistSelection = useCallback(async (
     playlist: AudioFolderPlaylist,
@@ -1437,7 +1474,10 @@ export function useAudioPlayer() {
     const playlist = folderPlaylistRef.current
     if (!playlist?.tracks.length) return
 
-    const activeTrackId = latestAudioStateRef.current?.currentTrackId ?? audioTrackRef.current?.id
+    const activeTrackId = logicalCursorTrackIdRef.current
+      ?? presentationTrackRef.current?.id
+      ?? latestAudioStateRef.current?.currentTrackId
+      ?? audioTrackRef.current?.id
     const currentIndex = activeTrackId ? queueTrackIndexRef.current.get(activeTrackId) ?? 0 : 0
     if (
       automatic
@@ -1740,6 +1780,12 @@ export function useAudioPlayer() {
 
       const nextAudioTrack = source.track
       recordAcceptedTrackSelectionActivity()
+      // The single-file path replaces the placeholder selection created above
+      // instead of going through beginTrackSelection(target...). Keep both
+      // cursors aligned with that replacement so the request remains current
+      // when the playback command resolves.
+      logicalCursorTrackIdRef.current = nextAudioTrack.id
+      desiredAudioTrackIdRef.current = nextAudioTrack.id
       pendingSelectionRef.current = {
         requestId: selectionRequestId,
         targetTrackId: nextAudioTrack.id,

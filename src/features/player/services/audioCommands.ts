@@ -16,6 +16,7 @@ export type AudioPlaybackPhase =
 
 export type AudioErrorCode =
   | 'USER_CANCELLED'
+  | 'SUPERSEDED'
   | 'NO_TRACK_LOADED'
   | 'INVALID_PATH'
   | 'FILE_NOT_FOUND'

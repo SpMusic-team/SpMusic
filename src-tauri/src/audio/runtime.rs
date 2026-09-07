@@ -1,8 +1,9 @@
 use std::{
     path::{Path, PathBuf},
     sync::{
+        atomic::{AtomicU64, Ordering},
         mpsc::{Receiver, Sender},
-        Arc,
+        Arc, Mutex, MutexGuard,
     },
     thread,
     time::{Duration, Instant},
@@ -16,7 +17,7 @@ use rodio::{
 use super::{
     device::current_output_device_signature,
     duration::duration_ms,
-    error::{audio_error, AudioCommandError, AudioErrorCode},
+    error::{audio_error, superseded_error, AudioCommandError, AudioErrorCode},
     lyrics_cache::LyricsCache,
     source::{
         hydrate_track_ref, open_source, open_source_fast, playback_track_ref,
@@ -94,11 +95,7 @@ pub(crate) enum AudioRuntimeRequest {
         path: PathBuf,
         reply: Sender<Result<AudioTrackRef, AudioCommandError>>,
     },
-    LoadAndPlay {
-        path: PathBuf,
-        request_id: u64,
-        reply: Sender<Result<AudioLoadAndPlayResult, AudioCommandError>>,
-    },
+    ProcessLatestLoadAndPlay,
     TrackParsed {
         generation: u64,
         path: PathBuf,
@@ -142,6 +139,67 @@ pub(crate) enum AudioRuntimeRequest {
     OutputDeviceChanged {
         signature: Option<String>,
     },
+}
+
+/// Serializes playback commits against command-entry intent registration.
+///
+/// Source preparation may run while newer requests arrive. The commit gate makes
+/// the final sink swap/start linearizable with registration: either the older
+/// request commits first, or it observes the newer request and has no playback
+/// state side effects.
+pub(crate) struct LatestLoadAndPlayIntent {
+    latest_request_id: AtomicU64,
+    commit_gate: Mutex<()>,
+}
+
+impl Default for LatestLoadAndPlayIntent {
+    fn default() -> Self {
+        Self {
+            latest_request_id: AtomicU64::new(0),
+            commit_gate: Mutex::new(()),
+        }
+    }
+}
+
+impl LatestLoadAndPlayIntent {
+    fn lock_commit_gate(&self) -> MutexGuard<'_, ()> {
+        self.commit_gate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    pub(crate) fn register(&self, request_id: u64) -> Result<(), AudioCommandError> {
+        let _gate = self.lock_commit_gate();
+        let latest_request_id = self.latest_request_id.load(Ordering::Acquire);
+        if request_id == 0 || request_id <= latest_request_id {
+            return Err(superseded_error(request_id, latest_request_id));
+        }
+        self.latest_request_id.store(request_id, Ordering::Release);
+        Ok(())
+    }
+
+    pub(crate) fn latest_request_id(&self) -> u64 {
+        self.latest_request_id.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn ensure_latest(&self, request_id: u64) -> Result<(), AudioCommandError> {
+        let latest_request_id = self.latest_request_id();
+        if latest_request_id == request_id {
+            Ok(())
+        } else {
+            Err(superseded_error(request_id, latest_request_id))
+        }
+    }
+
+    pub(crate) fn commit_if_latest<T>(
+        &self,
+        request_id: u64,
+        commit: impl FnOnce() -> T,
+    ) -> Result<T, AudioCommandError> {
+        let _gate = self.lock_commit_gate();
+        self.ensure_latest(request_id)?;
+        Ok(commit())
+    }
 }
 
 pub(crate) struct TrackParseRequest {
@@ -358,6 +416,7 @@ impl AudioRuntime {
         &mut self,
         path: PathBuf,
         request_id: u64,
+        latest_intent: &LatestLoadAndPlayIntent,
     ) -> Result<AudioLoadAndPlayResult, AudioCommandError> {
         let started_at = Instant::now();
         let generation = self.load_generation;
@@ -371,11 +430,7 @@ impl AudioRuntime {
             "audio load-and-play transaction started",
         );
 
-        self.clear_error();
-        self.pending_load_generation = None;
-        self.current_generation = Some(generation);
-        self.invalidate_loaded_audio();
-        self.phase = AudioPlaybackPhase::Loading;
+        latest_intent.ensure_latest(request_id)?;
 
         let preparation = (|| {
             validate_existing_file(&path)?;
@@ -389,6 +444,7 @@ impl AudioRuntime {
             let source = open_source_fast(&normalized_path)?;
             let source_duration = source.total_duration();
             let track = playback_track_ref(&normalized_path, source_duration);
+            latest_intent.ensure_latest(request_id)?;
             tracing::info!(
                 operation = "audio.transaction.load_and_play.source_ready",
                 path = %normalized_path.display(),
@@ -409,61 +465,73 @@ impl AudioRuntime {
                 )
             })?;
             apply_volume_to_sink(Some(&sink), self.volume * self.transport_gain);
-            configure_rebuilt_sink(&sink, source, Duration::ZERO, true).map_err(|error| {
+            // Keep the replacement paused until the latest-intent commit point.
+            // A superseded preparation can then be dropped without leaking audio.
+            configure_rebuilt_sink(&sink, source, Duration::ZERO, false).map_err(|error| {
                 audio_error(
                     AudioErrorCode::PlaybackFailed,
-                    format!("Failed to start audio source: {error}"),
+                    format!("Failed to prepare audio source: {error}"),
                     true,
                 )
             })?;
             Ok::<_, AudioCommandError>((normalized_path, track, sink))
         })();
 
-        let (normalized_path, track, sink) = match preparation {
-            Ok(prepared) => prepared,
-            Err(error) => {
-                self.phase = AudioPlaybackPhase::Error;
-                self.error = Some(error.clone());
-                tracing::warn!(
-                    operation = "audio.transaction.load_and_play.end",
-                    path = %path.display(),
-                    request_id,
-                    generation,
-                    error_code = ?error.code,
-                    error = %error.message,
-                    elapsed_ms = started_at.elapsed().as_millis() as u64,
-                    "audio load-and-play transaction failed",
-                );
-                return Err(error);
+        latest_intent.commit_if_latest(request_id, || {
+            self.clear_error();
+            self.pending_load_generation = None;
+            self.current_generation = Some(generation);
+            self.invalidate_loaded_audio();
+
+            let (normalized_path, track, sink) = match preparation {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    self.phase = AudioPlaybackPhase::Error;
+                    self.error = Some(error.clone());
+                    tracing::warn!(
+                        operation = "audio.transaction.load_and_play.end",
+                        path = %path.display(),
+                        request_id,
+                        generation,
+                        error_code = ?error.code,
+                        error = %error.message,
+                        elapsed_ms = started_at.elapsed().as_millis() as u64,
+                        "audio load-and-play transaction failed",
+                    );
+                    return Err(error);
+                }
+            };
+
+            let track_id = track.id.clone();
+            let file_name = track.file_name.clone();
+            self.current_path = Some(normalized_path);
+            self.current_track = Some(track);
+            self.sink = Some(sink);
+            self.accumulated = Duration::ZERO;
+            self.started_at = Some(Instant::now());
+            self.phase = AudioPlaybackPhase::Playing;
+            if let Some(sink) = self.sink.as_ref() {
+                sink.start_playback();
             }
-        };
+            let state = self.state();
+            tracing::info!(
+                operation = "audio.transaction.load_and_play.playing",
+                request_id,
+                generation,
+                track_id = %track_id,
+                phase = ?state.phase,
+                elapsed_ms = started_at.elapsed().as_millis() as u64,
+                "audio load-and-play transaction entered playing",
+            );
 
-        let track_id = track.id.clone();
-        let file_name = track.file_name.clone();
-        self.current_path = Some(normalized_path);
-        self.current_track = Some(track);
-        self.sink = Some(sink);
-        self.accumulated = Duration::ZERO;
-        self.started_at = Some(Instant::now());
-        self.phase = AudioPlaybackPhase::Playing;
-        let state = self.state();
-        tracing::info!(
-            operation = "audio.transaction.load_and_play.playing",
-            request_id,
-            generation,
-            track_id = %track_id,
-            phase = ?state.phase,
-            elapsed_ms = started_at.elapsed().as_millis() as u64,
-            "audio load-and-play transaction entered playing",
-        );
-
-        Ok(AudioLoadAndPlayResult {
-            request_id,
-            generation,
-            track_id,
-            file_name,
-            state,
-        })
+            Ok(AudioLoadAndPlayResult {
+                request_id,
+                generation,
+                track_id,
+                file_name,
+                state,
+            })
+        })?
     }
 
     pub(crate) fn apply_track_details(
@@ -1534,6 +1602,33 @@ mod tests {
                 SinkAction::Append,
                 SinkAction::Seek(position),
             ]
+        );
+    }
+
+    #[test]
+    fn superseded_commit_does_not_stop_old_sink_or_start_prepared_sink() {
+        let latest_intent = LatestLoadAndPlayIntent::default();
+        latest_intent.register(1).expect("A should register");
+        latest_intent.register(2).expect("B should supersede A");
+        let old_sink_stopped = Rc::new(Cell::new(false));
+        let mut old_sink = Some(RecordingStopSink(Rc::clone(&old_sink_stopped)));
+        let prepared_sink = RecordingSink::default();
+        configure_rebuilt_sink(&prepared_sink, silent_test_source(), Duration::ZERO, false)
+            .expect("replacement should prepare while paused");
+
+        let result = latest_intent.commit_if_latest(1, || {
+            stop_and_take_sink(&mut old_sink);
+            prepared_sink.start_playback();
+        });
+
+        assert_eq!(
+            result.expect_err("A must not cross the commit fence").code,
+            AudioErrorCode::Superseded,
+        );
+        assert!(!old_sink_stopped.get());
+        assert_eq!(
+            *prepared_sink.actions.borrow(),
+            vec![SinkAction::Pause, SinkAction::Append],
         );
     }
 

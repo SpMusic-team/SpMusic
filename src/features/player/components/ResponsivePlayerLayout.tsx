@@ -19,9 +19,39 @@ const HYSTERESIS = 16
 const SHORT_LAYOUT_BREAKPOINT = 600
 const QUARTER_MAX_WIDTH = 1120
 const QUARTER_ENTER_WIDTH = QUARTER_MAX_WIDTH - HYSTERESIS
+const HORIZONTAL_HALF_MIN_HEIGHT = 595
+const HORIZONTAL_HALF_MAX_HEIGHT = 1080
+const HORIZONTAL_HALF_MIN_CONTENT_WIDTH = 1080
+const HORIZONTAL_HALF_SIDE_INSET = 60
+const HORIZONTAL_HALF_COLUMN_GAP = 24
+const HORIZONTAL_HALF_VERTICAL_INSET = 96
 
 function isMinimumCompactViewport(viewport: ViewportSize): boolean {
   return viewport.width < 700 && viewport.height < SHORT_LAYOUT_BREAKPOINT
+}
+
+function horizontalHalfMinimumWidth(viewport: ViewportSize): number {
+  const effectiveHeight = Math.max(viewport.height, HORIZONTAL_HALF_MIN_HEIGHT)
+  const coverSize = effectiveHeight - HORIZONTAL_HALF_VERTICAL_INSET
+  return HORIZONTAL_HALF_SIDE_INSET * 2
+    + coverSize
+    + HORIZONTAL_HALF_COLUMN_GAP
+    + HORIZONTAL_HALF_MIN_CONTENT_WIDTH
+}
+
+function isHorizontalHalfViewport(viewport: ViewportSize, previous?: PlayerLayoutMode): boolean {
+  const effectiveHeight = Math.max(viewport.height, HORIZONTAL_HALF_MIN_HEIGHT)
+  const heightInRange = viewport.height <= HORIZONTAL_HALF_MAX_HEIGHT
+    || (previous === 'horizontal' && viewport.height <= HORIZONTAL_HALF_MAX_HEIGHT + HYSTERESIS)
+
+  if (!heightInRange) return false
+
+  const minimumWidth = horizontalHalfMinimumWidth(viewport)
+  const aspectThreshold = 2 * effectiveHeight
+  if (previous === 'horizontal') {
+    return viewport.width >= Math.max(aspectThreshold, minimumWidth) - HYSTERESIS
+  }
+  return viewport.width >= Math.max(aspectThreshold, minimumWidth) + HYSTERESIS
 }
 
 function readViewport(): ViewportSize {
@@ -70,13 +100,7 @@ function resolveLayout(
     return 'vertical'
   }
 
-  if (previous === 'horizontal') {
-    if (viewport.width >= 2 * viewport.height - HYSTERESIS) return 'horizontal'
-  } else if (viewport.width >= 2 * viewport.height + HYSTERESIS) {
-    return 'horizontal'
-  } else if (!previous && viewport.width >= 2 * viewport.height) {
-    return 'horizontal'
-  }
+  if (isHorizontalHalfViewport(viewport, previous)) return 'horizontal'
 
   return 'full'
 }

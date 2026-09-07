@@ -121,6 +121,7 @@ export function useActiveLyricScroll(
   lyricListRef: RefObject<HTMLOListElement | null>,
   layoutKey: string,
   scopeKey: string,
+  listReady = true,
 ) {
   const lineCentersRef = useRef<number[]>([])
   const scrollFrameRef = useRef<number | null>(null)
@@ -893,7 +894,7 @@ export function useActiveLyricScroll(
       if (measureAndRecenterRef.current === measureLineCenters) measureAndRecenterRef.current = () => {}
       cancelScrollFrame()
     }
-  }, [cancelFollowingLineAnimations, cancelLyricNavigation, cancelScrollFrame, lyricLayoutSignature, lyricListRef, scheduleMeasurement, scopeKey, targetScrollTop])
+  }, [cancelFollowingLineAnimations, cancelLyricNavigation, cancelScrollFrame, listReady, lyricLayoutSignature, lyricListRef, scheduleMeasurement, scopeKey, targetScrollTop])
 
   useLayoutEffect(() => {
     scheduleMeasurement()

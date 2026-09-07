@@ -103,6 +103,7 @@ export const appCopy = {
     unavailable: '真实播放后端不可用，请在 Tauri 桌面端验证。',
     errors: {
       USER_CANCELLED: '已取消选择音频。',
+      SUPERSEDED: '已由更新的切歌请求接管。',
       NO_TRACK_LOADED: '还没有加载音频，请先打开一个本地音频文件。',
       INVALID_PATH: '音频路径无效。',
       FILE_NOT_FOUND: '找不到这个音频文件。',

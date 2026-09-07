@@ -27,6 +27,7 @@ pub enum AudioErrorCode {
     PlaybackInitFailed,
     PlaybackFailed,
     UnsupportedOperation,
+    Superseded,
     InternalError,
 }
 
@@ -40,6 +41,16 @@ pub(crate) fn audio_error(
         message: message.into(),
         recoverable,
     }
+}
+
+pub(crate) fn superseded_error(request_id: u64, latest_request_id: u64) -> AudioCommandError {
+    audio_error(
+        AudioErrorCode::Superseded,
+        format!(
+            "Audio load-and-play request {request_id} was superseded by newer request {latest_request_id}"
+        ),
+        true,
+    )
 }
 
 pub(crate) fn unavailable_state(message: impl Into<String>) -> AudioPlaybackState {
@@ -71,5 +82,17 @@ mod tests {
 
         assert_eq!(serialized["code"], "INVALID_VOLUME");
         assert_eq!(serialized["recoverable"], true);
+    }
+
+    #[test]
+    fn superseded_error_is_recoverable_and_machine_readable() {
+        let serialized = serde_json::to_value(superseded_error(4, 7))
+            .expect("superseded error should serialize");
+
+        assert_eq!(serialized["code"], "SUPERSEDED");
+        assert_eq!(serialized["recoverable"], true);
+        assert!(serialized["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("request 4") && message.contains("request 7")));
     }
 }

@@ -133,6 +133,7 @@ export function LyricsPanel({
     lyricListRef,
     `${lyricLayoutKey}:${visualLinesLayoutKey}`,
     track.id,
+    !detailsPending,
   )
 
   const measureStableVisualLines = useCallback(() => {
@@ -208,7 +209,7 @@ export function LyricsPanel({
       document.fonts?.removeEventListener('loadingdone', scheduleMeasurement)
       if (measurementFrame !== null) window.cancelAnimationFrame(measurementFrame)
     }
-  }, [lyricLayoutKey, measureStableVisualLines])
+  }, [detailsPending, lyricLayoutKey, measureStableVisualLines])
 
   useEffect(() => {
     if (!visualClock) return

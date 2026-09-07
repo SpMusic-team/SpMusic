@@ -9,7 +9,9 @@
   --player-track-card-perspective: clamp(1200px, 72vw, 1700px);
   position: relative;
   isolation: isolate;
-  min-height: 100svh;
+  /* The horizontal-half design is authored down to 595px. Keep the stage
+     from entering an unverified compressed state below that boundary. */
+  min-height: max(100svh, 595px);
   overflow: hidden;
   background: var(--app-bg);
   color: var(--player-ink);

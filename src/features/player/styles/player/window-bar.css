@@ -1,0 +1,48 @@
+.window-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 20;
+  width: 100%;
+  height: 40px;
+  min-height: 40px;
+  padding: 0 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  user-select: none;
+  -webkit-app-region: drag;
+}
+
+.window-actions { display: flex; gap: 31px; }
+.window-leading, .window-actions {
+  flex: 0 0 auto;
+  cursor: default;
+  -webkit-app-region: no-drag;
+}
+.window-bar { cursor: grab; }
+.window-bar:active { cursor: grabbing; }
+.window-bar[data-fullscreen="true"] { cursor: default; -webkit-app-region: no-drag; }
+.window-bar button {
+  width: 20px;
+  height: 40px;
+  min-width: 0;
+  padding: 0;
+  border-radius: 0;
+  color: var(--player-muted);
+  background: transparent;
+  transition: color var(--app-motion-fast) ease;
+  -webkit-app-region: no-drag;
+}
+.window-bar button:hover, .window-bar button:focus-visible, .window-bar button:active { background: transparent; color: var(--player-ink); }
+.window-bar button svg {
+  width: 20px;
+  height: 20px;
+  transform-origin: center;
+  transition: transform var(--app-motion-fast) ease;
+}
+.window-bar button:hover svg, .window-bar button:focus-visible svg, .window-bar button:active svg { transform: scale(1.2); }
+
+@media (prefers-reduced-motion: reduce) {
+  .window-bar button svg { transition: none; }
+}

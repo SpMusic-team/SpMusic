@@ -1,0 +1,236 @@
+/* 播放列表详情页。版型按 2560×1440 设计稿拆解：顶部圆角横幅(标题药丸 + `# 数量 | 总时长` 徽标 + 一排圆形操作按钮)，
+   下面是整片正方形歌曲卡片网格。所有尺寸用 --prototype-unit 表达，窗口非 2560×1440 时直接等比拉伸。 */
+.playlist-panel {
+  position: absolute;
+  top: 40px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: calc(56 * var(--prototype-unit));
+  padding: calc(56 * var(--prototype-unit)) calc(88 * var(--prototype-unit)) calc(96 * var(--prototype-unit));
+  overflow-y: auto;
+  background: var(--app-bg);
+  color: var(--player-ink);
+}
+
+/* ---- 顶部横幅 Hero ---- */
+.playlist-hero {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  min-height: clamp(220px, calc(380 * var(--prototype-unit)), 640px);
+  border-radius: calc(24 * var(--prototype-unit));
+  overflow: hidden;
+  padding: calc(48 * var(--prototype-unit));
+  color: #fff;
+  background: var(--app-accent-soft);
+}
+
+.playlist-hero[data-tone="lagoon"] { background: linear-gradient(145deg, #0f5d72 2%, #73c7bb 36%, #f3dd9b 68%, #263c45); }
+.playlist-hero[data-tone="violet"] { background: linear-gradient(145deg, #20274d, #796da6 42%, #efc3b6 72%, #283547); }
+.playlist-hero[data-tone="rose"]   { background: linear-gradient(145deg, #522d4c, #c47687 42%, #f4cba8 72%, #4f5868); }
+.playlist-hero[data-tone="amber"]  { background: linear-gradient(145deg, #304f5c, #d9a85e 50%, #f4e0ae 72%, #475058); }
+.playlist-hero[data-tone="blue"]   { background: linear-gradient(145deg, #173957, #477fa7 48%, #b8d9d0 72%, #223449); }
+
+.playlist-hero::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(transparent 45%, rgba(0, 0, 0, 0.38));
+  pointer-events: none;
+}
+
+.playlist-hero-copy {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: calc(20 * var(--prototype-unit));
+  align-items: flex-start;
+}
+
+.playlist-hero-title {
+  margin: 0;
+  font-size: clamp(28px, calc(64 * var(--prototype-unit)), 96px);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  text-shadow: 0 2px 14px rgba(0, 0, 0, 0.35);
+  max-width: 72%;
+}
+
+.playlist-hero-meta {
+  display: flex;
+  align-items: center;
+  gap: calc(12 * var(--prototype-unit));
+  margin: 0;
+  font-size: clamp(18px, calc(30 * var(--prototype-unit)), 44px);
+  font-weight: 600;
+  opacity: 0.95;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.3);
+}
+.playlist-hero-meta-sep { opacity: 0.7; }
+
+.playlist-hero-actions {
+  display: flex;
+  align-items: center;
+  gap: calc(24 * var(--prototype-unit));
+  flex-wrap: wrap;
+  margin-top: calc(8 * var(--prototype-unit));
+}
+
+.playlist-hero-icon {
+  width: calc(52 * var(--prototype-unit));
+  height: calc(52 * var(--prototype-unit));
+  border-radius: 999px;
+}
+.playlist-hero-icon svg,
+.playlist-hero-icon [data-slot="icon"] { width: calc(26 * var(--prototype-unit)); height: calc(26 * var(--prototype-unit)); }
+
+.playlist-hero-actions .playlist-select-toggle {
+  height: calc(52 * var(--prototype-unit));
+  padding: 0 calc(28 * var(--prototype-unit));
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  background: rgba(255, 255, 255, 0.16);
+  color: inherit;
+  backdrop-filter: blur(6px);
+  border-radius: 999px;
+  font-size: calc(26 * var(--prototype-unit));
+}
+.playlist-hero-actions .playlist-select-toggle:hover {
+  background: rgba(255, 255, 255, 0.28);
+  color: inherit;
+}
+.playlist-hero-actions .playlist-select-toggle[data-selected="true"] {
+  background: rgba(255, 255, 255, 0.32);
+  border-color: rgba(255, 255, 255, 0.7);
+}
+
+.playlist-close {
+  position: absolute;
+  top: calc(20 * var(--prototype-unit));
+  right: calc(20 * var(--prototype-unit));
+  z-index: 2;
+  width: calc(48 * var(--prototype-unit));
+  height: calc(48 * var(--prototype-unit));
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.28);
+  color: #fff;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+}
+.playlist-close:hover { background: rgba(0, 0, 0, 0.42); }
+.playlist-close svg { width: calc(24 * var(--prototype-unit)); height: calc(24 * var(--prototype-unit)); }
+
+/* ---- 搜索 ---- */
+.playlist-filter { max-width: calc(640 * var(--prototype-unit)); }
+.playlist-filter-input { border-radius: 999px; }
+
+/* ---- 选择栏 ---- */
+.playlist-selection-bar {
+  display: flex;
+  align-items: center;
+  gap: calc(24 * var(--prototype-unit));
+  padding: calc(12 * var(--prototype-unit)) calc(4 * var(--prototype-unit));
+}
+.playlist-selection-count { font-size: calc(28 * var(--prototype-unit)); font-weight: 600; }
+
+/* ---- 歌曲网格 ---- */
+.playlist-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(calc(500 * var(--prototype-unit)), 1fr));
+  gap: calc(44 * var(--prototype-unit)) calc(40 * var(--prototype-unit));
+  padding-bottom: calc(48 * var(--prototype-unit));
+}
+
+.playlist-card {
+  appearance: none;
+  border: none;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: calc(16 * var(--prototype-unit));
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.playlist-card:disabled { cursor: default; }
+
+.playlist-card-cover {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: calc(18 * var(--prototype-unit));
+  overflow: hidden;
+  background: var(--app-accent-soft);
+}
+.playlist-card[data-tone="lagoon"] .playlist-card-cover { background: linear-gradient(145deg, #0f5d72 2%, #73c7bb 36%, #f3dd9b 68%, #263c45); }
+.playlist-card[data-tone="violet"] .playlist-card-cover { background: linear-gradient(145deg, #20274d, #796da6 42%, #efc3b6 72%, #283547); }
+.playlist-card[data-tone="rose"] .playlist-card-cover   { background: linear-gradient(145deg, #522d4c, #c47687 42%, #f4cba8 72%, #4f5868); }
+.playlist-card[data-tone="amber"] .playlist-card-cover  { background: linear-gradient(145deg, #304f5c, #d9a85e 50%, #f4e0ae 72%, #475058); }
+.playlist-card[data-tone="blue"] .playlist-card-cover   { background: linear-gradient(145deg, #173957, #477fa7 48%, #b8d9d0 72%, #223449); }
+
+.playlist-card[data-current="true"] .playlist-card-cover {
+  box-shadow: 0 0 0 calc(3 * var(--prototype-unit)) var(--player-accent, var(--player-blue)), 0 8px 24px rgba(0, 0, 0, 0.2);
+}
+.playlist-card[data-unavailable="true"] { opacity: 0.5; }
+
+.playlist-card-cover-state {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: calc(24 * var(--prototype-unit));
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.9);
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.35);
+}
+
+.playlist-card-checkbox {
+  position: absolute;
+  top: calc(14 * var(--prototype-unit));
+  right: calc(14 * var(--prototype-unit));
+  width: calc(28 * var(--prototype-unit));
+  height: calc(28 * var(--prototype-unit));
+  border-radius: 50%;
+  border: calc(2 * var(--prototype-unit)) solid rgba(255, 255, 255, 0.9);
+  background: rgba(0, 0, 0, 0.35);
+  display: none;
+}
+.playlist-card[data-select-mode="true"] .playlist-card-checkbox { display: block; }
+.playlist-card[data-selected="true"] .playlist-card-checkbox {
+  background: var(--player-blue, #477fa7);
+  border-color: #fff;
+}
+
+.playlist-card-title,
+.playlist-card-artist {
+  display: block;
+  width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.playlist-card-title { font-weight: 600; font-size: clamp(18px, calc(26 * var(--prototype-unit)), 40px); }
+.playlist-card-artist { font-size: clamp(16px, calc(22 * var(--prototype-unit)), 34px); opacity: 0.72; }
+
+/* ---- 空态 ---- */
+.playlist-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: calc(16 * var(--prototype-unit));
+  padding: calc(96 * var(--prototype-unit)) calc(40 * var(--prototype-unit));
+  text-align: center;
+  color: var(--player-ink);
+  opacity: 0.7;
+}

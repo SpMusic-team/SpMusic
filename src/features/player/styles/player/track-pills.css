@@ -1,0 +1,52 @@
+.track-pills {
+  position: absolute;
+  top: calc(87 * var(--prototype-unit));
+  left: calc(1124 * var(--prototype-unit));
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: calc(29 * var(--prototype-unit));
+}
+
+.track-pill {
+  box-sizing: border-box;
+  display: block;
+  width: fit-content;
+  max-width: min(100%, var(--player-track-details-max-width));
+  height: calc(60 * var(--prototype-unit));
+  padding: calc(10 * var(--prototype-unit)) calc(20 * var(--prototype-unit));
+  border-radius: calc(30 * var(--prototype-unit));
+  background: var(--player-blue-soft);
+  box-shadow: calc(-2 * var(--prototype-unit)) calc(4 * var(--prototype-unit)) calc(4 * var(--prototype-unit)) rgba(0,0,0,.25);
+  color: var(--player-blue-ink);
+  font-size: calc(28 * var(--prototype-unit));
+  font-weight: 500;
+  line-height: calc(40 * var(--prototype-unit));
+  white-space: nowrap;
+}
+
+button.track-pill {
+  border: 0;
+  text-align: start;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.track-pill:hover,
+.track-pill:active {
+  background: var(--player-blue-soft);
+  color: var(--player-blue-ink);
+  transform: none;
+  translate: none;
+  scale: none;
+}
+
+.track-pill .ping-pong-text {
+  position: relative;
+  z-index: 2;
+}
+
+.track-pills .title-pill {
+  max-width: min(100%, var(--player-track-title-max-width));
+  font-size: calc(32 * var(--prototype-unit));
+}

@@ -76,6 +76,7 @@ export const appCopy = {
     bookmark: '书签',
     cover: '专辑封面',
     info: '信息 / 标签',
+    lyrics: '歌词',
     listeningHistory: '收听记录',
     artist: '艺术家',
     album: '专辑',

@@ -19,6 +19,7 @@ export function PlayerShell() {
   const viewModel: PlayerUiViewModel = {
     playback: {
       track: player.track,
+      audioOutputInfo: player.audioOutputInfo,
       artwork: player.artwork,
       artworkPrefetchCandidate: player.artworkPrefetchCandidate,
       artworkPrefetchCandidates: player.artworkPrefetchCandidates,

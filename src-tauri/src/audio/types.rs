@@ -28,6 +28,30 @@ pub struct AudioTrackMetadata {
     pub comment: Option<String>,
     pub lyrics: Option<String>,
     pub cover_art: Option<AudioCoverArt>,
+    pub audio_format: Option<AudioFormatMetadata>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioOutputInfo {
+    pub method: String,
+    pub device_name: String,
+    #[ts(type = "number")]
+    pub bit_depth: u16,
+    #[ts(type = "number")]
+    pub sample_rate_hz: u32,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioFormatMetadata {
+    #[ts(type = "number | null")]
+    pub bit_depth: Option<u8>,
+    #[ts(type = "number | null")]
+    pub sample_rate_hz: Option<u32>,
+    #[ts(type = "number | null")]
+    pub bitrate_kbps: Option<u32>,
+    pub codec: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -438,5 +462,6 @@ mod tests {
         assert!(metadata.comment.is_none());
         assert!(metadata.lyrics.is_none());
         assert!(metadata.cover_art.is_none());
+        assert!(metadata.audio_format.is_none());
     }
 }

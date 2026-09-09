@@ -1,7 +1,7 @@
 import type { RepeatMode, ShuffleMode } from '@/features/player/model/playbackModes'
 import type { Track, TrackArtwork, TrackArtworkPrefetchCandidate, TrackFeedback, TrackSummary } from '@/features/player/model/playerTypes'
 import type { PlayerVisualTimelineClock } from '@/features/player/model/visualTimelineClock'
-import type { AudioTransportTarget, AudioTransportTransition } from '@/features/player/services/audioCommands'
+import type { AudioOutputInfo, AudioTransportTarget, AudioTransportTransition } from '@/features/player/services/audioCommands'
 
 export type PlayerContentState = 'empty' | 'loading' | 'track' | 'error'
 
@@ -27,6 +27,7 @@ export type TrackCardPreviewToken = Readonly<{
 
 export type PlayerPlaybackViewModel = {
   track: Track | null
+  audioOutputInfo?: AudioOutputInfo | null
   artwork?: TrackArtwork | null
   artworkPrefetchCandidate?: TrackArtworkPrefetchCandidate | null
   artworkPrefetchCandidates?: readonly TrackArtworkPrefetchCandidate[]

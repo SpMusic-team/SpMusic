@@ -36,6 +36,13 @@ export type AudioTrackRef = {
   metadata: AudioTrackMetadata
 }
 
+export type AudioOutputInfo = {
+  method: string
+  deviceName: string
+  bitDepth: number
+  sampleRateHz: number
+}
+
 export type AudioTrackMetadata = {
   title: string | null
   artist: string | null
@@ -48,6 +55,14 @@ export type AudioTrackMetadata = {
   comment: string | null
   lyrics: string | null
   coverArt: AudioCoverArt | null
+  audioFormat: AudioFormatMetadata | null
+}
+
+export type AudioFormatMetadata = {
+  bitDepth: number | null
+  sampleRateHz: number | null
+  bitrateKbps: number | null
+  codec: string | null
 }
 
 export type AudioCoverArt = {
@@ -324,6 +339,10 @@ export async function getAudioState(): Promise<AudioPlaybackState> {
 
 export async function getCurrentAudioTrack(): Promise<AudioTrackRef | null> {
   return invoke<AudioTrackRef | null>('audio_get_current_track')
+}
+
+export async function getAudioOutputInfo(): Promise<AudioOutputInfo | null> {
+  return invoke<AudioOutputInfo | null>('audio_get_output_info')
 }
 
 export async function listenAudioStateChanged(

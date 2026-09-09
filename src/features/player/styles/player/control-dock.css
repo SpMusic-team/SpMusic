@@ -41,9 +41,11 @@
 .responsive-player-layout[data-player-layout="full"] .playback-info-button {
   box-sizing: border-box;
   width: fit-content;
-  max-width: min(332px, 100%);
+  min-width: 48px;
+  max-width: min(314px, 100%);
+  min-height: 26px;
+  max-height: 40px;
   height: fit-content;
-  min-width: 0;
   padding: 0;
   display: inline-flex;
   flex: 0 0 auto;
@@ -94,6 +96,7 @@
   z-index: 2;
   align-items: center;
   gap: 10px;
+  overflow: hidden;
   transition: padding var(--player-control-transition-duration) var(--app-motion-easing);
   position: relative;
   z-index: 2;

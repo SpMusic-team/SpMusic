@@ -97,7 +97,10 @@
 }
 
 .responsive-player-layout[data-player-layout="full"] .playback-info-button {
-  max-width: min(calc(332 * var(--player-layout-unit)), 100%);
+  min-width: calc(48 * var(--player-layout-unit));
+  max-width: min(calc(314 * var(--player-layout-unit)), 100%);
+  min-height: calc(26 * var(--player-layout-unit));
+  max-height: calc(40 * var(--player-layout-unit));
   height: fit-content;
   padding-inline: 0;
   border-radius: calc(30 * var(--player-layout-unit));
@@ -577,8 +580,11 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
 .responsive-player-layout[data-player-layout="horizontal"] .playback-info-button {
   box-sizing: border-box;
   width: fit-content;
-  max-width: 100%;
-  min-width: 0;
+  min-width: 48px;
+  max-width: min(314px, 100%);
+  min-height: 26px;
+  max-height: 40px;
+  overflow: hidden;
   height: fit-content;
   padding: 0;
   display: inline-flex;
@@ -1439,9 +1445,9 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
   .more-track-meta > span { gap: 3px; }
   .more-track-meta > span svg { width: 14px; height: 14px; }
   .more-copy-action { width: 28px; height: 28px; }
-  .more-feedback-actions { gap: 6px; }
-  .more-feedback-action { width: 48px; height: 34px; }
-  .more-feedback-action svg { width: 22px; height: 22px; }
+  .more-feedback-actions { gap: 9px; }
+  .more-feedback-action { width: 106px; height: 72px; padding: 0; }
+  .more-feedback-action .player-control-icon-frame { width: 48px; height: 48px; }
   .more-action-grid { gap: 6px 12px; padding: 10px 0; }
   .more-action { min-height: 42px; }
   .more-action > svg { width: 24px; height: 24px; }

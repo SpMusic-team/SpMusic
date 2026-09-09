@@ -1548,6 +1548,8 @@ export function PlayerSurface({
               <PlaybackInfoButton
                 visible={Boolean(track)}
                 visualIsPlaying={visualPlaybackState === 'playing'}
+                currentTrack={track}
+                audioOutputInfo={playback.audioOutputInfo}
               />
               <ControlDock
                 playback={coverDragActive ? {

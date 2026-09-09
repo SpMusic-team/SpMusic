@@ -36,6 +36,7 @@ import type {
 import { createPlayerVisualTimelineClock } from '@/features/player/model/visualTimelineClock'
 import {
   getAudioState,
+  getAudioOutputInfo,
   getCurrentAudioTrack,
   hydrateAudioTrack,
   isAudioCommandError,
@@ -271,6 +272,7 @@ export function useAudioPlayer() {
   const [volume, setVolume] = useState(72)
   const [queueOpen, setQueueOpen] = useState(false)
   const [audioState, setAudioState] = useState<AudioPlaybackState | null>(null)
+  const [audioOutputInfo, setAudioOutputInfo] = useState<Awaited<ReturnType<typeof getAudioOutputInfo>>>(null)
   const [audioTrack, setAudioTrack] = useState<AudioTrackRef | null>(null)
   const [presentationTrack, setPresentationTrack] = useState<Track | null>(null)
   const [presentationArtwork, setPresentationArtwork] = useState<TrackArtwork | null>(null)
@@ -1681,6 +1683,11 @@ export function useAudioPlayer() {
       .catch((error: unknown) => commitAudioError(commandError(error)))
 
     const initialStateRequestGeneration = audioStateRequestGenerationRef.current
+    void getAudioOutputInfo()
+      .then((nextOutputInfo) => {
+        if (!disposed) setAudioOutputInfo(nextOutputInfo)
+      })
+      .catch(() => undefined)
     void getAudioState()
       .then((nextAudioState) => {
         if (!disposed && initialStateRequestGeneration === audioStateRequestGenerationRef.current) {
@@ -2172,6 +2179,7 @@ export function useAudioPlayer() {
     transportTransition: audioState?.transportTransition ?? null,
     transportSettledRequestId: audioState?.transportSettledRequestId ?? null,
     audioState,
+    audioOutputInfo,
     currentAudioTrack,
     startProgressPreview,
     setProgress,

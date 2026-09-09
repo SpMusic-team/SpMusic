@@ -8,7 +8,10 @@ use std::{sync::mpsc::Sender, thread::JoinHandle};
 use rodio::cpal::{
     self,
     traits::{DeviceTrait, HostTrait},
+    SampleFormat,
 };
+
+use super::types::AudioOutputInfo;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AudioDeviceEvent {
@@ -83,4 +86,24 @@ pub(crate) fn current_output_device_signature() -> Option<String> {
         .unwrap_or_else(|_| "unknown-config".to_string());
 
     Some(format!("default={name}|{config}"))
+}
+
+pub(crate) fn current_output_info() -> Option<AudioOutputInfo> {
+    let host = cpal::default_host();
+    let device = host.default_output_device()?;
+    let config = device.default_output_config().ok()?;
+    let bit_depth = match config.sample_format() {
+        SampleFormat::I8 | SampleFormat::U8 => 8,
+        SampleFormat::I16 | SampleFormat::U16 => 16,
+        SampleFormat::I32 | SampleFormat::U32 | SampleFormat::F32 => 32,
+        SampleFormat::I64 | SampleFormat::U64 | SampleFormat::F64 => 64,
+        _ => 0,
+    };
+
+    Some(AudioOutputInfo {
+        method: format!("{} OUTPUT", host.id().name().to_ascii_uppercase()),
+        device_name: device.name().unwrap_or_else(|_| "unknown".to_string()),
+        bit_depth,
+        sample_rate_hz: config.sample_rate().0,
+    })
 }

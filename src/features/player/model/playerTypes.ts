@@ -2,16 +2,24 @@ export type CoverTone = 'lagoon' | 'violet' | 'rose' | 'amber' | 'blue'
 
 export type Track = {
   id: string
+  sourcePath?: string
   title: string
   artist: string
   album: string
   category?: string
+  fileExtension?: string
   durationSeconds: number
   coverTone: CoverTone
   coverFilePath?: string
   coverImage?: string
   coverImageFallback?: string
   lyrics: DemoLyricLine[]
+  audioFormat?: {
+    bitDepth: number | null
+    sampleRateHz: number | null
+    bitrateKbps: number | null
+    codec: string | null
+  }
 }
 
 export type TrackSummary = Pick<Track, 'id' | 'title' | 'artist' | 'album' | 'category'>

@@ -5,12 +5,13 @@ mod webview_memory;
 use std::sync::Once;
 
 use app_paths::AppPaths;
+use audio::current_output_info;
 use audio::{
     load_cover_pixels, AudioCommandError, AudioController, AudioEmbedLyricsInput,
     AudioFolderPlaylist, AudioFolderPlaylistInput, AudioLoadAndPlayInput, AudioLoadAndPlayResult,
     AudioLoadCoverPixelsInput, AudioLoadFileInput, AudioOpenFileInput, AudioOpenSourceResult,
-    AudioPlayInput, AudioPlaybackState, AudioSeekInput, AudioSetVolumeInput, AudioTrackRef,
-    AudioTransitionPlaybackInput, CoverPixelsError,
+    AudioOutputInfo, AudioPlayInput, AudioPlaybackState, AudioSeekInput, AudioSetVolumeInput,
+    AudioTrackRef, AudioTransitionPlaybackInput, CoverPixelsError,
 };
 use tauri::{ipc::Response, Manager, State};
 use tracing_subscriber::EnvFilter;
@@ -248,6 +249,12 @@ fn audio_get_current_track(
 }
 
 #[tauri::command]
+fn audio_get_output_info() -> Option<AudioOutputInfo> {
+    tracing::debug!(command = "audio_get_output_info", "Tauri command invoked");
+    current_output_info()
+}
+
+#[tauri::command]
 async fn audio_load_cover_pixels(
     state: State<'_, AppPaths>,
     input: AudioLoadCoverPixelsInput,
@@ -296,6 +303,7 @@ pub fn run() {
             audio_set_volume,
             audio_get_state,
             audio_get_current_track,
+            audio_get_output_info,
             audio_load_cover_pixels,
         ])
         .setup(|app| {

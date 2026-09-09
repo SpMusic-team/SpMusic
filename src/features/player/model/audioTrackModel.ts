@@ -17,6 +17,11 @@ export function fileNameTitle(fileName: string): string {
   return fileName.replace(/\.[^.]+$/u, '') || fileName
 }
 
+export function fileExtension(fileName: string): string | undefined {
+  const match = /\.([^.]+)$/u.exec(fileName)
+  return match?.[1]?.toLowerCase()
+}
+
 const COVER_TONES: readonly CoverTone[] = ['lagoon', 'violet', 'rose', 'amber', 'blue']
 
 export function coverToneForTrackId(id: string): CoverTone {
@@ -76,6 +81,7 @@ export function audioFolderTrackPlaceholder(track: AudioFolderTrackRef): AudioTr
       comment: null,
       lyrics: null,
       coverArt: null,
+      audioFormat: null,
     },
   }
 }
@@ -138,16 +144,19 @@ export function audioTrackToTrack(track: AudioTrackRef): Track {
 
   return {
     id: track.id,
+    sourcePath: track.sourcePath,
     title,
     artist,
     album,
     category: 'local-audio',
+    fileExtension: fileExtension(track.fileName),
     durationSeconds,
     coverTone: 'blue',
     coverFilePath: track.metadata.coverArt?.filePath ?? undefined,
     coverImage: audioCoverArtUrl(track.metadata.coverArt),
     coverImageFallback: audioCoverArtFallbackUrl(track.metadata.coverArt),
     lyrics: metadataLyricsToLines(track, durationSeconds),
+    audioFormat: track.metadata.audioFormat ?? undefined,
   }
 }
 
@@ -165,9 +174,21 @@ function lyricLinesEqual(left: DemoLyricLine[], right: DemoLyricLine[]): boolean
   )
 }
 
+function audioFormatEqual(left: Track['audioFormat'], right: Track['audioFormat']): boolean {
+  return left === right || (
+    left !== undefined
+    && right !== undefined
+    && left.bitDepth === right.bitDepth
+    && left.sampleRateHz === right.sampleRateHz
+    && left.bitrateKbps === right.bitrateKbps
+    && left.codec === right.codec
+  )
+}
+
 export function trackPresentationEqual(left: Track, right: Track): boolean {
   return left === right || (
     left.id === right.id
+    && left.sourcePath === right.sourcePath
     && left.title === right.title
     && left.artist === right.artist
     && left.album === right.album
@@ -177,6 +198,7 @@ export function trackPresentationEqual(left: Track, right: Track): boolean {
     && left.coverFilePath === right.coverFilePath
     && left.coverImage === right.coverImage
     && left.coverImageFallback === right.coverImageFallback
+    && audioFormatEqual(left.audioFormat, right.audioFormat)
     && lyricLinesEqual(left.lyrics, right.lyrics)
   )
 }

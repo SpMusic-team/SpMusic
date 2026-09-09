@@ -23,12 +23,13 @@ mod source_tests;
 
 pub use controller::AudioController;
 pub use cover_pixels::{load_cover_pixels, AudioLoadCoverPixelsInput, CoverPixelsError};
+pub(crate) use device::current_output_info;
 pub use error::AudioCommandError;
 pub use types::{
     AudioEmbedLyricsInput, AudioFolderPlaylist, AudioFolderPlaylistInput, AudioLoadAndPlayInput,
     AudioLoadAndPlayResult, AudioLoadFileInput, AudioOpenFileInput, AudioOpenSourceResult,
-    AudioPlayInput, AudioPlaybackState, AudioSeekInput, AudioSetVolumeInput, AudioTrackRef,
-    AudioTransitionPlaybackInput,
+    AudioOutputInfo, AudioPlayInput, AudioPlaybackState, AudioSeekInput, AudioSetVolumeInput,
+    AudioTrackRef, AudioTransitionPlaybackInput,
 };
 
 pub const AUDIO_STATE_CHANGED_EVENT: &str = "audio_state_changed";

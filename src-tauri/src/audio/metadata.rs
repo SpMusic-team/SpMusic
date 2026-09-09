@@ -4,12 +4,15 @@ use std::{
 };
 
 use lofty::{
+    file::AudioFile,
     file::TaggedFileExt,
     tag::{Accessor, ItemKey, Tag},
 };
 
 use super::{
-    cover_cache::cover_art_from_tag, lyrics_cache::LyricsCache, types::AudioTrackMetadata,
+    cover_cache::cover_art_from_tag,
+    lyrics_cache::LyricsCache,
+    types::{AudioFormatMetadata, AudioTrackMetadata},
 };
 
 const REPLAY_GAIN_MIN_DB: f32 = -24.0;
@@ -120,6 +123,16 @@ pub(super) fn read_embedded_metadata(
     cover_cache_dir: Option<&Path>,
 ) -> Result<AudioTrackMetadata, lofty::error::LoftyError> {
     let tagged_file = read_tagged_file(path)?;
+    let audio_format = Some(AudioFormatMetadata {
+        bit_depth: tagged_file.properties().bit_depth(),
+        sample_rate_hz: tagged_file.properties().sample_rate(),
+        bitrate_kbps: tagged_file.properties().audio_bitrate(),
+        codec: path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map(|extension| extension.to_ascii_uppercase()),
+    });
+
     let Some(tag) = tagged_file
         .primary_tag()
         .or_else(|| tagged_file.first_tag())
@@ -129,10 +142,14 @@ pub(super) fn read_embedded_metadata(
             path = %path.display(),
             "audio file has no readable metadata tag",
         );
-        return Ok(AudioTrackMetadata::default());
+        return Ok(AudioTrackMetadata {
+            audio_format,
+            ..Default::default()
+        });
     };
 
     let mut metadata = metadata_from_tag(tag, cover_cache_dir);
+    metadata.audio_format = audio_format;
     if metadata.lyrics.is_none() {
         metadata.lyrics = tagged_file.tags().iter().find_map(lyrics_from_tag);
     }
@@ -153,6 +170,7 @@ fn metadata_from_tag(tag: &Tag, cover_cache_dir: Option<&Path>) -> AudioTrackMet
         comment: tag.comment().map(cow_to_string),
         lyrics: lyrics_from_tag(tag),
         cover_art: cover_art_from_tag(tag, cover_cache_dir),
+        audio_format: None,
     }
 }
 

@@ -1,19 +1,17 @@
-import type { LucideIcon } from 'lucide-react'
 import {
-  AlbumIcon,
-  BarChart3Icon,
   BookmarkIcon,
-  CopyIcon,
+  CirclePlusIcon,
+  ClosedCaptionIcon,
+  Disc3Icon,
   FolderIcon,
   GuitarIcon,
   ImageIcon,
   InfoIcon,
-  ListPlusIcon,
   Mic2Icon,
   Music2Icon,
   Trash2Icon,
 } from 'lucide-react'
-import { toast } from 'sonner'
+import { DataHistogram24Regular } from '@fluentui/react-icons'
 import { PingPongText } from '@/components/PingPongText'
 import { buttonVariants } from '@/components/ui/button'
 import {
@@ -26,11 +24,12 @@ import {
 import { Separator } from '@/components/ui/separator'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useSystemIcons } from '@/features/appearance/hooks/useAppearance'
+import { IconButton } from '@/features/player/components/IconButton'
 import { PressFeedbackButton } from '@/features/player/components/PressFeedbackButton'
 import { appCopy } from '@/features/player/model/playerCopy'
 import type { ArtworkSourceView } from '@/features/player/hooks/useArtworkVisualResource'
 import type { Track } from '@/features/player/model/playerTypes'
-import { formatDuration } from '@/features/player/model/trackUtils'
+import { formatCompactDuration } from '@/features/player/model/trackUtils'
 import type { SystemIcon } from '@/icons/systemIcons'
 import { cn } from '@/lib/utils'
 import { ArtworkCanvas } from './ArtworkCanvas'
@@ -49,7 +48,7 @@ type MoreActionsMenuProps = {
 }
 
 type UnavailableActionProps = {
-  icon: LucideIcon
+  icon: SystemIcon
   label: string
   wide?: boolean
 }
@@ -84,20 +83,6 @@ export function MoreActionsMenu({
   open,
 }: MoreActionsMenuProps) {
   const systemIcons = useSystemIcons()
-
-  async function copyTrackTitle() {
-    if (!navigator.clipboard) {
-      toast.error(appCopy.moreMenu.copyUnavailable)
-      return
-    }
-
-    try {
-      await navigator.clipboard.writeText(track.title)
-      toast.success(appCopy.moreMenu.copiedTitle)
-    } catch {
-      toast.error(appCopy.moreMenu.copyUnavailable)
-    }
-  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -139,19 +124,27 @@ export function MoreActionsMenu({
               <PingPongText as="strong" className="more-track-title" text={track.title} />
               <PingPongText className="more-track-byline" text={`${track.artist} - ${track.album}`} />
               <div className="more-track-meta">
-                <span><Music2Icon />{formatDuration(track.durationSeconds)}</span>
-                <button type="button" className="more-copy-action" aria-label={appCopy.moreMenu.copyTitle} onClick={() => void copyTrackTitle()}>
-                  <CopyIcon />
-                  <span className="sr-only">{appCopy.moreMenu.copyTitle}</span>
-                </button>
+                <span><Music2Icon />{formatCompactDuration(track.durationSeconds)} | {track.fileExtension ?? 'flac'}</span>
               </div>
               <div className="more-feedback-actions">
-                <button type="button" className="more-feedback-action" data-selected={liked} aria-label={appCopy.controls.like} aria-pressed={liked} onClick={onLike}>
-                  <LikeIcon />
-                </button>
-                <button type="button" className="more-feedback-action" data-selected={disliked} aria-label={appCopy.controls.dislike} aria-pressed={disliked} onClick={onDislike}>
-                  <DislikeIcon />
-                </button>
+                <IconButton
+                  className="more-feedback-action"
+                  animated
+                  pressFeedback
+                  icon={LikeIcon}
+                  label={appCopy.controls.like}
+                  selected={liked}
+                  onClick={onLike}
+                />
+                <IconButton
+                  className="more-feedback-action"
+                  animated
+                  pressFeedback
+                  icon={DislikeIcon}
+                  label={appCopy.controls.dislike}
+                  selected={disliked}
+                  onClick={onDislike}
+                />
               </div>
             </div>
           </div>
@@ -161,20 +154,22 @@ export function MoreActionsMenu({
 
         <section className="more-action-grid" aria-label={appCopy.moreMenu.title}>
           <UnavailableAction icon={Trash2Icon} label={appCopy.moreMenu.delete} wide />
-          <UnavailableAction icon={ListPlusIcon} label={appCopy.moreMenu.playlist} />
+          <UnavailableAction icon={CirclePlusIcon} label={appCopy.moreMenu.playlist} />
           <UnavailableAction icon={BookmarkIcon} label={appCopy.moreMenu.bookmark} />
           <UnavailableAction icon={ImageIcon} label={appCopy.moreMenu.cover} wide />
           <UnavailableAction icon={InfoIcon} label={appCopy.moreMenu.info} />
-          <UnavailableAction icon={BarChart3Icon} label={appCopy.moreMenu.listeningHistory} />
+          <UnavailableAction icon={ClosedCaptionIcon} label={appCopy.moreMenu.lyrics} />
         </section>
 
         <Separator />
 
         <section className="more-action-grid more-action-grid-secondary" aria-label={appCopy.moreMenu.title}>
           <UnavailableAction icon={Mic2Icon} label={appCopy.moreMenu.artist} />
-          <UnavailableAction icon={AlbumIcon} label={appCopy.moreMenu.album} />
-          <UnavailableAction icon={FolderIcon} label={appCopy.moreMenu.folder} />
+          <UnavailableAction icon={Disc3Icon} label={appCopy.moreMenu.album} />
           <UnavailableAction icon={GuitarIcon} label={appCopy.moreMenu.genre} />
+          <div className="more-action-spacer" aria-hidden="true" />
+          <UnavailableAction icon={FolderIcon} label={appCopy.moreMenu.folder} />
+          <UnavailableAction icon={DataHistogram24Regular} label={appCopy.moreMenu.listeningHistory} />
         </section>
       </DialogContent>
     </Dialog>

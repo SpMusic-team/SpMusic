@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type FocusEvent, type KeyboardEvent, type PointerEvent } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type FocusEvent, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -54,6 +54,57 @@ function showPlaybackModeToast({ icon: ModeIcon, label }: PlaybackModePresentati
       position: 'top-center',
       unstyled: true,
     },
+  )
+}
+
+function usePlaybackModeControls(playback: PlayerUiViewModel['playback']) {
+  const systemIcons = useSystemIcons()
+  const shuffleModePresentations: Record<ShuffleMode, PlaybackModePresentation> = {
+    none: { icon: systemIcons.shuffleOff, label: appCopy.controls.shuffleOff, pressed: false },
+    'shuffle-all': { icon: systemIcons.shuffle, label: appCopy.controls.shuffle, pressed: true },
+    'shuffle-category-order': { icon: systemIcons.shuffleCategoryOrder, label: appCopy.controls.shuffleCategoryOrder, pressed: true },
+    'shuffle-category-random': { icon: systemIcons.shuffleCategoryRandom, label: appCopy.controls.shuffleCategoryRandom, pressed: true },
+  }
+  const repeatModePresentations: Record<RepeatMode, PlaybackModePresentation> = {
+    'list-loop': { icon: systemIcons.repeat, label: appCopy.controls.repeat, pressed: false },
+    'repeat-one': { icon: systemIcons.repeatOne, label: appCopy.controls.repeatOne, pressed: true },
+    sequential: { icon: systemIcons.sequential, label: appCopy.controls.sequential, pressed: true },
+    'all-categories-until-stop': { icon: systemIcons.playAllCategories, label: appCopy.controls.playAllCategories, pressed: true },
+  }
+  const shufflePresentation = shuffleModePresentations[playback.shuffleMode]
+  const repeatPresentation = repeatModePresentations[playback.repeatMode]
+
+  return {
+    shufflePresentation,
+    repeatPresentation,
+    handleShuffleCycle: () => {
+      const nextMode = nextShuffleMode[playback.shuffleMode]
+      playback.onShuffleCycle()
+      showPlaybackModeToast(shuffleModePresentations[nextMode])
+    },
+    handleRepeatCycle: () => {
+      const nextMode = nextRepeatMode[playback.repeatMode]
+      playback.onRepeatCycle()
+      showPlaybackModeToast(repeatModePresentations[nextMode])
+    },
+  }
+}
+
+type ExternalPlaybackModeControlsProps = {
+  playback: PlayerUiViewModel['playback']
+  playbackInfo: ReactNode
+}
+
+export function ExternalPlaybackModeControls({ playback, playbackInfo }: ExternalPlaybackModeControlsProps) {
+  const { shufflePresentation, repeatPresentation, handleShuffleCycle, handleRepeatCycle } = usePlaybackModeControls(playback)
+  const disabled = !playback.track
+
+  return (
+    <div className="player-external-mode-row">
+      <IconButton className="external-mode-button" icon={shufflePresentation.icon} label={shufflePresentation.label} selected={shufflePresentation.pressed} disabled={disabled} onClick={handleShuffleCycle} />
+      {playbackInfo}
+      <IconButton className="external-mode-button" icon={repeatPresentation.icon} label={repeatPresentation.label} selected={repeatPresentation.pressed} disabled={disabled} onClick={handleRepeatCycle} />
+    </div>
   )
 }
 
@@ -310,32 +361,7 @@ export function ControlDock({
   const volumeControlDisabled = commandBusy
     || disabled
     || (volume.isDisabled && !volume.isBusy)
-  const shuffleModePresentations: Record<ShuffleMode, PlaybackModePresentation> = {
-    none: { icon: systemIcons.shuffleOff, label: appCopy.controls.shuffleOff, pressed: false },
-    'shuffle-all': { icon: systemIcons.shuffle, label: appCopy.controls.shuffle, pressed: true },
-    'shuffle-category-order': { icon: systemIcons.shuffleCategoryOrder, label: appCopy.controls.shuffleCategoryOrder, pressed: true },
-    'shuffle-category-random': { icon: systemIcons.shuffleCategoryRandom, label: appCopy.controls.shuffleCategoryRandom, pressed: true },
-  }
-  const repeatModePresentations: Record<RepeatMode, PlaybackModePresentation> = {
-    'list-loop': { icon: systemIcons.repeat, label: appCopy.controls.repeat, pressed: false },
-    'repeat-one': { icon: systemIcons.repeatOne, label: appCopy.controls.repeatOne, pressed: true },
-    sequential: { icon: systemIcons.sequential, label: appCopy.controls.sequential, pressed: true },
-    'all-categories-until-stop': { icon: systemIcons.playAllCategories, label: appCopy.controls.playAllCategories, pressed: true },
-  }
-  const shufflePresentation = shuffleModePresentations[playback.shuffleMode]
-  const repeatPresentation = repeatModePresentations[playback.repeatMode]
-
-  function handleShuffleCycle() {
-    const nextMode = nextShuffleMode[playback.shuffleMode]
-    playback.onShuffleCycle()
-    showPlaybackModeToast(shuffleModePresentations[nextMode])
-  }
-
-  function handleRepeatCycle() {
-    const nextMode = nextRepeatMode[playback.repeatMode]
-    playback.onRepeatCycle()
-    showPlaybackModeToast(repeatModePresentations[nextMode])
-  }
+  const { shufflePresentation, repeatPresentation, handleShuffleCycle, handleRepeatCycle } = usePlaybackModeControls(playback)
 
   return (
     <motion.footer

@@ -5,7 +5,7 @@ import { AnimatePresence, animate, motion, useMotionValue, useReducedMotion, use
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useAppearance, useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { CoverPanel } from '@/features/player/components/CoverPanel'
-import { ControlDock } from '@/features/player/components/ControlDock'
+import { ControlDock, ExternalPlaybackModeControls } from '@/features/player/components/ControlDock'
 import { EmptyPlayerState } from '@/features/player/components/EmptyPlayerState'
 import { LyricsPanel } from '@/features/player/components/LyricsPanel'
 import { PlaybackInfoButton } from '@/features/player/components/PlaybackInfoButton'
@@ -1545,11 +1545,16 @@ export function PlayerSurface({
             ) : <EmptyPlayerState state={contentState === 'track' ? 'empty' : contentState} statusText={playback.statusText} />}
 
             <div className="player-control-region">
-              <PlaybackInfoButton
-                visible={Boolean(track)}
-                visualIsPlaying={visualPlaybackState === 'playing'}
-                currentTrack={track}
-                audioOutputInfo={playback.audioOutputInfo}
+              <ExternalPlaybackModeControls
+                playback={playback}
+                playbackInfo={(
+                  <PlaybackInfoButton
+                    visible={Boolean(track)}
+                    visualIsPlaying={visualPlaybackState === 'playing'}
+                    currentTrack={track}
+                    audioOutputInfo={playback.audioOutputInfo}
+                  />
+                )}
               />
               <ControlDock
                 playback={coverDragActive ? {

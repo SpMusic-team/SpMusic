@@ -24,6 +24,10 @@ const HORIZONTAL_HALF_MIN_HEIGHT = 595
 const HORIZONTAL_HALF_MAX_HEIGHT = 1080
 const QUARTER_MIN_HEIGHT = 1120
 const QUARTER_MAX_HEIGHT = 1440
+const VERTICAL_HALF_MIN_WIDTH = 1024
+const VERTICAL_HALF_MAX_WIDTH = 1920
+const VERTICAL_HALF_MIN_HEIGHT = 1120
+const VERTICAL_HALF_MAX_HEIGHT = 1440
 const HORIZONTAL_HALF_MIN_CONTENT_WIDTH = 1080
 const HORIZONTAL_HALF_SIDE_INSET = 60
 const HORIZONTAL_HALF_COLUMN_GAP = 24
@@ -75,6 +79,14 @@ function isQuarterViewport(viewport: ViewportSize, previous?: PlayerLayoutMode):
   return heightInRange && widthInRange
 }
 
+function isVerticalHalfViewport(viewport: ViewportSize, previous?: PlayerLayoutMode): boolean {
+  const inset = previous === 'vertical' ? HYSTERESIS : 0
+  return viewport.width >= VERTICAL_HALF_MIN_WIDTH - inset
+    && viewport.width <= VERTICAL_HALF_MAX_WIDTH + inset
+    && viewport.height >= VERTICAL_HALF_MIN_HEIGHT - inset
+    && viewport.height <= VERTICAL_HALF_MAX_HEIGHT + inset
+}
+
 function isHorizontalHalfViewport(viewport: ViewportSize, previous?: PlayerLayoutMode): boolean {
   const effectiveHeight = Math.max(viewport.height, HORIZONTAL_HALF_MIN_HEIGHT)
   const heightInRange = viewport.height <= HORIZONTAL_HALF_MAX_HEIGHT
@@ -104,7 +116,14 @@ function resolveLayout(
 
   const compactMinimum = isMinimumCompactViewport(viewport)
 
-  if (compactMinimum || isQuarterViewport(viewport, previous)) return 'quarter'
+  if (compactMinimum) return 'quarter'
+
+  // The vertical half-screen is a bounded transition composition rather than
+  // a portrait-only aspect-ratio rule. It owns the documented 1024px boundary;
+  // hysteresis only extends an already-active vertical composition below it.
+  if (isVerticalHalfViewport(viewport, previous)) return 'vertical'
+
+  if (isQuarterViewport(viewport, previous)) return 'quarter'
 
   if (previous === 'vertical') {
     if (viewport.height >= viewport.width - HYSTERESIS) return 'vertical'

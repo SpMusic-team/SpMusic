@@ -15,7 +15,7 @@
         "title": "spmusic",
         "width": 1120,
         "height": 720,
-        "minWidth": 1723,
+        "minWidth": 640,
         "minHeight": 595,
         "resizable": true,
         "decorations": false,

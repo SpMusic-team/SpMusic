@@ -25,6 +25,8 @@ export type OwnedArtworkResource = {
   view?: ArtworkSourceView
   retain: () => () => void
   releaseCache: () => void
+  releaseCacheIfIdle: () => boolean
+  isReleased: () => boolean
 }
 
 type ArtworkCanvasPoolDebug = {
@@ -57,15 +59,191 @@ type ArtworkCanvasPool = {
   acquire: (
     signal: AbortSignal,
     backingEdge: AudioLoadCoverPixelsInput['maxEdge'],
+    purpose: 'foreground' | 'prefetch',
   ) => Promise<ArtworkCanvasLease | null>
+  hasAvailable: () => boolean
+  waitForAvailable: () => Promise<boolean>
   dispose: () => void
 }
 
+type ArtworkCanvasWaiter = {
+  signal: AbortSignal
+  backingEdge: AudioLoadCoverPixelsInput['maxEdge']
+  purpose: 'foreground' | 'prefetch'
+  resolve: (lease: ArtworkCanvasLease | null) => void
+  abort: () => void
+}
+
+type LoadedArtworkResource = {
+  resource: OwnedArtworkResource
+  fallbackSource?: string
+}
+
+type ArtworkLoadQueueConsumer = {
+  signal: AbortSignal
+  resolve: (loaded: LoadedArtworkResource | null) => void
+  reject: (error: unknown) => void
+  abort: () => void
+}
+
+type ArtworkLoadQueueJob = {
+  key: string
+  priority: 0 | 1
+  consumers: Set<ArtworkLoadQueueConsumer>
+  active: boolean
+  settled: boolean
+  execute: (getPurpose: () => 'foreground' | 'prefetch') => Promise<LoadedArtworkResource | null>
+}
+
+const artworkLoadQueue: ArtworkLoadQueueJob[] = []
+const artworkLoadJobs = new Map<string, ArtworkLoadQueueJob>()
+let artworkLoadQueueActive = false
+let nextArtworkSchedulerScopeId = 0
+
+function settleArtworkLoadJob(job: ArtworkLoadQueueJob): ArtworkLoadQueueConsumer[] {
+  // Retire identity ownership and release the global execution gate before
+  // resolving consumers. Promise continuations may schedule an immediate retry;
+  // they must observe a fresh queued job, never this already-settled instance.
+  job.settled = true
+  if (artworkLoadJobs.get(job.key) === job) artworkLoadJobs.delete(job.key)
+  const consumers = [...job.consumers]
+  job.consumers.clear()
+  artworkLoadQueueActive = false
+  return consumers
+}
+
+function pumpArtworkLoadQueue() {
+  if (artworkLoadQueueActive) return
+  artworkLoadQueue.sort((left, right) => left.priority - right.priority)
+  const job = artworkLoadQueue.shift()
+  if (!job) return
+  if (!job.consumers.size) {
+    artworkLoadJobs.delete(job.key)
+    pumpArtworkLoadQueue()
+    return
+  }
+  artworkLoadQueueActive = true
+  job.active = true
+  void job.execute(() => job.priority === 0 ? 'foreground' : 'prefetch').then((loaded) => {
+    const consumers = settleArtworkLoadJob(job)
+    const deliveries = consumers.map(() => loaded ? forkLoadedArtworkResource(loaded) : null)
+    loaded?.resource.releaseCache()
+    pumpArtworkLoadQueue()
+    consumers.forEach((consumer, index) => {
+      consumer.signal.removeEventListener('abort', consumer.abort)
+      if (!consumer.signal.aborted) {
+        consumer.resolve(deliveries[index])
+      } else {
+        deliveries[index]?.resource.releaseCache()
+      }
+    })
+  }, (error: unknown) => {
+    const consumers = settleArtworkLoadJob(job)
+    pumpArtworkLoadQueue()
+    for (const consumer of consumers) {
+      consumer.signal.removeEventListener('abort', consumer.abort)
+      if (!consumer.signal.aborted) consumer.reject(error)
+    }
+  })
+}
+
+function forkLoadedArtworkResource(loaded: LoadedArtworkResource): LoadedArtworkResource {
+  const sharedResource = loaded.resource
+  const releaseSharedOwnership = sharedResource.retain()
+  let referenceCount = 1
+  let cacheReleased = false
+  let released = false
+  const releaseIfUnused = () => {
+    if (referenceCount !== 0 || released) return
+    released = true
+    releaseSharedOwnership()
+  }
+  const resource: OwnedArtworkResource = {
+    get view() {
+      return released ? undefined : sharedResource.view
+    },
+    retain: () => {
+      if (released) return () => undefined
+      let leaseReleased = false
+      referenceCount += 1
+      return () => {
+        if (leaseReleased) return
+        leaseReleased = true
+        referenceCount -= 1
+        releaseIfUnused()
+      }
+    },
+    releaseCache: () => {
+      if (cacheReleased) return
+      cacheReleased = true
+      referenceCount -= 1
+      releaseIfUnused()
+    },
+    releaseCacheIfIdle: () => {
+      if (cacheReleased || referenceCount !== 1) return false
+      cacheReleased = true
+      referenceCount = 0
+      releaseIfUnused()
+      return true
+    },
+    isReleased: () => released || sharedResource.isReleased(),
+  }
+  return { resource, fallbackSource: loaded.fallbackSource }
+}
+
+function scheduleArtworkLoad(
+  key: string,
+  signal: AbortSignal,
+  purpose: 'foreground' | 'prefetch',
+  execute: ArtworkLoadQueueJob['execute'],
+): Promise<LoadedArtworkResource | null> {
+  if (signal.aborted) return Promise.resolve(null)
+  let job = artworkLoadJobs.get(key)
+  if (job?.settled) {
+    artworkLoadJobs.delete(key)
+    job = undefined
+  }
+  if (!job) {
+    job = {
+      key,
+      priority: purpose === 'foreground' ? 0 : 1,
+      consumers: new Set(),
+      active: false,
+      settled: false,
+      execute,
+    }
+    artworkLoadJobs.set(key, job)
+    artworkLoadQueue.push(job)
+  } else if (purpose === 'foreground') {
+    job.priority = 0
+  }
+  const scheduledJob = job
+  const promise = new Promise<LoadedArtworkResource | null>((resolve, reject) => {
+    const consumer: ArtworkLoadQueueConsumer = {
+      signal,
+      resolve,
+      reject,
+      abort: () => {
+        scheduledJob.consumers.delete(consumer)
+        resolve(null)
+        if (!scheduledJob.active && !scheduledJob.consumers.size) {
+          const index = artworkLoadQueue.indexOf(scheduledJob)
+          if (index >= 0) artworkLoadQueue.splice(index, 1)
+          artworkLoadJobs.delete(scheduledJob.key)
+        }
+      },
+    }
+    scheduledJob.consumers.add(consumer)
+    signal.addEventListener('abort', consumer.abort, { once: true })
+  })
+  pumpArtworkLoadQueue()
+  return promise
+}
+
 function createArtworkCanvasPool(): ArtworkCanvasPool {
-  // Three logical resources (previous/current/next) remain warm. Keep one
-  // additional lease available so an interrupted hand-off can decode its new
-  // edge without waiting for the retired visible pair.
-  const entries = Array.from({ length: 4 }, (_, debugIndex): ArtworkCanvasPoolEntry => ({
+  // current±3 stay decoded; the eighth lease stages the incoming outer edge
+  // while an overlapping window remains pinned during rapid navigation.
+  const entries = Array.from({ length: 8 }, (_, debugIndex): ArtworkCanvasPoolEntry => ({
     canvas: document.createElement('canvas'),
     backingEdge: 0,
     debugIndex,
@@ -88,12 +266,13 @@ function createArtworkCanvasPool(): ArtworkCanvasPool {
   }
 
   let disposed = false
-  let waiter: {
-    signal: AbortSignal
-    backingEdge: AudioLoadCoverPixelsInput['maxEdge']
-    resolve: (lease: ArtworkCanvasLease | null) => void
-    abort: () => void
-  } | null = null
+  const waiters: ArtworkCanvasWaiter[] = []
+  const availabilityWaiters = new Set<(available: boolean) => void>()
+
+  const publishAvailability = (isAvailable: boolean) => {
+    for (const resolve of availabilityWaiters) resolve(isAvailable)
+    availabilityWaiters.clear()
+  }
 
   const prepareEntry = (
     entry: ArtworkCanvasPoolEntry,
@@ -125,10 +304,10 @@ function createArtworkCanvasPool(): ArtworkCanvasPool {
         active = false
         debug.leased -= 1
         if (disposed) return
-        const pending = waiter
-        if (pending) {
-          waiter = null
-          debug.waiters = 0
+        while (waiters.length) {
+          const foregroundIndex = waiters.findIndex((pending) => pending.purpose === 'foreground')
+          const [pending] = waiters.splice(foregroundIndex >= 0 ? foregroundIndex : 0, 1)
+          debug.waiters = waiters.length
           pending.signal.removeEventListener('abort', pending.abort)
           if (!pending.signal.aborted) {
             pending.resolve(makeLease(entry, pending.backingEdge))
@@ -137,44 +316,63 @@ function createArtworkCanvasPool(): ArtworkCanvasPool {
           pending.resolve(null)
         }
         available.push(entry)
+        publishAvailability(true)
       },
     }
   }
 
   return {
-    acquire: (signal, backingEdge) => {
+    acquire: (signal, backingEdge, purpose) => {
       if (disposed || signal.aborted) return Promise.resolve(null)
       const entry = available.pop()
       if (entry) return Promise.resolve(makeLease(entry, backingEdge))
-      if (waiter) {
-        const superseded = waiter
-        waiter = null
-        superseded.signal.removeEventListener('abort', superseded.abort)
-        superseded.resolve(null)
+      if (purpose === 'prefetch' && waiters.some((pending) => pending.purpose === 'foreground')) {
+        return Promise.resolve(null)
+      }
+      if (purpose === 'foreground') {
+        for (let index = waiters.length - 1; index >= 0; index -= 1) {
+          const pending = waiters[index]
+          if (pending.purpose !== 'prefetch') continue
+          waiters.splice(index, 1)
+          pending.signal.removeEventListener('abort', pending.abort)
+          pending.resolve(null)
+        }
       }
       return new Promise((resolve) => {
-        const abort = () => {
-          if (waiter?.resolve !== resolve) return
-          waiter = null
-          debug.waiters = 0
-          resolve(null)
+        const pending: ArtworkCanvasWaiter = {
+          signal,
+          backingEdge,
+          purpose,
+          resolve,
+          abort: () => {
+            const index = waiters.indexOf(pending)
+            if (index < 0) return
+            waiters.splice(index, 1)
+            debug.waiters = waiters.length
+            resolve(null)
+          },
         }
-        waiter = { signal, backingEdge, resolve, abort }
-        debug.waiters = 1
+        waiters.push(pending)
+        debug.waiters = waiters.length
         debug.maxWaiters = Math.max(debug.maxWaiters, debug.waiters)
-        signal.addEventListener('abort', abort, { once: true })
+        signal.addEventListener('abort', pending.abort, { once: true })
       })
+    },
+    hasAvailable: () => !disposed && available.length > 0,
+    waitForAvailable: () => {
+      if (disposed) return Promise.resolve(false)
+      if (available.length) return Promise.resolve(true)
+      return new Promise((resolve) => { availabilityWaiters.add(resolve) })
     },
     dispose: () => {
       if (disposed) return
       disposed = true
-      if (waiter) {
-        const pending = waiter
-        waiter = null
-        debug.waiters = 0
+      for (const pending of waiters.splice(0)) {
         pending.signal.removeEventListener('abort', pending.abort)
         pending.resolve(null)
       }
+      debug.waiters = 0
+      publishAvailability(false)
       for (const entry of entries) {
         entry.canvas.width = 0
         entry.canvas.height = 0
@@ -212,11 +410,6 @@ type UseArtworkVisualResourceResult = {
   markReady: (layerId: number) => void
   markLoadError: (layerId: number) => void
   markExitComplete: (layerId: number, consumer: ArtworkLayerConsumer) => void
-}
-
-type LoadedArtworkResource = {
-  resource: OwnedArtworkResource
-  fallbackSource?: string
 }
 
 type PreparedArtwork = {
@@ -297,6 +490,14 @@ function createOwnedArtworkResource(
       referenceCount -= 1
       releaseIfUnused()
     },
+    releaseCacheIfIdle: () => {
+      if (cacheReleased || referenceCount !== 1) return false
+      cacheReleased = true
+      referenceCount = 0
+      releaseIfUnused()
+      return true
+    },
+    isReleased: () => released,
   }
 }
 
@@ -332,6 +533,8 @@ const COVER_EDGE_BUCKETS: AudioLoadCoverPixelsInput['maxEdge'][] = [1024, 1536, 
 // 10 selections at 80 ms drove foreground invokes from 2 to 12 and the final cover to
 // 4.47 s; the trailing strategy previously brought the final cover to about 2.55 s.
 const COLD_ARTWORK_RAPID_SELECTION_DEBOUNCE_MS = 110
+const MAX_FOREGROUND_LOAD_ATTEMPTS = 2
+const MAX_STABLE_PREFETCH_RETRIES = 1
 const COVER_REQUEST_ID_STORAGE_KEY = 'spmusic.audio.cover-pixels.request-id'
 let lastCoverRequestId = 0
 
@@ -458,6 +661,9 @@ export function useArtworkVisualResource(
   const [layers, setLayers] = useState<ArtworkVisualLayer[]>([])
   const [coverMaxEdge, setCoverMaxEdge] = useState(selectCoverMaxEdge)
   const [uiBurstReportRevision, setUiBurstReportRevision] = useState(0)
+  const [prefetchRetryRevision, setPrefetchRetryRevision] = useState(0)
+  const [paintedPreviewTokenId, setPaintedPreviewTokenId] = useState<number | null>(null)
+  const paintedLayerIdsRef = useRef(new Set<number>())
   const canvasPoolRef = useRef<ArtworkCanvasPool | null>(null)
   const contentRevisionRef = useRef(0)
   const layersRef = useRef<ArtworkVisualLayer[]>([])
@@ -470,17 +676,36 @@ export function useArtworkVisualResource(
     identity: string
     controller: AbortController
   } | null>(null)
+  const artworkSchedulerScopeRef = useRef(++nextArtworkSchedulerScopeId)
   const preparedArtworkRef = useRef<PreparedArtwork | null>(null)
   const promotedArtworkRef = useRef<PreparedArtwork | null>(null)
   const adjacentWarmControllersRef = useRef(new Map<string, AbortController>())
+  const prefetchRetryCountsRef = useRef(new Map<string, number>())
   const lastReportedActivitySequenceRef = useRef(0)
   const latestActivitySequenceRef = useRef(selectionActivitySequence)
   const uiBurstReportInFlightRef = useRef(false)
   const resourceRegistryRef = useRef(new Map<string, ArtworkResourceRegistryEntry>())
+  const pinnedIdentitiesRef = useRef(new Set<string>())
   const slotFlushFrameRef = useRef<number | null>(null)
   const clearingSlotsRef = useRef(new Set<0 | 1 | 2>())
   const layerIdRef = useRef(0)
   const exitCompletionsRef = useRef(new Map<number, Set<ArtworkLayerConsumer>>())
+  const reclaimIdleRegistryResource = useCallback(() => {
+    const preparedResource = preparedArtworkRef.current?.resource
+    const promotedResource = promotedArtworkRef.current?.resource
+    for (const [identity, entry] of resourceRegistryRef.current) {
+      // These refs carry their own promotion lifecycle. Let their explicit
+      // eviction path clear both the ref and cache ownership together.
+      if (entry.resource === preparedResource || entry.resource === promotedResource) continue
+      if (pinnedIdentitiesRef.current.has(identity)) continue
+      if (layersRef.current.some((layer) => layer.identity === identity)) continue
+      if (queuedLayerRef.current?.identity === identity) continue
+      if (!entry.resource.releaseCacheIfIdle()) continue
+      resourceRegistryRef.current.delete(identity)
+      return true
+    }
+    return false
+  }, [])
   // `artwork` is optional in the public playback view model. Derive the same
   // stable artwork contract from Track so a cover-less/demo track still owns a
   // real visual layer (empty OwnedArtworkResource + fallback cover + metadata).
@@ -502,6 +727,37 @@ export function useArtworkVisualResource(
     : null
   const effectiveTrack = matchingPrefetchCandidate?.track ?? track
   const effectiveArtwork = matchingPrefetchCandidate?.artwork ?? requestedArtwork ?? trackArtworkFallback
+  const pinnedIdentities = useMemo(() => {
+    const identities = new Set(prefetchCandidates.map((candidate) => (
+      artworkResourceIdentity(candidate.track, candidate.artwork)
+    )))
+    if (effectiveTrack && effectiveArtwork) {
+      identities.add(artworkResourceIdentity(effectiveTrack, effectiveArtwork))
+    }
+    if (previewToken) {
+      identities.add(artworkResourceIdentity(previewToken.track, previewToken.artwork))
+    }
+    for (const layer of layers) identities.add(layer.identity)
+    return identities
+  }, [effectiveArtwork, effectiveTrack, layers, prefetchCandidates, previewToken])
+  useLayoutEffect(() => {
+    pinnedIdentitiesRef.current = pinnedIdentities
+    // Seven steady-state resources cover current±3. If an older window left an
+    // eighth idle entry behind, release that now so the eighth canvas remains
+    // available as the staging lease for the next outer-edge decode.
+    if (resourceRegistryRef.current.size < 8) return
+    const preparedResource = preparedArtworkRef.current?.resource
+    const promotedResource = promotedArtworkRef.current?.resource
+    for (const [identity, entry] of resourceRegistryRef.current) {
+      if (pinnedIdentities.has(identity)) continue
+      if (entry.resource === preparedResource || entry.resource === promotedResource) continue
+      if (layersRef.current.some((layer) => layer.identity === identity)) continue
+      if (queuedLayerRef.current?.identity === identity) continue
+      if (!entry.resource.releaseCacheIfIdle()) continue
+      resourceRegistryRef.current.delete(identity)
+      if (resourceRegistryRef.current.size < 8) break
+    }
+  }, [pinnedIdentities])
   // A successful selection can settle before its artwork decode creates a
   // layer, so retain the intent in the view model. The monotonically increasing
   // activity sequence prevents that retained intent from being reused by a
@@ -538,6 +794,13 @@ export function useArtworkVisualResource(
     coverPixelInvokes: 0,
   })
 
+  const scheduleStablePrefetchRetry = useCallback((identity: string) => {
+    const retryCount = prefetchRetryCountsRef.current.get(identity) ?? 0
+    if (retryCount >= MAX_STABLE_PREFETCH_RETRIES) return
+    prefetchRetryCountsRef.current.set(identity, retryCount + 1)
+    setPrefetchRetryRevision((revision) => revision + 1)
+  }, [])
+
   useEffect(() => {
     if (!import.meta.env.DEV) return
     const devWindow = window as Window & { __SPMUSIC_ARTWORK_PREFETCH__?: ArtworkPrefetchDebug }
@@ -563,12 +826,10 @@ export function useArtworkVisualResource(
     return createOwnedArtworkResource(lease, view, true)
   }, [])
 
-  const loadArtworkResource = useCallback(async (
+  const loadArtworkResourceRaw = useCallback(async (
     artwork: TrackArtwork,
-    controller: AbortController,
-    purpose: 'foreground' | 'prefetch',
+    getPurpose: () => 'foreground' | 'prefetch',
   ): Promise<LoadedArtworkResource | null> => {
-    const { signal } = controller
     const requestFilePath = artwork.coverFilePath
     const primary = artwork.coverImage ?? artwork.coverImageFallback
     const secondary = artwork.coverImage ? artwork.coverImageFallback : undefined
@@ -576,22 +837,25 @@ export function useArtworkVisualResource(
       return { resource: createOwnedArtworkResource() }
     }
 
-    const lease = await getCanvasPool().acquire(signal, coverMaxEdge)
-    if (!lease || signal.aborted) {
-      lease?.release()
-      return null
+    const canvasPool = getCanvasPool()
+    const acquireLease = async () => {
+      if (!canvasPool.hasAvailable()) reclaimIdleRegistryResource()
+      while (!canvasPool.hasAvailable()) {
+        if (!await canvasPool.waitForAvailable()) return null
+      }
+      // Only the module scheduler calls this executor, so availability cannot
+      // be consumed by another queued decode between this check and acquire.
+      // Acquiring before invoking also bounds decoded RGBA to the one active job.
+      return canvasPool.acquire(new AbortController().signal, coverMaxEdge, getPurpose())
     }
-
-    // Tauri invokes are not cancellable from JavaScript. Return the bounded backing
-    // canvas immediately so a foreground request never waits for an obsolete prefetch.
-    const releaseLeaseOnAbort = () => lease.release()
-    signal.addEventListener('abort', releaseLeaseOnAbort, { once: true })
-    try {
-
-      const loadImageFallback = async (): Promise<LoadedArtworkResource | null> => {
+    const lease = await acquireLease()
+    if (!lease) return null
+    const internalController = new AbortController()
+    const { signal } = internalController
+    const loadImageFallback = async (): Promise<LoadedArtworkResource | null> => {
       if (!primary) {
         lease.release()
-        return signal.aborted ? null : { resource: createOwnedArtworkResource() }
+        return { resource: createOwnedArtworkResource() }
       }
       const sources = secondary && secondary !== primary ? [primary, secondary] : [primary]
       for (const candidate of sources) {
@@ -601,9 +865,9 @@ export function useArtworkVisualResource(
             lease,
             coverMaxEdge,
             signal,
-            () => !signal.aborted && lease.isActive(),
+            () => lease.isActive(),
           )
-          if (!contentRect || signal.aborted || !lease.isActive()) {
+          if (!contentRect || !lease.isActive()) {
             lease.release()
             return null
           }
@@ -612,60 +876,65 @@ export function useArtworkVisualResource(
             fallbackSource: candidate === primary ? secondary : undefined,
           }
         } catch {
-          if (signal.aborted || !lease.isActive()) {
-            lease.release()
-            return null
-          }
+          if (!lease.isActive()) return null
         }
       }
       lease.release()
-      return signal.aborted ? null : { resource: createOwnedArtworkResource() }
-      }
-
-      if (!requestFilePath) return loadImageFallback()
-
-      let requestId: number
-      try {
-        requestId = nextCoverRequestId()
-      } catch {
-        return loadImageFallback()
-      }
-      prefetchDebugRef.current.coverPixelInvokes += 1
-      if (purpose === 'foreground') prefetchDebugRef.current.foregroundLoads += 1
-      try {
-        const pixels = await loadAudioCoverPixels({
-          filePath: requestFilePath,
-          maxEdge: coverMaxEdge,
-          requestId,
-        })
-        if (signal.aborted || !lease.isActive()) {
-          lease.release()
-          return null
-        }
-        const contentRect = writePixelsToCanvas(lease, pixels)
-        if (signal.aborted || !lease.isActive()) {
-          lease.release()
-          return null
-        }
-        return {
-          resource: commitCanvasLease(lease, contentRect),
-          fallbackSource: primary ?? secondary,
-        }
-      } catch (error: unknown) {
-        if (isAudioCoverPixelsError(error) && error.code === 'STALE_REQUEST') {
-          lease.release()
-          return null
-        }
-        if (signal.aborted || !lease.isActive()) {
-          lease.release()
-          return null
-        }
-        return loadImageFallback()
-      }
-    } finally {
-      signal.removeEventListener('abort', releaseLeaseOnAbort)
+      return { resource: createOwnedArtworkResource() }
     }
-  }, [commitCanvasLease, coverMaxEdge, getCanvasPool])
+
+    if (!requestFilePath) return loadImageFallback()
+    try {
+      prefetchDebugRef.current.coverPixelInvokes += 1
+      if (getPurpose() === 'foreground') prefetchDebugRef.current.foregroundLoads += 1
+      const pixels = await loadAudioCoverPixels({
+        filePath: requestFilePath,
+        maxEdge: coverMaxEdge,
+        requestId: nextCoverRequestId(),
+      })
+      if (!lease.isActive()) {
+        lease.release()
+        return null
+      }
+      const contentRect = writePixelsToCanvas(lease, pixels)
+      if (!lease.isActive()) {
+        lease.release()
+        return null
+      }
+      return {
+        resource: commitCanvasLease(lease, contentRect),
+        fallbackSource: primary ?? secondary,
+      }
+    } catch (error: unknown) {
+      if (isAudioCoverPixelsError(error) && error.code === 'STALE_REQUEST') {
+        lease.release()
+        return null
+      }
+      if (!lease.isActive()) return null
+      return loadImageFallback()
+    }
+  }, [commitCanvasLease, coverMaxEdge, getCanvasPool, reclaimIdleRegistryResource])
+
+  const loadArtworkResource = useCallback((
+    artwork: TrackArtwork,
+    controller: AbortController,
+    purpose: 'foreground' | 'prefetch',
+  ): Promise<LoadedArtworkResource | null> => {
+    const identity = [
+      artworkSchedulerScopeRef.current,
+      artwork.resourceKey,
+      artwork.coverFilePath ?? '',
+      artwork.coverImage ?? '',
+      artwork.coverImageFallback ?? '',
+      coverMaxEdge,
+    ].join('\u0000')
+    return scheduleArtworkLoad(
+      identity,
+      controller.signal,
+      purpose,
+      (getPurpose) => loadArtworkResourceRaw(artwork, getPurpose),
+    )
+  }, [coverMaxEdge, loadArtworkResourceRaw])
 
   useLayoutEffect(() => {
     latestRequestRef.current = {
@@ -708,6 +977,7 @@ export function useArtworkVisualResource(
 
   const releaseLayerOwner = useCallback((layer: ArtworkVisualLayer) => {
     exitCompletionsRef.current.delete(layer.id)
+    paintedLayerIdsRef.current.delete(layer.id)
     layer.releaseLayerLease()
   }, [])
 
@@ -715,6 +985,11 @@ export function useArtworkVisualResource(
     const registry = resourceRegistryRef.current
     const entry = registry.get(identity)
     if (!entry) return undefined
+    if (entry.resource.isReleased() || !entry.resource.view) {
+      registry.delete(identity)
+      entry.resource.releaseCache()
+      return undefined
+    }
     registry.delete(identity)
     registry.set(identity, entry)
     return entry
@@ -732,18 +1007,42 @@ export function useArtworkVisualResource(
     identity: string,
     entry: ArtworkResourceRegistryEntry,
   ) => {
+    if (!entry.resource.view) {
+      entry.resource.releaseCache()
+      return
+    }
     const registry = resourceRegistryRef.current
     const previous = registry.get(identity)
     if (previous && previous.resource !== entry.resource) previous.resource.releaseCache()
     registry.delete(identity)
     registry.set(identity, entry)
-    while (registry.size > 3) {
-      const oldestIdentity = registry.keys().next().value
-      if (oldestIdentity === undefined) break
-      const oldest = registry.get(oldestIdentity)
-      registry.delete(oldestIdentity)
-      oldest?.resource.releaseCache()
+    // Keep one of the eight canvases free for staging whenever only the
+    // seven-item current±3 window is pinned. Extra visible/preview resources
+    // remain protected by their layer refs and can temporarily fill slot 8.
+    while (registry.size > 7) {
+      const preparedResource = preparedArtworkRef.current?.resource
+      const promotedResource = promotedArtworkRef.current?.resource
+      const evictable = [...registry].find(([candidateIdentity, candidateEntry]) => (
+        candidateIdentity !== identity
+        &&
+        !pinnedIdentitiesRef.current.has(candidateIdentity)
+        && candidateEntry.resource !== preparedResource
+        && candidateEntry.resource !== promotedResource
+        && !layersRef.current.some((layer) => layer.identity === candidateIdentity)
+        && queuedLayerRef.current?.identity !== candidateIdentity
+        && candidateEntry.resource.releaseCacheIfIdle()
+      ))
+      if (!evictable) break
+      registry.delete(evictable[0])
     }
+  }, [])
+
+  const releaseIfNotRegistered = useCallback((
+    identity: string,
+    resource: OwnedArtworkResource,
+  ) => {
+    if (resourceRegistryRef.current.get(identity)?.resource === resource) return
+    resource.releaseCache()
   }, [])
 
   const clearRegistry = useCallback(() => {
@@ -755,7 +1054,12 @@ export function useArtworkVisualResource(
     if (!prepared || preparedArtworkRef.current !== prepared) return
     preparedArtworkRef.current = null
     prepared.controller.abort()
-    if (prepared.resource) registryDelete(prepared.identity, prepared.resource)
+    if (
+      prepared.resource
+      && !layersRef.current.some((layer) => layer.identity === prepared.identity)
+    ) {
+      registryDelete(prepared.identity, prepared.resource)
+    }
     const debug = prefetchDebugRef.current
     debug.prepared = 0
     debug.inFlight = 0
@@ -790,6 +1094,21 @@ export function useArtworkVisualResource(
 
   const enqueueOrInstall = useCallback((nextLayer: ArtworkVisualLayer) => {
     let currentLayers = layersRef.current
+    const hasAvailableSlot = ([0, 1, 2] as const).some(
+      (slot) => !clearingSlotsRef.current.has(slot) && !currentLayers.some((layer) => layer.slot === slot),
+    )
+    const disposableStandbys = hasAvailableSlot
+      ? []
+      : currentLayers.filter(
+          (layer) => layer.phase === 'preview' && layer.previewTokenId === undefined,
+        ).slice(0, 1)
+    if (disposableStandbys.length) {
+      currentLayers = currentLayers.filter((layer) => !disposableStandbys.includes(layer))
+      for (const layer of disposableStandbys) {
+        releaseLayerOwner(layer)
+        if (layer.slot !== null) scheduleSlotRelease(layer.slot)
+      }
+    }
     const incoming = currentLayers.find((layer) => layer.phase === 'incoming')
     if (incoming) {
       currentLayers = currentLayers.filter((layer) => layer.id !== incoming.id)
@@ -853,38 +1172,101 @@ export function useArtworkVisualResource(
     }
   }, [])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     previewGenerationRef.current += 1
     const generation = previewGenerationRef.current
     previewControllerRef.current?.abort()
     previewControllerRef.current = null
 
-    const previousPreview = layersRef.current.find((layer) => layer.phase === 'preview')
-    if (previousPreview && previousPreview.previewTokenId !== previewToken?.id) {
-      releaseLayerOwner(previousPreview)
-      replaceLayers(layersRef.current.filter((layer) => layer.id !== previousPreview.id))
-      if (previousPreview.slot !== null) scheduleSlotRelease(previousPreview.slot)
+    const standbyIdentities = new Set(([-1, 1] as const).flatMap((direction) => {
+      const candidate = prefetchCandidates.find((entry) => entry.direction === direction)
+      return candidate ? [artworkResourceIdentity(candidate.track, candidate.artwork)] : []
+    }))
+    const obsoleteBoundPreviews = layersRef.current.filter((layer) => (
+      layer.phase === 'preview'
+      && layer.previewTokenId !== undefined
+      && layer.previewTokenId !== previewToken?.id
+    ))
+    if (obsoleteBoundPreviews.length) {
+      const obsoleteIds = new Set(obsoleteBoundPreviews.map((layer) => layer.id))
+      const nextLayers = layersRef.current.flatMap((layer): ArtworkVisualLayer[] => {
+        if (!obsoleteIds.has(layer.id)) return [layer]
+        if (standbyIdentities.has(layer.identity)) return [{ ...layer, previewTokenId: undefined }]
+        releaseLayerOwner(layer)
+        if (layer.slot !== null) scheduleSlotRelease(layer.slot)
+        return []
+      })
+      replaceLayers(nextLayers)
     }
     if (!previewToken) return
+    setPaintedPreviewTokenId(null)
     if (layersRef.current.some((layer) => layer.previewTokenId === previewToken.id)) return
 
     const identity = artworkResourceIdentity(previewToken.track, previewToken.artwork)
+    const paintedStandby = layersRef.current.find((layer) => (
+      (layer.phase === 'exiting'
+        || (layer.phase === 'preview' && layer.previewTokenId === undefined))
+      && layer.identity === identity
+      && Boolean(layer.resource.view)
+    ))
+    if (paintedStandby) {
+      replaceLayers(layersRef.current.map((layer) => layer.id === paintedStandby.id
+        ? {
+            ...layer,
+            track: previewToken.track,
+            artwork: previewToken.artwork,
+            requestedArtwork: previewToken.artwork,
+            phase: 'preview',
+            transitionIntent: null,
+            previewTokenId: previewToken.id,
+          }
+        : layer))
+      if (paintedLayerIdsRef.current.has(paintedStandby.id)) {
+        setPaintedPreviewTokenId(previewToken.id)
+      }
+      return
+    }
     const installPreview = (loaded: LoadedArtworkResource) => {
       if (
         generation !== previewGenerationRef.current
         || previewControllerRef.current?.signal.aborted
         || latestRequestRef.current.track?.id !== previewToken.originTrackId
       ) {
-        loaded.resource.releaseCache()
+        releaseIfNotRegistered(identity, loaded.resource)
+        return
+      }
+      const standby = layersRef.current.find((layer) => (
+        (layer.phase === 'exiting'
+          || (layer.phase === 'preview' && layer.previewTokenId === undefined))
+        && layer.identity === identity
+        && Boolean(layer.resource.view)
+      ))
+      if (standby) {
+        replaceLayers(layersRef.current.map((layer) => layer.id === standby.id
+          ? {
+              ...layer,
+              phase: 'preview',
+              transitionIntent: null,
+              previewTokenId: previewToken.id,
+            }
+          : layer))
+        if (paintedLayerIdsRef.current.has(standby.id)) {
+          setPaintedPreviewTokenId(previewToken.id)
+        }
+        if (standby.resource !== loaded.resource) loaded.resource.releaseCache()
         return
       }
       if (loaded.resource.view) registrySet(identity, loaded)
-      const currentLayers = layersRef.current.filter((layer) => layer.phase !== 'preview')
+      const currentLayers = layersRef.current
       const availableSlot = ([0, 1, 2] as const).find(
         (slot) => !currentLayers.some((layer) => layer.slot === slot),
       )
-      if (availableSlot === undefined) {
-        loaded.resource.releaseCache()
+      const replaceableStandby = availableSlot === undefined
+        ? currentLayers.find((layer) => layer.phase === 'preview' && layer.previewTokenId === undefined)
+        : undefined
+      const targetSlot = availableSlot ?? replaceableStandby?.slot
+      if (targetSlot === undefined || targetSlot === null) {
+        releaseIfNotRegistered(identity, loaded.resource)
         return
       }
       const layer = createLayer(
@@ -896,7 +1278,15 @@ export function useArtworkVisualResource(
         null,
         previewToken.id,
       )
-      replaceLayers([...currentLayers, { ...layer, phase: 'preview', slot: availableSlot }])
+      const nextPreview = { ...layer, phase: 'preview' as const, slot: targetSlot }
+      if (replaceableStandby) {
+        replaceLayers(currentLayers.map((candidate) => (
+          candidate.id === replaceableStandby.id ? nextPreview : candidate
+        )))
+        releaseLayerOwner(replaceableStandby)
+      } else {
+        replaceLayers([...currentLayers, nextPreview])
+      }
     }
 
     const cached = registryGet(identity)
@@ -904,23 +1294,28 @@ export function useArtworkVisualResource(
       installPreview(cached)
       return
     }
-    const prepared = preparedArtworkRef.current
-    if (prepared?.identity === identity && !prepared.controller.signal.aborted) {
-      void prepared.promise.then((loaded) => {
-        if (loaded) installPreview(loaded)
-      })
-      return
-    }
     const controller = new AbortController()
     previewControllerRef.current = controller
-    const loadOrPromotePrepared = () => {
+    const loadOrPromotePrepared = async () => {
       const newlyPrepared = preparedArtworkRef.current
-      const promise = newlyPrepared?.identity === identity && !newlyPrepared.controller.signal.aborted
-        ? newlyPrepared.promise
-        : loadArtworkResource(previewToken.artwork, controller, 'foreground')
-      void promise.then((loaded) => {
-        if (loaded && !controller.signal.aborted) installPreview(loaded)
-      }).finally(() => {
+      let loaded = newlyPrepared?.identity === identity && !newlyPrepared.controller.signal.aborted
+        ? await newlyPrepared.promise
+        : null
+      if (
+        !loaded
+        && generation === previewGenerationRef.current
+        && !controller.signal.aborted
+        && latestRequestRef.current.track?.id === previewToken.originTrackId
+      ) {
+        loaded = await loadArtworkResource(previewToken.artwork, controller, 'foreground')
+      }
+      if (!loaded) {
+        return
+      }
+      if (!controller.signal.aborted) installPreview(loaded)
+    }
+    const startPreviewLoad = () => {
+      void loadOrPromotePrepared().finally(() => {
         if (previewControllerRef.current === controller) previewControllerRef.current = null
       })
     }
@@ -928,16 +1323,18 @@ export function useArtworkVisualResource(
     // standby effect publish its single shared promise before deciding whether
     // a foreground decode is actually needed.
     if (standbyCandidate && artworkResourceIdentity(standbyCandidate.track, standbyCandidate.artwork) === identity) {
-      queueMicrotask(loadOrPromotePrepared)
+      queueMicrotask(startPreviewLoad)
     } else {
-      loadOrPromotePrepared()
+      startPreviewLoad()
     }
   }, [
     createLayer,
     loadArtworkResource,
+    prefetchCandidates,
     previewToken,
     registryGet,
     registrySet,
+    releaseIfNotRegistered,
     releaseLayerOwner,
     replaceLayers,
     scheduleSlotRelease,
@@ -946,8 +1343,17 @@ export function useArtworkVisualResource(
 
   const markReady = useCallback((layerId: number) => {
     const currentLayers = layersRef.current
+    const preview = currentLayers.find((layer) => layer.id === layerId && layer.phase === 'preview')
+    if (preview?.resource.view) {
+      paintedLayerIdsRef.current.add(preview.id)
+      if (preview.previewTokenId !== null && preview.previewTokenId !== undefined) {
+        setPaintedPreviewTokenId(preview.previewTokenId)
+      }
+      return
+    }
     const incoming = currentLayers.find((layer) => layer.id === layerId && layer.phase === 'incoming')
     if (!incoming) return
+    if (incoming.resource.view) paintedLayerIdsRef.current.add(incoming.id)
 
     if (!incoming.transitionIntent) {
       previewGenerationRef.current += 1
@@ -958,12 +1364,15 @@ export function useArtworkVisualResource(
         queuedLayerRef.current = null
         releaseLayerOwner(queued)
       }
+      const retainedStandbys = currentLayers.filter((layer) => (
+        layer.phase === 'preview' && layer.previewTokenId === undefined
+      ))
       for (const layer of currentLayers) {
-        if (layer.id !== incoming.id) releaseLayerOwner(layer)
+        if (layer.id !== incoming.id && !retainedStandbys.includes(layer)) releaseLayerOwner(layer)
       }
       exitCompletionsRef.current.clear()
       clearingSlotsRef.current.clear()
-      replaceLayers([{ ...incoming, phase: 'active', previewTokenId: undefined }])
+      replaceLayers([{ ...incoming, phase: 'active', previewTokenId: undefined }, ...retainedStandbys])
       return
     }
 
@@ -1029,7 +1438,7 @@ export function useArtworkVisualResource(
     }
 
     const pool = getCanvasPool()
-    void pool.acquire(controller.signal, coverMaxEdge).then(async (lease) => {
+    void pool.acquire(controller.signal, coverMaxEdge, 'foreground').then(async (lease) => {
       if (!lease) return
       if (!isCurrent() || !lease.isActive()) {
         lease.release()
@@ -1162,11 +1571,19 @@ export function useArtworkVisualResource(
       'prefetch',
     ).then((loaded) => {
       debug.inFlight = 0
-      if (!loaded) return null
+      if (!loaded) {
+        if (!controller.signal.aborted && preparedArtworkRef.current === nextPrepared) {
+          preparedArtworkRef.current = null
+          debug.prepared = 0
+          scheduleStablePrefetchRetry(identity)
+        }
+        return null
+      }
       if (controller.signal.aborted) {
         loaded.resource.releaseCache()
         return null
       }
+      prefetchRetryCountsRef.current.delete(identity)
       nextPrepared.resource = loaded.resource
       registrySet(identity, loaded)
       debug.ready += 1
@@ -1178,6 +1595,8 @@ export function useArtworkVisualResource(
     evictPreparedArtwork,
     layers,
     loadArtworkResource,
+    prefetchRetryRevision,
+    scheduleStablePrefetchRetry,
     standbyCandidate,
     registrySet,
     track?.id,
@@ -1185,18 +1604,57 @@ export function useArtworkVisualResource(
 
   useEffect(() => {
     const currentTrackId = track?.id
-    const stableActiveLayer = layersRef.current.length === 1
-      && layersRef.current[0]?.phase === 'active'
-      && layersRef.current[0].track.id === currentTrackId
-      && queuedLayerRef.current === null
-    const candidates = stableActiveLayer && currentTrackId
+    const candidates = currentTrackId
       ? prefetchCandidates
         .filter((candidate) => candidate.afterTrackId === currentTrackId && candidate.track.id !== currentTrackId)
-        .slice(0, 2)
+        .slice(0, 6)
       : []
+    const standbyCandidates = ([-1, 1] as const).flatMap((direction) => {
+      const candidate = candidates.find((entry) => entry.direction === direction)
+      return candidate ? [candidate] : []
+    })
+    const standbyIdentities = new Set(standbyCandidates.map((candidate) => (
+      artworkResourceIdentity(candidate.track, candidate.artwork)
+    )))
     const desiredIdentities = new Set(candidates.map((candidate) => (
       artworkResourceIdentity(candidate.track, candidate.artwork)
     )))
+    for (const identity of prefetchRetryCountsRef.current.keys()) {
+      if (!desiredIdentities.has(identity)) prefetchRetryCountsRef.current.delete(identity)
+    }
+
+    const obsoleteStandbys = layersRef.current.filter((layer) => (
+      layer.phase === 'preview'
+      && layer.previewTokenId === undefined
+      && !standbyIdentities.has(layer.identity)
+    ))
+    if (obsoleteStandbys.length) {
+      const obsoleteIds = new Set(obsoleteStandbys.map((layer) => layer.id))
+      for (const layer of obsoleteStandbys) {
+        releaseLayerOwner(layer)
+        if (layer.slot !== null) scheduleSlotRelease(layer.slot)
+      }
+      replaceLayers(layersRef.current.filter((layer) => !obsoleteIds.has(layer.id)))
+    }
+
+    const installStandby = (candidate: TrackArtworkPrefetchCandidate, loaded: LoadedArtworkResource) => {
+      const identity = artworkResourceIdentity(candidate.track, candidate.artwork)
+      if (!loaded.resource.view || !standbyIdentities.has(identity)) return
+      if (layersRef.current.some((layer) => layer.identity === identity)) return
+      if (layersRef.current.some((layer) => layer.phase === 'incoming' || layer.phase === 'exiting')) return
+      const availableSlot = ([0, 1, 2] as const).find(
+        (slot) => !clearingSlotsRef.current.has(slot) && !layersRef.current.some((layer) => layer.slot === slot),
+      )
+      if (availableSlot === undefined) return
+      const standby = createLayer(
+        candidate.track,
+        candidate.artwork,
+        identity,
+        loaded.resource,
+        loaded.fallbackSource,
+      )
+      replaceLayers([...layersRef.current, { ...standby, phase: 'preview', slot: availableSlot }])
+    }
 
     for (const [identity, controller] of adjacentWarmControllersRef.current) {
       if (desiredIdentities.has(identity)) continue
@@ -1206,16 +1664,36 @@ export function useArtworkVisualResource(
 
     for (const candidate of candidates) {
       const identity = artworkResourceIdentity(candidate.track, candidate.artwork)
+      const cached = registryGet(identity)
+      if (cached) {
+        if (standbyIdentities.has(identity)) installStandby(candidate, cached)
+        continue
+      }
+      const prepared = preparedArtworkRef.current
+      if (prepared?.identity === identity) {
+        if (standbyIdentities.has(identity)) {
+          void prepared.promise.then((loaded) => {
+            if (loaded && !prepared.controller.signal.aborted) installStandby(candidate, loaded)
+          })
+        }
+        continue
+      }
       if (
-        resourceRegistryRef.current.has(identity)
-        || preparedArtworkRef.current?.identity === identity
-        || adjacentWarmControllersRef.current.has(identity)
+        adjacentWarmControllersRef.current.has(identity)
       ) continue
       const controller = new AbortController()
       adjacentWarmControllersRef.current.set(identity, controller)
       void loadArtworkResource(candidate.artwork, controller, 'prefetch')
         .then((loaded) => {
-          if (!loaded) return
+          if (!loaded) {
+            const latestCurrentId = latestRequestRef.current.track?.id
+            const stillAdjacent = prefetchCandidates.some((entry) => (
+              entry.afterTrackId === latestCurrentId
+              && artworkResourceIdentity(entry.track, entry.artwork) === identity
+            ))
+            if (!controller.signal.aborted && stillAdjacent) scheduleStablePrefetchRetry(identity)
+            return
+          }
           const latestCurrentId = latestRequestRef.current.track?.id
           const stillAdjacent = prefetchCandidates.some((entry) => (
             entry.afterTrackId === latestCurrentId
@@ -1225,7 +1703,9 @@ export function useArtworkVisualResource(
             loaded.resource.releaseCache()
             return
           }
+          prefetchRetryCountsRef.current.delete(identity)
           registrySet(identity, loaded)
+          if (standbyIdentities.has(identity)) installStandby(candidate, loaded)
         })
         .finally(() => {
           if (adjacentWarmControllersRef.current.get(identity) === controller) {
@@ -1233,7 +1713,20 @@ export function useArtworkVisualResource(
           }
         })
     }
-  }, [layers, loadArtworkResource, prefetchCandidates, registrySet, track?.id])
+  }, [
+    createLayer,
+    layers,
+    loadArtworkResource,
+    prefetchRetryRevision,
+    prefetchCandidates,
+    registryGet,
+    registrySet,
+    releaseLayerOwner,
+    replaceLayers,
+    scheduleSlotRelease,
+    scheduleStablePrefetchRetry,
+    track?.id,
+  ])
 
   useEffect(() => {
     const latest = latestRequestRef.current
@@ -1393,28 +1886,34 @@ export function useArtworkVisualResource(
         requestControllerRef.current = retryController
         foregroundRequestRef.current = { identity, controller: retryController }
         prefetchDebugRef.current.foregroundInFlight = 1
-        let retried: LoadedArtworkResource | null = null
-        while (
-          !retried
-          && !retryController.signal.aborted
-          && promotionGeneration === generationRef.current
-        ) {
-          retried = await loadArtworkResource(
-            prepared.artwork,
-            retryController,
-            'foreground',
-          )
-          if (!retried && !retryController.signal.aborted) {
-            prefetchDebugRef.current.foregroundRetries += 1
+        try {
+          let retried: LoadedArtworkResource | null = null
+          for (
+            let attempt = 0;
+            !retried
+              && attempt < MAX_FOREGROUND_LOAD_ATTEMPTS
+              && !retryController.signal.aborted
+              && promotionGeneration === generationRef.current;
+            attempt += 1
+          ) {
+            retried = await loadArtworkResource(
+              prepared.artwork,
+              retryController,
+              'foreground',
+            )
+            if (!retried && !retryController.signal.aborted) {
+              prefetchDebugRef.current.foregroundRetries += 1
+            }
           }
-        }
-        if (!retried) return
-        registrySet(identity, retried)
-        if (!installPromoted(retried)) registryDelete(identity, retried.resource)
-        if (requestControllerRef.current === retryController) requestControllerRef.current = null
-        if (foregroundRequestRef.current?.controller === retryController) {
-          foregroundRequestRef.current = null
-          prefetchDebugRef.current.foregroundInFlight = 0
+          if (!retried) return
+          registrySet(identity, retried)
+          if (!installPromoted(retried)) registryDelete(identity, retried.resource)
+        } finally {
+          if (requestControllerRef.current === retryController) requestControllerRef.current = null
+          if (foregroundRequestRef.current?.controller === retryController) {
+            foregroundRequestRef.current = null
+            prefetchDebugRef.current.foregroundInFlight = 0
+          }
         }
       }).finally(() => {
         if (promotedArtworkRef.current === prepared) promotedArtworkRef.current = null
@@ -1501,7 +2000,7 @@ export function useArtworkVisualResource(
           return
         }
       }
-      while (isCurrent()) {
+      for (let attempt = 0; attempt < MAX_FOREGROUND_LOAD_ATTEMPTS && isCurrent(); attempt += 1) {
         const loaded = await loadArtworkResource(currentArtwork, controller, 'foreground')
         if (loaded) {
           install(loaded)
@@ -1640,8 +2139,19 @@ export function useArtworkVisualResource(
       && layers.some((layer) => layer.identity === requestIdentity && layer.phase === 'active')
       && !layers.some((layer) => layer.identity === requestIdentity && layer.phase === 'incoming'),
     )
-  const previewArtworkReady = previewToken !== null && layers.some(
-    (layer) => layer.phase === 'preview' && layer.previewTokenId === previewToken.id,
-  )
-  return { slots, currentArtworkReady, previewArtworkReady, markReady, markLoadError, markExitComplete }
+  const previewArtworkReady = previewToken !== null
+    && paintedPreviewTokenId === previewToken.id
+    && layers.some((layer) => (
+      layer.phase === 'preview'
+      && layer.previewTokenId === previewToken.id
+      && Boolean(layer.resource.view)
+    ))
+  return {
+    slots,
+    currentArtworkReady,
+    previewArtworkReady,
+    markReady,
+    markLoadError,
+    markExitComplete,
+  }
 }

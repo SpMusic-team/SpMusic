@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { MotionConfig, useReducedMotion } from 'motion/react'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import type { WindowLayoutState } from './WindowBar'
 
 type PlayerLayoutMode = 'full' | 'horizontal' | 'vertical' | 'quarter'
@@ -17,14 +18,17 @@ type ResponsivePlayerLayoutProps = {
 
 const HYSTERESIS = 16
 const SHORT_LAYOUT_BREAKPOINT = 600
-const QUARTER_MAX_WIDTH = 1120
-const QUARTER_ENTER_WIDTH = QUARTER_MAX_WIDTH - HYSTERESIS
+const QUARTER_MIN_WIDTH = 640
+const QUARTER_MAX_WIDTH = 1024
 const HORIZONTAL_HALF_MIN_HEIGHT = 595
 const HORIZONTAL_HALF_MAX_HEIGHT = 1080
+const QUARTER_MIN_HEIGHT = 1120
+const QUARTER_MAX_HEIGHT = 1440
 const HORIZONTAL_HALF_MIN_CONTENT_WIDTH = 1080
 const HORIZONTAL_HALF_SIDE_INSET = 60
 const HORIZONTAL_HALF_COLUMN_GAP = 24
 const HORIZONTAL_HALF_VERTICAL_INSET = 96
+const DEFAULT_MIN_WINDOW_WIDTH = QUARTER_MIN_WIDTH
 
 function isMinimumCompactViewport(viewport: ViewportSize): boolean {
   return viewport.width < 700 && viewport.height < SHORT_LAYOUT_BREAKPOINT
@@ -37,6 +41,38 @@ function horizontalHalfMinimumWidth(viewport: ViewportSize): number {
     + coverSize
     + HORIZONTAL_HALF_COLUMN_GAP
     + HORIZONTAL_HALF_MIN_CONTENT_WIDTH
+}
+
+function getWindowMinimumWidth(layout: PlayerLayoutMode, viewport: ViewportSize): number {
+  if (layout !== 'horizontal') return DEFAULT_MIN_WINDOW_WIDTH
+
+  const designMinimumWidth = horizontalHalfMinimumWidth(viewport)
+  // At the minimum design height there is no smaller supported layout. Keep
+  // the full horizontal-half boundary; above it, leave a hysteresis-sized
+  // opening so resize can switch layouts before the dock is clipped.
+  if (viewport.height <= HORIZONTAL_HALF_MIN_HEIGHT) return designMinimumWidth
+  return Math.max(
+    DEFAULT_MIN_WINDOW_WIDTH,
+    designMinimumWidth - HYSTERESIS - 1,
+  )
+}
+
+function getWindowMinimumHeight(layout: PlayerLayoutMode): number {
+  return layout === 'quarter' ? QUARTER_MIN_HEIGHT : HORIZONTAL_HALF_MIN_HEIGHT
+}
+
+function isQuarterViewport(viewport: ViewportSize, previous?: PlayerLayoutMode): boolean {
+  const heightInRange = previous === 'quarter'
+    ? viewport.height >= QUARTER_MIN_HEIGHT - HYSTERESIS
+      && viewport.height <= QUARTER_MAX_HEIGHT + HYSTERESIS
+    : viewport.height >= QUARTER_MIN_HEIGHT
+      && viewport.height <= QUARTER_MAX_HEIGHT
+  const widthInRange = previous === 'quarter'
+    ? viewport.width >= QUARTER_MIN_WIDTH - HYSTERESIS
+      && viewport.width <= QUARTER_MAX_WIDTH + HYSTERESIS
+    : viewport.width >= QUARTER_MIN_WIDTH
+      && viewport.width <= QUARTER_MAX_WIDTH
+  return heightInRange && widthInRange
 }
 
 function isHorizontalHalfViewport(viewport: ViewportSize, previous?: PlayerLayoutMode): boolean {
@@ -68,29 +104,7 @@ function resolveLayout(
 
   const compactMinimum = isMinimumCompactViewport(viewport)
 
-  if (previous === 'quarter') {
-    if (
-      compactMinimum
-      || (
-        viewport.width < QUARTER_MAX_WIDTH
-        && viewport.height >= viewport.width - HYSTERESIS
-      )
-    ) return 'quarter'
-  } else if (
-    compactMinimum
-    || (
-      viewport.width < QUARTER_ENTER_WIDTH
-      && viewport.height >= viewport.width + HYSTERESIS
-    )
-  ) {
-    return 'quarter'
-  } else if (
-    !previous
-    && viewport.width < QUARTER_MAX_WIDTH
-    && viewport.height >= viewport.width
-  ) {
-    return 'quarter'
-  }
+  if (compactMinimum || isQuarterViewport(viewport, previous)) return 'quarter'
 
   if (previous === 'vertical') {
     if (viewport.height >= viewport.width - HYSTERESIS) return 'vertical'
@@ -110,6 +124,26 @@ export function ResponsivePlayerLayout({ children, nativeWindowState, windowBar 
   const [layout, setLayout] = useState<PlayerLayoutMode>(() => resolveLayout(readViewport(), nativeWindowState))
   const [short, setShort] = useState(() => readViewport().height < SHORT_LAYOUT_BREAKPOINT)
   const layoutRef = useRef(layout)
+  const windowMinimumRef = useRef<string | null>(null)
+
+  const syncWindowMinimum = useCallback((nextLayout: PlayerLayoutMode, viewport: ViewportSize, windowState: WindowLayoutState) => {
+    if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return
+
+    const minWidth = windowState.maximized || windowState.fullscreen
+      ? DEFAULT_MIN_WINDOW_WIDTH
+      : getWindowMinimumWidth(nextLayout, viewport)
+    const minHeight = getWindowMinimumHeight(nextLayout)
+    const key = `${minWidth}:${minHeight}`
+    if (windowMinimumRef.current === key) return
+    windowMinimumRef.current = key
+
+    void getCurrentWindow().setSizeConstraints({
+      minWidth,
+      minHeight,
+    }).catch(() => {
+      windowMinimumRef.current = null
+    })
+  }, [])
 
   const syncLayout = useCallback((viewport: ViewportSize, windowState: WindowLayoutState) => {
     const nextLayout = resolveLayout(viewport, windowState, layoutRef.current)
@@ -127,13 +161,15 @@ export function ResponsivePlayerLayout({ children, nativeWindowState, windowBar 
 
   useEffect(() => {
     function handleResize() {
-      syncLayout(readViewport(), nativeWindowState)
+      const viewport = readViewport()
+      syncLayout(viewport, nativeWindowState)
+      syncWindowMinimum(layoutRef.current, viewport, nativeWindowState)
     }
 
     handleResize()
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
-  }, [nativeWindowState, syncLayout])
+  }, [nativeWindowState, syncLayout, syncWindowMinimum])
 
   return (
     <MotionConfig transition={{ layout: { duration: reduceMotion ? 0 : 0.3, ease: 'easeOut' } }}>

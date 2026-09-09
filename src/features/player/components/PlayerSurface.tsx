@@ -193,6 +193,13 @@ const TrackCardMotionLayer = memo(function TrackCardMotionLayer({
     role,
   ])
   const handleReady = useCallback(() => {
+    if (layer.phase === 'preview') {
+      // CoverPanel also reports ready for a cover-less fallback. A draggable
+      // target is eligible only after ArtworkCanvas has painted a real source.
+      if (!layer.resource.view) return
+      onReady(layer.id)
+      return
+    }
     if (layer.phase !== 'incoming') return
     if (!incomingPaintedRef.current) {
       readyPendingRef.current = true
@@ -324,23 +331,6 @@ function resolveRenderedTrackCardSession(
   artworkSlots: readonly [ArtworkVisualLayer | null, ArtworkVisualLayer | null, ArtworkVisualLayer | null],
   previewToken: TrackCardPreviewToken | null,
 ): TrackCardTransitionSession | null {
-  // A direction lock publishes this session synchronously, before preview
-  // hydration can insert its layer. Keep the active card attached to the live
-  // MotionValue during that insertion render; the ready effect upgrades it to
-  // the validated two-card session on the following render.
-  if (
-    liveSession?.kind === 'drag'
-    && liveSession.incomingLayerId < 0
-    && (liveSession.key.startsWith('drag-pending:') || liveSession.key.startsWith('boundary:'))
-  ) {
-    const outgoingIsCurrent = artworkSlots.some((layer) => (
-      layer?.id === liveSession.outgoingLayerId
-      && layer.phase === 'active'
-    ))
-    const tokenMatchesDirection = !previewToken || previewToken.direction === liveSession.direction
-    if (outgoingIsCurrent && tokenMatchesDirection) return liveSession
-  }
-
   const automaticIncoming = artworkSlots.find((layer) => (
     layer?.phase === 'active'
     && Boolean(layer.transitionIntent)
@@ -424,6 +414,7 @@ type CoverDragGesture = {
   interruptedSettle: TrackCardSettleContext | null
   handoffLayerId: number | null
   handoffPose: TrackCardHandoffPose | null
+  targetReady: boolean
 }
 
 type CoverPointerSample = Pick<PointerEvent, 'clientX' | 'pointerId'>
@@ -788,13 +779,14 @@ export function PlayerSurface({
       target: 1,
       durationSeconds: trackCardReducedMotion ? 0.08 : TRACK_CARD_DURATION_SECONDS,
       onComplete: () => {
+        // Keep the completed pose until React has committed removal of the
+        // exiting layer. The stale-session effect clears the session and
+        // resets progress on the following frame, after the old DOM subscriber
+        // can no longer jump back to its progress=0 pose.
         completeTrackCardExit(activeSession.outgoingLayerId)
-        publishTrackCardSession(null)
-        setTrackCardPreviewToken(null)
-        trackCardProgress.set(0)
       },
     })
-  }, [commitTrackPreview, completeTrackCardExit, discardCoverDrag, publishTrackCardSession, runTrackCardSettle, trackCardProgress, trackCardReducedMotion])
+  }, [commitTrackPreview, completeTrackCardExit, discardCoverDrag, runTrackCardSettle, trackCardReducedMotion])
 
   const handleCoverPointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     const coverFrame = (event.target as HTMLElement).closest<HTMLElement>('.cover-frame')
@@ -871,6 +863,7 @@ export function PlayerSurface({
       interruptedSettle,
       handoffLayerId,
       handoffPose,
+      targetReady: false,
     }
     setCoverDragActive(true)
     coverInteractionPhaseRef.current = 'dragging'
@@ -897,10 +890,15 @@ export function PlayerSurface({
     gesture.velocityX = integrated.velocityX
     gesture.latestX = integrated.latestX
     gesture.latestAt = integrated.latestAt
-    gesture.signedProgress = integrated.viewportPosition
-    gesture.progress = Math.abs(gesture.signedProgress)
+    const directionPosition = gesture.direction && !gesture.targetReady
+      ? Math.min(0.96, Math.max(-0.96, (gesture.startX - event.clientX) / (gesture.coverWidth * 0.55)))
+      : integrated.viewportPosition
+    if (gesture.targetReady || !gesture.direction) {
+      gesture.signedProgress = integrated.viewportPosition
+      gesture.progress = Math.abs(gesture.signedProgress)
+    }
     const nextDirection = trackCardDirection(
-      gesture.signedProgress,
+      directionPosition,
       gesture.coverWidth,
       TRACK_CARD_DRAG_LOCK_PX,
     )
@@ -912,6 +910,7 @@ export function PlayerSurface({
       if (gesture.token) discardTrackPreview?.(gesture.token.id)
       else if (gesture.direction) discardTrackPreview?.(-1)
       gesture.token = null
+      gesture.targetReady = false
       gesture.direction = nextDirection
       setTrackCardPreviewToken(null)
       stopTrackCardAnimation()
@@ -927,31 +926,11 @@ export function PlayerSurface({
       }
       gesture.moved = true
       suppressCoverClickRef.current = true
-      const outgoing = (gesture.handoffLayerId === null
-        ? null
-        : artworkSlots.find((layer) => layer?.id === gesture.handoffLayerId))
-        ?? artworkSlots.find((layer) => layer?.phase === 'active')
-      if (outgoing) {
-        // Preview hydration and artwork decoding are asynchronous. Establish an
-        // outgoing-only session as soon as the gesture locks direction so the
-        // current card follows the pointer even while the incoming card is not
-        // available yet. The ready effect below replaces this placeholder with
-        // the two-card session without resetting the shared progress value.
-        // Commit the new role subscriptions before publishing its first
-        // pointer-controlled progress. Otherwise the interrupted session's
-        // subscribers can briefly consume the new gesture's near-zero value.
-        flushSync(() => {
-          publishTrackCardSession({
-            key: `drag-pending:${gestureId}:${revision}`,
-            outgoingLayerId: outgoing.id,
-            incomingLayerId: -1,
-            direction: nextDirection,
-            kind: 'drag',
-            outgoingHandoff: gesture.handoffPose ?? undefined,
-          })
-        })
-        trackCardProgress.set(gesture.progress)
-      }
+      // The direction can lock before the adjacent real cover is painted.
+      // Keep the current card at rest; there is no outgoing-only drag session.
+      gesture.signedProgress = 0
+      gesture.progress = 0
+      if (!gesture.interruptedSettle || !gesture.handoffPose) trackCardProgress.set(0)
       const requestedDirection = nextDirection
       void prepareTrackPreview?.(requestedDirection).then((token) => {
         const activeGesture = coverDragRef.current
@@ -968,18 +947,6 @@ export function PlayerSurface({
           return
         }
         if (!token) {
-          const outgoing = artworkSlots.find((layer) => layer?.phase === 'active')
-          if (outgoing) {
-            publishTrackCardSession({
-              key: `boundary:${gestureId}:${revision}`,
-              outgoingLayerId: outgoing.id,
-              incomingLayerId: -1,
-              direction: requestedDirection,
-              kind: 'drag',
-              outgoingHandoff: gesture.handoffPose ?? undefined,
-            })
-            trackCardProgress.set(Math.min(0.08, gesture.progress * 0.12))
-          }
           return
         }
         if (
@@ -990,19 +957,21 @@ export function PlayerSurface({
           return
         }
         gesture.token = token
-        trackCardProgress.set(gesture.progress)
-        setTrackCardPreviewToken(token)
+        flushSync(() => setTrackCardPreviewToken(token))
       })
       return
     }
     if (!gesture.direction) return
+    if (!gesture.targetReady) {
+      gesture.signedProgress = 0
+      gesture.progress = 0
+      return
+    }
     const activeSession = trackCardSessionRef.current
     if (activeSession?.kind === 'drag') {
-      trackCardProgress.set(activeSession.key.startsWith('boundary:')
-        ? Math.min(0.08, gesture.progress * 0.12)
-        : gesture.progress)
+      trackCardProgress.set(gesture.progress)
     }
-  }, [artworkSlots, discardTrackPreview, prepareTrackPreview, publishTrackCardSession, stopTrackCardAnimation, trackCardProgress])
+  }, [discardTrackPreview, prepareTrackPreview, publishTrackCardSession, stopTrackCardAnimation, trackCardProgress])
 
   const handleCoverPointerUp = useCallback((event: CoverPointerSample) => {
     let gesture = coverDragRef.current
@@ -1026,20 +995,42 @@ export function PlayerSurface({
       gesture.coverWidth,
       TRACK_CARD_DRAG_LOCK_PX,
     )
-    const shouldCommit = Boolean(
-      gesture.token
-      && finalDirection
+    const commitRequested = Boolean(
+      finalDirection
       && gesture.direction === finalDirection
-      && gesture.token.direction === finalDirection
       && trackCardGeometryReady
       && (
         gesture.progress >= TRACK_CARD_COMMIT_PROGRESS
         || (Math.abs(gesture.velocityX) >= TRACK_CARD_COMMIT_VELOCITY && displacement >= 24)
       ),
     )
-    if (shouldCommit) commitCoverDrag(gesture)
+    if (!gesture.targetReady || !commitRequested) {
+      discardCoverDrag(gesture.targetReady)
+      return
+    }
+    const activeSession = trackCardSessionRef.current
+    const previewLayer = gesture.token
+      ? artworkSlots.find((layer) => (
+          layer?.phase === 'preview'
+          && layer.previewTokenId === gesture.token?.id
+        ))
+      : null
+    const previewLayerReady = Boolean(
+      gesture.token
+      && gesture.token.direction === finalDirection
+      && activeSession?.kind === 'drag'
+      && activeSession.key === `drag:${gesture.token.id}`
+      && previewLayer
+      && activeSession.incomingLayerId === previewLayer.id,
+    )
+    // Pointer release has exactly two bounded outcomes. A fully hydrated,
+    // token-matched layer pair continues from the pointer-owned pose; every
+    // other state immediately starts the existing rollback settle. Keeping a
+    // released gesture alive while waiting for artwork would leave progress
+    // ownerless if that asynchronous request never obtained a canvas lease.
+    if (previewLayerReady) commitCoverDrag(gesture)
     else discardCoverDrag(true)
-  }, [commitCoverDrag, discardCoverDrag, handleCoverPointerMove, trackCardGeometryReady])
+  }, [artworkSlots, commitCoverDrag, discardCoverDrag, handleCoverPointerMove, trackCardGeometryReady])
 
   const handleCoverPointerCancel = useCallback(() => {
     if (coverDragRef.current?.released) return
@@ -1087,32 +1078,33 @@ export function PlayerSurface({
     }
     const handleWindowPointerUp = (event: PointerEvent) => {
       const gesture = coverDragRef.current
-      if (!gesture?.captureLost || gesture.pointerId !== event.pointerId) return
-      if (event.composedPath().includes(gesture.captureElement)) return
+      if (!gesture || gesture.pointerId !== event.pointerId) return
       handleCoverPointerUp(event)
     }
     const handleWindowPointerCancel = (event: PointerEvent) => {
       const gesture = coverDragRef.current
-      if (!gesture?.captureLost || gesture.pointerId !== event.pointerId) return
-      if (event.composedPath().includes(gesture.captureElement)) return
+      if (!gesture || gesture.pointerId !== event.pointerId) return
       handleCoverPointerCancel()
     }
     window.addEventListener('pointermove', handleWindowPointerMove)
-    window.addEventListener('pointerup', handleWindowPointerUp)
-    window.addEventListener('pointercancel', handleWindowPointerCancel)
+    // Capture release before a synchronous preview/session render can change
+    // the event target subtree. The React handler becomes a harmless no-op
+    // after this path clears the gesture.
+    window.addEventListener('pointerup', handleWindowPointerUp, true)
+    window.addEventListener('pointercancel', handleWindowPointerCancel, true)
     return () => {
       window.removeEventListener('pointermove', handleWindowPointerMove)
-      window.removeEventListener('pointerup', handleWindowPointerUp)
-      window.removeEventListener('pointercancel', handleWindowPointerCancel)
+      window.removeEventListener('pointerup', handleWindowPointerUp, true)
+      window.removeEventListener('pointercancel', handleWindowPointerCancel, true)
     }
   }, [coverDragActive, handleCoverPointerCancel, handleCoverPointerMove, handleCoverPointerUp])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!trackCardPreviewToken || !previewArtworkReady) return
     const gesture = coverDragRef.current
     const outgoing = artworkSlots.find((layer) => layer?.phase === 'active')
     const incoming = artworkSlots.find((layer) => layer?.previewTokenId === trackCardPreviewToken.id)
-    if (!gesture || !outgoing || !incoming || gesture.token?.id !== trackCardPreviewToken.id) return
+    if (!gesture || gesture.released || !outgoing || !incoming || gesture.token?.id !== trackCardPreviewToken.id) return
     const session: TrackCardTransitionSession = {
       key: `drag:${trackCardPreviewToken.id}`,
       outgoingLayerId: outgoing.id,
@@ -1131,9 +1123,15 @@ export function PlayerSurface({
       && activeSession.kind === session.kind,
     )
     if (!sessionIsCurrent) publishTrackCardSession(session)
-    if (trackCardProgress.get() !== gesture.progress) {
-      trackCardProgress.set(gesture.progress)
-    }
+    // Real pixels have reached the target DOM canvas. Begin interaction from
+    // the current pointer coordinate so waiting never turns into a visual jump.
+    gesture.targetReady = true
+    gesture.startX = gesture.latestX
+    gesture.signedProgress = 0
+    gesture.progress = 0
+    gesture.velocityX = 0
+    gesture.latestAt = performance.now()
+    trackCardProgress.set(0)
   }, [artworkSlots, previewArtworkReady, publishTrackCardSession, trackCardPreviewToken, trackCardProgress])
 
   // Automatic navigation can expose the new layer pair while the shared
@@ -1191,18 +1189,19 @@ export function PlayerSurface({
       kind: 'automatic',
     }
     trackCardProgress.set(0)
+    // Register the layer pair in the same commit that exposes it. Artwork and
+    // metadata can settle before the next frame; leaving the session unowned
+    // until then lets that render enter this branch again, cancel the pending
+    // run, and reset progress a second time.
+    publishTrackCardSession(session)
     trackCardStartFrameRef.current = requestAnimationFrame(() => {
       if (trackCardRunIdRef.current !== runId) return
-      publishTrackCardSession(session)
-      trackCardStartFrameRef.current = requestAnimationFrame(() => {
-        if (trackCardRunIdRef.current !== runId) return
-        trackCardStartFrameRef.current = null
-        runTrackCardSettle({
-          session,
-          target: 1,
-          durationSeconds: trackCardReducedMotion ? 0.08 : TRACK_CARD_DURATION_SECONDS,
-          onComplete: () => completeTrackCardExit(outgoing.id),
-        })
+      trackCardStartFrameRef.current = null
+      runTrackCardSettle({
+        session,
+        target: 1,
+        durationSeconds: trackCardReducedMotion ? 0.08 : TRACK_CARD_DURATION_SECONDS,
+        onComplete: () => completeTrackCardExit(outgoing.id),
       })
     })
   }, [

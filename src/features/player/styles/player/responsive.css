@@ -1086,14 +1086,14 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
 
 .responsive-player-layout[data-player-layout="quarter"] .player-stage {
   --quarter-cover-size: min(
-    calc(100vw - 34 * var(--player-layout-unit)),
+    calc(100vw - 52px),
     calc(100svh - 514 * var(--player-layout-unit)),
     calc(802 * var(--player-layout-unit))
   );
   inset:
-    calc(97 * var(--player-layout-unit))
-    calc(17 * var(--player-layout-unit))
-    calc(30 * var(--player-layout-unit));
+    48px
+    26px
+    30px;
   grid-template-rows: var(--quarter-cover-size) auto minmax(0, 1fr) calc(180 * var(--player-layout-unit));
   row-gap: 0;
   overflow-y: auto;
@@ -1109,6 +1109,63 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
 .responsive-player-layout[data-player-layout="quarter"] .cover-frame {
   width: min(100%, var(--quarter-cover-size));
   max-height: 100%;
+  align-self: center;
+  justify-self: center;
+  transition: width var(--player-playback-transition-duration) var(--app-motion-easing);
+}
+
+.responsive-player-layout[data-player-layout="quarter"] .player-stage[data-playback-state="paused"] .cover-frame {
+  width: calc(var(--quarter-cover-size) - 30 * var(--player-layout-unit));
+}
+
+.responsive-player-layout[data-player-layout="quarter"] .cover-column {
+  align-items: center;
+  justify-items: center;
+}
+
+.responsive-player-layout[data-player-layout="quarter"] .cover-actions {
+  position: absolute;
+  z-index: 3;
+  left: 12px;
+  right: 12px;
+  bottom: 24px;
+  height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.responsive-player-layout[data-player-layout="quarter"] .cover-feedback {
+  position: static;
+  width: 236px;
+  height: 72px;
+  flex: 0 0 236px;
+  gap: 24px;
+}
+
+.responsive-player-layout[data-player-layout="quarter"] .cover-feedback button {
+  width: 106px;
+  height: 72px;
+  flex: 0 0 106px;
+}
+
+.responsive-player-layout[data-player-layout="quarter"] .cover-art .player-control-icon-frame {
+  width: 48px;
+  height: 48px;
+}
+
+.responsive-player-layout[data-player-layout="quarter"] .cover-actions .more-button {
+  position: relative;
+  right: auto;
+  bottom: auto;
+  width: 72px;
+  height: 68px;
+  flex: 0 0 72px;
+}
+
+.responsive-player-layout[data-player-layout="quarter"] .cover-actions .more-button > svg {
+  width: 48px;
+  height: 48px;
 }
 
 .responsive-player-layout[data-player-layout="quarter"] .track-card-deck {
@@ -1124,6 +1181,23 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
   margin-inline: 0;
   padding-inline: 0;
   justify-self: center;
+  gap: 29px;
+}
+
+.responsive-player-layout[data-player-layout="quarter"] .track-pills .track-pill {
+  width: fit-content;
+  max-width: 100%;
+  align-self: flex-start;
+  height: auto;
+  padding: 10px 20px;
+  border-radius: 30px;
+  font-size: 28px;
+  line-height: 36px;
+}
+
+.responsive-player-layout[data-player-layout="quarter"] .track-pills .title-pill {
+  font-size: 32px;
+  line-height: 40px;
 }
 
 .responsive-player-layout[data-player-layout="quarter"] .lyrics-panel {
@@ -1199,8 +1273,10 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
    the 1120 x 1440 vertical-half reference before its composition changes. */
 @media (min-width: 640px) and (min-height: 800px) {
   .responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .player-stage {
-    top: clamp(97px, calc(6.04166667vw + 58.333333px), 126px);
-    bottom: clamp(30px, calc(6.04166667vw - 8.666667px), 59px);
+    top: 48px;
+    left: 26px;
+    right: 26px;
+    bottom: 30px;
   }
 }
 
@@ -1376,6 +1452,7 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
 @media (prefers-reduced-motion: reduce) {
   .responsive-player-layout[data-player-layout="full"] .cover-frame,
   .responsive-player-layout[data-player-layout="horizontal"] .cover-frame,
+  .responsive-player-layout[data-player-layout="quarter"] .cover-frame,
   .responsive-player-layout[data-player-layout="full"] .control-transport,
   .responsive-player-layout[data-player-layout="full"] .control-primary .previous-button,
   .responsive-player-layout[data-player-layout="full"] .control-primary .next-button,

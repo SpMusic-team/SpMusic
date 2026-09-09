@@ -274,7 +274,10 @@ export function useAudioPlayer() {
   const [audioTrack, setAudioTrack] = useState<AudioTrackRef | null>(null)
   const [presentationTrack, setPresentationTrack] = useState<Track | null>(null)
   const [presentationArtwork, setPresentationArtwork] = useState<TrackArtwork | null>(null)
-  const [artworkPrefetchCandidates, setArtworkPrefetchCandidates] = useState<readonly TrackArtworkPrefetchCandidate[]>([])
+  type WindowedArtworkPrefetchCandidate = TrackArtworkPrefetchCandidate & Readonly<{
+    distance: 1 | 2 | 3
+  }>
+  const [artworkPrefetchCandidates, setArtworkPrefetchCandidates] = useState<readonly WindowedArtworkPrefetchCandidate[]>([])
   const [selectionActivitySequence, setSelectionActivitySequence] = useState(0)
   const [selectionVisualIntent, setSelectionVisualIntent] = useState<TrackSelectionVisualIntent | null>(null)
   const [detailsPending, setDetailsPending] = useState(false)
@@ -816,9 +819,6 @@ export function useAudioPlayer() {
   }, [])
 
   const prefetchAdjacentPlaylistTracks = useCallback((trackId: string) => {
-    // Metadata is cheap and bounded separately from decoded artwork: retain at
-    // most one descriptor per direction, while the artwork hook decodes only
-    // the currently primed direction.
     if (shuffleMode !== 'none') {
       setArtworkPrefetchCandidates([])
       return
@@ -833,59 +833,79 @@ export function useAudioPlayer() {
     }
     const playlistEpoch = playlistScopeEpochRef.current
     const scope = playlistScope(playlist)
-    const descriptors = ([-1, 1] as const).map((direction) => ({
-      direction,
-      resolved: resolveAvailablePlaylistTarget(
-        playlist,
-        queueTracks,
-        originIndex,
-        trackId,
-        direction,
-        shuffleMode,
-      ),
-    })).filter((entry) => entry.resolved !== null)
-
-    setArtworkPrefetchCandidates([])
-    for (const { direction, resolved } of descriptors) {
-      const target = resolved!.track
-      void requestHydratedAudioTrack(target.sourcePath, playlistEpoch).then((hydratedTrack) => {
-        if (
-          generation !== artworkPrefetchGenerationRef.current
-          || playlistScopeEpochRef.current !== playlistEpoch
-          || playlistScopeRef.current !== scope
-          || (logicalCursorTrackIdRef.current
-            ?? presentationTrackRef.current?.id
-            ?? latestAudioStateRef.current?.currentTrackId
-            ?? audioTrackRef.current?.id) !== trackId
-          || hydratedTrack.id !== target.id
-        ) return
-        const presentationTrack = audioTrackToTrack(hydratedTrack)
-        const candidate = {
-          afterTrackId: trackId,
+    const descriptors: Array<{
+      direction: Direction
+      distance: 1 | 2 | 3
+      resolved: { index: number; track: AudioFolderTrackRef }
+    }> = []
+    const seenTrackIds = new Set([trackId])
+    for (const direction of [-1, 1] as const) {
+      let cursorIndex = originIndex
+      let cursorTrackId = trackId
+      for (const distance of [1, 2, 3] as const) {
+        const resolved = resolveAvailablePlaylistTarget(
+          playlist,
+          queueTracks,
+          cursorIndex,
+          cursorTrackId,
           direction,
-          track: presentationTrack,
-          artwork: prefetchArtworkFromTrack(presentationTrack),
-        } satisfies TrackArtworkPrefetchCandidate
-        setArtworkPrefetchCandidates((current) => {
-          const ready = [candidate, ...current.filter((item) => item.direction !== direction)]
-          const prime = artworkPrimeDirectionRef.current
-          ready.sort((left, right) => Number(right.direction === prime) - Number(left.direction === prime))
-          return ready.slice(0, 2)
-        })
-      }).catch((error: unknown) => {
-        if (generation === artworkPrefetchGenerationRef.current) {
-          console.debug(`${direction < 0 ? 'Previous' : 'Next'}-track metadata prefetch failed`, error)
-        }
-      })
+          shuffleMode,
+        )
+        if (!resolved || seenTrackIds.has(resolved.track.id)) break
+        seenTrackIds.add(resolved.track.id)
+        descriptors.push({ direction, distance, resolved })
+        cursorIndex = resolved.index
+        cursorTrackId = resolved.track.id
+      }
     }
+
+    void (async () => {
+      const hydrated = await Promise.all(descriptors.map(async (descriptor) => {
+          try {
+            const hydratedTrack = await requestHydratedAudioTrack(descriptor.resolved.track.sourcePath, playlistEpoch)
+            if (hydratedTrack.id !== descriptor.resolved.track.id) return null
+            const presentationTrack = audioTrackToTrack(hydratedTrack)
+            return {
+              afterTrackId: trackId,
+              direction: descriptor.direction,
+              distance: descriptor.distance,
+              track: presentationTrack,
+              artwork: prefetchArtworkFromTrack(presentationTrack),
+            } satisfies WindowedArtworkPrefetchCandidate
+          } catch (error: unknown) {
+            if (generation === artworkPrefetchGenerationRef.current) {
+              console.debug(`${descriptor.direction < 0 ? 'Previous' : 'Next'}-track metadata prefetch failed`, error)
+            }
+            return null
+          }
+        }))
+      if (
+        generation !== artworkPrefetchGenerationRef.current
+        || playlistScopeEpochRef.current !== playlistEpoch
+        || playlistScopeRef.current !== scope
+        || (logicalCursorTrackIdRef.current
+          ?? presentationTrackRef.current?.id
+          ?? latestAudioStateRef.current?.currentTrackId
+          ?? audioTrackRef.current?.id) !== trackId
+      ) return
+      const ready = hydrated.filter((candidate): candidate is WindowedArtworkPrefetchCandidate => candidate !== null)
+      const prime = artworkPrimeDirectionRef.current
+      ready.sort((left, right) => left.distance - right.distance
+        || Number(right.direction === prime) - Number(left.direction === prime))
+      // Keep the previous window pinned until all six new descriptors settle,
+      // then swap the complete window in one state publication.
+      setArtworkPrefetchCandidates(ready.slice(0, 6))
+    })()
   }, [queueTracks, requestHydratedAudioTrack, shuffleMode])
 
   const primeTrackArtwork = useCallback((direction: Direction) => {
     artworkPrimeDirectionRef.current = direction
     setArtworkPrefetchCandidates((current) => {
       if (current[0]?.direction === direction) return current
-      const preferred = current.find((candidate) => candidate.direction === direction)
-      return preferred ? [preferred, ...current.filter((candidate) => candidate !== preferred)].slice(0, 2) : current
+      const preferred = current.filter((candidate) => candidate.direction === direction)
+      return preferred.length
+        ? [...preferred, ...current.filter((candidate) => candidate.direction !== direction)].slice(0, 6)
+        : current
     })
   }, [])
 
@@ -1356,32 +1376,43 @@ export function useAudioPlayer() {
     const previewId = trackCardPreviewIdRef.current + 1
     trackCardPreviewIdRef.current = previewId
     preparedTrackCardPreviewRef.current = null
+    const createToken = (hydratedTrack: AudioTrackRef): PreparedTrackCardPreview => {
+      const previewTrack = audioTrackToTrack(hydratedTrack)
+      return {
+        id: previewId,
+        originTrackId,
+        targetTrackId: target.id,
+        direction,
+        track: previewTrack,
+        artwork: prefetchArtworkFromTrack(previewTrack),
+        playlistEpoch,
+        playlistScope: scope,
+        targetIndex,
+      }
+    }
     const cachedTrack = hydratedCacheGet(hydratedAudioTrackCacheRef.current, target.sourcePath)
-    const previewAudioTrack = cachedTrack ?? audioFolderTrackPlaceholder(target)
-    const previewTrack = audioTrackToTrack(previewAudioTrack)
-    const token: PreparedTrackCardPreview = {
-      id: previewId,
-      originTrackId,
-      targetTrackId: target.id,
-      direction,
-      track: previewTrack,
-      artwork: prefetchArtworkFromTrack(previewTrack),
-      playlistEpoch,
-      playlistScope: scope,
-      targetIndex,
+    if (cachedTrack) {
+      const token = createToken(cachedTrack)
+      preparedTrackCardPreviewRef.current = token
+      return Promise.resolve(token)
     }
-    preparedTrackCardPreviewRef.current = token
-
-    // A cache miss renders the deterministic filename/tone placeholder now and
-    // warms metadata for a later binding. It never delays the gesture contract.
-    if (!cachedTrack) {
-      void requestHydratedAudioTrack(target.sourcePath, playlistEpoch).catch((error: unknown) => {
-        if (trackCardPreviewIdRef.current === previewId) {
-          console.debug('Track-card preview hydration failed', error)
-        }
-      })
-    }
-    return Promise.resolve(token)
+    // Never expose filename/tone placeholder metadata as a draggable card.
+    return requestHydratedAudioTrack(target.sourcePath, playlistEpoch).then((hydratedTrack) => {
+      if (
+        trackCardPreviewIdRef.current !== previewId
+        || playlistScopeEpochRef.current !== playlistEpoch
+        || playlistScopeRef.current !== scope
+        || hydratedTrack.id !== target.id
+      ) return null
+      const token = createToken(hydratedTrack)
+      preparedTrackCardPreviewRef.current = token
+      return token
+    }).catch((error: unknown) => {
+      if (trackCardPreviewIdRef.current === previewId) {
+        console.debug('Track-card preview hydration failed', error)
+      }
+      return null
+    })
   }, [primeTrackArtwork, queueTracks, requestHydratedAudioTrack, shuffleMode])
 
   const commitTrackCardPreview = useCallback((tokenId: number) => {

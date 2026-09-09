@@ -270,16 +270,6 @@ export async function loadAudioCoverPixels(input: AudioLoadCoverPixelsInput): Pr
   return parseCoverPixels(response, input.maxEdge)
 }
 
-export type WebviewUiBurstSettledInput = {
-  activityUnits: number
-}
-
-export async function noteWebviewUiBurstSettled(
-  input: WebviewUiBurstSettledInput,
-): Promise<void> {
-  return invoke<void>('webview_note_ui_burst_settled', input)
-}
-
 export function isAudioCoverPixelsError(error: unknown): error is AudioCoverPixelsError {
   if (!error || typeof error !== 'object') return false
   const candidate = error as Partial<AudioCoverPixelsError>

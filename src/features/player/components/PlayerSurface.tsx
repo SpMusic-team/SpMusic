@@ -455,6 +455,11 @@ export function PlayerSurface({
   const [trackCardSession, setTrackCardSession] = useState<TrackCardTransitionSession | null>(null)
   const trackCardSessionRef = useRef<TrackCardTransitionSession | null>(null)
   const publishTrackCardSession = useCallback((session: TrackCardTransitionSession | null) => {
+    const current = trackCardSessionRef.current
+    if (
+      (current === null && session === null)
+      || (current !== null && session !== null && trackCardSessionsMatch(current, session))
+    ) return
     trackCardSessionRef.current = session
     setTrackCardSession(session)
   }, [])
@@ -1104,7 +1109,16 @@ export function PlayerSurface({
     const gesture = coverDragRef.current
     const outgoing = artworkSlots.find((layer) => layer?.phase === 'active')
     const incoming = artworkSlots.find((layer) => layer?.previewTokenId === trackCardPreviewToken.id)
-    if (!gesture || gesture.released || !outgoing || !incoming || gesture.token?.id !== trackCardPreviewToken.id) return
+    if (
+      !gesture
+      || gesture.released
+      || !outgoing
+      || !incoming
+      || gesture.token?.id !== trackCardPreviewToken.id
+      || gesture.direction !== trackCardPreviewToken.direction
+      || gesture.token.direction !== gesture.direction
+      || gesture.token.originTrackId !== gesture.originTrackId
+    ) return
     const session: TrackCardTransitionSession = {
       key: `drag:${trackCardPreviewToken.id}`,
       outgoingLayerId: outgoing.id,
@@ -1146,6 +1160,11 @@ export function PlayerSurface({
     if (!trackCardGeometryReady) return
     const sessionKey = `selection:${intent.requestId}`
     const activeSession = trackCardSessionRef.current
+    const activeGesture = coverDragRef.current
+    // A live pointer gesture owns the card pair. Publishing an automatic
+    // selection session here would race the preview-ready layout effect and
+    // make both effects continuously replace each other's session.
+    if (activeGesture && !activeGesture.released) return
     if (
       activeSession
       && activeSession.key === sessionKey
@@ -1161,7 +1180,10 @@ export function PlayerSurface({
       intent.previewTokenId !== undefined
       && activeSession?.kind === 'drag'
       && activeSession.outgoingLayerId === outgoing.id
-      && activeSession.incomingLayerId === incoming.id,
+      && activeSession.incomingLayerId === incoming.id
+      && activeSession.direction === intent.direction
+      && trackCardSettleRef.current?.target === 1
+      && trackCardSettleRef.current.session === activeSession,
     )
     if (continuesCommittedDrag) {
       // Committing a prepared drag promotes the same preview layer pair into
@@ -1179,6 +1201,10 @@ export function PlayerSurface({
       setTrackCardPreviewToken(null)
       return
     }
+    // Drag rollback/cleanup retains ownership until its session is removed.
+    // A mismatched promoted pair is stale and must be handled by the existing
+    // cancellation/stale-session paths instead of falling through to auto.
+    if (activeSession?.kind === 'drag') return
     stopTrackCardAnimation()
     const runId = trackCardRunIdRef.current
     const session: TrackCardTransitionSession = {

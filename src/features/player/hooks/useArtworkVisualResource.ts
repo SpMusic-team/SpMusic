@@ -4,7 +4,6 @@ import type { TrackCardPreviewToken, TrackSelectionVisualIntent } from '@/featur
 import {
   isAudioCoverPixelsError,
   loadAudioCoverPixels,
-  noteWebviewUiBurstSettled,
   type AudioCoverPixels,
   type AudioLoadCoverPixelsInput,
 } from '@/features/player/services/audioCommands'
@@ -437,10 +436,6 @@ type ArtworkPrefetchDebug = {
   foregroundDeduplicated: number
   coldDebounceWaits: number
   coldDebounced: number
-  uiBurstReports: number
-  uiBurstActivityUnits: number[]
-  uiBurstLastSequence: number
-  uiBurstReportErrors: number
   foregroundPreemptions: number
   foregroundRetries: number
   coverPixelInvokes: number
@@ -660,7 +655,6 @@ export function useArtworkVisualResource(
 ): UseArtworkVisualResourceResult {
   const [layers, setLayers] = useState<ArtworkVisualLayer[]>([])
   const [coverMaxEdge, setCoverMaxEdge] = useState(selectCoverMaxEdge)
-  const [uiBurstReportRevision, setUiBurstReportRevision] = useState(0)
   const [prefetchRetryRevision, setPrefetchRetryRevision] = useState(0)
   const [paintedPreviewTokenId, setPaintedPreviewTokenId] = useState<number | null>(null)
   const paintedLayerIdsRef = useRef(new Set<number>())
@@ -681,9 +675,6 @@ export function useArtworkVisualResource(
   const promotedArtworkRef = useRef<PreparedArtwork | null>(null)
   const adjacentWarmControllersRef = useRef(new Map<string, AbortController>())
   const prefetchRetryCountsRef = useRef(new Map<string, number>())
-  const lastReportedActivitySequenceRef = useRef(0)
-  const latestActivitySequenceRef = useRef(selectionActivitySequence)
-  const uiBurstReportInFlightRef = useRef(false)
   const resourceRegistryRef = useRef(new Map<string, ArtworkResourceRegistryEntry>())
   const pinnedIdentitiesRef = useRef(new Set<string>())
   const slotFlushFrameRef = useRef<number | null>(null)
@@ -785,10 +776,6 @@ export function useArtworkVisualResource(
     foregroundDeduplicated: 0,
     coldDebounceWaits: 0,
     coldDebounced: 0,
-    uiBurstReports: 0,
-    uiBurstActivityUnits: [],
-    uiBurstLastSequence: 0,
-    uiBurstReportErrors: 0,
     foregroundPreemptions: 0,
     foregroundRetries: 0,
     coverPixelInvokes: 0,
@@ -944,10 +931,6 @@ export function useArtworkVisualResource(
     }
     latestArtworkDetailsReadyRef.current = !detailsPending || Boolean(matchingPrefetchCandidate)
   }, [currentTransitionIntent, detailsPending, effectiveArtwork, effectiveTrack, matchingPrefetchCandidate])
-
-  useLayoutEffect(() => {
-    latestActivitySequenceRef.current = selectionActivitySequence
-  }, [selectionActivitySequence])
 
   useLayoutEffect(() => {
     let frameId: number | null = null
@@ -2042,66 +2025,6 @@ export function useArtworkVisualResource(
     scheduleSlotRelease,
   ])
 
-  useEffect(() => {
-    const currentSequence = Math.max(0, Math.floor(selectionActivitySequence))
-    if (
-      currentSequence <= lastReportedActivitySequenceRef.current
-      || uiBurstReportInFlightRef.current
-      || detailsPending
-      || !requestIdentity
-      || foregroundRequestRef.current !== null
-      || queuedLayerRef.current !== null
-      || layersRef.current.length !== 1
-    ) return
-
-    const stableLayer = layersRef.current[0]
-    if (stableLayer?.phase !== 'active' || stableLayer.identity !== requestIdentity) return
-
-    const latest = latestRequestRef.current
-    if (
-      !latest.track
-      || !latest.requestedArtwork
-      || latest.track.id !== latest.requestedArtwork.id
-    ) return
-
-    const activityUnits = Math.min(
-      8,
-      Math.max(1, currentSequence - lastReportedActivitySequenceRef.current),
-    )
-    uiBurstReportInFlightRef.current = true
-    void noteWebviewUiBurstSettled({ activityUnits })
-      .then(() => {
-        lastReportedActivitySequenceRef.current = Math.max(
-          lastReportedActivitySequenceRef.current,
-          currentSequence,
-        )
-        const debug = prefetchDebugRef.current
-        debug.uiBurstReports += 1
-        debug.uiBurstActivityUnits.push(activityUnits)
-        if (debug.uiBurstActivityUnits.length > 32) debug.uiBurstActivityUnits.shift()
-        debug.uiBurstLastSequence = lastReportedActivitySequenceRef.current
-      })
-      .catch((error: unknown) => {
-        prefetchDebugRef.current.uiBurstReportErrors += 1
-        console.debug('WebView UI burst settlement notification failed', error)
-      })
-      .finally(() => {
-        uiBurstReportInFlightRef.current = false
-        // A later selection can already be visually stable while this invoke is
-        // pending. Re-evaluate only for genuinely newer activity; a failure for
-        // the same sequence therefore cannot create an automatic retry loop.
-        if (latestActivitySequenceRef.current > currentSequence) {
-          setUiBurstReportRevision((revision) => revision + 1)
-        }
-      })
-  }, [
-    detailsPending,
-    layers,
-    requestIdentity,
-    selectionActivitySequence,
-    uiBurstReportRevision,
-  ])
-
   useEffect(() => () => {
     generationRef.current += 1
     requestControllerRef.current?.abort()
@@ -2127,11 +2050,11 @@ export function useArtworkVisualResource(
     canvasPoolRef.current = null
   }, [clearRegistry, evictPreparedArtwork])
 
-  const slots: readonly [ArtworkVisualLayer | null, ArtworkVisualLayer | null, ArtworkVisualLayer | null] = [
+  const slots = useMemo<readonly [ArtworkVisualLayer | null, ArtworkVisualLayer | null, ArtworkVisualLayer | null]>(() => [
     layers.find((layer) => layer.slot === 0) ?? null,
     layers.find((layer) => layer.slot === 1) ?? null,
     layers.find((layer) => layer.slot === 2) ?? null,
-  ]
+  ], [layers])
   const currentArtworkReady = !effectiveTrack
     || (!effectiveArtwork && !detailsPending)
     || Boolean(

@@ -1437,12 +1437,12 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
 ) .control-dock {
   position: relative;
   inset: auto;
-  width: calc(526 * var(--player-layout-unit));
-  max-width: 100%;
-  height: calc(145 * var(--player-layout-unit));
-  margin: 0;
-  padding: calc(23 * var(--player-layout-unit)) 0;
-  border-radius: calc(30 * var(--player-layout-unit));
+  width: calc(100% - 40px);
+  max-width: none;
+  height: 145px;
+  margin-inline: 20px;
+  padding: 23px 0;
+  border-radius: 30px;
   align-self: center;
   justify-self: center;
   transform: none;
@@ -1470,8 +1470,59 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
 ) .progress-row[data-long-time] {
   grid-template-columns:
     calc(100 * var(--player-layout-unit))
-    calc(225 * var(--player-layout-unit))
+    minmax(300px, 1fr)
     calc(100 * var(--player-layout-unit));
+  gap: 24px;
+  padding-inline: clamp(54px, calc((100% - 548px) / 2), 81px);
+}
+
+/* Keep the progress control visually identical to the full-screen player. */
+.responsive-player-layout:is(
+  [data-player-layout="vertical"],
+  [data-player-layout="quarter"]:not([data-player-short="true"])
+) .progress-row {
+  height: calc(28 * var(--player-layout-unit));
+  grid-template-columns:
+    calc(72 * var(--player-layout-unit))
+    minmax(300px, 1fr)
+    calc(72 * var(--player-layout-unit));
+  gap: 24px;
+  padding-inline: clamp(54px, calc((100% - 492px) / 2), 81px);
+  font-size: calc(22 * var(--player-layout-unit));
+  line-height: calc(28 * var(--player-layout-unit));
+}
+
+.responsive-player-layout:is(
+  [data-player-layout="vertical"],
+  [data-player-layout="quarter"]:not([data-player-short="true"])
+) .control-dock[data-playback-state="paused"] .progress-row {
+  font-size: calc(16 * var(--player-layout-unit));
+  line-height: calc(24 * var(--player-layout-unit));
+}
+
+.responsive-player-layout:is(
+  [data-player-layout="vertical"],
+  [data-player-layout="quarter"]:not([data-player-short="true"])
+) .control-progress-slider {
+  min-width: 300px;
+  height: calc(28 * var(--player-layout-unit));
+}
+
+.responsive-player-layout:is(
+  [data-player-layout="vertical"],
+  [data-player-layout="quarter"]:not([data-player-short="true"])
+) .control-progress-slider [data-slot="slider-track"] {
+  height: calc(6 * var(--player-layout-unit));
+}
+
+.responsive-player-layout:is(
+  [data-player-layout="vertical"],
+  [data-player-layout="quarter"]:not([data-player-short="true"])
+) .control-progress-slider [data-slot="slider-thumb"] {
+  width: calc(23 * var(--player-layout-unit));
+  height: calc(23 * var(--player-layout-unit));
+  width: round(nearest, calc(23 * var(--player-layout-unit)), 1px);
+  height: round(nearest, calc(23 * var(--player-layout-unit)), 1px);
 }
 
 .responsive-player-layout:is(
@@ -1480,8 +1531,15 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
 ) .control-row {
   height: calc(76 * var(--player-layout-unit));
   margin-top: calc(1 * var(--player-layout-unit));
-  padding-inline: calc(18 * var(--player-layout-unit));
+  padding-inline: clamp(46px, calc((100% - 492px) / 2 - 8px), 73px);
   grid-template-columns: calc(48 * var(--player-layout-unit)) minmax(0, 1fr) calc(48 * var(--player-layout-unit));
+}
+
+.responsive-player-layout:is(
+  [data-player-layout="vertical"],
+  [data-player-layout="quarter"]:not([data-player-short="true"])
+) .control-dock:has(.progress-row[data-long-time]) .control-row {
+  padding-inline: clamp(46px, calc((100% - 548px) / 2 - 8px), 73px);
 }
 
 .responsive-player-layout:is(
@@ -1541,6 +1599,377 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
   [data-player-layout="quarter"]:not([data-player-short="true"])
 ) .control-auxiliary-end > .control-optional {
   display: none;
+}
+
+/* The tall quarter-screen composition uses the same external playback row
+   as the vertical-half composition. */
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .player-stage {
+  grid-template-rows:
+    var(--quarter-cover-size)
+    auto
+    minmax(0, 1fr)
+    245px;
+  overflow: visible;
+}
+
+.responsive-player-layout:is(
+  [data-player-layout="vertical"],
+  [data-player-layout="quarter"]:not([data-player-short="true"])
+) .player-control-region {
+  grid-area: dock;
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: 72px 28px 145px;
+  pointer-events: none;
+}
+
+.responsive-player-layout:is(
+  [data-player-layout="vertical"],
+  [data-player-layout="quarter"]:not([data-player-short="true"])
+) .player-external-mode-row {
+  box-sizing: border-box;
+  min-width: 0;
+  padding-inline: 43px;
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr) 72px;
+  align-items: end;
+  justify-items: center;
+  pointer-events: auto;
+  grid-column: 1;
+  grid-row: 1;
+  width: 100%;
+}
+
+.responsive-player-layout:is(
+  [data-player-layout="vertical"],
+  [data-player-layout="quarter"]:not([data-player-short="true"])
+) .external-mode-button {
+  width: 72px;
+  height: 72px;
+  padding: 0;
+  display: inline-flex;
+  border-radius: 999px;
+  background: var(--player-blue-soft);
+  color: var(--player-blue);
+  box-shadow: 0 4px 4px rgba(0, 0, 0, .25);
+}
+
+.responsive-player-layout:is(
+  [data-player-layout="vertical"],
+  [data-player-layout="quarter"]:not([data-player-short="true"])
+) .external-mode-button:hover,
+.responsive-player-layout:is(
+  [data-player-layout="vertical"],
+  [data-player-layout="quarter"]:not([data-player-short="true"])
+) .external-mode-button:active {
+  background: var(--player-blue-soft);
+  color: var(--player-blue);
+  transform: none;
+  translate: none;
+  scale: none;
+}
+
+.responsive-player-layout:is(
+  [data-player-layout="vertical"],
+  [data-player-layout="quarter"]:not([data-player-short="true"])
+) .external-mode-button svg,
+.responsive-player-layout:is(
+  [data-player-layout="vertical"],
+  [data-player-layout="quarter"]:not([data-player-short="true"])
+) .external-mode-button .player-control-icon-frame {
+  width: 48px;
+  height: 48px;
+}
+
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .player-control-region .control-dock {
+  grid-column: 1;
+  grid-row: 3;
+  pointer-events: auto;
+}
+
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .player-external-mode-row {
+  padding-inline: 30px;
+}
+
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .player-control-region {
+  width: calc(100% + 52px);
+  margin-inline: -26px;
+}
+
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .playback-info-button {
+  box-sizing: border-box;
+  width: fit-content;
+  max-width: min(332px, 100%);
+  min-height: 40px;
+  max-height: 40px;
+  padding: 0;
+  display: inline-flex;
+  border: 0;
+  border-radius: 30px;
+  background: var(--player-volume-surface);
+  color: var(--player-blue);
+  overflow: hidden;
+}
+
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .playback-info-button-content {
+  padding: 10px 20px;
+  gap: 10px;
+}
+
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .playback-info-button-content > svg {
+  width: 16px;
+  height: 16px;
+  flex-basis: 16px;
+}
+
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .playback-info-button-text {
+  max-width: 266px;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+/* Quarter-screen controller icons stay at the design-pixel size while the
+   surrounding player content continues to respond to viewport width. */
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .control-row {
+  height: 76px;
+}
+
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .control-primary,
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .control-transport {
+  gap: 0;
+}
+
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .control-transport {
+  display: flex;
+  align-items: center;
+  gap: 36px;
+}
+
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .control-primary button,
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .control-auxiliary button {
+  width: 48px;
+  height: 48px;
+  flex: 0 0 48px;
+}
+
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .control-primary button svg,
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .control-auxiliary button svg,
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .control-primary .player-control-icon-frame,
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .control-auxiliary .player-control-icon-frame {
+  width: 48px;
+  height: 48px;
+}
+
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .control-primary .previous-button,
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .control-primary .next-button {
+  width: 64px;
+  height: 64px;
+  flex-basis: 64px;
+}
+
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .control-primary .previous-button svg,
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .control-primary .next-button svg,
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .control-primary .previous-button .player-control-icon-frame,
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .control-primary .next-button .player-control-icon-frame {
+  width: 32px;
+  height: 32px;
+}
+
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .control-primary .play-button {
+  width: 76px;
+  height: 76px;
+  flex-basis: 76px;
+}
+
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .control-primary .play-button svg,
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .control-primary .play-button .player-control-icon-frame {
+  width: 48px;
+  height: 48px;
+}
+
+/* Match the full-screen transport sizing and paused/playing transition. */
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .control-transport {
+  gap: 36px;
+  transition-property: gap;
+  transition-duration: var(--player-control-transition-duration);
+  transition-timing-function: var(--app-motion-easing);
+}
+
+.responsive-player-layout:is(
+  [data-player-layout="vertical"],
+  [data-player-layout="quarter"]:not([data-player-short="true"])
+) .progress-row {
+  transition-property: font-size, line-height;
+  transition-duration: var(--player-control-transition-duration);
+  transition-timing-function: var(--app-motion-easing);
+}
+
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .control-primary[data-playback-state="paused"] .control-transport {
+  gap: 12px;
+}
+
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .control-primary .previous-button,
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .control-primary .next-button {
+  width: 64px;
+  height: 64px;
+  flex-basis: 64px;
+  transition-property: width, height, flex-basis;
+  transition-duration: var(--player-control-transition-duration);
+  transition-timing-function: var(--app-motion-easing);
+}
+
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .control-primary[data-playback-state="paused"] .previous-button,
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .control-primary[data-playback-state="paused"] .next-button {
+  width: 56px;
+  height: 56px;
+  flex-basis: 56px;
+}
+
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .control-primary .play-button {
+  width: 76px;
+  height: 76px;
+  flex-basis: 76px;
+  transition-property: width, height, flex-basis;
+  transition-duration: var(--player-control-transition-duration);
+  transition-timing-function: var(--app-motion-easing);
+}
+
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .control-primary[data-playback-state="paused"] .play-button {
+  width: 84px;
+  height: 84px;
+  flex-basis: 84px;
+}
+
+/* Match the full-screen playback-info badge transition. */
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .playback-info-button {
+  interpolate-size: allow-keywords;
+  transition-property: width, height, border-radius, color;
+  transition-duration: var(--player-control-transition-duration);
+  transition-timing-function: var(--app-motion-easing);
+}
+
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .playback-info-button:hover,
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .playback-info-button:active {
+  background: var(--player-volume-surface);
+  color: var(--player-blue);
+  transform: none;
+  translate: none;
+  scale: none;
+}
+
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .playback-info-button-content {
+  transition: padding var(--player-control-transition-duration) var(--app-motion-easing);
+}
+
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .playback-info-button-content > svg {
+  transition:
+    width var(--player-control-transition-duration) var(--app-motion-easing),
+    height var(--player-control-transition-duration) var(--app-motion-easing),
+    flex-basis var(--player-control-transition-duration) var(--app-motion-easing);
+}
+
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .playback-info-button-text {
+  transition:
+    font-size var(--player-control-transition-duration) var(--app-motion-easing),
+    line-height var(--player-control-transition-duration) var(--app-motion-easing);
+}
+
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .playback-info-button[data-playback-state="paused"] {
+  color: var(--player-blue-soft);
+}
+
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .playback-info-button[data-playback-state="paused"] .playback-info-button-content > svg {
+  width: 14px;
+  height: 14px;
+  flex-basis: 14px;
+}
+
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .playback-info-button[data-playback-state="paused"] .playback-info-button-text {
+  font-size: 12px;
+  line-height: 16px;
+}
+
+/* Keep the vertical-half controller in sync with the full-screen transport
+   and playback-info transitions. */
+.responsive-player-layout[data-player-layout="vertical"] .control-transport {
+  transition-property: gap;
+  transition-duration: var(--player-control-transition-duration);
+  transition-timing-function: var(--app-motion-easing);
+}
+
+.responsive-player-layout[data-player-layout="vertical"] .control-primary[data-playback-state="paused"] .control-transport {
+  gap: calc(12 * var(--player-layout-unit));
+}
+
+.responsive-player-layout[data-player-layout="vertical"] .control-primary .previous-button,
+.responsive-player-layout[data-player-layout="vertical"] .control-primary .next-button,
+.responsive-player-layout[data-player-layout="vertical"] .control-primary .play-button {
+  transition-property: width, height, flex-basis;
+  transition-duration: var(--player-control-transition-duration);
+  transition-timing-function: var(--app-motion-easing);
+}
+
+.responsive-player-layout[data-player-layout="vertical"] .control-primary[data-playback-state="paused"] .previous-button,
+.responsive-player-layout[data-player-layout="vertical"] .control-primary[data-playback-state="paused"] .next-button {
+  width: calc(56 * var(--player-layout-unit));
+  height: calc(56 * var(--player-layout-unit));
+  flex-basis: calc(56 * var(--player-layout-unit));
+}
+
+.responsive-player-layout[data-player-layout="vertical"] .control-primary[data-playback-state="paused"] .play-button {
+  width: calc(84 * var(--player-layout-unit));
+  height: calc(84 * var(--player-layout-unit));
+  flex-basis: calc(84 * var(--player-layout-unit));
+}
+
+.responsive-player-layout[data-player-layout="vertical"] .playback-info-button {
+  interpolate-size: allow-keywords;
+  transition-property: width, height, border-radius, color;
+  transition-duration: var(--player-control-transition-duration);
+  transition-timing-function: var(--app-motion-easing);
+}
+
+.responsive-player-layout[data-player-layout="vertical"] .playback-info-button:hover,
+.responsive-player-layout[data-player-layout="vertical"] .playback-info-button:active {
+  background: var(--player-volume-surface);
+  color: var(--player-blue);
+  transform: none;
+  translate: none;
+  scale: none;
+}
+
+.responsive-player-layout[data-player-layout="vertical"] .playback-info-button-content {
+  transition: padding var(--player-control-transition-duration) var(--app-motion-easing);
+}
+
+.responsive-player-layout[data-player-layout="vertical"] .playback-info-button-content > svg {
+  transition:
+    width var(--player-control-transition-duration) var(--app-motion-easing),
+    height var(--player-control-transition-duration) var(--app-motion-easing),
+    flex-basis var(--player-control-transition-duration) var(--app-motion-easing);
+}
+
+.responsive-player-layout[data-player-layout="vertical"] .playback-info-button-text {
+  transition:
+    font-size var(--player-control-transition-duration) var(--app-motion-easing),
+    line-height var(--player-control-transition-duration) var(--app-motion-easing);
+}
+
+.responsive-player-layout[data-player-layout="vertical"] .playback-info-button[data-playback-state="paused"] {
+  color: var(--player-blue-soft);
+}
+
+.responsive-player-layout[data-player-layout="vertical"] .playback-info-button[data-playback-state="paused"] .playback-info-button-content > svg {
+  width: calc(14 * var(--player-layout-unit));
+  height: calc(14 * var(--player-layout-unit));
+  flex-basis: calc(14 * var(--player-layout-unit));
+}
+
+.responsive-player-layout[data-player-layout="vertical"] .playback-info-button[data-playback-state="paused"] .playback-info-button-text {
+  font-size: calc(12 * var(--player-layout-unit));
+  line-height: calc(16 * var(--player-layout-unit));
 }
 
 /* Keep the wide edge of the quarter layout geometrically continuous with

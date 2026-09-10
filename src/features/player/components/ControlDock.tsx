@@ -103,9 +103,9 @@ export function ExternalPlaybackModeControls({ playback, playbackInfo }: Externa
 
   return (
     <div className="player-external-mode-row">
-      <IconButton className="external-mode-button" icon={shufflePresentation.icon} label={shufflePresentation.label} selected={shufflePresentation.pressed} disabled={disabled} onClick={handleShuffleCycle} />
+      <IconButton className="external-mode-button" icon={shufflePresentation.icon} label={shufflePresentation.label} selected={shufflePresentation.pressed} disabled={disabled} pressFeedback pressFeedbackTone="secondary-container" onClick={handleShuffleCycle} />
       {playbackInfo}
-      <IconButton className="external-mode-button" icon={repeatPresentation.icon} label={repeatPresentation.label} selected={repeatPresentation.pressed} disabled={disabled} onClick={handleRepeatCycle} />
+      <IconButton className="external-mode-button" icon={repeatPresentation.icon} label={repeatPresentation.label} selected={repeatPresentation.pressed} disabled={disabled} pressFeedback pressFeedbackTone="secondary-container" onClick={handleRepeatCycle} />
     </div>
   )
 }

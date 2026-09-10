@@ -140,6 +140,7 @@ const TrackCardMotionLayer = memo(function TrackCardMotionLayer({
   const readyPendingRef = useRef(false)
   const planeTransform = useMotionValue('none')
   const contentOpacity = useMotionValue(1)
+  const isStandaloneActive = phase === 'active' && role === null
   useArtworkResourceConsumer(layer.resource)
 
   // useTransform keeps the transformer captured by its first subscription.
@@ -252,13 +253,18 @@ const TrackCardMotionLayer = memo(function TrackCardMotionLayer({
         transformOrigin: coverGeometry
           ? `${coverGeometry.centerX}px ${coverGeometry.centerY}px`
           : '50% 50%',
-        pointerEvents: acceptsDrag || (phase === 'active' && role === null) ? 'auto' : 'none',
+        pointerEvents: acceptsDrag || isStandaloneActive ? 'auto' : 'none',
       }}
       aria-hidden={phase !== 'active' || role !== null || undefined}
     >
+      {/* A released transition layer can remain in the artwork pool while a
+          newer drag owns the only valid card pair. If that old exiting layer
+          loses its role, rendering it as a normal card resets its transform
+          to the centre and produces the rapid-drag recoil. Only the one
+          unowned active layer is allowed to use the static visible pose. */}
       <motion.div
         className="track-card-content"
-        style={{ opacity: role ? contentOpacity : phase === 'preview' || phase === 'incoming' ? 0 : 1 }}
+        style={{ opacity: role ? contentOpacity : isStandaloneActive ? 1 : 0 }}
       >
         <CoverPanel
           layer={layer}
@@ -331,6 +337,28 @@ function resolveRenderedTrackCardSession(
   artworkSlots: readonly [ArtworkVisualLayer | null, ArtworkVisualLayer | null, ArtworkVisualLayer | null],
   previewToken: TrackCardPreviewToken | null,
 ): TrackCardTransitionSession | null {
+  const liveDragOutgoing = liveSession?.kind === 'drag'
+    ? artworkSlots.find((layer) => (
+      layer?.id === liveSession.outgoingLayerId
+      && (layer.phase === 'active' || layer.phase === 'exiting')
+    ))
+    : null
+  const liveDragIncoming = liveSession?.kind === 'drag'
+    ? artworkSlots.find((layer) => (
+      layer?.id === liveSession.incomingLayerId
+      && (layer.phase === 'preview' || layer.phase === 'incoming' || layer.phase === 'active')
+    ))
+    : null
+  // A drag owns the shared progress from preview readiness through commit or
+  // rollback. The committed pair can gain automatic transition metadata before
+  // the drag settle is re-keyed; that metadata must not steal its render roles.
+  if (
+    liveSession?.kind === 'drag'
+    && liveDragOutgoing
+    && liveDragIncoming
+    && liveDragOutgoing.id !== liveDragIncoming.id
+  ) return liveSession
+
   const automaticIncoming = artworkSlots.find((layer) => (
     layer?.phase === 'active'
     && Boolean(layer.transitionIntent)
@@ -804,9 +832,22 @@ export function PlayerSurface({
       || !event.currentTarget.contains(coverFrame)
       || (event.target as HTMLElement).closest('button, [role="button"], a, input')
     ) return
-    const interruptedSession = trackCardSessionRef.current
+    let interruptedSession = trackCardSessionRef.current
     const interruptedSettle = trackCardSettleRef.current
     const interruptedProgress = trackCardProgress.get()
+    if (interruptedSession && !interruptedSettle) {
+      // A completed settle clears its context before React necessarily removes
+      // the outgoing layer. Retire that session synchronously before the new
+      // gesture is allowed to reset the shared MotionValue; otherwise the old
+      // outgoing subscriber still has a role and jumps back to progress zero.
+      stopTrackCardAnimation()
+      const completedOutgoingLayerId = interruptedSession.outgoingLayerId
+      flushSync(() => {
+        completeTrackCardExit(completedOutgoingLayerId)
+        publishTrackCardSession(null)
+      })
+      interruptedSession = null
+    }
     const plane = coverFrame.closest<HTMLElement>('.track-card-plane')
     const planeLayerId = Number.parseInt(plane?.dataset.trackCardLayerId ?? '', 10)
     const handoffLayerId = Number.isInteger(planeLayerId) ? planeLayerId : null
@@ -873,7 +914,7 @@ export function PlayerSurface({
     setCoverDragActive(true)
     coverInteractionPhaseRef.current = 'dragging'
     suppressCoverClickRef.current = false
-  }, [prepareTrackPreview, stopTrackCardAnimation, track, trackCardCoverGeometry, trackCardGeometryReady, trackCardProgress, trackCardReducedMotion])
+  }, [completeTrackCardExit, prepareTrackPreview, publishTrackCardSession, stopTrackCardAnimation, track, trackCardCoverGeometry, trackCardGeometryReady, trackCardProgress, trackCardReducedMotion])
 
   const handleCoverPointerMove = useCallback((event: CoverPointerSample) => {
     const gesture = coverDragRef.current

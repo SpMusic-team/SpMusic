@@ -10,6 +10,7 @@
 @import "./player/volume-control.css";
 @import "./player/queue-panel.css";
 @import "./player/playlist-panel.css";
+@import "./player/playlist-playback-dock.css";
 @import "./player/empty-state.css";
 @import "./player/appearance-overrides.css";
 @import "./player/responsive.css";

@@ -1590,6 +1590,11 @@ export function PlayerSurface({
               isOpenAudioDisabled={playlist.isOpenAudioDisabled || playbackTransitionPending}
               onOpenAudio={playlist.onOpenAudio}
               onTrackSelect={playlist.onTrackSelect}
+              playback={playback}
+              timeline={timeline}
+              visualIsPlaying={visualPlaybackState === 'playing'}
+              playbackTransitionPending={playbackTransitionPending}
+              onPlayToggle={handlePlayToggle}
               onClose={() => playlist.onOpenChange(false)}
             />
           ) : null}

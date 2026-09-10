@@ -1429,6 +1429,120 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
   padding: 0 0 0 calc(18 * var(--player-layout-unit));
 }
 
+/* The tall quarter and vertical-half views intentionally share one compact
+   controller. Duration text, not the viewport variant, decides track width. */
+.responsive-player-layout:is(
+  [data-player-layout="vertical"],
+  [data-player-layout="quarter"]:not([data-player-short="true"])
+) .control-dock {
+  position: relative;
+  inset: auto;
+  width: calc(526 * var(--player-layout-unit));
+  max-width: 100%;
+  height: calc(145 * var(--player-layout-unit));
+  margin: 0;
+  padding: calc(23 * var(--player-layout-unit)) 0;
+  border-radius: calc(30 * var(--player-layout-unit));
+  align-self: center;
+  justify-self: center;
+  transform: none;
+}
+
+.responsive-player-layout:is(
+  [data-player-layout="vertical"],
+  [data-player-layout="quarter"]:not([data-player-short="true"])
+) .progress-row {
+  height: calc(28 * var(--player-layout-unit));
+  grid-template-columns:
+    calc(72 * var(--player-layout-unit))
+    calc(300 * var(--player-layout-unit))
+    calc(72 * var(--player-layout-unit));
+  justify-content: space-between;
+  gap: calc(8 * var(--player-layout-unit));
+  padding-inline: calc(20 * var(--player-layout-unit));
+  font-size: calc(22 * var(--player-layout-unit));
+  line-height: calc(28 * var(--player-layout-unit));
+}
+
+.responsive-player-layout:is(
+  [data-player-layout="vertical"],
+  [data-player-layout="quarter"]:not([data-player-short="true"])
+) .progress-row[data-long-time] {
+  grid-template-columns:
+    calc(100 * var(--player-layout-unit))
+    calc(225 * var(--player-layout-unit))
+    calc(100 * var(--player-layout-unit));
+}
+
+.responsive-player-layout:is(
+  [data-player-layout="vertical"],
+  [data-player-layout="quarter"]:not([data-player-short="true"])
+) .control-row {
+  height: calc(76 * var(--player-layout-unit));
+  margin-top: calc(1 * var(--player-layout-unit));
+  padding-inline: calc(18 * var(--player-layout-unit));
+  grid-template-columns: calc(48 * var(--player-layout-unit)) minmax(0, 1fr) calc(48 * var(--player-layout-unit));
+}
+
+.responsive-player-layout:is(
+  [data-player-layout="vertical"],
+  [data-player-layout="quarter"]:not([data-player-short="true"])
+) .control-primary {
+  width: calc(276 * var(--player-layout-unit));
+  padding: 0;
+  gap: 0;
+}
+
+.responsive-player-layout:is(
+  [data-player-layout="vertical"],
+  [data-player-layout="quarter"]:not([data-player-short="true"])
+) .control-transport {
+  display: flex;
+  align-items: center;
+  gap: calc(36 * var(--player-layout-unit));
+}
+
+.responsive-player-layout:is(
+  [data-player-layout="vertical"],
+  [data-player-layout="quarter"]:not([data-player-short="true"])
+) .control-primary .previous-button,
+.responsive-player-layout:is(
+  [data-player-layout="vertical"],
+  [data-player-layout="quarter"]:not([data-player-short="true"])
+) .control-primary .next-button {
+  width: calc(64 * var(--player-layout-unit));
+  height: calc(64 * var(--player-layout-unit));
+  flex: 0 0 calc(64 * var(--player-layout-unit));
+}
+
+.responsive-player-layout:is(
+  [data-player-layout="vertical"],
+  [data-player-layout="quarter"]:not([data-player-short="true"])
+) .control-primary .play-button {
+  width: calc(76 * var(--player-layout-unit));
+  height: calc(76 * var(--player-layout-unit));
+  flex: 0 0 calc(76 * var(--player-layout-unit));
+}
+
+.responsive-player-layout:is(
+  [data-player-layout="vertical"],
+  [data-player-layout="quarter"]:not([data-player-short="true"])
+) .control-auxiliary {
+  width: calc(48 * var(--player-layout-unit));
+  padding: 0;
+}
+
+.responsive-player-layout:is(
+  [data-player-layout="vertical"],
+  [data-player-layout="quarter"]:not([data-player-short="true"])
+) .control-primary > .control-optional,
+.responsive-player-layout:is(
+  [data-player-layout="vertical"],
+  [data-player-layout="quarter"]:not([data-player-short="true"])
+) .control-auxiliary-end > .control-optional {
+  display: none;
+}
+
 /* Keep the wide edge of the quarter layout geometrically continuous with
    the 1120 x 1440 vertical-half reference before its composition changes. */
 @media (min-width: 640px) and (min-height: 800px) {

@@ -29,6 +29,8 @@ type ProgressControlProps = {
   timeline: PlayerTimelineViewModel
   disabled: boolean
   isPlaying: boolean
+  showTimes?: boolean
+  className?: string
 }
 
 type PlaybackModePresentation = {
@@ -108,7 +110,13 @@ export function ExternalPlaybackModeControls({ playback, playbackInfo }: Externa
   )
 }
 
-const ProgressControl = memo(function ProgressControl({ timeline, disabled, isPlaying }: ProgressControlProps) {
+export const ProgressControl = memo(function ProgressControl({
+  timeline,
+  disabled,
+  isPlaying,
+  showTimes = true,
+  className,
+}: ProgressControlProps) {
   const [semanticPosition, setSemanticPosition] = useState(timeline.positionSeconds)
   const pointerPreviewRef = useRef(false)
   const keyboardPreviewRef = useRef(false)
@@ -125,6 +133,9 @@ const ProgressControl = memo(function ProgressControl({ timeline, disabled, isPl
   const sliderPosition = timeline.interaction === 'following' && timeline.visualClock
     ? semanticPosition
     : timeline.positionSeconds
+  const formattedPosition = formatDuration(sliderPosition)
+  const formattedDuration = formatDuration(timeline.durationSeconds)
+  const hasHourTime = formattedPosition.split(':').length > 2 || formattedDuration.split(':').length > 2
 
   const updateVisualProgress = useCallback(() => {
     if (!timeline.visualClock || timelineInteractionRef.current !== 'following') return
@@ -299,8 +310,13 @@ const ProgressControl = memo(function ProgressControl({ timeline, disabled, isPl
   }, [])
 
   return (
-    <div className="progress-row control-progress" aria-label={appCopy.progress.label}>
-      <time ref={progressTimeRef} className="control-progress-time control-progress-time-start">{formatDuration(sliderPosition)}</time>
+    <div
+      className={`progress-row control-progress${className ? ` ${className}` : ''}`}
+      data-long-time={hasHourTime ? '' : undefined}
+      data-times-hidden={!showTimes ? '' : undefined}
+      aria-label={appCopy.progress.label}
+    >
+      {showTimes ? <time ref={progressTimeRef} className="control-progress-time control-progress-time-start">{formattedPosition}</time> : null}
       <Slider
         ref={progressSliderRef}
         className="control-progress-slider"
@@ -328,7 +344,7 @@ const ProgressControl = memo(function ProgressControl({ timeline, disabled, isPl
         step={0.01}
         value={sliderPosition}
       />
-      <time className="control-progress-time control-progress-time-end">{formatDuration(timeline.durationSeconds)}</time>
+      {showTimes ? <time className="control-progress-time control-progress-time-end">{formattedDuration}</time> : null}
     </div>
   )
 })

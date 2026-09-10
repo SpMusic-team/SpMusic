@@ -7,10 +7,11 @@ import { Input } from '@/components/ui/input'
 import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { IconButton } from '@/features/player/components/IconButton'
 import { PlaylistCard } from '@/features/player/components/PlaylistCard'
+import { PlaylistPlaybackDock } from '@/features/player/components/PlaylistPlaybackDock'
 import { coverToneForTrackId } from '@/features/player/model/audioTrackModel'
 import { appCopy } from '@/features/player/model/playerCopy'
 import type { ShuffleMode } from '@/features/player/model/playbackModes'
-import type { PlaylistHeroArtwork, PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
+import type { PlayerPlaybackViewModel, PlayerTimelineViewModel, PlaylistHeroArtwork, PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
 
 type PlaylistPanelProps = {
   tracks: PlaylistTrackItemViewModel[]
@@ -24,6 +25,11 @@ type PlaylistPanelProps = {
   isOpenAudioDisabled?: boolean
   onOpenAudio?: () => void
   onTrackSelect?: (trackId: string) => void
+  playback: PlayerPlaybackViewModel
+  timeline: PlayerTimelineViewModel
+  visualIsPlaying: boolean
+  playbackTransitionPending: boolean
+  onPlayToggle: () => void
   onClose: () => void
 }
 
@@ -51,6 +57,11 @@ export function PlaylistPanel({
   isOpenAudioDisabled,
   onOpenAudio,
   onTrackSelect,
+  playback,
+  timeline,
+  visualIsPlaying,
+  playbackTransitionPending,
+  onPlayToggle,
   onClose,
 }: PlaylistPanelProps) {
   const systemIcons = useSystemIcons()
@@ -254,6 +265,16 @@ export function PlaylistPanel({
           </EmptyHeader>
         </Empty>
       )}
+      <PlaylistPlaybackDock
+        playback={playback}
+        timeline={timeline}
+        visualIsPlaying={visualIsPlaying}
+        playbackTransitionPending={playbackTransitionPending}
+        onPlayToggle={onPlayToggle}
+        searchOpen={searchOpen}
+        onSearchToggle={handleSearchToggle}
+        onClose={onClose}
+      />
     </motion.section>
   )
 }

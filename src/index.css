@@ -37,6 +37,7 @@
   --player-dock: #f7f9ff99;
   --player-surface-variant: #dde3ea;
   --player-secondary-container: #d3e5f5;
+  --player-secondary-fix: #d3e5f5;
   --color-bg: var(--app-bg);
   --color-surface: var(--app-surface);
   --color-surface-muted: var(--app-surface-muted);

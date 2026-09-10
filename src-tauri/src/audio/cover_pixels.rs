@@ -1,11 +1,12 @@
 use std::{
+    collections::{HashMap, VecDeque},
     fs::{self, File},
     future::Future,
     io::{Cursor, Read},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU64, Ordering},
-        OnceLock,
+        Mutex as StdMutex, OnceLock,
     },
 };
 
@@ -31,8 +32,11 @@ const FLAG_ORIENTATION_APPLIED: u32 = 1 << 0;
 const FLAG_RESIZED: u32 = 1 << 1;
 
 const ALLOWED_MAX_EDGES: [u32; 7] = [256, 512, 768, 1024, 1536, 2048, 3072];
+const ALLOWED_PLAYLIST_MAX_EDGES: [u32; 2] = [256, 512];
+const MAX_PLAYLIST_CLIENTS: usize = 16;
 
 static REQUEST_COORDINATOR: OnceLock<CoverRequestCoordinator> = OnceLock::new();
+static PLAYLIST_REQUEST_COORDINATOR: OnceLock<PlaylistCoverRequestCoordinator> = OnceLock::new();
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -40,6 +44,21 @@ pub struct AudioLoadCoverPixelsInput {
     pub file_path: String,
     pub max_edge: u32,
     pub request_id: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioLoadPlaylistCoverPixelsInput {
+    pub client_id: String,
+    pub file_path: String,
+    pub max_edge: u32,
+    pub window_generation: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioBeginPlaylistCoverWindowInput {
+    pub client_id: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -53,6 +72,7 @@ pub enum CoverPixelsErrorCode {
     AllocationFailed,
     WorkerFailed,
     InvalidRequestId,
+    InvalidClientId,
     StaleRequest,
 }
 
@@ -153,6 +173,92 @@ impl CoverRequestCoordinator {
     }
 }
 
+struct PlaylistCoverRequestCoordinator {
+    clients: StdMutex<PlaylistCoverClients>,
+    decode_gate: tauri::async_runtime::Mutex<()>,
+}
+
+#[derive(Default)]
+struct PlaylistCoverClients {
+    generations: HashMap<String, u64>,
+    recency: VecDeque<String>,
+}
+
+impl PlaylistCoverRequestCoordinator {
+    fn new() -> Self {
+        Self {
+            clients: StdMutex::new(PlaylistCoverClients::default()),
+            decode_gate: tauri::async_runtime::Mutex::new(()),
+        }
+    }
+
+    fn begin_window(&self, client_id: &str) -> Result<u64, CoverPixelsError> {
+        validate_playlist_client_id(client_id)?;
+        let mut clients = self
+            .clients
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let generation = clients
+            .generations
+            .get(client_id)
+            .copied()
+            .unwrap_or(0)
+            .saturating_add(1);
+        clients.generations.insert(client_id.to_owned(), generation);
+        clients.recency.retain(|candidate| candidate != client_id);
+        clients.recency.push_back(client_id.to_owned());
+        while clients.recency.len() > MAX_PLAYLIST_CLIENTS {
+            if let Some(expired) = clients.recency.pop_front() {
+                clients.generations.remove(&expired);
+            }
+        }
+        Ok(generation)
+    }
+
+    fn ensure_current(
+        &self,
+        client_id: &str,
+        window_generation: u64,
+    ) -> Result<(), CoverPixelsError> {
+        let clients = self
+            .clients
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if clients.generations.get(client_id).copied() == Some(window_generation) {
+            Ok(())
+        } else {
+            Err(CoverPixelsError::stale())
+        }
+    }
+
+    async fn run_registered<T, F, Fut>(
+        &self,
+        client_id: &str,
+        window_generation: u64,
+        work: F,
+    ) -> Result<T, CoverPixelsError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<T, CoverPixelsError>>,
+    {
+        // Reject an already obsolete window before joining the decode queue. A
+        // generation can still advance while this request waits, so it is checked
+        // again after acquiring the gate and immediately before publishing output.
+        self.ensure_current(client_id, window_generation)?;
+        let _guard = self.decode_gate.lock().await;
+        self.ensure_current(client_id, window_generation)?;
+        let result = work().await?;
+        self.ensure_current(client_id, window_generation)?;
+        Ok(result)
+    }
+}
+
+pub fn begin_playlist_cover_window(client_id: &str) -> Result<u64, CoverPixelsError> {
+    PLAYLIST_REQUEST_COORDINATOR
+        .get_or_init(PlaylistCoverRequestCoordinator::new)
+        .begin_window(client_id)
+}
+
 pub async fn load_cover_pixels(
     app_cache_dir: PathBuf,
     input: AudioLoadCoverPixelsInput,
@@ -186,6 +292,41 @@ pub async fn load_cover_pixels(
         .await
 }
 
+pub async fn load_playlist_cover_pixels(
+    app_cache_dir: PathBuf,
+    input: AudioLoadPlaylistCoverPixelsInput,
+) -> Result<Vec<u8>, CoverPixelsError> {
+    validate_playlist_max_edge(input.max_edge)?;
+
+    // Playlist requests share a window generation rather than a per-cover latest-wins
+    // id. This coordinator is intentionally independent from foreground artwork so
+    // thumbnail hydration cannot supersede the currently playing cover request.
+    let coordinator =
+        PLAYLIST_REQUEST_COORDINATOR.get_or_init(PlaylistCoverRequestCoordinator::new);
+    let client_id = input.client_id.clone();
+    let window_generation = input.window_generation;
+    coordinator
+        .run_registered(&client_id, window_generation, || async move {
+            tauri::async_runtime::spawn_blocking(move || {
+                load_cover_pixels_blocking(&app_cache_dir, &input.file_path, input.max_edge)
+            })
+            .await
+            .map_err(|error| {
+                tracing::error!(
+                    operation = "audio.playlist_cover_pixels.join",
+                    window_generation,
+                    error = %error,
+                    "playlist cover pixel decoder worker failed",
+                );
+                CoverPixelsError::internal(
+                    CoverPixelsErrorCode::WorkerFailed,
+                    "playlist cover pixel decoder worker failed",
+                )
+            })?
+        })
+        .await
+}
+
 fn load_cover_pixels_blocking(
     app_cache_dir: &Path,
     requested_path: &str,
@@ -213,6 +354,33 @@ fn validate_max_edge(max_edge: u32) -> Result<(), CoverPixelsError> {
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
+        ))
+    }
+}
+
+fn validate_playlist_max_edge(max_edge: u32) -> Result<(), CoverPixelsError> {
+    if ALLOWED_PLAYLIST_MAX_EDGES.contains(&max_edge) {
+        Ok(())
+    } else {
+        Err(CoverPixelsError::recoverable(
+            CoverPixelsErrorCode::InvalidMaxEdge,
+            "playlist cover maxEdge must be 256 or 512",
+        ))
+    }
+}
+
+fn validate_playlist_client_id(client_id: &str) -> Result<(), CoverPixelsError> {
+    if !client_id.is_empty()
+        && client_id.len() <= 128
+        && client_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        Ok(())
+    } else {
+        Err(CoverPixelsError::recoverable(
+            CoverPixelsErrorCode::InvalidClientId,
+            "clientId must contain 1-128 ASCII letters, digits, hyphens, or underscores",
         ))
     }
 }
@@ -753,6 +921,9 @@ mod tests {
         assert!(validate_max_edge(255).is_err());
         assert!(validate_max_edge(3000).is_err());
         assert!(validate_max_edge(3073).is_err());
+        assert!(validate_playlist_max_edge(256).is_ok());
+        assert!(validate_playlist_max_edge(512).is_ok());
+        assert!(validate_playlist_max_edge(768).is_err());
     }
 
     #[test]
@@ -796,6 +967,96 @@ mod tests {
                 .await
                 .expect("latest request enters decode work");
             assert_eq!(entered_decode.load(Ordering::Acquire), 1);
+        });
+    }
+
+    #[test]
+    fn playlist_generation_allows_a_batch_and_rejects_older_windows() {
+        tauri::async_runtime::block_on(async {
+            let coordinator = PlaylistCoverRequestCoordinator::new();
+            let first_window = coordinator.begin_window("client-a").unwrap();
+            assert_eq!(first_window, 1);
+            coordinator
+                .run_registered("client-a", first_window, || async {
+                    Ok::<(), CoverPixelsError>(())
+                })
+                .await
+                .expect("first request in a window enters decode work");
+            coordinator
+                .run_registered("client-a", first_window, || async {
+                    Ok::<(), CoverPixelsError>(())
+                })
+                .await
+                .expect("same window shares the coordinator");
+            let next_window = coordinator.begin_window("client-a").unwrap();
+            assert_eq!(next_window, 2);
+
+            let stale = coordinator
+                .run_registered("client-a", first_window, || async {
+                    Ok::<(), CoverPixelsError>(())
+                })
+                .await
+                .expect_err("older window must be stale");
+            assert!(matches!(stale.code, CoverPixelsErrorCode::StaleRequest));
+
+            coordinator
+                .run_registered("client-a", next_window, || async {
+                    Ok::<(), CoverPixelsError>(())
+                })
+                .await
+                .expect("current window enters decode work");
+        });
+    }
+
+    #[test]
+    fn playlist_generation_change_discards_a_queued_request() {
+        tauri::async_runtime::block_on(async {
+            let coordinator = Arc::new(PlaylistCoverRequestCoordinator::new());
+            let old_window = coordinator.begin_window("client-a").unwrap();
+            let held_gate = coordinator.decode_gate.lock().await;
+            let stale_coordinator = Arc::clone(&coordinator);
+            let entered_decode = Arc::new(AtomicUsize::new(0));
+            let stale_counter = Arc::clone(&entered_decode);
+            let stale_task = tauri::async_runtime::spawn(async move {
+                stale_coordinator
+                    .run_registered("client-a", old_window, || async move {
+                        stale_counter.fetch_add(1, Ordering::AcqRel);
+                        Ok::<(), CoverPixelsError>(())
+                    })
+                    .await
+            });
+
+            coordinator.begin_window("client-a").unwrap();
+            drop(held_gate);
+
+            let stale = stale_task
+                .await
+                .expect("join queued request")
+                .expect_err("queued old window must be stale");
+            assert!(matches!(stale.code, CoverPixelsErrorCode::StaleRequest));
+            assert_eq!(entered_decode.load(Ordering::Acquire), 0);
+        });
+    }
+
+    #[test]
+    fn playlist_clients_do_not_supersede_each_other() {
+        tauri::async_runtime::block_on(async {
+            let coordinator = PlaylistCoverRequestCoordinator::new();
+            let old_client_window = coordinator.begin_window("old-client").unwrap();
+            let new_client_window = coordinator.begin_window("new-client").unwrap();
+
+            coordinator
+                .run_registered("old-client", old_client_window, || async {
+                    Ok::<(), CoverPixelsError>(())
+                })
+                .await
+                .expect("old client remains isolated");
+            coordinator
+                .run_registered("new-client", new_client_window, || async {
+                    Ok::<(), CoverPixelsError>(())
+                })
+                .await
+                .expect("new client remains isolated");
         });
     }
 }

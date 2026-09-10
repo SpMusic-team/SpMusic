@@ -17,6 +17,7 @@ import { demoTracks } from './demoTracks'
 
 export function DemoPlayerPage() {
   const [currentTrackId, setCurrentTrackId] = useState(demoTracks[0]?.id ?? null)
+  const [currentPlaylistTrackId, setCurrentPlaylistTrackId] = useState(fakePlaylistTracks[0]?.id ?? null)
   const [playing, setPlaying] = useState(false)
   const [transportTransition, setTransportTransition] = useState<AudioTransportTransition | null>(null)
   const [transportSettledRequestId, setTransportSettledRequestId] = useState<number | null>(null)
@@ -62,6 +63,18 @@ export function DemoPlayerPage() {
     setCurrentTrackId(demoTracks[nextIndex]?.id ?? null)
     setProgress(0)
   }, [currentTrackId, repeatMode, shuffleMode])
+
+  const selectPlaylistTrack = useCallback((trackId: string) => {
+    const playlistIndex = fakePlaylistTracks.findIndex((candidate) => candidate.id === trackId)
+    if (playlistIndex < 0 || demoTracks.length === 0) return
+    const mappedTrack = demoTracks[playlistIndex % demoTracks.length]
+    if (!mappedTrack) return
+    endingTrackRef.current = null
+    setCurrentPlaylistTrackId(trackId)
+    setCurrentTrackId(mappedTrack.id)
+    setProgress(0)
+    setPlaying(true)
+  }, [])
 
   useEffect(() => {
     if (!playing || !track || timelineInteraction !== 'following') return
@@ -199,11 +212,10 @@ export function DemoPlayerPage() {
       tracks: fakePlaylistTracks,
       playlistName: fakePlaylistName,
       totalDurationSeconds: fakePlaylistTotalSeconds,
-      currentTrackId: track?.id ?? null,
+      currentTrackId: currentPlaylistTrackId,
       shuffleMode,
       onShuffleCycle: () => setShuffleMode((value) => nextShuffleMode[value]),
-      // 假数据阶段：点任意歌曲只返回播放页.
-      onTrackSelect: () => setQueueOpen(false),
+      onTrackSelect: selectPlaylistTrack,
     },
     feedback: {
       value: track ? feedbackByTrackId[track.id] : undefined,

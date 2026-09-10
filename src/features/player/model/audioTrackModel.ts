@@ -1,4 +1,5 @@
 import { splitLyricTranslation } from '@/features/player/model/lyrics'
+import type { PlaylistTrackVisual } from '@/features/player/model/playerUiViewModel'
 import type { CoverTone, DemoLyricLine, Track } from '@/features/player/model/playerTypes'
 import {
   audioCoverArtFallbackUrl,
@@ -157,6 +158,24 @@ export function audioTrackToTrack(track: AudioTrackRef): Track {
     coverImageFallback: audioCoverArtFallbackUrl(track.metadata.coverArt),
     lyrics: metadataLyricsToLines(track, durationSeconds),
     audioFormat: track.metadata.audioFormat ?? undefined,
+  }
+}
+
+export function audioTrackToPlaylistVisual(track: AudioTrackRef): PlaylistTrackVisual {
+  const title = nonEmptyText(track.metadata.title) ?? fileNameTitle(track.fileName)
+  const artist = nonEmptyText(track.metadata.artist) ?? nonEmptyText(track.metadata.albumArtist) ?? '本地音频'
+  const album = nonEmptyText(track.metadata.album) ?? '本地音频'
+
+  return {
+    id: track.id,
+    title,
+    artist,
+    album,
+    durationSeconds: track.durationMs ? track.durationMs / 1000 : 0,
+    fileExtension: fileExtension(track.fileName),
+    coverTone: coverToneForTrackId(track.id),
+    audioFormat: track.metadata.audioFormat ?? undefined,
+    hasLocalArtwork: track.metadata.coverArt !== null,
   }
 }
 

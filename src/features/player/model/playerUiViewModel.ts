@@ -97,12 +97,32 @@ export type PlayerQueueViewModel = {
   onTrackSelect?: (trackId: string) => void
 }
 
+export type PlaylistCoverBitmap = Readonly<{
+  image: ImageBitmap
+  width: number
+  height: number
+}>
+
 export type PlaylistTrackItemViewModel = TrackSummary
   & Partial<Pick<Track, 'durationSeconds' | 'fileExtension' | 'coverTone' | 'coverImage' | 'coverImageFallback' | 'audioFormat'>>
+  & Readonly<{
+    hasLocalArtwork?: boolean
+    coverBitmap?: PlaylistCoverBitmap
+  }>
+
+export type PlaylistTrackVisual = Pick<
+  Track,
+  'id' | 'title' | 'artist' | 'album' | 'durationSeconds' | 'fileExtension' | 'coverTone' | 'audioFormat'
+> & Readonly<{
+  hasLocalArtwork: boolean
+  coverBitmap?: PlaylistCoverBitmap
+}>
 
 export type PlaylistHeroArtwork = Readonly<{
   trackId: string
   coverTone: CoverTone
+  hasLocalArtwork?: boolean
+  coverBitmap?: PlaylistCoverBitmap
   coverImage?: string
   coverImageFallback?: string
 }>
@@ -121,6 +141,7 @@ export type PlayerPlaylistViewModel = {
   shuffleMode: ShuffleMode
   onShuffleCycle: () => void
   onTrackSelect?: (trackId: string) => void
+  onVisibleTrackIdsChange?: (trackIds: readonly string[], keepPersistentArtwork?: boolean) => void
 }
 
 export type PlayerFeedbackViewModel = {

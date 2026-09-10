@@ -10,18 +10,18 @@ export function PlayerShell() {
   const [isPlaylistOpen, setIsPlaylistOpen] = useState(false)
   const currentTrackId = player.track?.id ?? null
   const playlistTracks = useMemo<PlaylistTrackItemViewModel[]>(() => player.queueTracks.map((queueTrack) => {
+    const windowedVisual = player.playlistTrackVisuals[queueTrack.id]
     const currentTrack = player.track
-    if (!currentTrack || queueTrack.id !== currentTrack.id) return queueTrack
+    if (!currentTrack || queueTrack.id !== currentTrack.id) return windowedVisual ?? queueTrack
     return {
-      ...queueTrack,
+      ...(windowedVisual ?? queueTrack),
       durationSeconds: currentTrack.durationSeconds,
       fileExtension: currentTrack.fileExtension,
       coverTone: currentTrack.coverTone,
-      coverImage: currentTrack.coverImage,
-      coverImageFallback: currentTrack.coverImageFallback,
+      hasLocalArtwork: Boolean(currentTrack.coverFilePath || currentTrack.coverImage || currentTrack.coverImageFallback),
       audioFormat: currentTrack.audioFormat,
     }
-  }), [player.queueTracks, player.track])
+  }), [player.playlistTrackVisuals, player.queueTracks, player.track])
   const playlistTotalSeconds = useMemo(() => {
     const knownDurations = playlistTracks
       .map((track) => track.durationSeconds)
@@ -112,6 +112,7 @@ export function PlayerShell() {
       onTrackSelect: player.audioBusy || player.transportBusy || player.timelineInteraction === 'seeking'
         ? undefined
         : player.selectQueueTrack,
+      onVisibleTrackIdsChange: player.setVisiblePlaylistTrackIds,
     },
     feedback: {
       value: player.currentFeedback,

@@ -2,7 +2,8 @@ import { BarChart3, Grid2X2, Menu, Search } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { ProgressControl } from '@/features/player/components/ControlDock'
-import type { PlayerPlaybackViewModel, PlayerTimelineViewModel } from '@/features/player/model/playerUiViewModel'
+import { PlaylistCoverCanvas } from '@/features/player/components/PlaylistCoverCanvas'
+import type { PlayerPlaybackViewModel, PlayerTimelineViewModel, PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
 import { coverToneForTrackId } from '@/features/player/model/audioTrackModel'
 
 type PlaylistPlaybackDockProps = {
@@ -10,6 +11,7 @@ type PlaylistPlaybackDockProps = {
   timeline: PlayerTimelineViewModel
   visualIsPlaying: boolean
   playbackTransitionPending: boolean
+  playlistTrack?: PlaylistTrackItemViewModel
   onPlayToggle: () => void
   searchOpen: boolean
   onSearchToggle: () => void
@@ -21,6 +23,7 @@ export function PlaylistPlaybackDock({
   timeline,
   visualIsPlaying,
   playbackTransitionPending,
+  playlistTrack,
   onPlayToggle,
   searchOpen,
   onSearchToggle,
@@ -31,6 +34,7 @@ export function PlaylistPlaybackDock({
   const artwork = playback.artwork
   const imageFallback = artwork?.coverImageFallback ?? track?.coverImageFallback
   const imageSource = artwork?.coverImage ?? track?.coverImage ?? imageFallback
+  const localArtwork = playlistTrack?.hasLocalArtwork ?? Boolean(artwork?.coverFilePath ?? track?.coverFilePath)
   const disabled = !track
   const commandBusy = playback.isAudioBusy
     || playback.isSelectionPending
@@ -41,27 +45,36 @@ export function PlaylistPlaybackDock({
   return (
     <aside className="playlist-playback-dock" aria-label="当前播放">
       <div className="playlist-playback-track" data-tone={track?.coverTone ?? coverToneForTrackId(track?.id ?? '')}>
-        <div className="playlist-playback-cover">
-          {imageSource ? (
-            <img
-              src={imageSource}
-              alt=""
-              onError={(event) => {
-                const image = event.currentTarget
-                if (imageFallback && image.dataset.fallbackApplied !== 'true') {
-                  image.dataset.fallbackApplied = 'true'
-                  image.src = imageFallback
-                  return
-                }
-                image.hidden = true
-              }}
-            />
-          ) : null}
-        </div>
-        <div className="playlist-playback-copy">
-          <strong>{track?.title ?? '未在播放'}</strong>
-          <span>{track ? `${track.artist}/${track.album}` : '选择一首歌曲开始播放'}</span>
-        </div>
+        <button
+          type="button"
+          className="playlist-playback-track-button"
+          aria-label={track ? `返回播放界面：${track.title}` : '返回播放界面'}
+          onClick={onClose}
+        >
+          <span className="playlist-playback-cover" aria-hidden="true">
+            {playlistTrack?.coverBitmap ? (
+              <PlaylistCoverCanvas bitmap={playlistTrack.coverBitmap} />
+            ) : !localArtwork && imageSource ? (
+              <img
+                src={imageSource}
+                alt=""
+                onError={(event) => {
+                  const image = event.currentTarget
+                  if (imageFallback && image.dataset.fallbackApplied !== 'true') {
+                    image.dataset.fallbackApplied = 'true'
+                    image.src = imageFallback
+                    return
+                  }
+                  image.hidden = true
+                }}
+              />
+            ) : null}
+          </span>
+          <span className="playlist-playback-copy">
+            <strong>{track?.title ?? '未在播放'}</strong>
+            <span>{track ? `${track.artist}/${track.album}` : '选择一首歌曲开始播放'}</span>
+          </span>
+        </button>
         <Button
           className="playlist-playback-toggle"
           size="icon-lg"

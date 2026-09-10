@@ -7,11 +7,13 @@ use std::sync::Once;
 use app_paths::AppPaths;
 use audio::current_output_info;
 use audio::{
-    load_cover_pixels, AudioCommandError, AudioController, AudioEmbedLyricsInput,
+    begin_playlist_cover_window, load_cover_pixels, load_playlist_cover_pixels,
+    AudioBeginPlaylistCoverWindowInput, AudioCommandError, AudioController, AudioEmbedLyricsInput,
     AudioFolderPlaylist, AudioFolderPlaylistInput, AudioLoadAndPlayInput, AudioLoadAndPlayResult,
-    AudioLoadCoverPixelsInput, AudioLoadFileInput, AudioOpenFileInput, AudioOpenSourceResult,
-    AudioOutputInfo, AudioPlayInput, AudioPlaybackState, AudioSeekInput, AudioSetVolumeInput,
-    AudioTrackRef, AudioTransitionPlaybackInput, CoverPixelsError,
+    AudioLoadCoverPixelsInput, AudioLoadFileInput, AudioLoadPlaylistCoverPixelsInput,
+    AudioOpenFileInput, AudioOpenSourceResult, AudioOutputInfo, AudioPlayInput, AudioPlaybackState,
+    AudioSeekInput, AudioSetVolumeInput, AudioTrackRef, AudioTransitionPlaybackInput,
+    CoverPixelsError,
 };
 use tauri::{ipc::Response, Manager, State};
 use tracing_subscriber::EnvFilter;
@@ -276,6 +278,47 @@ async fn audio_load_cover_pixels(
     Ok(Response::new(response))
 }
 
+#[tauri::command]
+async fn audio_load_playlist_cover_pixels(
+    state: State<'_, AppPaths>,
+    input: AudioLoadPlaylistCoverPixelsInput,
+) -> Result<Response, CoverPixelsError> {
+    tracing::debug!(
+        command = "audio_load_playlist_cover_pixels",
+        client_id = %input.client_id,
+        path = %input.file_path,
+        max_edge = input.max_edge,
+        window_generation = input.window_generation,
+        "Tauri command invoked",
+    );
+    let app_cache_dir = state.cache_dir.clone();
+    let client_id = input.client_id.clone();
+    let window_generation = input.window_generation;
+    let response = load_playlist_cover_pixels(app_cache_dir, input).await?;
+    tracing::debug!(
+        command = "audio_load_playlist_cover_pixels",
+        client_id,
+        window_generation,
+        response_byte_len = response.len(),
+        "Tauri command completed",
+    );
+    Ok(Response::new(response))
+}
+
+#[tauri::command]
+fn audio_begin_playlist_cover_window(
+    input: AudioBeginPlaylistCoverWindowInput,
+) -> Result<u64, CoverPixelsError> {
+    let window_generation = begin_playlist_cover_window(&input.client_id)?;
+    tracing::debug!(
+        command = "audio_begin_playlist_cover_window",
+        client_id = %input.client_id,
+        window_generation,
+        "playlist cover window generation allocated",
+    );
+    Ok(window_generation)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     init_tracing();
@@ -305,6 +348,8 @@ pub fn run() {
             audio_get_current_track,
             audio_get_output_info,
             audio_load_cover_pixels,
+            audio_begin_playlist_cover_window,
+            audio_load_playlist_cover_pixels,
         ])
         .setup(|app| {
             let app_paths = AppPaths::prepare()?;

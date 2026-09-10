@@ -1631,6 +1631,7 @@ export function PlayerSurface({
               isOpenAudioDisabled={playlist.isOpenAudioDisabled || playbackTransitionPending}
               onOpenAudio={playlist.onOpenAudio}
               onTrackSelect={playlist.onTrackSelect}
+              onVisibleTrackIdsChange={playlist.onVisibleTrackIdsChange}
               playback={playback}
               timeline={timeline}
               visualIsPlaying={visualPlaybackState === 'playing'}

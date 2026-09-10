@@ -78,6 +78,13 @@ export type AudioLoadCoverPixelsInput = {
   requestId: number
 }
 
+export type AudioLoadPlaylistCoverPixelsInput = {
+  clientId: string
+  filePath: string
+  maxEdge: 256 | 512
+  windowGeneration: number
+}
+
 export type AudioCoverPixels = {
   width: number
   height: number
@@ -225,7 +232,7 @@ function coverPixelBytes(response: ArrayBuffer | Uint8Array): Uint8Array {
 
 function parseCoverPixels(
   response: ArrayBuffer | Uint8Array,
-  maxEdge: AudioLoadCoverPixelsInput['maxEdge'],
+  maxEdge: AudioLoadCoverPixelsInput['maxEdge'] | AudioLoadPlaylistCoverPixelsInput['maxEdge'],
 ): AudioCoverPixels {
   const bytes = coverPixelBytes(response)
   if (bytes.byteLength < COVER_PIXELS_HEADER_LENGTH) throw new Error('Cover pixel response header is truncated')
@@ -283,6 +290,17 @@ function parseCoverPixels(
 export async function loadAudioCoverPixels(input: AudioLoadCoverPixelsInput): Promise<AudioCoverPixels> {
   const response = await invoke<ArrayBuffer | Uint8Array>('audio_load_cover_pixels', { input })
   return parseCoverPixels(response, input.maxEdge)
+}
+
+export async function loadAudioPlaylistCoverPixels(
+  input: AudioLoadPlaylistCoverPixelsInput,
+): Promise<AudioCoverPixels> {
+  const response = await invoke<ArrayBuffer | Uint8Array>('audio_load_playlist_cover_pixels', { input })
+  return parseCoverPixels(response, input.maxEdge)
+}
+
+export async function beginAudioPlaylistCoverWindow(clientId: string): Promise<number> {
+  return invoke<number>('audio_begin_playlist_cover_window', { input: { clientId } })
 }
 
 export function isAudioCoverPixelsError(error: unknown): error is AudioCoverPixelsError {

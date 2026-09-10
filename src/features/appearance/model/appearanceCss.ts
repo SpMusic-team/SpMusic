@@ -79,6 +79,7 @@ export function createAppearanceCssVars(appearance: AppearancePreset, resolvedCo
     '--player-dock': colors.playerDock,
     '--player-surface-variant': colors.playerSurfaceVariant,
     '--player-secondary-container': colors.playerSecondaryContainer,
+    '--player-secondary-fix': colors.playerSecondaryFix,
     '--player-controls-radius': controlLength(appearance.player.controls.radius * 0.6),
     '--player-controls-radius-short': `${compactNumber(appearance.player.controls.radius * 0.52)}px`,
     '--player-controls-shadow': appearance.player.controls.shadow / 200,

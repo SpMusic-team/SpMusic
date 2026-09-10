@@ -1,5 +1,6 @@
 import { memo, type SyntheticEvent } from 'react'
 import { useSystemIcons } from '@/features/appearance/hooks/useAppearance'
+import { PlaylistCoverCanvas } from '@/features/player/components/PlaylistCoverCanvas'
 import { appCopy } from '@/features/player/model/playerCopy'
 import type { PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
 import type { CoverTone } from '@/features/player/model/playerTypes'
@@ -12,6 +13,7 @@ type PlaylistCardProps = {
   canActivate: boolean
   selectMode: boolean
   selected: boolean
+  artworkVisible: boolean
   onActivate: (trackId: string) => void
   onToggleSelect: (trackId: string) => void
 }
@@ -30,6 +32,7 @@ export const PlaylistCard = memo(function PlaylistCard({
   canActivate,
   selectMode,
   selected,
+  artworkVisible,
   onActivate,
   onToggleSelect,
 }: PlaylistCardProps) {
@@ -44,6 +47,7 @@ export const PlaylistCard = memo(function PlaylistCard({
     ? `${track.artist} - ${track.album}`
     : track.artist
   const clock = formatTrackClock(track.durationSeconds)
+  const coverSource = track.coverImage ?? track.coverImageFallback
   const formatParts = [clock, track.fileExtension?.toLowerCase()]
     .filter((part): part is string => Boolean(part))
   if (track.audioFormat?.bitDepth) formatParts.push(`${track.audioFormat.bitDepth}bit`)
@@ -61,6 +65,7 @@ export const PlaylistCard = memo(function PlaylistCard({
     <button
       type="button"
       className="playlist-card"
+      data-playlist-track-id={track.id}
       data-tone={coverTone}
       data-current={current ? 'true' : undefined}
       data-unavailable={unavailable ? 'true' : undefined}
@@ -74,8 +79,10 @@ export const PlaylistCard = memo(function PlaylistCard({
       onClick={handleClick}
     >
       <span className="playlist-card-cover" aria-hidden="true">
-        {track.coverImage ? (
-          <img className="playlist-card-cover-image" src={track.coverImage} alt="" onError={handleCoverError} />
+        {artworkVisible && track.coverBitmap ? (
+          <PlaylistCoverCanvas className="playlist-card-cover-image" bitmap={track.coverBitmap} />
+        ) : artworkVisible && !track.hasLocalArtwork && coverSource ? (
+          <img className="playlist-card-cover-image" src={coverSource} alt="" onError={handleCoverError} />
         ) : null}
         {unavailable ? <span className="playlist-card-cover-state">{appCopy.playlistPage.moreUnavailable}</span> : null}
         {selectMode ? <span className="playlist-card-checkbox" /> : null}

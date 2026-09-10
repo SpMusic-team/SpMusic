@@ -34,6 +34,7 @@ export type AppearanceColors = {
   playerDock: string
   playerSurfaceVariant: string
   playerSecondaryContainer: string
+  playerSecondaryFix: string
   playerProgressPlayed: string
   playerProgressUnplayed: string
 }
@@ -183,6 +184,7 @@ export type AppearanceCssVars = CSSProperties & {
   '--player-dock': string
   '--player-surface-variant': string
   '--player-secondary-container': string
+  '--player-secondary-fix': string
   '--player-controls-radius': string
   '--player-controls-radius-short': string
   '--player-controls-shadow': number

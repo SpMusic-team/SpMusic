@@ -3,6 +3,7 @@ import { toast } from 'sonner'
 import {
   audioFolderTrackPlaceholder,
   audioTrackToTrack,
+  coverToneForTrackId,
   fileNameTitle,
   normalizeAudioSourcePath,
   patchTrackDuration,
@@ -22,6 +23,7 @@ import { appCopy } from '@/features/player/model/playerCopy'
 import type {
   PlayerContentState,
   PlayerTimelineInteraction,
+  PlaylistHeroArtwork,
   TrackCardPreviewToken,
   TrackSelectionVisualIntent,
   TrackSelectionVisualSource,
@@ -131,6 +133,14 @@ function playlistTrackSummaries(playlist: AudioFolderPlaylist): TrackSummary[] {
     album: sourceName,
     category: 'local-audio',
   }))
+}
+
+function playlistHeroArtworkFallback(playlist: AudioFolderPlaylist): PlaylistHeroArtwork | null {
+  const firstTrack = playlist.tracks[0]
+  return firstTrack ? {
+    trackId: firstTrack.id,
+    coverTone: coverToneForTrackId(firstTrack.id),
+  } : null
 }
 
 function resolveAvailablePlaylistTarget(
@@ -285,6 +295,7 @@ export function useAudioPlayer() {
   const [detailsPending, setDetailsPending] = useState(false)
   const [contentState, setContentState] = useState<PlayerContentState>('empty')
   const [folderPlaylist, setFolderPlaylist] = useState<AudioFolderPlaylist | null>(null)
+  const [playlistHeroArtwork, setPlaylistHeroArtwork] = useState<PlaylistHeroArtwork | null>(null)
   const [audioError, setAudioError] = useState<AudioCommandError | null>(null)
   const [audioBusy, setAudioBusy] = useState(false)
   const [selectionPending, setSelectionPending] = useState(false)
@@ -323,6 +334,7 @@ export function useAudioPlayer() {
   const hydratedAudioTrackCacheRef = useRef(new Map<string, AudioTrackRef>())
   const hydrationInFlightRef = useRef(new Map<string, Promise<AudioTrackRef>>())
   const artworkPrefetchGenerationRef = useRef(0)
+  const playlistHeroArtworkGenerationRef = useRef(0)
   const artworkPrimeDirectionRef = useRef<Direction>(1)
   const stagedTrackDetailsRef = useRef<{
     requestId: number
@@ -443,6 +455,7 @@ export function useAudioPlayer() {
   const activatePlaylistScope = useCallback((playlist: AudioFolderPlaylist) => {
     const nextScope = playlistScope(playlist)
     const nextQueueTracks = playlistTrackSummaries(playlist)
+    setPlaylistHeroArtwork(playlistHeroArtworkFallback(playlist))
     const currentPresentation = presentationTrackRef.current
     const currentIndex = currentPresentation
       ? nextQueueTracks.findIndex((track) => track.id === currentPresentation.id)
@@ -658,6 +671,64 @@ export function useAudioPlayer() {
     }
     return request
   }, [])
+
+  useEffect(() => {
+    const generation = playlistHeroArtworkGenerationRef.current + 1
+    playlistHeroArtworkGenerationRef.current = generation
+    const playlist = folderPlaylist
+    const firstTrack = playlist?.tracks[0]
+
+    if (!playlist || !firstTrack) {
+      return () => {
+        if (playlistHeroArtworkGenerationRef.current === generation) {
+          playlistHeroArtworkGenerationRef.current += 1
+        }
+      }
+    }
+
+    const playlistEpoch = playlistScopeEpochRef.current
+    const scope = playlistScope(playlist)
+    const firstTrackId = firstTrack.id
+    const requestSourcePath = firstTrack.sourcePath
+    const sourcePath = normalizeAudioSourcePath(requestSourcePath)
+    let cancelled = false
+
+    if (firstTrack.available) {
+      void requestHydratedAudioTrack(requestSourcePath, playlistEpoch)
+        .then((hydratedTrack) => {
+          const activePlaylist = folderPlaylistRef.current
+          const activeFirstTrack = activePlaylist?.tracks[0]
+          if (
+            cancelled
+            || playlistHeroArtworkGenerationRef.current !== generation
+            || playlistScopeEpochRef.current !== playlistEpoch
+            || playlistScopeRef.current !== scope
+            || !activePlaylist
+            || playlistScope(activePlaylist) !== scope
+            || activeFirstTrack?.id !== firstTrackId
+            || normalizeAudioSourcePath(activeFirstTrack.sourcePath) !== sourcePath
+            || hydratedTrack.id !== firstTrackId
+            || normalizeAudioSourcePath(hydratedTrack.sourcePath) !== sourcePath
+          ) return
+
+          const hydratedArtwork = audioTrackToTrack(hydratedTrack)
+          setPlaylistHeroArtwork({
+            trackId: firstTrackId,
+            coverTone: hydratedArtwork.coverTone,
+            coverImage: hydratedArtwork.coverImage,
+            coverImageFallback: hydratedArtwork.coverImageFallback,
+          })
+        })
+        .catch(() => undefined)
+    }
+
+    return () => {
+      cancelled = true
+      if (playlistHeroArtworkGenerationRef.current === generation) {
+        playlistHeroArtworkGenerationRef.current += 1
+      }
+    }
+  }, [folderPlaylist, requestHydratedAudioTrack])
 
   const settleSelectionFailure = useCallback((requestId: number, error: AudioCommandError) => {
     if (!selectionIsCurrent(requestId)) return
@@ -2158,6 +2229,7 @@ export function useAudioPlayer() {
     contentState,
     queueTracks,
     unavailableTrackIds,
+    playlistHeroArtwork,
     playlistName: folderPlaylist ? playlistDisplayName(folderPlaylist) : undefined,
     currentFeedback: track ? feedbackByTrackId[track.id] : undefined,
     feedbackByTrackId,

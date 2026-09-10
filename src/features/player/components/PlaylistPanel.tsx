@@ -1,8 +1,8 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useMemo, useState, type SyntheticEvent } from 'react'
 import { motion } from 'motion/react'
 import { Search } from 'lucide-react'
-import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty'
 import { Input } from '@/components/ui/input'
 import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { IconButton } from '@/features/player/components/IconButton'
@@ -10,16 +10,19 @@ import { PlaylistCard } from '@/features/player/components/PlaylistCard'
 import { coverToneForTrackId } from '@/features/player/model/audioTrackModel'
 import { appCopy } from '@/features/player/model/playerCopy'
 import type { ShuffleMode } from '@/features/player/model/playbackModes'
-import type { TrackSummary } from '@/features/player/model/playerTypes'
+import type { PlaylistHeroArtwork, PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
 
 type PlaylistPanelProps = {
-  tracks: TrackSummary[]
+  tracks: PlaylistTrackItemViewModel[]
+  heroArtwork?: PlaylistHeroArtwork | null
   unavailableTrackIds?: ReadonlySet<string>
   playlistName?: string
   currentTrackId?: string | null
   totalDurationSeconds?: number
   shuffleMode: ShuffleMode
   onShuffleCycle: () => void
+  isOpenAudioDisabled?: boolean
+  onOpenAudio?: () => void
   onTrackSelect?: (trackId: string) => void
   onClose: () => void
 }
@@ -38,12 +41,15 @@ function formatTotalClock(totalSeconds?: number): string | null {
 
 export function PlaylistPanel({
   tracks,
+  heroArtwork,
   unavailableTrackIds,
   playlistName,
   currentTrackId,
   totalDurationSeconds,
   shuffleMode,
   onShuffleCycle,
+  isOpenAudioDisabled,
+  onOpenAudio,
   onTrackSelect,
   onClose,
 }: PlaylistPanelProps) {
@@ -58,7 +64,13 @@ export function PlaylistPanel({
     () => unavailableTrackIds ?? new Set<string>(),
     [unavailableTrackIds],
   )
-  const heroTone = coverToneForTrackId(playlistName ?? tracks[0]?.id ?? '')
+  const firstTrack = tracks[0]
+  const establishedHeroArtwork = heroArtwork?.trackId === firstTrack?.id ? heroArtwork : null
+  const heroCoverImage = establishedHeroArtwork?.coverImage
+  const heroCoverFallback = establishedHeroArtwork?.coverImageFallback
+  const heroImageSource = heroCoverImage ?? heroCoverFallback
+  const heroTone = establishedHeroArtwork?.coverTone
+    ?? coverToneForTrackId(firstTrack?.id ?? playlistName ?? '')
   const totalClock = formatTotalClock(totalDurationSeconds)
 
   const query = filter.trim().toLowerCase()
@@ -110,13 +122,26 @@ export function PlaylistPanel({
     onClose()
   }, [currentTrackId, filteredTracks, onClose, onTrackSelect, unavailable])
 
+  const playableTrackId = currentTrackId && !unavailable.has(currentTrackId)
+    ? currentTrackId
+    : filteredTracks.find((track) => !unavailable.has(track.id))?.id
+
+  const handleHeroCoverError = useCallback((event: SyntheticEvent<HTMLImageElement>) => {
+    const image = event.currentTarget
+    if (heroCoverFallback && image.src !== heroCoverFallback) {
+      image.src = heroCoverFallback
+      return
+    }
+    image.hidden = true
+  }, [heroCoverFallback])
+
   const handleShuffle = useCallback(() => {
     onShuffleCycle()
   }, [onShuffleCycle])
 
   const handleMore = useCallback(() => {
-    toast(appCopy.playlistPage.moreUnavailable)
-  }, [])
+    onOpenAudio?.()
+  }, [onOpenAudio])
 
   const selectedCount = selectedIds.size
 
@@ -131,13 +156,23 @@ export function PlaylistPanel({
       aria-label={appCopy.playlistPage.title}
     >
       <header className="playlist-hero" data-tone={heroTone}>
+        {heroImageSource ? (
+          <img
+            key={firstTrack?.id}
+            className="playlist-hero-image"
+            src={heroImageSource}
+            alt=""
+            onError={handleHeroCoverError}
+          />
+        ) : null}
         <button type="button" className="playlist-close" aria-label={appCopy.playlistPage.close} onClick={onClose}>
           <systemIcons.close />
         </button>
         <div className="playlist-hero-copy">
           <h1 className="playlist-hero-title">{playlistName ?? appCopy.playlistPage.title}</h1>
           <p className="playlist-hero-meta">
-            <span className="playlist-hero-count" aria-label={appCopy.playlistPage.count(tracks.length)}>#{tracks.length}</span>
+            <systemIcons.music aria-hidden="true" />
+            <span className="playlist-hero-count" aria-label={appCopy.playlistPage.count(tracks.length)}>{tracks.length}</span>
             {totalClock ? (
               <>
                 <span className="playlist-hero-meta-sep" aria-hidden="true">|</span>
@@ -147,7 +182,7 @@ export function PlaylistPanel({
           </p>
           <div className="playlist-hero-actions">
             <IconButton className="playlist-hero-icon" icon={systemIcons.shuffle} label={appCopy.controls.shuffle} selected={shuffleMode !== 'none'} onClick={handleShuffle} />
-            <IconButton className="playlist-hero-icon" icon={systemIcons.play} label={appCopy.playlistPage.play} onClick={handlePlay} />
+            <IconButton className="playlist-hero-icon" icon={systemIcons.play} label={appCopy.playlistPage.play} disabled={!playableTrackId || !onTrackSelect} onClick={handlePlay} />
             <Button
               className="playlist-search-button playlist-hero-icon"
               aria-label={appCopy.playlistPage.search}
@@ -167,7 +202,7 @@ export function PlaylistPanel({
             >
               {selectMode ? appCopy.playlistPage.done : appCopy.playlistPage.select}
             </Button>
-            <IconButton className="playlist-hero-icon" icon={systemIcons.more} label={appCopy.playlistPage.more} onClick={handleMore} />
+            <IconButton className="playlist-hero-icon" icon={systemIcons.more} label={appCopy.playlistPage.more} disabled={isOpenAudioDisabled || !onOpenAudio} onClick={handleMore} />
           </div>
         </div>
       </header>
@@ -203,6 +238,7 @@ export function PlaylistPanel({
               coverTone={coverToneForTrackId(track.id)}
               current={track.id === currentTrackId}
               unavailable={unavailable.has(track.id)}
+              canActivate={onTrackSelect !== undefined}
               selectMode={selectMode}
               selected={selectedIds.has(track.id)}
               onActivate={handleActivate}
@@ -211,10 +247,12 @@ export function PlaylistPanel({
           ))}
         </div>
       ) : (
-        <div className="playlist-empty">
-          <strong>{appCopy.playlistPage.emptyTitle}</strong>
-          <span>{appCopy.playlistPage.emptyDescription}</span>
-        </div>
+        <Empty className="playlist-empty">
+          <EmptyHeader>
+            <EmptyTitle>{appCopy.playlistPage.emptyTitle}</EmptyTitle>
+            <EmptyDescription>{appCopy.playlistPage.emptyDescription}</EmptyDescription>
+          </EmptyHeader>
+        </Empty>
       )}
     </motion.section>
   )

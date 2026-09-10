@@ -1,15 +1,35 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { DevAudioToolsAvailability, DevAudioToolsSlot } from '@/features/player/components/DevAudioToolsSlot'
 import { PlayerSurface } from '@/features/player/components/PlayerSurface'
 import { useAudioPlayer } from '@/features/player/hooks/useAudioPlayer'
-import { fakePlaylistName, fakePlaylistTotalSeconds, fakePlaylistTracks } from '@/features/player/model/fakePlaylist'
-import type { DevAudioToolsViewModel, PlayerUiViewModel } from '@/features/player/model/playerUiViewModel'
+import type { DevAudioToolsViewModel, PlayerUiViewModel, PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
 
 export function PlayerShell() {
   const player = useAudioPlayer()
   const [isDevAudioToolsOpen, setIsDevAudioToolsOpen] = useState(false)
   const [isPlaylistOpen, setIsPlaylistOpen] = useState(false)
   const currentTrackId = player.track?.id ?? null
+  const playlistTracks = useMemo<PlaylistTrackItemViewModel[]>(() => player.queueTracks.map((queueTrack) => {
+    const currentTrack = player.track
+    if (!currentTrack || queueTrack.id !== currentTrack.id) return queueTrack
+    return {
+      ...queueTrack,
+      durationSeconds: currentTrack.durationSeconds,
+      fileExtension: currentTrack.fileExtension,
+      coverTone: currentTrack.coverTone,
+      coverImage: currentTrack.coverImage,
+      coverImageFallback: currentTrack.coverImageFallback,
+      audioFormat: currentTrack.audioFormat,
+    }
+  }), [player.queueTracks, player.track])
+  const playlistTotalSeconds = useMemo(() => {
+    const knownDurations = playlistTracks
+      .map((track) => track.durationSeconds)
+      .filter((duration): duration is number => duration !== undefined && Number.isFinite(duration))
+    return knownDurations.length === playlistTracks.length && knownDurations.length > 0
+      ? knownDurations.reduce((total, duration) => total + duration, 0)
+      : undefined
+  }, [playlistTracks])
   const toggleTrackFeedback = player.toggleTrackFeedback
   const handleFeedbackToggle = useCallback((feedback: Parameters<typeof toggleTrackFeedback>[1]) => {
     if (currentTrackId) toggleTrackFeedback(currentTrackId, feedback)
@@ -76,14 +96,22 @@ export function PlayerShell() {
     playlist: {
       isOpen: isPlaylistOpen,
       onOpenChange: setIsPlaylistOpen,
-      tracks: fakePlaylistTracks,
-      playlistName: fakePlaylistName,
-      totalDurationSeconds: fakePlaylistTotalSeconds,
+      isOpenAudioDisabled: player.audioBusy
+        || player.transportBusy
+        || player.selectionPending
+        || player.timelineInteraction === 'seeking',
+      onOpenAudio: player.openAudio,
+      tracks: playlistTracks,
+      heroArtwork: player.playlistHeroArtwork,
+      unavailableTrackIds: player.unavailableTrackIds,
+      playlistName: player.playlistName,
+      totalDurationSeconds: playlistTotalSeconds,
       currentTrackId: player.track?.id ?? null,
       shuffleMode: player.shuffleMode,
       onShuffleCycle: player.cycleShuffleMode,
-      // 假数据阶段：点任意歌曲只返回播放页，不真正切换播放队列.
-      onTrackSelect: () => setIsPlaylistOpen(false),
+      onTrackSelect: player.audioBusy || player.transportBusy || player.timelineInteraction === 'seeking'
+        ? undefined
+        : player.selectQueueTrack,
     },
     feedback: {
       value: player.currentFeedback,

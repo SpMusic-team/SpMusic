@@ -1580,12 +1580,15 @@ export function PlayerSurface({
             <PlaylistPanel
               key={`${playlist.playlistName ?? 'playlist'}:${playlist.tracks.length}:${playlist.tracks[0]?.id ?? ''}:${playlist.tracks[playlist.tracks.length - 1]?.id ?? ''}`}
               tracks={playlist.tracks}
+              heroArtwork={playlist.heroArtwork}
               unavailableTrackIds={playlist.unavailableTrackIds}
               playlistName={playlist.playlistName}
               currentTrackId={playlist.currentTrackId}
               totalDurationSeconds={playlist.totalDurationSeconds}
               shuffleMode={playlist.shuffleMode}
               onShuffleCycle={playlist.onShuffleCycle}
+              isOpenAudioDisabled={playlist.isOpenAudioDisabled || playbackTransitionPending}
+              onOpenAudio={playlist.onOpenAudio}
               onTrackSelect={playlist.onTrackSelect}
               onClose={() => playlist.onOpenChange(false)}
             />

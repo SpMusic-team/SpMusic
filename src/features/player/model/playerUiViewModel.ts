@@ -1,5 +1,5 @@
 import type { RepeatMode, ShuffleMode } from '@/features/player/model/playbackModes'
-import type { Track, TrackArtwork, TrackArtworkPrefetchCandidate, TrackFeedback, TrackSummary } from '@/features/player/model/playerTypes'
+import type { CoverTone, Track, TrackArtwork, TrackArtworkPrefetchCandidate, TrackFeedback, TrackSummary } from '@/features/player/model/playerTypes'
 import type { PlayerVisualTimelineClock } from '@/features/player/model/visualTimelineClock'
 import type { AudioOutputInfo, AudioTransportTarget, AudioTransportTransition } from '@/features/player/services/audioCommands'
 
@@ -97,10 +97,23 @@ export type PlayerQueueViewModel = {
   onTrackSelect?: (trackId: string) => void
 }
 
+export type PlaylistTrackItemViewModel = TrackSummary
+  & Partial<Pick<Track, 'durationSeconds' | 'fileExtension' | 'coverTone' | 'coverImage' | 'coverImageFallback' | 'audioFormat'>>
+
+export type PlaylistHeroArtwork = Readonly<{
+  trackId: string
+  coverTone: CoverTone
+  coverImage?: string
+  coverImageFallback?: string
+}>
+
 export type PlayerPlaylistViewModel = {
   isOpen: boolean
   onOpenChange: (isOpen: boolean) => void
-  tracks: TrackSummary[]
+  isOpenAudioDisabled?: boolean
+  onOpenAudio?: () => void
+  tracks: PlaylistTrackItemViewModel[]
+  heroArtwork?: PlaylistHeroArtwork | null
   unavailableTrackIds?: ReadonlySet<string>
   playlistName?: string
   currentTrackId?: string | null

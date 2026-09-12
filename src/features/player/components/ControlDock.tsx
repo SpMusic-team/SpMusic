@@ -126,13 +126,16 @@ export const ProgressControl = memo(function ProgressControl({
   const timelineInteractionRef = useRef(timeline.interaction)
   const timelineDurationRef = useRef(timeline.durationSeconds)
   const lastVisualSecondRef = useRef(Math.floor(timeline.positionSeconds))
+  const progressRangeRef = useRef<HTMLElement | null>(null)
+  const progressThumbRef = useRef<HTMLElement | null>(null)
+  const progressTrackWidthRef = useRef(0)
+  const progressThumbWidthRef = useRef(0)
+  const lastVisualPixelRef = useRef<number | null>(null)
   const pressedPointerIdRef = useRef<number | null>(null)
   const pressEndRef = useRef<{ pointerId: number; reason: ProgressPressEndReason } | null>(null)
   const cancelProgressPreviewRef = useRef(timeline.onCancelPreview)
   const progressDisabled = disabled || timeline.durationSeconds <= 0
-  const sliderPosition = timeline.interaction === 'following' && timeline.visualClock
-    ? semanticPosition
-    : timeline.positionSeconds
+  const sliderPosition = semanticPosition
   const formattedPosition = formatDuration(sliderPosition)
   const formattedDuration = formatDuration(timeline.durationSeconds)
   const hasHourTime = formattedPosition.split(':').length > 2 || formattedDuration.split(':').length > 2
@@ -144,8 +147,21 @@ export const ProgressControl = memo(function ProgressControl({
       Math.max(timeline.visualClock.getPositionSeconds(), 0),
       durationSeconds > 0 ? durationSeconds : 0,
     )
-    const percentage = durationSeconds > 0 ? positionSeconds / durationSeconds * 100 : 0
-    progressSliderRef.current?.style.setProperty('--player-visual-progress', `${percentage}%`)
+    const trackWidth = progressTrackWidthRef.current
+    const thumbWidth = progressThumbWidthRef.current
+    if (trackWidth > 0 && progressRangeRef.current && progressThumbRef.current) {
+      const ratio = durationSeconds > 0 ? positionSeconds / durationSeconds : 0
+      const travelWidth = Math.max(0, trackWidth - thumbWidth)
+      const playedPixel = Math.round(travelWidth * ratio)
+      if (playedPixel !== lastVisualPixelRef.current) {
+        lastVisualPixelRef.current = playedPixel
+        const rangeScale = trackWidth > 0
+          ? Math.min(1, Math.max(0, (playedPixel + thumbWidth / 2) / trackWidth))
+          : 0
+        progressRangeRef.current.style.setProperty('--player-range-scale', String(rangeScale))
+        progressThumbRef.current.style.setProperty('--player-thumb-x', `${thumbWidth / 2 + playedPixel}px`)
+      }
+    }
     const wholeSecond = Math.floor(positionSeconds)
     if (wholeSecond === lastVisualSecondRef.current) return
     lastVisualSecondRef.current = wholeSecond
@@ -160,6 +176,7 @@ export const ProgressControl = memo(function ProgressControl({
     if (timeline.interaction === 'seeking') return
     const nextValue = readProgressValue(value)
     previewValueRef.current = nextValue
+    setSemanticPosition((previous) => previous === nextValue ? previous : nextValue)
     if (!pointerPreviewRef.current && !keyboardPreviewRef.current) timeline.onPreviewStart()
     if (reason === 'drag' || reason === 'track-press') {
       pointerPreviewRef.current = true
@@ -241,7 +258,9 @@ export const ProgressControl = memo(function ProgressControl({
   useEffect(() => {
     let cancelled = false
     queueMicrotask(() => {
-      if (!cancelled) setSemanticPosition(timeline.positionSeconds)
+      if (!cancelled && !pointerPreviewRef.current && !keyboardPreviewRef.current) {
+        setSemanticPosition(timeline.positionSeconds)
+      }
     })
     return () => { cancelled = true }
   }, [timeline.interaction, timeline.positionSeconds])
@@ -260,6 +279,36 @@ export const ProgressControl = memo(function ProgressControl({
     return () => window.clearInterval(intervalId)
   }, [isPlaying, timeline.durationSeconds, timeline.interaction, timeline.visualClock])
 
+  useLayoutEffect(() => {
+    const slider = progressSliderRef.current
+    if (!slider) return
+    const track = slider.querySelector<HTMLElement>('[data-slot="slider-track"]')
+    const range = slider.querySelector<HTMLElement>('[data-slot="slider-range"]')
+    const thumb = slider.querySelector<HTMLElement>('[data-slot="slider-thumb"]')
+    if (!track || !range || !thumb) return
+
+    progressRangeRef.current = range
+    progressThumbRef.current = thumb
+    const measure = () => {
+      progressTrackWidthRef.current = track.getBoundingClientRect().width
+      progressThumbWidthRef.current = thumb.getBoundingClientRect().width
+      lastVisualPixelRef.current = null
+      updateVisualProgress()
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(track)
+    observer.observe(thumb)
+    return () => {
+      observer.disconnect()
+      progressRangeRef.current = null
+      progressThumbRef.current = null
+      progressTrackWidthRef.current = 0
+      progressThumbWidthRef.current = 0
+      lastVisualPixelRef.current = null
+    }
+  }, [updateVisualProgress])
+
   useEffect(() => {
     if (!timeline.visualClock) return
     updateVisualProgress()
@@ -270,6 +319,7 @@ export const ProgressControl = memo(function ProgressControl({
     timelineInteractionRef.current = timeline.interaction
     timelineDurationRef.current = timeline.durationSeconds
     if (timeline.interaction !== 'following') lastVisualSecondRef.current = Math.floor(timeline.positionSeconds)
+    if (timeline.interaction !== 'following') lastVisualPixelRef.current = null
     updateVisualProgress()
   }, [timeline.durationSeconds, timeline.interaction, timeline.positionSeconds, updateVisualProgress])
 
@@ -302,8 +352,9 @@ export const ProgressControl = memo(function ProgressControl({
       pressedPointerIdRef.current = null
       pressEndRef.current = null
       progressSliderElement?.removeAttribute('data-thumb-pressed')
-      if (pointerPreviewRef.current) {
+      if (pointerPreviewRef.current || keyboardPreviewRef.current) {
         pointerPreviewRef.current = false
+        keyboardPreviewRef.current = false
         cancelProgressPreviewRef.current()
       }
     }

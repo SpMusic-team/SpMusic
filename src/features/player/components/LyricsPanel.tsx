@@ -116,7 +116,7 @@ export function LyricsPanel({
     activeIndex: semanticTimeline?.currentIndex ?? -1,
   })
   const useFollowingTimeline = Boolean(visualClock)
-    && interaction === 'following'
+    && (interaction === 'following' || interaction === 'previewing')
     && followingTimeline.lyrics === track.lyrics
   const activeLyricIndex = useFollowingTimeline
     ? followingTimeline.activeIndex
@@ -215,13 +215,13 @@ export function LyricsPanel({
     if (!visualClock) return
     let disposed = false
     const updateActiveLyric = () => {
-      if (disposed || interaction !== 'following') return
+      if (disposed || (interaction !== 'following' && interaction !== 'previewing')) return
       const nextPositionSeconds = visualClock.getPositionSeconds()
       const nextTimeline = locateLyricTimeline(track.lyrics, nextPositionSeconds)
       const nextActiveIndex = nextTimeline?.currentIndex ?? -1
       const previousIdentity = followingTimelineIdentityRef.current
       if (previousIdentity.lyrics === track.lyrics && previousIdentity.activeIndex === nextActiveIndex) return
-      prepareFollowingStep(nextActiveIndex)
+      if (interaction === 'following') prepareFollowingStep(nextActiveIndex)
       followingTimelineIdentityRef.current = { lyrics: track.lyrics, activeIndex: nextActiveIndex }
       setFollowingTimeline({
         lyrics: track.lyrics,

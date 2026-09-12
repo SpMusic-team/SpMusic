@@ -37,6 +37,7 @@ type ArtworkCanvasPoolDebug = {
   staleWrites: number
   useAfterRelease: number
   backingResizeCount: number
+  backingResetCount: number
   backingEdges: number[]
 }
 
@@ -44,6 +45,7 @@ type ArtworkCanvasPoolEntry = {
   canvas: HTMLCanvasElement
   backingEdge: number
   debugIndex: number
+  idleResetTimer: number | null
 }
 
 type ArtworkCanvasLease = {
@@ -246,6 +248,7 @@ function createArtworkCanvasPool(): ArtworkCanvasPool {
     canvas: document.createElement('canvas'),
     backingEdge: 0,
     debugIndex,
+    idleResetTimer: null,
   }))
   const available = [...entries]
   const debug: ArtworkCanvasPoolDebug = {
@@ -257,6 +260,7 @@ function createArtworkCanvasPool(): ArtworkCanvasPool {
     staleWrites: 0,
     useAfterRelease: 0,
     backingResizeCount: 0,
+    backingResetCount: 0,
     backingEdges: entries.map(() => 0),
   }
   if (import.meta.env.DEV) {
@@ -277,6 +281,10 @@ function createArtworkCanvasPool(): ArtworkCanvasPool {
     entry: ArtworkCanvasPoolEntry,
     requestedEdge: AudioLoadCoverPixelsInput['maxEdge'],
   ) => {
+    if (entry.idleResetTimer !== null) {
+      window.clearTimeout(entry.idleResetTimer)
+      entry.idleResetTimer = null
+    }
     if (entry.backingEdge >= requestedEdge) return
     entry.canvas.width = requestedEdge
     entry.canvas.height = requestedEdge
@@ -315,6 +323,15 @@ function createArtworkCanvasPool(): ArtworkCanvasPool {
           pending.resolve(null)
         }
         available.push(entry)
+        entry.idleResetTimer = window.setTimeout(() => {
+          entry.idleResetTimer = null
+          if (disposed || !available.includes(entry) || entry.backingEdge === 0) return
+          entry.canvas.width = 0
+          entry.canvas.height = 0
+          entry.backingEdge = 0
+          debug.backingResetCount += 1
+          debug.backingEdges[entry.debugIndex] = 0
+        }, ARTWORK_CANVAS_IDLE_RESET_MS)
         publishAvailability(true)
       },
     }
@@ -373,6 +390,8 @@ function createArtworkCanvasPool(): ArtworkCanvasPool {
       debug.waiters = 0
       publishAvailability(false)
       for (const entry of entries) {
+        if (entry.idleResetTimer !== null) window.clearTimeout(entry.idleResetTimer)
+        entry.idleResetTimer = null
         entry.canvas.width = 0
         entry.canvas.height = 0
         entry.backingEdge = 0
@@ -523,7 +542,9 @@ async function fetchArtworkBlob(source: string, signal: AbortSignal): Promise<Bl
   return response.blob()
 }
 
-const COVER_EDGE_BUCKETS: AudioLoadCoverPixelsInput['maxEdge'][] = [1024, 1536, 2048, 3072]
+const COVER_EDGE_BUCKETS: AudioLoadCoverPixelsInput['maxEdge'][] = [1024, 1536]
+const MAX_ARTWORK_BACKING_EDGE: AudioLoadCoverPixelsInput['maxEdge'] = 1536
+const ARTWORK_CANVAS_IDLE_RESET_MS = 2500
 // Load-shed only fully cold artwork during rapid selection. Without trailing debounce,
 // 10 selections at 80 ms drove foreground invokes from 2 to 12 and the final cover to
 // 4.47 s; the trailing strategy previously brought the final cover to about 2.55 s.
@@ -563,7 +584,7 @@ function selectCoverMaxEdge(): AudioLoadCoverPixelsInput['maxEdge'] {
   )
   const estimatedCssEdge = measuredCssEdge || Math.min(window.innerWidth, window.innerHeight) * 0.8
   const physicalEdge = Math.ceil(estimatedCssEdge * Math.max(1, window.devicePixelRatio || 1))
-  return COVER_EDGE_BUCKETS.find((bucket) => bucket >= physicalEdge) ?? 3072
+  return COVER_EDGE_BUCKETS.find((bucket) => bucket >= physicalEdge) ?? MAX_ARTWORK_BACKING_EDGE
 }
 
 function waitForColdArtworkRapidSelection(signal: AbortSignal): Promise<boolean> {
@@ -652,6 +673,7 @@ export function useArtworkVisualResource(
   selectionActivitySequence: number,
   selectionVisualIntent: TrackSelectionVisualIntent | null,
   previewToken: TrackCardPreviewToken | null = null,
+  suspended = false,
 ): UseArtworkVisualResourceResult {
   const [layers, setLayers] = useState<ArtworkVisualLayer[]>([])
   const [coverMaxEdge, setCoverMaxEdge] = useState(selectCoverMaxEdge)
@@ -1049,6 +1071,40 @@ export function useArtworkVisualResource(
     debug.evicted += 1
   }, [registryDelete])
 
+  useLayoutEffect(() => {
+    if (!suspended) return
+    generationRef.current += 1
+    requestControllerRef.current?.abort()
+    requestControllerRef.current = null
+    foregroundRequestRef.current = null
+    prefetchDebugRef.current.foregroundInFlight = 0
+    previewGenerationRef.current += 1
+    previewControllerRef.current?.abort()
+    previewControllerRef.current = null
+    promotedArtworkRef.current?.controller.abort()
+    promotedArtworkRef.current = null
+    for (const controller of adjacentWarmControllersRef.current.values()) controller.abort()
+    adjacentWarmControllersRef.current.clear()
+    evictPreparedArtwork()
+    if (slotFlushFrameRef.current !== null) cancelAnimationFrame(slotFlushFrameRef.current)
+    slotFlushFrameRef.current = null
+    for (const layer of layersRef.current) releaseLayerOwner(layer)
+    layersRef.current = []
+    const queued = queuedLayerRef.current
+    if (queued) releaseLayerOwner(queued)
+    queuedLayerRef.current = null
+    exitCompletionsRef.current.clear()
+    clearingSlotsRef.current.clear()
+    paintedLayerIdsRef.current.clear()
+    clearRegistry()
+    canvasPoolRef.current?.dispose()
+    canvasPoolRef.current = null
+    queueMicrotask(() => {
+      setPaintedPreviewTokenId(null)
+      setLayers([])
+    })
+  }, [clearRegistry, evictPreparedArtwork, releaseLayerOwner, suspended])
+
   const installQueuedLayer = useCallback((baseLayers: ArtworkVisualLayer[]) => {
     const queued = queuedLayerRef.current
     const availableSlot = ([0, 1, 2] as const).find(
@@ -1156,6 +1212,7 @@ export function useArtworkVisualResource(
   }, [])
 
   useLayoutEffect(() => {
+    if (suspended) return
     previewGenerationRef.current += 1
     const generation = previewGenerationRef.current
     previewControllerRef.current?.abort()
@@ -1322,6 +1379,7 @@ export function useArtworkVisualResource(
     replaceLayers,
     scheduleSlotRelease,
     standbyCandidate,
+    suspended,
   ])
 
   const markReady = useCallback((layerId: number) => {
@@ -1497,6 +1555,7 @@ export function useArtworkVisualResource(
   }, [effectiveArtwork, effectiveTrack, replaceLayers, requestIdentity])
 
   useEffect(() => {
+    if (suspended) return
     const currentTrackId = track?.id
     const prepared = preparedArtworkRef.current
     const candidateStillRelevant = Boolean(
@@ -1583,9 +1642,11 @@ export function useArtworkVisualResource(
     standbyCandidate,
     registrySet,
     track?.id,
+    suspended,
   ])
 
   useEffect(() => {
+    if (suspended) return
     const currentTrackId = track?.id
     const candidates = currentTrackId
       ? prefetchCandidates
@@ -1709,9 +1770,11 @@ export function useArtworkVisualResource(
     scheduleSlotRelease,
     scheduleStablePrefetchRetry,
     track?.id,
+    suspended,
   ])
 
   useEffect(() => {
+    if (suspended) return
     const latest = latestRequestRef.current
     const foregroundRequest = foregroundRequestRef.current
     if (foregroundRequest && foregroundRequest.identity !== requestIdentity) {
@@ -2023,6 +2086,7 @@ export function useArtworkVisualResource(
     requestTone,
     requestTrackId,
     scheduleSlotRelease,
+    suspended,
   ])
 
   useEffect(() => () => {

@@ -7,16 +7,15 @@ import { Input } from '@/components/ui/input'
 import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { IconButton } from '@/features/player/components/IconButton'
 import { PlaylistCard } from '@/features/player/components/PlaylistCard'
-import { PlaylistCoverCanvas } from '@/features/player/components/PlaylistCoverCanvas'
+import { PlaylistCoverImage } from '@/features/player/components/PlaylistCoverImage'
 import { PlaylistPlaybackDock } from '@/features/player/components/PlaylistPlaybackDock'
 import { coverToneForTrackId } from '@/features/player/model/audioTrackModel'
 import { appCopy } from '@/features/player/model/playerCopy'
 import type { ShuffleMode } from '@/features/player/model/playbackModes'
-import type { PlayerPlaybackViewModel, PlayerTimelineViewModel, PlaylistHeroArtwork, PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
+import type { PlayerPlaybackViewModel, PlayerTimelineViewModel, PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
 
 type PlaylistPanelProps = {
   tracks: PlaylistTrackItemViewModel[]
-  heroArtwork?: PlaylistHeroArtwork | null
   unavailableTrackIds?: ReadonlySet<string>
   playlistName?: string
   currentTrackId?: string | null
@@ -76,7 +75,6 @@ function formatTotalClock(totalSeconds?: number): string | null {
 
 export function PlaylistPanel({
   tracks,
-  heroArtwork,
   unavailableTrackIds,
   playlistName,
   currentTrackId,
@@ -119,15 +117,6 @@ export function PlaylistPanel({
     () => unavailableTrackIds ?? new Set<string>(),
     [unavailableTrackIds],
   )
-  const firstTrack = tracks[0]
-  const establishedHeroArtwork = heroArtwork?.trackId === firstTrack?.id ? heroArtwork : null
-  const heroCoverImage = establishedHeroArtwork?.coverImage
-  const heroCoverFallback = establishedHeroArtwork?.coverImageFallback
-  const heroImageSource = establishedHeroArtwork?.hasLocalArtwork
-    ? undefined
-    : heroCoverImage ?? heroCoverFallback
-  const heroTone = establishedHeroArtwork?.coverTone
-    ?? coverToneForTrackId(firstTrack?.id ?? playlistName ?? '')
   const totalClock = formatTotalClock(totalDurationSeconds)
 
   const query = filter.trim().toLowerCase()
@@ -331,15 +320,6 @@ export function PlaylistPanel({
     ? currentTrackId
     : filteredTracks.find((track) => !unavailable.has(track.id))?.id
 
-  const handleHeroCoverError = useCallback((event: SyntheticEvent<HTMLImageElement>) => {
-    const image = event.currentTarget
-    if (heroCoverFallback && image.src !== heroCoverFallback) {
-      image.src = heroCoverFallback
-      return
-    }
-    image.hidden = true
-  }, [heroCoverFallback])
-
   const handleShuffle = useCallback(() => {
     onShuffleCycle()
   }, [onShuffleCycle])
@@ -349,6 +329,17 @@ export function PlaylistPanel({
   }, [onOpenAudio])
 
   const selectedCount = selectedIds.size
+  const firstTrack = tracks[0]
+  const firstTrackCoverSource = firstTrack?.coverImage ?? firstTrack?.coverImageFallback
+  const handleHeroCoverError = useCallback((event: SyntheticEvent<HTMLImageElement>) => {
+    const image = event.currentTarget
+    const fallback = firstTrack?.coverImageFallback
+    if (fallback && image.src !== fallback) {
+      image.src = fallback
+      return
+    }
+    image.hidden = true
+  }, [firstTrack?.coverImageFallback])
 
   return (
     <motion.section
@@ -361,21 +352,11 @@ export function PlaylistPanel({
       exit="exit"
       aria-label={appCopy.playlistPage.title}
     >
-      <header className="playlist-hero" data-tone={heroTone}>
-        {establishedHeroArtwork?.coverBitmap ? (
-          <PlaylistCoverCanvas
-            key={firstTrack?.id}
-            className="playlist-hero-image"
-            bitmap={establishedHeroArtwork.coverBitmap}
-          />
-        ) : heroImageSource ? (
-          <img
-            key={firstTrack?.id}
-            className="playlist-hero-image"
-            src={heroImageSource}
-            alt=""
-            onError={handleHeroCoverError}
-          />
+      <header className="playlist-hero">
+        {firstTrack?.coverThumbnail ? (
+          <PlaylistCoverImage className="playlist-hero-image" image={firstTrack.coverThumbnail} />
+        ) : firstTrackCoverSource ? (
+          <img className="playlist-hero-image" src={firstTrackCoverSource} alt="" aria-hidden="true" decoding="async" onError={handleHeroCoverError} />
         ) : null}
         <button type="button" className="playlist-close" aria-label={appCopy.playlistPage.close} onClick={onClose}>
           <systemIcons.close />

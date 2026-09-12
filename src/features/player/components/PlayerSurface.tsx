@@ -524,6 +524,7 @@ export function PlayerSurface({
     playback.selectionActivitySequence ?? 0,
     playback.selectionVisualIntent ?? null,
     trackCardPreviewToken,
+    playlist.isOpen,
   )
   const activeArtworkLayerId = artworkSlots.find((layer) => layer?.phase === 'active')?.id ?? null
   const activeArtworkLayer = artworkSlots.find((layer): layer is ArtworkVisualLayer => layer?.phase === 'active') ?? null
@@ -1481,7 +1482,7 @@ export function PlayerSurface({
         aria-busy={contentState === 'loading'}
         aria-labelledby="app-title"
       >
-        {artworkSlots.map((layer, slot) => (
+        {!playlist.isOpen ? artworkSlots.map((layer, slot) => (
           <AmbientArtwork
             key={`ambient-slot:${slot}`}
             layer={layer}
@@ -1491,7 +1492,7 @@ export function PlayerSurface({
             progress={trackCardProgress}
             preserveOutgoingOpacity={preservePendingOutgoingOpacity}
           />
-        ))}
+        )) : null}
         {devAudioTools?.content}
 
         <ResponsivePlayerLayout
@@ -1507,7 +1508,7 @@ export function PlayerSurface({
             />
           )}
         >
-          <section
+          {!playlist.isOpen ? <section
             ref={playerStageRef}
             className="player-stage"
             data-playback-state={visualPlaybackState}
@@ -1613,7 +1614,7 @@ export function PlayerSurface({
                 onPlayToggle={handlePlayToggle}
               />
             </div>
-          </section>
+          </section> : null}
         </ResponsivePlayerLayout>
 
         <AnimatePresence initial={false}>
@@ -1621,7 +1622,6 @@ export function PlayerSurface({
             <PlaylistPanel
               key={`${playlist.playlistName ?? 'playlist'}:${playlist.tracks.length}:${playlist.tracks[0]?.id ?? ''}:${playlist.tracks[playlist.tracks.length - 1]?.id ?? ''}`}
               tracks={playlist.tracks}
-              heroArtwork={playlist.heroArtwork}
               unavailableTrackIds={playlist.unavailableTrackIds}
               playlistName={playlist.playlistName}
               currentTrackId={playlist.currentTrackId}

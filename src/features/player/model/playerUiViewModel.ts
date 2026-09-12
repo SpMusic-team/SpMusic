@@ -1,5 +1,5 @@
 import type { RepeatMode, ShuffleMode } from '@/features/player/model/playbackModes'
-import type { CoverTone, Track, TrackArtwork, TrackArtworkPrefetchCandidate, TrackFeedback, TrackSummary } from '@/features/player/model/playerTypes'
+import type { Track, TrackArtwork, TrackArtworkPrefetchCandidate, TrackFeedback, TrackSummary } from '@/features/player/model/playerTypes'
 import type { PlayerVisualTimelineClock } from '@/features/player/model/visualTimelineClock'
 import type { AudioOutputInfo, AudioTransportTarget, AudioTransportTransition } from '@/features/player/services/audioCommands'
 
@@ -97,17 +97,18 @@ export type PlayerQueueViewModel = {
   onTrackSelect?: (trackId: string) => void
 }
 
-export type PlaylistCoverBitmap = Readonly<{
-  image: ImageBitmap
+export type PlaylistCoverImage = Readonly<{
+  src: string
   width: number
   height: number
+  encodedBytes: number
 }>
 
 export type PlaylistTrackItemViewModel = TrackSummary
   & Partial<Pick<Track, 'durationSeconds' | 'fileExtension' | 'coverTone' | 'coverImage' | 'coverImageFallback' | 'audioFormat'>>
   & Readonly<{
     hasLocalArtwork?: boolean
-    coverBitmap?: PlaylistCoverBitmap
+    coverThumbnail?: PlaylistCoverImage
   }>
 
 export type PlaylistTrackVisual = Pick<
@@ -115,16 +116,7 @@ export type PlaylistTrackVisual = Pick<
   'id' | 'title' | 'artist' | 'album' | 'durationSeconds' | 'fileExtension' | 'coverTone' | 'audioFormat'
 > & Readonly<{
   hasLocalArtwork: boolean
-  coverBitmap?: PlaylistCoverBitmap
-}>
-
-export type PlaylistHeroArtwork = Readonly<{
-  trackId: string
-  coverTone: CoverTone
-  hasLocalArtwork?: boolean
-  coverBitmap?: PlaylistCoverBitmap
-  coverImage?: string
-  coverImageFallback?: string
+  coverThumbnail?: PlaylistCoverImage
 }>
 
 export type PlayerPlaylistViewModel = {
@@ -133,7 +125,6 @@ export type PlayerPlaylistViewModel = {
   isOpenAudioDisabled?: boolean
   onOpenAudio?: () => void
   tracks: PlaylistTrackItemViewModel[]
-  heroArtwork?: PlaylistHeroArtwork | null
   unavailableTrackIds?: ReadonlySet<string>
   playlistName?: string
   currentTrackId?: string | null

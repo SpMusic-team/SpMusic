@@ -1,6 +1,6 @@
 import { memo, type SyntheticEvent } from 'react'
 import { useSystemIcons } from '@/features/appearance/hooks/useAppearance'
-import { PlaylistCoverCanvas } from '@/features/player/components/PlaylistCoverCanvas'
+import { PlaylistCoverImage } from '@/features/player/components/PlaylistCoverImage'
 import { appCopy } from '@/features/player/model/playerCopy'
 import type { PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
 import type { CoverTone } from '@/features/player/model/playerTypes'
@@ -79,8 +79,8 @@ export const PlaylistCard = memo(function PlaylistCard({
       onClick={handleClick}
     >
       <span className="playlist-card-cover" aria-hidden="true">
-        {artworkVisible && track.coverBitmap ? (
-          <PlaylistCoverCanvas className="playlist-card-cover-image" bitmap={track.coverBitmap} />
+        {artworkVisible && track.coverThumbnail ? (
+          <PlaylistCoverImage className="playlist-card-cover-image" image={track.coverThumbnail} />
         ) : artworkVisible && !track.hasLocalArtwork && coverSource ? (
           <img className="playlist-card-cover-image" src={coverSource} alt="" onError={handleCoverError} />
         ) : null}

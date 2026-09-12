@@ -102,7 +102,6 @@ export function PlayerShell() {
         || player.timelineInteraction === 'seeking',
       onOpenAudio: player.openAudio,
       tracks: playlistTracks,
-      heroArtwork: player.playlistHeroArtwork,
       unavailableTrackIds: player.unavailableTrackIds,
       playlistName: player.playlistName,
       totalDurationSeconds: playlistTotalSeconds,

@@ -2,7 +2,7 @@ import { BarChart3, Grid2X2, Menu, Search } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { ProgressControl } from '@/features/player/components/ControlDock'
-import { PlaylistCoverCanvas } from '@/features/player/components/PlaylistCoverCanvas'
+import { PlaylistCoverImage } from '@/features/player/components/PlaylistCoverImage'
 import type { PlayerPlaybackViewModel, PlayerTimelineViewModel, PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
 import { coverToneForTrackId } from '@/features/player/model/audioTrackModel'
 
@@ -52,8 +52,8 @@ export function PlaylistPlaybackDock({
           onClick={onClose}
         >
           <span className="playlist-playback-cover" aria-hidden="true">
-            {playlistTrack?.coverBitmap ? (
-              <PlaylistCoverCanvas bitmap={playlistTrack.coverBitmap} />
+            {playlistTrack?.coverThumbnail ? (
+              <PlaylistCoverImage image={playlistTrack.coverThumbnail} />
             ) : !localArtwork && imageSource ? (
               <img
                 src={imageSource}

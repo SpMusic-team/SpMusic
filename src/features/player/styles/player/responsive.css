@@ -288,6 +288,10 @@
   display: contents;
 }
 
+.track-meta-layout-spacer {
+  display: none;
+}
+
 .responsive-player-layout[data-player-layout="full"] .track-pills {
   width: 100%;
   margin-top: calc(10 * var(--player-layout-unit));
@@ -758,7 +762,9 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
   height: 100%;
   min-width: 0;
   min-height: 0;
-  padding: 10px 12px;
+  /* The card deck now owns the two title pills. Reserve their previous
+     145px + 4px gap so lyrics stay at the same position. */
+  padding: 159px 12px 10px;
   display: flex;
   flex-direction: column;
   align-items: stretch;
@@ -767,11 +773,10 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
   gap: 4px;
 }
 
-.responsive-player-layout[data-player-layout="horizontal"] .track-lyrics-region .track-pills {
-  width: 100%;
-  margin: 0;
-  flex: 0 0 auto;
-  align-self: stretch;
+.responsive-player-layout[data-player-layout="horizontal"] .track-card-plane .track-pills {
+  width: calc(100% - 24px);
+  margin: 10px 0 0 12px;
+  align-self: start;
   gap: 29px;
 }
 
@@ -1245,6 +1250,8 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
 }
 
 .responsive-player-layout[data-player-layout="quarter"] .player-stage {
+  /* The two fixed-pixel pills (60px + 29px + 56px) plus scaled top margin. */
+  --track-card-meta-height: calc(145px + 34 * var(--player-layout-unit));
   --quarter-cover-size: min(
     calc(100vw - 52px),
     calc(100svh - 514 * var(--player-layout-unit)),
@@ -1329,7 +1336,14 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
 }
 
 .responsive-player-layout[data-player-layout="quarter"] .track-card-deck {
-  height: calc(var(--quarter-cover-size) + 179 * var(--player-layout-unit));
+  height: calc(var(--quarter-cover-size) + var(--track-card-meta-height));
+}
+
+.responsive-player-layout[data-player-layout="quarter"] .track-meta-layout-spacer {
+  display: block;
+  grid-area: meta;
+  height: var(--track-card-meta-height);
+  pointer-events: none;
 }
 
 .responsive-player-layout[data-player-layout="quarter"] .track-pills {
@@ -1984,6 +1998,7 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
 }
 
 .responsive-player-layout[data-player-layout="quarter"][data-player-short="true"] .player-stage {
+  --track-card-meta-height: 90px;
   --short-cover-size: clamp(160px, calc(100svh - 411px), 220px);
   --short-dock-size: clamp(126px, calc(28.125svh - 20.25px), 144px);
   inset:
@@ -2008,7 +2023,7 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
 }
 
 .responsive-player-layout[data-player-layout="quarter"][data-player-short="true"] .track-card-deck {
-  height: calc(var(--short-cover-size) + 90px);
+  height: calc(var(--short-cover-size) + var(--track-card-meta-height));
 }
 
 .responsive-player-layout[data-player-layout="quarter"][data-player-short="true"] .cover-feedback {

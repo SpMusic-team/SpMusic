@@ -209,15 +209,17 @@
   display: grid;
   gap: var(--playlist-grid-gap, 20px);
   padding: 0 0 48px;
+  /* Reflowing between tile column counts must not move the scroll position. */
+  overflow-anchor: none;
 }
 
 .playlist-grid[data-layout-columns="1"] { grid-template-columns: minmax(0, 1fr); }
 .playlist-grid[data-layout-columns="2"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .playlist-grid[data-layout-columns="3"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .playlist-grid[data-layout-columns="4"] { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-.playlist-grid[data-layout-level="0"] { --playlist-grid-gap: 14px; }
+.playlist-grid[data-layout-level="0"] { --playlist-grid-gap: 20px; }
 .playlist-grid[data-layout-level="1"] { --playlist-grid-gap: 18px; }
-.playlist-grid[data-layout-level="2"] { --playlist-grid-gap: 20px; }
+.playlist-grid[data-layout-level="2"] { --playlist-grid-gap: 14px; }
 .playlist-grid[data-layout-level="5"] { --playlist-grid-gap: 8px; }
 .playlist-grid[data-layout-level="6"] { --playlist-grid-gap: 6px; }
 .playlist-grid[data-layout-level="7"] { --playlist-grid-gap: 3px; }

@@ -15,6 +15,12 @@ export type AppearanceMotionRuntime = {
   reducedMotion: 'always' | 'never'
   transition: Transition
   layoutTransition: Transition
+  layoutZoom: {
+    enterScale: {
+      zoomIn: number
+      zoomOut: number
+    }
+  }
   variants: {
     backdrop: Variants
     track: Variants
@@ -35,6 +41,12 @@ export function createAppearanceMotionRuntime(
       reducedMotion: 'always',
       transition: { duration: 0 },
       layoutTransition: { duration: 0 },
+      layoutZoom: {
+        enterScale: {
+          zoomIn: 1,
+          zoomOut: 1,
+        },
+      },
       variants: {
         backdrop: { initial: { opacity: 1 }, animate: { opacity: 1 }, exit: { opacity: 1 } },
         track: { initial: { opacity: 1 }, animate: { opacity: 1 }, exit: { opacity: 1 } },
@@ -60,6 +72,12 @@ export function createAppearanceMotionRuntime(
     disabled: false,
     reducedMotion: 'never',
     layoutTransition: prototypeSmartTransition,
+    layoutZoom: {
+      enterScale: {
+        zoomIn: 0.86,
+        zoomOut: 1.14,
+      },
+    },
     transition: {
       default: {
         type: 'spring',

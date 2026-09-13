@@ -24,6 +24,7 @@ import type {
   PlayerContentState,
   PlayerTimelineInteraction,
   PlaylistCoverImage,
+  PlaylistTrackMetadata,
   PlaylistTrackVisual,
   TrackCardPreviewToken,
   TrackSelectionVisualIntent,
@@ -103,6 +104,11 @@ type PlaylistVisualHydrationJob = {
   sourcePath: string
   normalizedSourcePath: string
 }
+
+type PlaylistMetadataHydrationJob = Pick<
+  PlaylistVisualHydrationJob,
+  'generation' | 'playlistEpoch' | 'scope' | 'trackId' | 'sourcePath' | 'normalizedSourcePath'
+>
 
 const HYDRATED_TRACK_CACHE_CAPACITY = 8
 
@@ -352,6 +358,7 @@ export function useAudioPlayer() {
   const [contentState, setContentState] = useState<PlayerContentState>('empty')
   const [folderPlaylist, setFolderPlaylist] = useState<AudioFolderPlaylist | null>(null)
   const [playlistTrackVisuals, setPlaylistTrackVisuals] = useState<Readonly<Record<string, PlaylistTrackVisual>>>({})
+  const [playlistTrackMetadata, setPlaylistTrackMetadata] = useState<Readonly<Record<string, PlaylistTrackMetadata>>>({})
   const [audioError, setAudioError] = useState<AudioCommandError | null>(null)
   const [audioBusy, setAudioBusy] = useState(false)
   const [selectionPending, setSelectionPending] = useState(false)
@@ -394,6 +401,12 @@ export function useAudioPlayer() {
   const playlistVisualDesiredIdsRef = useRef<ReadonlySet<string>>(new Set())
   const visiblePlaylistTrackIdsRef = useRef<readonly string[]>([])
   const keepPersistentPlaylistArtworkRef = useRef(false)
+  const showPlaylistArtworkRef = useRef(true)
+  const playlistMetadataGenerationRef = useRef(0)
+  const playlistMetadataWindowKeyRef = useRef<string | null>(null)
+  const playlistTrackMetadataRef = useRef<Readonly<Record<string, PlaylistTrackMetadata>>>({})
+  const playlistMetadataHydrationQueueRef = useRef<PlaylistMetadataHydrationJob[]>([])
+  const playlistMetadataHydrationActiveRef = useRef(0)
   const playlistVisualWindowKeyRef = useRef<string | null>(null)
   const playlistTrackVisualsRef = useRef<Readonly<Record<string, PlaylistTrackVisual>>>({})
   const playlistVisualHydrationQueueRef = useRef<PlaylistVisualHydrationJob[]>([])
@@ -443,6 +456,8 @@ export function useAudioPlayer() {
     playlistVisualDesiredIdsRef.current = new Set()
     visiblePlaylistTrackIdsRef.current = []
     keepPersistentPlaylistArtworkRef.current = false
+    playlistMetadataGenerationRef.current += 1
+    playlistMetadataHydrationQueueRef.current = []
     playlistVisualHydrationQueueRef.current = []
     void requestPlaylistCoverWindowGeneration().catch(() => undefined)
     releasePlaylistVisuals(playlistTrackVisualsRef.current)
@@ -576,6 +591,12 @@ export function useAudioPlayer() {
     playlistVisualDesiredIdsRef.current = new Set()
     visiblePlaylistTrackIdsRef.current = []
     keepPersistentPlaylistArtworkRef.current = false
+    showPlaylistArtworkRef.current = true
+    playlistMetadataGenerationRef.current += 1
+    playlistMetadataWindowKeyRef.current = null
+    playlistTrackMetadataRef.current = {}
+    playlistMetadataHydrationQueueRef.current = []
+    setPlaylistTrackMetadata({})
     playlistVisualWindowKeyRef.current = null
     releasePlaylistVisuals(playlistTrackVisualsRef.current)
     playlistTrackVisualsRef.current = {}
@@ -769,6 +790,61 @@ export function useAudioPlayer() {
     return request
   }, [])
 
+  const commitPlaylistTrackMetadata = useCallback((hydratedTrack: AudioTrackRef) => {
+    if (playlistTrackMetadataRef.current[hydratedTrack.id]) return
+    const visual = audioTrackToPlaylistVisual(hydratedTrack)
+    const metadata: PlaylistTrackMetadata = {
+      id: visual.id,
+      title: visual.title,
+      artist: visual.artist,
+      album: visual.album,
+      durationSeconds: visual.durationSeconds,
+      fileExtension: visual.fileExtension,
+      coverTone: visual.coverTone,
+      audioFormat: visual.audioFormat,
+      hasLocalArtwork: visual.hasLocalArtwork,
+    }
+    const nextMetadata = { ...playlistTrackMetadataRef.current, [hydratedTrack.id]: metadata }
+    playlistTrackMetadataRef.current = nextMetadata
+    setPlaylistTrackMetadata(nextMetadata)
+  }, [])
+
+  const pumpPlaylistMetadataHydration = useCallback(() => {
+    function pump(): void {
+      while (
+        playlistMetadataHydrationActiveRef.current < 2
+        && playlistMetadataHydrationQueueRef.current.length > 0
+      ) {
+        const job = playlistMetadataHydrationQueueRef.current.shift()
+        if (!job) break
+        playlistMetadataHydrationActiveRef.current += 1
+        void requestHydratedAudioTrack(job.sourcePath, job.playlistEpoch)
+          .then((hydratedTrack) => {
+            const activePlaylist = folderPlaylistRef.current
+            const activeDescriptor = activePlaylist?.tracks.find((candidate) => candidate.id === job.trackId)
+            if (
+              playlistMetadataGenerationRef.current !== job.generation
+              || playlistScopeEpochRef.current !== job.playlistEpoch
+              || playlistScopeRef.current !== job.scope
+              || !activePlaylist
+              || playlistScope(activePlaylist) !== job.scope
+              || activeDescriptor?.id !== job.trackId
+              || normalizeAudioSourcePath(activeDescriptor.sourcePath) !== job.normalizedSourcePath
+              || hydratedTrack.id !== job.trackId
+              || normalizeAudioSourcePath(hydratedTrack.sourcePath) !== job.normalizedSourcePath
+            ) return
+            commitPlaylistTrackMetadata(hydratedTrack)
+          })
+          .catch(() => undefined)
+          .finally(() => {
+            playlistMetadataHydrationActiveRef.current -= 1
+            pump()
+          })
+      }
+    }
+    pump()
+  }, [commitPlaylistTrackMetadata, requestHydratedAudioTrack])
+
   const pumpPlaylistVisualHydration = useCallback(() => {
     function pump(): void {
       while (
@@ -796,6 +872,10 @@ export function useAudioPlayer() {
                 || normalizeAudioSourcePath(hydratedTrack.sourcePath) !== job.normalizedSourcePath
             }
             if (jobIsStale()) return
+
+            // Metadata must not wait for a thumbnail decode, which can fail or
+            // be invalidated independently of the audio hydration result.
+            commitPlaylistTrackMetadata(hydratedTrack)
 
             let coverThumbnail: PlaylistCoverImage | undefined
             const coverFilePath = hydratedTrack.metadata.coverArt?.filePath
@@ -836,14 +916,16 @@ export function useAudioPlayer() {
       }
     }
     pump()
-  }, [requestHydratedAudioTrack])
+  }, [commitPlaylistTrackMetadata, requestHydratedAudioTrack])
 
   const setVisiblePlaylistTrackIds = useCallback((
     trackIds: readonly string[],
     keepPersistentArtwork = true,
+    showArtwork = true,
   ) => {
-    visiblePlaylistTrackIdsRef.current = trackIds.slice(0, 40)
+    visiblePlaylistTrackIdsRef.current = showArtwork ? trackIds.slice(0, 40) : trackIds
     keepPersistentPlaylistArtworkRef.current = keepPersistentArtwork
+    showPlaylistArtworkRef.current = showArtwork
     const playlist = folderPlaylistRef.current
     const descriptorsById = new Map(playlist?.tracks.map((descriptor) => [descriptor.id, descriptor]))
     const orderedDesiredIds: string[] = []
@@ -864,6 +946,31 @@ export function useAudioPlayer() {
       orderedDesiredIds.push(trackId)
     }
     const scope = playlist ? playlistScope(playlist) : ''
+    const metadataWindowKey = `${playlistScopeEpochRef.current}\u0000${scope}\u0000${orderedDesiredIds.join('\u0000')}`
+    if (playlistMetadataWindowKeyRef.current !== metadataWindowKey) {
+      playlistMetadataWindowKeyRef.current = metadataWindowKey
+      playlistMetadataHydrationQueueRef.current = []
+      if (playlist) {
+        const playlistEpoch = playlistScopeEpochRef.current
+        playlistMetadataHydrationQueueRef.current = orderedDesiredIds.flatMap((trackId) => {
+          const descriptor = descriptorsById.get(trackId)
+          if (!descriptor?.available || playlistTrackMetadataRef.current[trackId]) return []
+          return [{
+            generation: playlistMetadataGenerationRef.current,
+            playlistEpoch,
+            scope,
+            trackId,
+            sourcePath: descriptor.sourcePath,
+            normalizedSourcePath: normalizeAudioSourcePath(descriptor.sourcePath),
+          }]
+        })
+        pumpPlaylistMetadataHydration()
+      }
+    }
+    // A text viewport only drives metadata hydration. It must not invalidate
+    // the last artwork window or its object URLs during a view transition.
+    if (!showArtwork && keepPersistentArtwork) return
+
     const windowKey = `${playlistScopeEpochRef.current}\u0000${scope}\u0000${keepPersistentArtwork}\u0000${orderedDesiredIds.join('\u0000')}`
     if (playlistVisualWindowKeyRef.current === windowKey) return
     playlistVisualWindowKeyRef.current = windowKey
@@ -924,7 +1031,7 @@ export function useAudioPlayer() {
       playlistVisualHydrationQueueRef.current = jobs
       pumpPlaylistVisualHydration()
     }).catch(() => undefined)
-  }, [pumpPlaylistVisualHydration, requestPlaylistCoverWindowGeneration])
+  }, [pumpPlaylistMetadataHydration, pumpPlaylistVisualHydration, requestPlaylistCoverWindowGeneration])
 
   useEffect(() => {
     if (
@@ -934,6 +1041,7 @@ export function useAudioPlayer() {
     setVisiblePlaylistTrackIds(
       visiblePlaylistTrackIdsRef.current,
       keepPersistentPlaylistArtworkRef.current,
+      showPlaylistArtworkRef.current,
     )
   }, [setVisiblePlaylistTrackIds, track?.id])
 
@@ -2454,6 +2562,7 @@ export function useAudioPlayer() {
     contentState,
     queueTracks,
     unavailableTrackIds,
+    playlistTrackMetadata,
     playlistTrackVisuals,
     playlistName: folderPlaylist ? playlistDisplayName(folderPlaylist) : undefined,
     currentFeedback: track ? feedbackByTrackId[track.id] : undefined,

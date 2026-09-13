@@ -14,6 +14,7 @@ type PlaylistCardProps = {
   selectMode: boolean
   selected: boolean
   artworkVisible: boolean
+  showExtendedMetadata: boolean
   onActivate: (trackId: string) => void
   onToggleSelect: (trackId: string) => void
 }
@@ -33,6 +34,7 @@ export const PlaylistCard = memo(function PlaylistCard({
   selectMode,
   selected,
   artworkVisible,
+  showExtendedMetadata,
   onActivate,
   onToggleSelect,
 }: PlaylistCardProps) {
@@ -43,14 +45,18 @@ export const PlaylistCard = memo(function PlaylistCard({
   }
   const title = track.title
   const label = unavailable ? `${title} · ${appCopy.playlistPage.moreUnavailable}` : title
-  const artistAlbum = track.album && track.album !== track.artist
+  const artistAlbum = showExtendedMetadata && track.album && track.album !== track.artist
     ? `${track.artist} - ${track.album}`
     : track.artist
   const clock = formatTrackClock(track.durationSeconds)
+  const bitDepth = track.audioFormat?.bitDepth
   const coverSource = track.coverImage ?? track.coverImageFallback
-  const formatParts = [clock, track.fileExtension?.toLowerCase()]
+  const formatParts = showExtendedMetadata ? [clock, track.fileExtension?.toLowerCase()]
     .filter((part): part is string => Boolean(part))
-  if (track.audioFormat?.bitDepth) formatParts.push(`${track.audioFormat.bitDepth}bit`)
+    : []
+  if (showExtendedMetadata && bitDepth != null && Number.isFinite(bitDepth) && bitDepth >= 24) {
+    formatParts.push(`${bitDepth}bit`)
+  }
 
   const handleCoverError = (event: SyntheticEvent<HTMLImageElement>) => {
     const image = event.currentTarget

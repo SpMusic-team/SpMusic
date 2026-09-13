@@ -119,6 +119,8 @@ export type PlaylistTrackVisual = Pick<
   coverThumbnail?: PlaylistCoverImage
 }>
 
+export type PlaylistTrackMetadata = Omit<PlaylistTrackVisual, 'coverThumbnail'>
+
 export type PlayerPlaylistViewModel = {
   isOpen: boolean
   onOpenChange: (isOpen: boolean) => void
@@ -132,7 +134,7 @@ export type PlayerPlaylistViewModel = {
   shuffleMode: ShuffleMode
   onShuffleCycle: () => void
   onTrackSelect?: (trackId: string) => void
-  onVisibleTrackIdsChange?: (trackIds: readonly string[], keepPersistentArtwork?: boolean) => void
+  onVisibleTrackIdsChange?: (trackIds: readonly string[], keepPersistentArtwork?: boolean, showArtwork?: boolean) => void
 }
 
 export type PlayerFeedbackViewModel = {

@@ -255,7 +255,8 @@ const TrackCardMotionLayer = memo(function TrackCardMotionLayer({
           : '50% 50%',
         pointerEvents: acceptsDrag || isStandaloneActive ? 'auto' : 'none',
       }}
-      aria-hidden={phase !== 'active' || role !== null || undefined}
+      aria-hidden={phase !== 'active' || undefined}
+      inert={phase !== 'active'}
     >
       {/* A released transition layer can remain in the artwork pool while a
           newer drag owns the only valid card pair. If that old exiting layer
@@ -279,6 +280,7 @@ const TrackCardMotionLayer = memo(function TrackCardMotionLayer({
           onMoreOpenChange={onMoreOpenChange}
           moreOpen={moreOpen}
         />
+        <TrackMeta layer={layer} />
       </motion.div>
     </motion.div>
   )
@@ -527,7 +529,6 @@ export function PlayerSurface({
     playlist.isOpen,
   )
   const activeArtworkLayerId = artworkSlots.find((layer) => layer?.phase === 'active')?.id ?? null
-  const activeArtworkLayer = artworkSlots.find((layer): layer is ArtworkVisualLayer => layer?.phase === 'active') ?? null
   const trackCardGeometryReady = Boolean(
     trackCardCoverGeometry
     && trackCardCoverGeometry.width > 1
@@ -1558,8 +1559,8 @@ export function PlayerSurface({
                   })}
                 </div>
 
+                <div className="track-meta-layout-spacer" aria-hidden="true" />
                 <div className="track-lyrics-region">
-                  <TrackMeta layer={activeArtworkLayer} />
                   <LyricsPanel
                     track={track}
                     detailsPending={playback.detailsPending}

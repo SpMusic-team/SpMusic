@@ -159,10 +159,15 @@ export function PlaylistPanel({
   const [searchOpen, setSearchOpen] = useState(false)
   const [layoutLevel, setLayoutLevel] = useState(readPlaylistLayoutLevel)
   const [layoutAnnouncement, setLayoutAnnouncement] = useState('')
-  const [artworkWindowIds, setArtworkWindowIds] = useState<ReadonlySet<string>>(new Set())
+  // The player owns the bounded thumbnail window across panel opens. Render
+  // retained URLs on the first frame, before the new viewport report arrives.
+  const [artworkWindowIds, setArtworkWindowIds] = useState<ReadonlySet<string>>(
+    () => new Set(tracks.filter((track) => track.coverThumbnail).map((track) => track.id)),
+  )
   const [artworkWindowRevision, setArtworkWindowRevision] = useState(0)
   const panelRef = useRef<HTMLElement | null>(null)
   const gridRef = useRef<HTMLDivElement | null>(null)
+  const initialPositionAppliedRef = useRef(false)
   const layoutLevelRef = useRef(layoutLevel)
   const wheelAccumulatedDeltaRef = useRef(0)
   const wheelLastAtRef = useRef(0)
@@ -291,9 +296,19 @@ export function PlaylistPanel({
     onTrackSelect?.(target)
   }, [currentTrackId, filteredTracks, onTrackSelect, unavailable])
 
-  useEffect(() => () => {
-    onVisibleTrackIdsChange?.([], false)
-  }, [onVisibleTrackIdsChange])
+  useLayoutEffect(() => {
+    if (initialPositionAppliedRef.current || !currentTrackId) return
+    const panel = panelRef.current
+    const grid = gridRef.current
+    if (!panel || !grid) return
+    const currentCard = [...grid.querySelectorAll<HTMLElement>('[data-playlist-track-id]')]
+      .find((card) => card.dataset.playlistTrackId === currentTrackId)
+    if (!currentCard) return
+    const panelRect = panel.getBoundingClientRect()
+    const cardRect = currentCard.getBoundingClientRect()
+    panel.scrollTop += cardRect.top - panelRect.top - (panel.clientHeight - cardRect.height) / 2
+    initialPositionAppliedRef.current = true
+  }, [currentTrackId, filteredTrackIdsKey])
 
   useEffect(() => {
     const panel = panelRef.current

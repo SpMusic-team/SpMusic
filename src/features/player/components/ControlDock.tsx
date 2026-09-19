@@ -1,6 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type FocusEvent, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
-import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Slider } from '@/components/ui/slider'
 import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
@@ -9,12 +8,15 @@ import {
   nextRepeatMode,
   nextShuffleMode,
   type RepeatMode,
-  type ShuffleMode,
 } from '@/features/player/model/playbackModes'
 import type { PlayerTimelineViewModel, PlayerUiViewModel } from '@/features/player/model/playerUiViewModel'
 import { formatDuration } from '@/features/player/model/trackUtils'
-import type { SystemIcon } from '@/icons/systemIcons'
 import { IconButton } from './IconButton'
+import {
+  getShuffleModePresentation,
+  showPlaybackModeToast,
+  type PlaybackModePresentation,
+} from './playbackModePresentation'
 import { VolumeControl } from './VolumeControl'
 
 type ControlDockProps = Pick<PlayerUiViewModel, 'playback' | 'timeline' | 'volume' | 'queue'> & {
@@ -33,47 +35,15 @@ type ProgressControlProps = {
   className?: string
 }
 
-type PlaybackModePresentation = {
-  icon: SystemIcon
-  label: string
-  pressed: boolean
-}
-
-const playbackModeToastId = 'player-playback-mode'
-
-function showPlaybackModeToast({ icon: ModeIcon, label }: PlaybackModePresentation) {
-  toast.custom(
-    () => (
-      <div className="playback-mode-toast">
-        <ModeIcon aria-hidden="true" />
-        <span>{label}</span>
-      </div>
-    ),
-    {
-      id: playbackModeToastId,
-      className: 'playback-mode-toast-shell',
-      duration: 2500,
-      position: 'top-center',
-      unstyled: true,
-    },
-  )
-}
-
 function usePlaybackModeControls(playback: PlayerUiViewModel['playback']) {
   const systemIcons = useSystemIcons()
-  const shuffleModePresentations: Record<ShuffleMode, PlaybackModePresentation> = {
-    none: { icon: systemIcons.shuffleOff, label: appCopy.controls.shuffleOff, pressed: false },
-    'shuffle-all': { icon: systemIcons.shuffle, label: appCopy.controls.shuffle, pressed: true },
-    'shuffle-category-order': { icon: systemIcons.shuffleCategoryOrder, label: appCopy.controls.shuffleCategoryOrder, pressed: true },
-    'shuffle-category-random': { icon: systemIcons.shuffleCategoryRandom, label: appCopy.controls.shuffleCategoryRandom, pressed: true },
-  }
   const repeatModePresentations: Record<RepeatMode, PlaybackModePresentation> = {
     'list-loop': { icon: systemIcons.repeat, label: appCopy.controls.repeat, pressed: false },
     'repeat-one': { icon: systemIcons.repeatOne, label: appCopy.controls.repeatOne, pressed: true },
     sequential: { icon: systemIcons.sequential, label: appCopy.controls.sequential, pressed: true },
     'all-categories-until-stop': { icon: systemIcons.playAllCategories, label: appCopy.controls.playAllCategories, pressed: true },
   }
-  const shufflePresentation = shuffleModePresentations[playback.shuffleMode]
+  const shufflePresentation = getShuffleModePresentation(playback.shuffleMode, systemIcons)
   const repeatPresentation = repeatModePresentations[playback.repeatMode]
 
   return {
@@ -82,7 +52,7 @@ function usePlaybackModeControls(playback: PlayerUiViewModel['playback']) {
     handleShuffleCycle: () => {
       const nextMode = nextShuffleMode[playback.shuffleMode]
       playback.onShuffleCycle()
-      showPlaybackModeToast(shuffleModePresentations[nextMode])
+      showPlaybackModeToast(getShuffleModePresentation(nextMode, systemIcons))
     },
     handleRepeatCycle: () => {
       const nextMode = nextRepeatMode[playback.repeatMode]

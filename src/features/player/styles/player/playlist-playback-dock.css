@@ -3,14 +3,23 @@
 }
 
 .playlist-playback-dock {
+  /* The playlist dock is a fixed-size surface. Reuse the player's slider
+     treatment and clock animation, but keep its geometry independent of the
+     viewport-driven prototype unit so vertical stretching cannot resize it. */
+  --playlist-progress-unit: 1px;
+  --control-unit: var(--playlist-progress-unit);
+  --player-progress-track-thickness: 6px;
+  --player-progress-thumb-size: 23px;
+  --playlist-dock-inline-padding: 24px;
   position: fixed;
-  right: max(16px, calc((100vw - 624px) / 2));
+  left: 16px;
+  right: 16px;
   bottom: 24px;
   z-index: 2;
   box-sizing: border-box;
-  width: min(624px, calc(100vw - 32px));
+  width: auto;
   height: 200px;
-  padding: 8px 24px 0;
+  padding: 8px var(--playlist-dock-inline-padding) 0;
   overflow: hidden;
   border-radius: 30px;
   background: var(--player-dock);
@@ -73,10 +82,22 @@
 
 .playlist-playback-toggle,
 .playlist-playback-nav-button {
+  color: var(--player-blue);
+}
+
+.playlist-playback-toggle {
   width: 48px;
   height: 48px;
   padding: 0;
-  color: var(--player-blue);
+}
+
+.playlist-playback-nav-button {
+  width: 100%;
+  min-width: 0;
+  height: 64px;
+  padding: 0 16px;
+  border-radius: 30px;
+  box-sizing: border-box;
 }
 
 .playlist-playback-toggle,
@@ -89,7 +110,7 @@
 
 .playlist-playback-progress {
   height: 28px;
-  padding: 0 1px;
+  padding: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 0;
@@ -98,17 +119,24 @@
 .playlist-playback-nav {
   display: grid;
   height: 84px;
+  width: calc(100% + (var(--playlist-dock-inline-padding) * 2));
+  margin-inline: calc(var(--playlist-dock-inline-padding) * -1);
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  align-items: center;
-  justify-items: center;
+  align-items: end;
+  justify-items: stretch;
 }
 
 .playlist-playback-nav-button.is-active { color: var(--player-blue); }
 .playlist-playback-nav-button.is-active svg { fill: currentColor; }
 .playlist-playback-nav-button:disabled { opacity: .22; }
+.playlist-playback-statistics-button:disabled { opacity: 1; }
+.playlist-playback-nav-button:hover { background: transparent; }
+.playlist-playback-nav-button.is-active:hover { color: var(--player-blue); }
+.playlist-playback-nav-button:not(.is-active):hover { color: var(--player-secondary-fix); }
+.playlist-playback-nav-button .press-feedback-button-ripple { animation-duration: 200ms; }
 
 @media (max-width: 520px) {
-  .playlist-playback-dock { padding-inline: 16px; }
+  .playlist-playback-dock { --playlist-dock-inline-padding: 16px; }
   .playlist-playback-track { grid-template-columns: 56px minmax(0, 1fr) 44px; gap: 12px; }
   .playlist-playback-track-button { grid-template-columns: 56px minmax(0, 1fr); gap: 12px; }
   .playlist-playback-cover { width: 56px; height: 56px; border-radius: 16px; }

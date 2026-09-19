@@ -5,13 +5,14 @@ import { Button } from '@/components/ui/button'
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty'
 import { Input } from '@/components/ui/input'
 import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
+import { getShuffleModePresentation, showPlaybackModeToast } from '@/features/player/components/playbackModePresentation'
 import { IconButton } from '@/features/player/components/IconButton'
 import { PlaylistCard } from '@/features/player/components/PlaylistCard'
 import { PlaylistCoverImage } from '@/features/player/components/PlaylistCoverImage'
 import { PlaylistPlaybackDock } from '@/features/player/components/PlaylistPlaybackDock'
 import { coverToneForTrackId } from '@/features/player/model/audioTrackModel'
 import { appCopy } from '@/features/player/model/playerCopy'
-import type { ShuffleMode } from '@/features/player/model/playbackModes'
+import { nextShuffleMode, type ShuffleMode } from '@/features/player/model/playbackModes'
 import type { PlayerPlaybackViewModel, PlayerTimelineViewModel, PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
 
 type PlaylistPanelProps = {
@@ -289,12 +290,10 @@ export function PlaylistPanel({
   }, [])
 
   const handlePlay = useCallback(() => {
-    const target = currentTrackId && !unavailable.has(currentTrackId)
-      ? currentTrackId
-      : filteredTracks.find((track) => !unavailable.has(track.id))?.id
+    const target = tracks.find((track) => !unavailable.has(track.id))?.id
     if (!target) return
     onTrackSelect?.(target)
-  }, [currentTrackId, filteredTracks, onTrackSelect, unavailable])
+  }, [onTrackSelect, tracks, unavailable])
 
   useLayoutEffect(() => {
     if (initialPositionAppliedRef.current || !currentTrackId) return
@@ -459,13 +458,15 @@ export function PlaylistPanel({
     }
   }, [appearanceMotion, stopLayoutAnimations])
 
-  const playableTrackId = currentTrackId && !unavailable.has(currentTrackId)
-    ? currentTrackId
-    : filteredTracks.find((track) => !unavailable.has(track.id))?.id
+  const playableTrackId = tracks.find((track) => !unavailable.has(track.id))?.id
 
   const handleShuffle = useCallback(() => {
+    const nextMode = nextShuffleMode[shuffleMode]
     onShuffleCycle()
-  }, [onShuffleCycle])
+    showPlaybackModeToast(getShuffleModePresentation(nextMode, systemIcons))
+  }, [onShuffleCycle, shuffleMode, systemIcons])
+
+  const shufflePresentation = getShuffleModePresentation(shuffleMode, systemIcons)
 
   const handleMore = useCallback(() => {
     onOpenAudio?.()
@@ -517,8 +518,22 @@ export function PlaylistPanel({
             ) : null}
           </p>
           <div className="playlist-hero-actions">
-            <IconButton className="playlist-hero-icon" icon={systemIcons.shuffle} label={appCopy.controls.shuffle} selected={shuffleMode !== 'none'} onClick={handleShuffle} />
-            <IconButton className="playlist-hero-icon" icon={systemIcons.play} label={appCopy.playlistPage.play} disabled={!playableTrackId || !onTrackSelect} onClick={handlePlay} />
+            <IconButton
+              className="playlist-hero-icon playlist-hero-shuffle-button"
+              icon={shufflePresentation.icon}
+              label={shufflePresentation.label}
+              selected={shufflePresentation.pressed}
+              onClick={handleShuffle}
+            />
+            <IconButton
+              className="playlist-hero-icon playlist-hero-play-button"
+              icon={systemIcons.play}
+              label={appCopy.playlistPage.play}
+              disabled={!playableTrackId || !onTrackSelect}
+              pressFeedback
+              pressFeedbackTone="surface-variant"
+              onClick={handlePlay}
+            />
             <Button
               className="playlist-search-button playlist-hero-icon"
               aria-label={appCopy.playlistPage.search}

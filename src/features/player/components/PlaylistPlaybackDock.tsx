@@ -1,7 +1,9 @@
-import { BarChart3, Grid2X2, Menu, Search } from 'lucide-react'
+import { DataHistogram24Filled, Grid24Filled } from '@fluentui/react-icons'
+import { Menu, Search } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { ProgressControl } from '@/features/player/components/ControlDock'
+import { IconButton } from '@/features/player/components/IconButton'
 import { PlaylistCoverImage } from '@/features/player/components/PlaylistCoverImage'
 import type { PlayerPlaybackViewModel, PlayerTimelineViewModel, PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
 import { coverToneForTrackId } from '@/features/player/model/audioTrackModel'
@@ -98,18 +100,40 @@ export function PlaylistPlaybackDock({
       />
 
       <nav className="playlist-playback-nav" aria-label="播放列表快捷操作">
-        <Button className="playlist-playback-nav-button is-active" size="icon-lg" variant="ghost" aria-label="播放列表" aria-current="page">
-          <Grid2X2 aria-hidden="true" />
-        </Button>
-        <Button className="playlist-playback-nav-button" size="icon-lg" variant="ghost" aria-label="播放统计" disabled>
-          <BarChart3 aria-hidden="true" />
-        </Button>
-        <Button className="playlist-playback-nav-button" size="icon-lg" variant="ghost" aria-label="搜索" aria-pressed={searchOpen} onClick={onSearchToggle}>
-          <Search aria-hidden="true" />
-        </Button>
-        <Button className="playlist-playback-nav-button" size="icon-lg" variant="ghost" aria-label="返回播放界面" onClick={onClose}>
-          <Menu aria-hidden="true" />
-        </Button>
+        <IconButton
+          className="playlist-playback-nav-button is-active"
+          icon={Grid24Filled}
+          label="播放列表"
+          selected
+          aria-current="page"
+          pressFeedback
+          pressFeedbackTone="surface-variant"
+        />
+        <IconButton
+          className="playlist-playback-nav-button playlist-playback-statistics-button"
+          icon={DataHistogram24Filled}
+          label="播放统计"
+          disabled
+          pressFeedback
+          pressFeedbackTone="surface-variant"
+        />
+        <IconButton
+          className="playlist-playback-nav-button"
+          icon={Search}
+          label="搜索"
+          selected={searchOpen}
+          pressFeedback
+          pressFeedbackTone="surface-variant"
+          onClick={onSearchToggle}
+        />
+        <IconButton
+          className="playlist-playback-nav-button"
+          icon={Menu}
+          label="返回播放界面"
+          pressFeedback
+          pressFeedbackTone="surface-variant"
+          onClick={onClose}
+        />
       </nav>
     </aside>
   )

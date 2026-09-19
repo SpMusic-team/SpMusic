@@ -10,7 +10,7 @@
   display: flex;
   flex-direction: column;
   gap: 25px;
-  padding: 0 25px 48px;
+  padding: 0 16px 48px;
   overflow-y: auto;
   background: var(--app-bg);
   color: var(--player-ink);
@@ -21,7 +21,7 @@
 .playlist-hero {
   position: relative;
   width: 100%;
-  max-width: var(--playlist-page-max-width);
+  max-width: none;
   height: clamp(320px, calc(320px + (100vw - 640px) * 0.5), 460px);
   min-height: 320px;
   margin: 0 auto;
@@ -155,6 +155,13 @@
   color: var(--player-blue-ink, var(--player-blue));
 }
 
+/* The play action uses the same pointer-originated ripple as playback controls;
+   keep its surface stable until it is actually pressed. */
+.playlist-hero-play-button:hover {
+  background: color-mix(in srgb, var(--player-blue-soft) 94%, transparent);
+  color: var(--player-blue-ink, var(--player-blue));
+}
+
 .playlist-hero-icon:focus-visible,
 .playlist-hero-actions .playlist-select-toggle:focus-visible,
 .playlist-card:focus-visible {
@@ -166,6 +173,16 @@
 .playlist-hero-actions .playlist-select-toggle[data-selected="true"] {
   background: var(--player-blue);
   color: var(--app-accent-contrast);
+}
+
+.playlist-hero-shuffle-button[data-selected="true"] {
+  background: color-mix(in srgb, var(--player-blue-soft) 94%, transparent);
+  color: var(--player-blue-ink, var(--player-blue));
+}
+
+.playlist-search-button[data-selected="true"] {
+  background: color-mix(in srgb, var(--player-blue-soft) 94%, transparent);
+  color: var(--player-blue-ink, var(--player-blue));
 }
 
 .playlist-close {
@@ -208,6 +225,7 @@
 .playlist-grid {
   display: grid;
   gap: var(--playlist-grid-gap, 20px);
+  max-width: none;
   padding: 0 0 48px;
   /* Reflowing between tile column counts must not move the scroll position. */
   overflow-anchor: none;

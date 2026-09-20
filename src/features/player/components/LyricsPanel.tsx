@@ -39,6 +39,8 @@ type LyricVisualLines = {
 
 type LyricVisualLinesById = Record<string, LyricVisualLines>
 
+const MIN_STABLE_LYRIC_MEASUREMENT_WIDTH = 120
+
 function lyricPairSpacingForDelta(deltaSeconds: number | null, tightThresholdSeconds: number): LyricPairSpacing {
   if (deltaSeconds === null) return 'none'
   return Number.isFinite(deltaSeconds) && deltaSeconds >= 0 && deltaSeconds < tightThresholdSeconds
@@ -139,6 +141,13 @@ export function LyricsPanel({
   const measureStableVisualLines = useCallback(() => {
     const lyricList = lyricListRef.current
     if (!lyricList || lyricList.children.length !== track.lyrics.length) return
+    const measurementWidth = lyricList.clientWidth
+    // Compact hides inactive lines. Their own clientWidth is therefore zero,
+    // so measuring each line at its current width would cache one character
+    // per visual line. The visible list is the stable width contract shared by
+    // every lyric. Ignore transient collapsed layouts until ResizeObserver
+    // reports the final usable width.
+    if (measurementWidth < MIN_STABLE_LYRIC_MEASUREMENT_WIDTH) return
 
     const nextVisualLines: LyricVisualLinesById = {}
     track.lyrics.forEach((line, index) => {
@@ -152,7 +161,7 @@ export function LyricsPanel({
       measurementLine.setAttribute('aria-hidden', 'true')
       measurementLine.style.position = 'fixed'
       measurementLine.style.inset = '0 auto auto -100000px'
-      measurementLine.style.width = `${renderedLine.clientWidth}px`
+      measurementLine.style.width = `${measurementWidth}px`
       measurementLine.style.height = 'auto'
       measurementLine.style.minHeight = '0'
       measurementLine.style.pointerEvents = 'none'
@@ -195,6 +204,11 @@ export function LyricsPanel({
     measureStableVisualLines()
     const observer = new ResizeObserver(scheduleMeasurement)
     observer.observe(lyricList)
+    const lyricsPanel = lyricList.closest<HTMLElement>('.lyrics-panel')
+    if (lyricsPanel) observer.observe(lyricsPanel)
+    Array.from(lyricList.children).forEach((line) => {
+      if (line instanceof HTMLElement) observer.observe(line)
+    })
     const appearanceRoot = document.querySelector('.spmusic-app') ?? document.documentElement
     const appearanceObserver = new MutationObserver(scheduleMeasurement)
     appearanceObserver.observe(appearanceRoot, { attributes: true })

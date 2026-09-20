@@ -7,7 +7,10 @@ import {
   PLAYER_LAYOUT_MODES,
   RESPONSIVE_PLAYER_LAYOUT_CONFIG,
   resolveResponsivePlayerLayout,
+  type CompactLayoutProfile,
+  type PlayerLayoutMode,
   type ResponsivePlayerLayoutConfig,
+  type ResponsivePlayerLayoutResult,
 } from './responsivePlayerLayout.ts'
 
 const EPSILON = 1e-9
@@ -16,7 +19,41 @@ function assertClose(actual: number, expected: number, message?: string) {
   assert.ok(Math.abs(actual - expected) <= EPSILON, message ?? `${actual} != ${expected}`)
 }
 
-test('方案一集中定义设计范围和选择参数', () => {
+function isScoredLayout(layout: ResponsivePlayerLayoutResult['layout']): layout is PlayerLayoutMode {
+  return layout !== 'compact'
+}
+
+function stateKey(result: ResponsivePlayerLayoutResult): string {
+  return `${result.layout}:${result.compactProfile ?? '-'}`
+}
+
+function assertResolved(
+  width: number,
+  height: number,
+  layout: ResponsivePlayerLayoutResult['layout'],
+  compactProfile: CompactLayoutProfile | null,
+) {
+  const result = resolveResponsivePlayerLayout(width, height)
+  assert.equal(result.layout, layout, `${width}x${height}: layout`)
+  assert.equal(result.compactProfile, compactProfile, `${width}x${height}: compactProfile`)
+  assert.equal(result.fallback, false, `${width}x${height}: fallback`)
+}
+
+function assertCompactFallback(
+  width: number,
+  height: number,
+  compactProfile: CompactLayoutProfile,
+  scale: number,
+) {
+  const result = resolveResponsivePlayerLayout(width, height)
+  assert.equal(result.layout, 'compact', `${width}x${height}: layout`)
+  assert.equal(result.compactProfile, compactProfile, `${width}x${height}: compactProfile`)
+  assert.equal(result.fallback, true, `${width}x${height}: fallback`)
+  assertClose(result.scale, scale, `${width}x${height}: scale`)
+  assert.ok(Number.isFinite(result.scale), `${width}x${height}: finite scale`)
+}
+
+test('集中定义现有设计范围和选择参数', () => {
   assert.equal(RESPONSIVE_PLAYER_LAYOUT_CONFIG.minScale, 0.9)
   assert.equal(RESPONSIVE_PLAYER_LAYOUT_CONFIG.promotionScale, 0.96)
   assert.equal(RESPONSIVE_PLAYER_LAYOUT_CONFIG.decisionBucketPx, 4)
@@ -32,7 +69,7 @@ test('方案一集中定义设计范围和选择参数', () => {
     horizontal: {
       minWidth: 1723,
       maxWidth: 2560,
-      minHeight: 595,
+      minHeight: 720,
       maxHeight: 1080,
       informationLevel: 2,
       tieBreakPriority: 3,
@@ -56,30 +93,115 @@ test('方案一集中定义设计范围和选择参数', () => {
   })
 })
 
-test('文档中的尺寸示例得到预期视图', () => {
+test('Compact 精确边界矩阵与三个退出边界符合规格', () => {
   const examples = [
-    [2560, 1440, 'full', false],
-    [2560, 595, 'horizontal', false],
-    [2560, 1080, 'full', false],
-    [1920, 1080, 'full', false],
-    [1850, 1050, 'full', false],
-    [1800, 1050, 'horizontal', false],
-    [1819, 1108, 'vertical', false],
-    [1600, 900, 'horizontal', false],
-    [1280, 1050, 'vertical', false],
-    [1024, 1200, 'vertical', false],
-    [900, 1100, 'quarter', false],
-    [1100, 700, 'horizontal', true],
-  ] as const
+    [640, 720, 'compact', 'compact-row'],
+    [899, 720, 'compact', 'compact-row'],
+    [900, 720, 'compact', 'compact-row-lyric'],
+    [640, 890, 'compact', 'compact-row'],
+    [640, 891, 'compact', 'compact-stacked'],
+    [899, 1030, 'compact', 'compact-stacked'],
+    [899, 1031, 'compact', 'compact-stacked-lyric'],
+    [900, 1030, 'compact', 'compact-row-lyric'],
+    [900, 1031, 'compact', 'compact-stacked-lyric'],
+    [923, 1079, 'compact', 'compact-stacked-lyric'],
+    [924, 1007, 'compact', 'compact-row-lyric'],
+    [924, 1008, 'vertical', null],
+    [1551, 720, 'compact', 'compact-row-lyric'],
+    [1552, 720, 'horizontal', null],
+    [640, 1079, 'compact', 'compact-stacked-lyric'],
+    [640, 1080, 'quarter', null],
+  ] as const satisfies ReadonlyArray<readonly [
+    number,
+    number,
+    ResponsivePlayerLayoutResult['layout'],
+    CompactLayoutProfile | null,
+  ]>
 
-  for (const [width, height, layout, fallback] of examples) {
-    const result = resolveResponsivePlayerLayout(width, height)
-    assert.equal(result.layout, layout, `${width}x${height}`)
-    assert.equal(result.fallback, fallback, `${width}x${height}`)
+  for (const [width, height, layout, compactProfile] of examples) {
+    assertResolved(width, height, layout, compactProfile)
   }
 })
 
-test('1819x1108 选择竖半屏，因为其缩放失真小于横半屏的高度溢出', () => {
+test('891 与 1031 锚点不会被 4px 分桶吞掉', () => {
+  const at891 = resolveResponsivePlayerLayout(640, 891)
+  const at1031 = resolveResponsivePlayerLayout(640, 1031)
+
+  assert.equal(at891.decisionHeight, 891)
+  assert.equal(at891.compactProfile, 'compact-stacked')
+  assert.equal(at1031.decisionHeight, 1031)
+  assert.equal(at1031.compactProfile, 'compact-stacked-lyric')
+})
+
+test('Compact 安全下溢域按原始 viewport 比例整体缩放', () => {
+  const examples = [
+    [629, 715, 'compact-row', 629 / 640],
+    [1220, 714, 'compact-row-lyric', 714 / 720],
+    [576, 648, 'compact-row', 0.9],
+    [639, 720, 'compact-row', 639 / 640],
+    [640, 719, 'compact-row', 719 / 720],
+    [1510, 719, 'compact-row-lyric', 719 / 720],
+  ] as const satisfies ReadonlyArray<readonly [number, number, CompactLayoutProfile, number]>
+
+  for (const [width, height, compactProfile, scale] of examples) {
+    assertCompactFallback(width, height, compactProfile, scale)
+
+    const expected = resolveResponsivePlayerLayout(width, height)
+    for (let iteration = 0; iteration < 100; iteration += 1) {
+      assert.deepEqual(resolveResponsivePlayerLayout(width, height), expected)
+    }
+  }
+})
+
+test('Compact 安全下溢域在 576x648 逐像素边界外退出到 legacy fail-safe', () => {
+  for (const [width, height] of [[575, 648], [576, 647]] as const) {
+    const result = resolveResponsivePlayerLayout(width, height)
+    assert.notEqual(result.layout, 'compact', `${width}x${height}: layout`)
+    assert.equal(result.compactProfile, null, `${width}x${height}: compactProfile`)
+    assert.equal(result.fallback, true, `${width}x${height}: fallback`)
+    assertClose(result.scale, 0.9, `${width}x${height}: scale`)
+    assert.ok(Number.isFinite(result.scale), `${width}x${height}: finite scale`)
+  }
+})
+
+test('正式候选优先于 Compact 安全下溢域', () => {
+  const result = resolveResponsivePlayerLayout(1552, 714)
+
+  assert.equal(result.layout, 'horizontal')
+  assert.equal(result.compactProfile, null)
+  assert.equal(result.fallback, false)
+  assertClose(result.scale, 1552 / 1723)
+})
+
+test('全部受支持整数尺寸都由正式视图覆盖', () => {
+  for (let width = 640; width <= 2560; width += 1) {
+    for (let height = 720; height <= 1440; height += 1) {
+      const result = resolveResponsivePlayerLayout(width, height)
+      assert.equal(result.fallback, false, `${width}x${height}: ${stateKey(result)}`)
+      assert.ok(Number.isFinite(result.scale), `${width}x${height}: finite scale`)
+      if (result.layout === 'compact') {
+        assert.equal(result.scale, 1, `${width}x${height}: compact scale`)
+        assert.notEqual(result.compactProfile, null, `${width}x${height}: compact profile`)
+      } else {
+        assert.equal(result.compactProfile, null, `${width}x${height}: non-compact profile`)
+      }
+    }
+  }
+})
+
+test('三个缺陷复现尺寸解析为批准的正式或安全下溢 Compact 状态', () => {
+  assertCompactFallback(629, 715, 'compact-row', 0.9828125)
+
+  const lyric = resolveResponsivePlayerLayout(955, 795)
+  assert.equal(lyric.layout, 'compact')
+  assert.equal(lyric.compactProfile, 'compact-row-lyric')
+  assert.equal(lyric.fallback, false)
+  assertClose(lyric.scale, 1)
+
+  assertCompactFallback(1220, 714, 'compact-row-lyric', 0.9916666666666667)
+})
+
+test('1819x1108 继续选择竖半屏且候选没有内容尺寸溢出回归', () => {
   const viewport = { width: 1816, height: 1108 }
   const result = resolveResponsivePlayerLayout(1819, 1108)
   const horizontal = calculatePlayerLayoutCandidate('horizontal', viewport)
@@ -88,25 +210,23 @@ test('1819x1108 选择竖半屏，因为其缩放失真小于横半屏的高度�
   assert.ok(horizontal)
   assert.ok(vertical)
   assert.equal(result.layout, 'vertical')
+  assert.equal(result.compactProfile, null)
   assert.equal(result.fallback, false)
   assertClose(result.scale, 1108 / 1120)
   assertClose(horizontal.distortion, 1108 / 1080 - 1)
   assertClose(vertical.distortion, 1 - 1108 / 1120)
   assert.ok(horizontal.distortion > vertical.distortion)
+
+  const bounds = RESPONSIVE_PLAYER_LAYOUT_CONFIG.layouts.vertical
+  const virtualWidth = 1819 / result.scale
+  const virtualHeight = 1108 / result.scale
+  assert.ok(virtualWidth + EPSILON >= bounds.minWidth)
+  assert.ok(virtualHeight + EPSILON >= bounds.minHeight)
+  assert.ok(Math.min(virtualWidth, bounds.maxWidth) <= bounds.maxWidth + EPSILON)
+  assert.ok(Math.min(virtualHeight, bounds.maxHeight) <= bounds.maxHeight + EPSILON)
 })
 
-test('非 4px 整除的横半屏最小边界保持原比例有效', () => {
-  const result = resolveResponsivePlayerLayout(1723, 595)
-  assert.equal(result.layout, 'horizontal')
-  assert.equal(result.fallback, false)
-  assert.equal(result.scale, 1)
-  assert.deepEqual(
-    [result.decisionWidth, result.decisionHeight],
-    [1723, 595],
-  )
-})
-
-test('每个候选满足最小尺寸且可计算有限的内容画布 cap', () => {
+test('每个现有视图候选满足最小尺寸且可计算有限内容画布 cap', () => {
   const config = RESPONSIVE_PLAYER_LAYOUT_CONFIG
 
   for (let width = 576; width <= 2560; width += 4) {
@@ -141,19 +261,20 @@ test('每个候选满足最小尺寸且可计算有限的内容画布 cap', () =
   }
 })
 
-test('非 fallback 结果的原始尺寸达到最小尺寸且内容画布受 max cap 限制', () => {
+test('非 Compact 正式结果满足对应候选的最小尺寸与 max cap', () => {
   const boundaryHeights = [
-    595, 596, 597, 598, 599,
-    1078, 1079, 1080, 1081, 1082,
-    1118, 1119, 1120, 1121, 1122,
-    1198, 1199, 1200, 1201, 1202,
-    1438, 1439, 1440,
+    720, 721,
+    1007, 1008,
+    1079, 1080, 1081,
+    1119, 1120, 1121,
+    1199, 1200, 1201,
+    1439, 1440,
   ]
 
   for (let width = 640; width <= 2560; width += 1) {
     for (const height of boundaryHeights) {
       const result = resolveResponsivePlayerLayout(width, height)
-      if (result.fallback) continue
+      if (result.fallback || !isScoredLayout(result.layout)) continue
 
       const bounds = RESPONSIVE_PLAYER_LAYOUT_CONFIG.layouts[result.layout]
       const virtualWidth = width / result.scale
@@ -168,13 +289,15 @@ test('非 fallback 结果的原始尺寸达到最小尺寸且内容画布受 max
   }
 })
 
-test('0.90 是合法候选且低于下限会进入 fallback', () => {
+test('0.90 是现有视图合法候选且低于下限进入 fail-safe', () => {
   const atMinimum = resolveResponsivePlayerLayout(576, 1080)
   assert.equal(atMinimum.layout, 'quarter')
   assert.equal(atMinimum.fallback, false)
   assertClose(atMinimum.scale, 0.9)
 
   const belowMinimum = resolveResponsivePlayerLayout(576, 1079)
+  assert.equal(belowMinimum.layout, 'compact')
+  assert.equal(belowMinimum.compactProfile, 'compact-stacked-lyric')
   assert.equal(belowMinimum.fallback, true)
   assertClose(belowMinimum.scale, 0.9)
 })
@@ -280,7 +403,7 @@ test('0.96 对应的 0.04 失真门槛在溢出侧也按闭区间处理', () => 
   assert.equal(resolveResponsivePlayerLayout(1041, 1000, config).layout, 'horizontal')
 })
 
-test('同一 4px 判定桶内 layout 稳定，最终 scale 使用原始尺寸连续变化', () => {
+test('同一普通 4px 判定桶内布局稳定且最终 scale 使用原始尺寸连续变化', () => {
   const first = resolveResponsivePlayerLayout(1848, 1050)
   const last = resolveResponsivePlayerLayout(1851, 1050)
 
@@ -290,16 +413,23 @@ test('同一 4px 判定桶内 layout 稳定，最终 scale 使用原始尺寸连
   assert.ok(last.scale > first.scale)
 })
 
-test('相同尺寸重复调用及不同调用顺序不改变结果', () => {
+test('相同尺寸重复调用及乱序调用不改变顶层与 Compact 子状态', () => {
   const sizes = [
     [2560, 1440],
-    [1850, 1050],
     [1819, 1108],
-    [1723, 595],
-    [1280, 1050],
-    [900, 1100],
-    [1120, 720],
-    [640, 595],
+    [1552, 720],
+    [924, 1008],
+    [923, 1079],
+    [900, 1031],
+    [900, 720],
+    [640, 1031],
+    [640, 891],
+    [640, 720],
+    [639, 720],
+    [629, 715],
+    [576, 648],
+    [575, 648],
+    [576, 647],
   ] as const
   const expected = sizes.map(([width, height]) => resolveResponsivePlayerLayout(width, height))
 
@@ -311,69 +441,52 @@ test('相同尺寸重复调用及不同调用顺序不改变结果', () => {
   }
 })
 
-function assertNoLayoutReentry(sizes: ReadonlyArray<readonly [number, number]>) {
-  const exitedLayouts = new Set<string>()
+function assertNoStateReentry(sizes: ReadonlyArray<readonly [number, number]>) {
+  const exitedStates = new Set<string>()
   const [initialWidth, initialHeight] = sizes[0]
-  let previousLayout = resolveResponsivePlayerLayout(initialWidth, initialHeight).layout
+  let previousState = stateKey(resolveResponsivePlayerLayout(initialWidth, initialHeight))
 
   for (const [width, height] of sizes.slice(1)) {
-    const layout = resolveResponsivePlayerLayout(width, height).layout
-    if (layout === previousLayout) continue
+    const state = stateKey(resolveResponsivePlayerLayout(width, height))
+    if (state === previousState) continue
 
-    exitedLayouts.add(previousLayout)
+    exitedStates.add(previousState)
     assert.equal(
-      exitedLayouts.has(layout),
+      exitedStates.has(state),
       false,
-      `${previousLayout} -> ${layout} at ${width}x${height} re-enters an exited layout`,
+      `${previousState} -> ${state} at ${width}x${height} re-enters an exited state`,
     )
-    previousLayout = layout
+    previousState = state
   }
 }
 
-test('规格列出的单向拉宽和拉高扫描不会回到已离开的视图', () => {
-  for (const height of [595, 900, 1050, 1080, 1120, 1200]) {
-    assertNoLayoutReentry(
-      Array.from({ length: 2560 - 640 + 1 }, (_, index) => [640 + index, height] as const),
-    )
-  }
-
-  for (const width of [640, 1024, 1723, 1920]) {
-    assertNoLayoutReentry(
-      Array.from({ length: 1440 - 595 + 1 }, (_, index) => [width, 595 + index] as const),
-    )
-  }
-})
-
-test('1050 高度及横竖半屏相邻高度的双向拉宽扫描无视图重入', () => {
-  for (const height of [1050, 1079, 1080, 1081, 1108, 1119, 1120]) {
+test('受支持域的横向与纵向正反扫描没有 layout+compactProfile 的 A→B→A', () => {
+  for (const height of [720, 890, 891, 1007, 1008, 1030, 1031, 1079, 1080, 1120, 1200, 1440]) {
     const increasing = Array.from(
       { length: 2560 - 640 + 1 },
       (_, index) => [640 + index, height] as const,
     )
-    assertNoLayoutReentry(increasing)
-    assertNoLayoutReentry([...increasing].reverse())
+    assertNoStateReentry(increasing)
+    assertNoStateReentry([...increasing].reverse())
+  }
+
+  for (const width of [640, 899, 900, 923, 924, 1024, 1551, 1552, 1723, 1920, 2560]) {
+    const increasing = Array.from(
+      { length: 1440 - 720 + 1 },
+      (_, index) => [width, 720 + index] as const,
+    )
+    assertNoStateReentry(increasing)
+    assertNoStateReentry([...increasing].reverse())
   }
 })
 
-test('默认尺寸与最小尺寸使用有限且确定的 fail-safe', () => {
-  for (const [width, height] of [[1120, 720], [640, 595]] as const) {
-    const expected = resolveResponsivePlayerLayout(width, height)
-    assert.equal(expected.fallback, true)
-    assertClose(expected.scale, 0.9)
-    assert.ok(Number.isFinite(expected.scale))
-
-    for (let iteration = 0; iteration < 100; iteration += 1) {
-      assert.deepEqual(resolveResponsivePlayerLayout(width, height), expected)
-    }
-  }
-})
-
-test('fail-safe 不把超过内容画布 max 的轴计入失真距离', () => {
-  const result = resolveResponsivePlayerLayout(1510, 980)
+test('宽轴充足但高度下溢时优先使用 Compact 安全画布', () => {
+  const result = resolveResponsivePlayerLayout(1510, 719)
 
   assert.equal(result.fallback, true)
-  assert.equal(result.layout, 'horizontal')
-  assertClose(result.scale, 0.9)
+  assert.equal(result.layout, 'compact')
+  assert.equal(result.compactProfile, 'compact-row-lyric')
+  assertClose(result.scale, 719 / 720)
 })
 
 test('非法 viewport 输入也返回确定结果且不产生 NaN 或 Infinity', () => {
@@ -384,6 +497,7 @@ test('非法 viewport 输入也返回确定结果且不产生 NaN 或 Infinity',
   ]) {
     const result = resolveResponsivePlayerLayout(width, height)
     assert.equal(result.layout, 'full')
+    assert.equal(result.compactProfile, null)
     assert.equal(result.fallback, false)
     assert.equal(result.scale, 1)
     assert.ok(Number.isFinite(result.decisionWidth))

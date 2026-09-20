@@ -23,6 +23,7 @@ export function ResponsivePlayerLayout({ children, nativeWindowState, windowBar 
     const next = resolveCurrentViewport()
     setResolvedLayout((current) => (
       current.layout === next.layout
+      && current.compactProfile === next.compactProfile
       && current.scale === next.scale
       && current.fallback === next.fallback
       && current.short === next.short
@@ -55,6 +56,7 @@ export function ResponsivePlayerLayout({ children, nativeWindowState, windowBar 
 
   const responsiveStyle = {
     '--player-ui-scale': resolvedLayout.scale,
+    '--player-ui-scale-inverse': 1 / resolvedLayout.scale,
   } as CSSProperties
 
   return (
@@ -62,6 +64,7 @@ export function ResponsivePlayerLayout({ children, nativeWindowState, windowBar 
       <div
         className="responsive-player-layout"
         data-player-layout={resolvedLayout.layout}
+        data-player-compact-profile={resolvedLayout.compactProfile ?? undefined}
         data-player-short={resolvedLayout.short || undefined}
         data-player-layout-fallback={resolvedLayout.fallback || undefined}
         data-player-ui-scale={resolvedLayout.scale.toFixed(4)}

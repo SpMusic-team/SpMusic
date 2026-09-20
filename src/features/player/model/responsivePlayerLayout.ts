@@ -1,4 +1,10 @@
 export type PlayerLayoutMode = 'full' | 'horizontal' | 'vertical' | 'quarter'
+export type ResolvedPlayerLayoutMode = PlayerLayoutMode | 'compact'
+export type CompactLayoutProfile =
+  | 'compact-row'
+  | 'compact-row-lyric'
+  | 'compact-stacked'
+  | 'compact-stacked-lyric'
 
 export type ViewportSize = {
   width: number
@@ -35,12 +41,13 @@ export type PlayerLayoutCandidate = {
 }
 
 export type ResponsivePlayerLayoutResult = {
-  layout: PlayerLayoutMode
+  layout: ResolvedPlayerLayoutMode
   scale: number
   fallback: boolean
   short: boolean
   decisionWidth: number
   decisionHeight: number
+  compactProfile: CompactLayoutProfile | null
 }
 
 export const PLAYER_LAYOUT_MODES: readonly PlayerLayoutMode[] = [
@@ -66,7 +73,7 @@ export const RESPONSIVE_PLAYER_LAYOUT_CONFIG: ResponsivePlayerLayoutConfig = {
     horizontal: {
       minWidth: 1723,
       maxWidth: 2560,
-      minHeight: 595,
+      minHeight: 720,
       maxHeight: 1080,
       informationLevel: 2,
       tieBreakPriority: 3,
@@ -92,6 +99,12 @@ export const RESPONSIVE_PLAYER_LAYOUT_CONFIG: ResponsivePlayerLayoutConfig = {
 
 const EPSILON = 1e-9
 const SHORT_LAYOUT_BREAKPOINT = 600
+const COMPACT_MIN_WIDTH = 640
+const COMPACT_MIN_HEIGHT = 720
+const COMPACT_SAFE_MIN_WIDTH = COMPACT_MIN_WIDTH * RESPONSIVE_PLAYER_LAYOUT_CONFIG.minScale
+const COMPACT_SAFE_MIN_HEIGHT = COMPACT_MIN_HEIGHT * RESPONSIVE_PLAYER_LAYOUT_CONFIG.minScale
+const COMPACT_WIDTH_ANCHORS = [640, 900, 924, 1552] as const
+const COMPACT_HEIGHT_ANCHORS = [720, 891, 1008, 1031, 1080] as const
 
 function finiteViewportDimension(value: number, fallback: number): number {
   return Number.isFinite(value) && value > 0 ? value : fallback
@@ -105,10 +118,14 @@ export function getPlayerLayoutDecisionAnchors(
 ): readonly number[] {
   const minimumKey = axis === 'width' ? 'minWidth' : 'minHeight'
   const maximumKey = axis === 'width' ? 'maxWidth' : 'maxHeight'
-  return [...new Set(PLAYER_LAYOUT_MODES.flatMap((layout) => [
-    config.layouts[layout][minimumKey],
-    config.layouts[layout][maximumKey],
-  ]))].sort((left, right) => left - right)
+  const compactAnchors = axis === 'width' ? COMPACT_WIDTH_ANCHORS : COMPACT_HEIGHT_ANCHORS
+  return [...new Set([
+    ...PLAYER_LAYOUT_MODES.flatMap((layout) => [
+      config.layouts[layout][minimumKey],
+      config.layouts[layout][maximumKey],
+    ]),
+    ...compactAnchors,
+  ])].sort((left, right) => left - right)
 }
 
 function quantize(value: number, bucket: number, anchors: readonly number[]): number {
@@ -245,6 +262,13 @@ function calculateRawScale(
   )
 }
 
+function resolveCompactProfile(viewport: ViewportSize): CompactLayoutProfile {
+  if (viewport.height >= 1031) return 'compact-stacked-lyric'
+  if (viewport.width >= 900) return 'compact-row-lyric'
+  if (viewport.height >= 891) return 'compact-stacked'
+  return 'compact-row'
+}
+
 export function resolveResponsivePlayerLayout(
   width: number,
   height: number,
@@ -269,6 +293,31 @@ export function resolveResponsivePlayerLayout(
   )
   const eligibleCandidates = promotionCandidates.length > 0 ? promotionCandidates : candidates
   const fallback = eligibleCandidates.length === 0
+  const compact = fallback
+    && decisionViewport.width >= COMPACT_MIN_WIDTH
+    && decisionViewport.height >= COMPACT_MIN_HEIGHT
+  const compactFallback = fallback
+    && !compact
+    && decisionViewport.width >= COMPACT_SAFE_MIN_WIDTH
+    && decisionViewport.height >= COMPACT_SAFE_MIN_HEIGHT
+  if (compact || compactFallback) {
+    const compactScale = compact
+      ? 1
+      : Math.min(
+          1,
+          rawViewport.width / COMPACT_MIN_WIDTH,
+          rawViewport.height / COMPACT_MIN_HEIGHT,
+        )
+    return {
+      layout: 'compact',
+      scale: compactScale,
+      fallback: compactFallback,
+      short: false,
+      decisionWidth: decisionViewport.width,
+      decisionHeight: decisionViewport.height,
+      compactProfile: resolveCompactProfile(decisionViewport),
+    }
+  }
   const layout = fallback
     ? resolveFallbackLayout(decisionViewport, config)
     : [...eligibleCandidates].sort((left, right) => compareCandidates(
@@ -285,5 +334,6 @@ export function resolveResponsivePlayerLayout(
     short: rawViewport.height < SHORT_LAYOUT_BREAKPOINT,
     decisionWidth: decisionViewport.width,
     decisionHeight: decisionViewport.height,
+    compactProfile: null,
   }
 }

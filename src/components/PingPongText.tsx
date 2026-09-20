@@ -17,6 +17,7 @@ export function PingPongText({ as: Component = 'span', className, text }: PingPo
   const movingTextRef = useRef<HTMLSpanElement>(null)
   const animationRef = useRef<Animation | null>(null)
   const hoveredRef = useRef(false)
+  const focusedRef = useRef(false)
   const [state, setState] = useState({ animated: false, overflow: false })
   const timing = appearance.player.trackMetadata
 
@@ -66,7 +67,7 @@ export function PingPongText({ as: Component = 'span', className, text }: PingPo
       iterations: Infinity,
     })
 
-    if (hoveredRef.current || document.hidden) animation.pause()
+    if (hoveredRef.current || focusedRef.current || document.hidden) animation.pause()
     animationRef.current = animation
   }, [motion.disabled, stopAnimation, timing.scrollEdgePauseMs, timing.scrollPixelsPerSecond, timing.scrollStartDelayMs])
 
@@ -89,7 +90,7 @@ export function PingPongText({ as: Component = 'span', className, text }: PingPo
     const handleVisibilityChange = () => {
       const animation = animationRef.current
       if (!animation) return
-      if (document.hidden || hoveredRef.current) animation.pause()
+      if (document.hidden || hoveredRef.current || focusedRef.current) animation.pause()
       else animation.play()
     }
     document.addEventListener('visibilitychange', handleVisibilityChange)
@@ -109,7 +110,17 @@ export function PingPongText({ as: Component = 'span', className, text }: PingPo
 
   const handlePointerLeave = () => {
     hoveredRef.current = false
-    if (!document.hidden) animationRef.current?.play()
+    if (!document.hidden && !focusedRef.current) animationRef.current?.play()
+  }
+
+  const handleFocus = () => {
+    focusedRef.current = true
+    animationRef.current?.pause()
+  }
+
+  const handleBlur = () => {
+    focusedRef.current = false
+    if (!document.hidden && !hoveredRef.current) animationRef.current?.play()
   }
 
   return (
@@ -119,6 +130,9 @@ export function PingPongText({ as: Component = 'span', className, text }: PingPo
       data-overflow={state.overflow || undefined}
       onPointerEnter={handlePointerEnter}
       onPointerLeave={handlePointerLeave}
+      onFocus={handleFocus}
+      onBlur={handleBlur}
+      tabIndex={state.overflow ? 0 : undefined}
       title={text}
     >
       <span ref={viewportRef} className="ping-pong-text-viewport">

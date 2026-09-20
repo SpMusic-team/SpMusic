@@ -2,6 +2,7 @@
   /* Viewport units continue to drive fluid geometry. This unit only scales
      fixed-size UI tokens when the resolver selects a design-range bridge. */
   --player-ui-scale: 1;
+  --player-ui-scale-inverse: 1;
   --player-ui-px: calc(1px * var(--player-ui-scale));
   /* Full is height-driven. Horizontal-half inherits this structural scale for
      cover and lyrics, while its controller uses the fixed unit below. */
@@ -16,6 +17,21 @@
   inset: 0;
   min-width: 0;
   min-height: 0;
+}
+
+/* Tauri reports the web content viewport, which can be a few pixels smaller
+   than the configured native minimum once the Windows frame is accounted for.
+   In the resolver's bounded Compact fallback, lay out against the inverse-
+   scaled virtual canvas and scale the complete composition back into the real
+   viewport. */
+.responsive-player-layout[data-player-layout="compact"][data-player-layout-fallback="true"] {
+  inset: auto;
+  top: 0;
+  left: 0;
+  width: calc(100% * var(--player-ui-scale-inverse));
+  height: calc(100% * var(--player-ui-scale-inverse));
+  transform: scale(var(--player-ui-scale));
+  transform-origin: top left;
 }
 
 .control-transport {
@@ -56,7 +72,7 @@
 
 /* A fail-safe viewport can collapse the cover completely. Cover feedback and
    more actions are secondary controls and have no safe anchor in that state. */
-.responsive-player-layout[data-player-layout-fallback="true"] .cover-actions {
+.responsive-player-layout[data-player-layout-fallback="true"]:not([data-player-layout="compact"]) .cover-actions {
   display: none;
 }
 
@@ -667,7 +683,7 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
      window bar 40px + 8px top gap, and 48px bottom/side clearance. */
   --horizontal-content-min-width: calc(1080 * var(--horizontal-control-unit));
   --horizontal-cover-size: min(
-    calc(max(100svh, 595px) - 96px),
+    calc(max(100svh, 720px) - 96px),
     max(0px, calc(100vw - 144px - var(--horizontal-content-min-width)))
   );
   --horizontal-control-region-height: 209px;
@@ -754,7 +770,7 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
 }
 
 .responsive-player-layout[data-player-layout="horizontal"] .track-card-deck {
-  height: var(--horizontal-cover-size);
+  height: 100%;
 }
 
 .responsive-player-layout[data-player-layout="horizontal"] .track-pills {
@@ -1030,6 +1046,22 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
   flex: 0 0 auto;
 }
 
+/* When the horizontal cover is width-limited and ends above the dock, the
+   bottom controls can use the complete stage width. Keep the authored
+   right-column composition for wider windows, where the taller cover still
+   occupies the dock rows. */
+@media (min-height: 900px) and (max-width: calc(100svh + 836px)) {
+  .responsive-player-layout[data-player-layout="horizontal"] .player-control-region {
+    grid-column: 1 / -1;
+    grid-row: 5;
+    width: 100%;
+  }
+
+  .responsive-player-layout[data-player-layout="horizontal"] .track-card-deck {
+    height: calc(100% - var(--horizontal-control-region-height));
+  }
+}
+
 .responsive-player-layout[data-player-layout="quarter"] .player-stage {
   grid-template-columns: minmax(0, 1fr);
   grid-template-areas:
@@ -1056,7 +1088,7 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
     calc(36 * var(--player-layout-unit));
   grid-template-columns:
     minmax(0, calc(870 * var(--vertical-content-unit)))
-    minmax(0, calc(762 * var(--vertical-content-unit)));
+    minmax(0, 1fr);
   grid-template-rows:
     minmax(0, 1fr)
     calc(28 * var(--player-layout-unit))
@@ -1075,7 +1107,7 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
     "dock dock";
   column-gap: calc(24 * var(--vertical-content-unit));
   row-gap: 0;
-  justify-content: space-between;
+  justify-content: stretch;
 }
 
 .responsive-player-layout[data-player-layout="vertical"] .cover-frame {
@@ -1108,7 +1140,7 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
   width: min(100%, calc(762 * var(--vertical-content-unit)));
   height: min(100%, calc(672 * var(--player-layout-unit)));
   align-self: center;
-  justify-self: end;
+  justify-self: center;
 }
 
 .responsive-player-layout[data-player-layout="vertical"] .lyrics-panel li[data-active="true"],
@@ -1361,14 +1393,11 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
 }
 
 .responsive-player-layout[data-player-layout="quarter"] .track-pills {
-  width: min(
-    calc(100% - 42 * var(--player-layout-unit)),
-    calc(880 * var(--player-layout-unit))
-  );
+  width: min(100%, calc(880 * var(--player-layout-unit)));
   margin-top: calc(34 * var(--player-layout-unit));
   margin-inline: 0;
   padding-inline: 0;
-  justify-self: center;
+  justify-self: start;
   gap: 29px;
 }
 
@@ -1719,11 +1748,17 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
 
 .responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .player-external-mode-row {
   padding-inline: 30px;
+  justify-self: stretch;
 }
 
 .responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .player-control-region {
-  width: calc(100% + 52px);
-  margin-inline: -26px;
+  width: 100vw;
+  margin-inline: calc((100% - 100vw) / 2);
+}
+
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .player-control-region .control-dock {
+  margin-inline: 0;
+  justify-self: center;
 }
 
 .responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .playback-info-button {
@@ -2414,6 +2449,478 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
 .responsive-player-layout[data-player-layout="quarter"][data-player-short="true"] .control-primary .play-button svg {
   width: 34px;
   height: 34px;
+}
+
+/* Compact fills the low-height gap left by the four authored layouts. Its
+   resolver-owned profile is the sole source of structural breakpoints. */
+.responsive-player-layout[data-player-layout="compact"] {
+  --player-layout-unit: 1px;
+  --compact-side-inset: 26px;
+  --compact-cover-gap: 12px;
+  --compact-control-height: 245px;
+  --compact-content-control-gap: 35px;
+  --compact-viewport-width: calc(100vw * var(--player-ui-scale-inverse));
+  --compact-viewport-height: calc(100svh * var(--player-ui-scale-inverse));
+  --compact-row-cover-width-limit: calc(var(--compact-viewport-width) - 278px);
+  --compact-cover-size: max(
+    362px,
+    min(
+      var(--compact-row-cover-width-limit),
+      calc(var(--compact-viewport-height) - 358px),
+      650px
+    )
+  );
+}
+
+.responsive-player-layout[data-player-layout="compact"][data-player-compact-profile="compact-row-lyric"] {
+  --compact-row-cover-width-limit: calc(var(--compact-viewport-width) - 538px);
+}
+
+.responsive-player-layout[data-player-layout="compact"][data-player-compact-profile="compact-row"] {
+  --compact-cover-size: 362px;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .player-stage {
+  inset: 48px var(--compact-side-inset) 30px;
+  grid-template-columns:
+    var(--compact-cover-size)
+    minmax(0, 1fr);
+  grid-template-rows:
+    auto
+    minmax(0, 1fr)
+    var(--compact-content-control-gap)
+    var(--compact-control-height);
+  grid-template-areas:
+    "cover meta"
+    "cover lyrics"
+    ". ."
+    "dock dock";
+  column-gap: var(--compact-cover-gap);
+  row-gap: 0;
+  overflow: visible;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .track-card-deck {
+  height: 100%;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .track-lyrics-region {
+  grid-area: lyrics;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  display: block;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .cover-frame {
+  width: var(--compact-cover-size);
+  max-height: 100%;
+  align-self: center;
+  justify-self: center;
+  border-radius: 30px;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .cover-column {
+  align-items: center;
+  justify-items: center;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .cover-actions {
+  position: absolute;
+  z-index: 3;
+  left: 12px;
+  right: 12px;
+  bottom: 24px;
+  height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .cover-feedback {
+  position: static;
+  width: 236px;
+  height: 72px;
+  flex: 0 0 236px;
+  gap: 24px;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .cover-feedback button {
+  width: 106px;
+  height: 72px;
+  flex: 0 0 106px;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .cover-art .player-control-icon-frame {
+  width: 48px;
+  height: 48px;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .cover-actions .more-button {
+  position: relative;
+  right: auto;
+  bottom: auto;
+  width: 72px;
+  height: 68px;
+  flex: 0 0 72px;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .cover-actions .more-button > svg {
+  width: 48px;
+  height: 48px;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .track-meta-layout-spacer {
+  display: block;
+  grid-area: meta;
+  min-width: 0;
+  min-height: 128px;
+  pointer-events: none;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .track-pills {
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  gap: 12px;
+  align-self: start;
+  justify-self: start;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .track-pills .track-pill {
+  width: fit-content;
+  max-width: 100%;
+  height: auto;
+  padding: 10px 20px;
+  border-radius: 30px;
+  font-size: 28px;
+  line-height: 36px;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .track-pills .title-pill {
+  font-size: 32px;
+  line-height: 40px;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .lyrics-panel {
+  --player-lyrics-item-height: 64px;
+  --player-lyrics-font-size: 24px;
+  --player-lyrics-line-height: 32px;
+  --player-lyrics-translation-font-size: 20px;
+  --player-lyrics-translation-line-height: 28px;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  margin: 0;
+  align-self: stretch;
+  justify-self: stretch;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .lyrics-panel > ol {
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
+  justify-content: center;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .lyrics-panel > ol::before,
+.responsive-player-layout[data-player-layout="compact"] .lyrics-panel > ol::after,
+.responsive-player-layout[data-player-layout="compact"] .lyrics-panel li:not([data-active="true"]) {
+  display: none;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .lyrics-panel li[data-active="true"] {
+  width: 100%;
+  min-height: 64px;
+  font-size: 28px;
+  line-height: 36px;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .lyrics-panel li[data-active="true"] .translation-line {
+  font-size: 20px;
+  line-height: 28px;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .player-control-region {
+  grid-area: dock;
+  box-sizing: border-box;
+  width: calc(100% + 52px);
+  min-width: 0;
+  min-height: 0;
+  margin-inline: -26px;
+  display: grid;
+  grid-template-rows: 72px 28px 145px;
+  pointer-events: none;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .player-external-mode-row {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding-inline: 30px;
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr) 72px;
+  align-items: end;
+  justify-items: center;
+  grid-column: 1;
+  grid-row: 1;
+  pointer-events: auto;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .external-mode-button {
+  width: 72px;
+  height: 72px;
+  padding: 0;
+  display: inline-flex;
+  border-radius: 999px;
+  background: var(--player-blue-soft);
+  color: var(--player-blue);
+  box-shadow: 0 4px 4px rgba(0, 0, 0, .25);
+}
+
+.responsive-player-layout[data-player-layout="compact"] .external-mode-button:hover,
+.responsive-player-layout[data-player-layout="compact"] .external-mode-button:active {
+  background: var(--player-blue-soft);
+  color: var(--player-blue);
+  transform: none;
+  translate: none;
+  scale: none;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .external-mode-button svg,
+.responsive-player-layout[data-player-layout="compact"] .external-mode-button .player-control-icon-frame {
+  width: 48px;
+  height: 48px;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .playback-info-button {
+  box-sizing: border-box;
+  width: fit-content;
+  max-width: min(332px, 100%);
+  min-height: 40px;
+  max-height: 40px;
+  padding: 0;
+  display: inline-flex;
+  border: 0;
+  border-radius: 30px;
+  background: var(--player-volume-surface);
+  color: var(--player-blue);
+  overflow: hidden;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .playback-info-button-content {
+  padding: 10px 20px;
+  gap: 10px;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .playback-info-button-content > svg {
+  width: 16px;
+  height: 16px;
+  flex-basis: 16px;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .playback-info-button-text {
+  max-width: 266px;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .control-dock {
+  position: relative;
+  inset: auto;
+  grid-area: auto;
+  grid-column: 1;
+  grid-row: 3;
+  width: auto;
+  min-width: 0;
+  height: 145px;
+  margin: 0 20px;
+  padding-block: 23px;
+  border-radius: 30px;
+  align-self: stretch;
+  justify-self: stretch;
+  pointer-events: auto;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .progress-row,
+.responsive-player-layout[data-player-layout="compact"] .progress-row[data-long-time] {
+  grid-template-columns: 72px minmax(0, 1fr) 72px;
+  gap: 24px;
+  height: 28px;
+  padding-inline: 54px;
+  font-size: 22px;
+  line-height: 28px;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .progress-row[data-long-time] {
+  grid-template-columns: 100px minmax(0, 1fr) 100px;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .control-dock[data-playback-state="paused"] .progress-row {
+  font-size: 16px;
+  line-height: 24px;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .control-progress-slider {
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .control-progress-slider [data-slot="slider-track"] {
+  height: 6px;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .control-progress-slider [data-slot="slider-thumb"] {
+  width: 23px;
+  height: 23px;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .control-row,
+.responsive-player-layout[data-player-layout="compact"] .control-dock:has(.progress-row[data-long-time]) .control-row {
+  height: 76px;
+  margin-top: 1px;
+  padding-inline: calc(59px * var(--player-controls-density-factor));
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+}
+
+.responsive-player-layout[data-player-layout="compact"] .control-primary,
+.responsive-player-layout[data-player-layout="compact"] .control-transport {
+  width: auto;
+  padding: 0;
+  gap: 0;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .control-transport {
+  display: flex;
+  align-items: center;
+  gap: 36px;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .control-primary > .control-optional,
+.responsive-player-layout[data-player-layout="compact"] .control-auxiliary-end > .control-optional {
+  display: none;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .control-auxiliary {
+  width: 100%;
+  padding: 0;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .control-auxiliary-start {
+  justify-self: stretch;
+  justify-content: flex-start;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .control-auxiliary-end {
+  justify-self: stretch;
+  justify-content: flex-end;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .control-primary button,
+.responsive-player-layout[data-player-layout="compact"] .control-auxiliary button {
+  width: 48px;
+  height: 48px;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .control-primary .previous-button,
+.responsive-player-layout[data-player-layout="compact"] .control-primary .next-button {
+  width: 64px;
+  height: 64px;
+  flex-basis: 64px;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .control-primary[data-playback-state="paused"] .previous-button,
+.responsive-player-layout[data-player-layout="compact"] .control-primary[data-playback-state="paused"] .next-button {
+  width: 56px;
+  height: 56px;
+  flex-basis: 56px;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .control-primary .play-button {
+  width: 76px;
+  height: 76px;
+  flex-basis: 76px;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .control-primary[data-playback-state="paused"] .play-button {
+  width: 84px;
+  height: 84px;
+  flex-basis: 84px;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .window-settings-trigger,
+.responsive-player-layout[data-player-layout="compact"] .debug-queue-panel,
+.responsive-player-layout[data-player-layout="compact"][data-player-compact-profile="compact-row"] .lyrics-panel,
+.responsive-player-layout[data-player-layout="compact"][data-player-compact-profile="compact-stacked"] .lyrics-panel {
+  display: none;
+}
+
+.responsive-player-layout[data-player-layout="compact"]:is(
+  [data-player-compact-profile="compact-stacked"],
+  [data-player-compact-profile="compact-stacked-lyric"]
+) {
+  --compact-cover-size: max(
+    362px,
+    min(
+      calc(var(--compact-viewport-width) * .15 + 266px),
+      calc(var(--compact-viewport-height) - 529px),
+      500px
+    )
+  );
+}
+
+.responsive-player-layout[data-player-layout="compact"]:is(
+  [data-player-compact-profile="compact-stacked"],
+  [data-player-compact-profile="compact-stacked-lyric"]
+) .player-stage {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows:
+    var(--compact-cover-size)
+    auto
+    minmax(0, 1fr)
+    28px
+    var(--compact-control-height);
+  grid-template-areas:
+    "cover"
+    "meta"
+    "lyrics"
+    "."
+    "dock";
+  column-gap: 0;
+}
+
+.responsive-player-layout[data-player-layout="compact"]:is(
+  [data-player-compact-profile="compact-stacked"],
+  [data-player-compact-profile="compact-stacked-lyric"]
+) .track-pills {
+  width: min(100%, 680px);
+  margin-top: 12px;
+  justify-self: start;
+}
+
+.responsive-player-layout[data-player-layout="compact"]:is(
+  [data-player-compact-profile="compact-stacked"],
+  [data-player-compact-profile="compact-stacked-lyric"]
+) .track-meta-layout-spacer {
+  min-height: 140px;
+}
+
+.responsive-player-layout[data-player-layout="compact"]:is(
+  [data-player-compact-profile="compact-stacked"],
+  [data-player-compact-profile="compact-stacked-lyric"]
+) .lyrics-panel {
+  width: min(100%, 762px);
+  justify-self: center;
+}
+
+.responsive-player-layout .ping-pong-text[data-overflow="true"]:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--player-blue-ink) 70%, transparent);
+  outline-offset: 3px;
 }
 
 .responsive-player-layout[data-player-layout="quarter"] .debug-queue-panel,

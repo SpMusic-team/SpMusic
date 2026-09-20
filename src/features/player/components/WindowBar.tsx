@@ -125,10 +125,10 @@ export function WindowBar({
   }
 
   return (
-    <header className="window-bar" data-fullscreen={fullscreen} data-tauri-drag-region={!fullscreen || undefined} onDoubleClick={fullscreen ? undefined : toggleMaximize} onPointerDown={startWindowDrag}>
+    <header className="window-bar" data-fullscreen={fullscreen} data-playlist-open={playlistOpen} data-tauri-drag-region={!fullscreen || undefined} onDoubleClick={fullscreen ? undefined : toggleMaximize} onPointerDown={startWindowDrag}>
       <div className="window-leading" onDoubleClick={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
         <IconButton
-          icon={systemIcons.collapse}
+          icon={playlistOpen ? systemIcons.queue : systemIcons.collapse}
           label={appCopy.controls.playlistPage}
           selected={playlistOpen}
           onClick={onTogglePlaylist}
@@ -140,18 +140,6 @@ export function WindowBar({
           debugToolsEnabled={debugToolsEnabled}
           debugToolsOpen={debugToolsOpen}
           onDebugToolsOpenChange={onDebugToolsOpenChange}
-        />
-        <IconButton
-          icon={systemIcons.fullscreen}
-          label={appCopy.controls.fullscreen}
-          onClick={() => runWindowAction(async (windowRef) => {
-            const nextFullscreen = !(await windowRef.isFullscreen())
-            await windowRef.setFullscreen(nextFullscreen)
-            const isMaximized = await windowRef.isMaximized()
-            setFullscreen(nextFullscreen)
-            setMaximized(isMaximized)
-            onWindowStateChange({ maximized: isMaximized, fullscreen: nextFullscreen })
-          })}
         />
         <IconButton icon={systemIcons.minimize} label={appCopy.controls.minimize} onClick={() => runWindowAction((windowRef) => windowRef.minimize())} />
         <IconButton

@@ -15,12 +15,18 @@
   left: 16px;
   right: 16px;
   bottom: 24px;
-  z-index: 2;
+  /* Keep the viewport-fixed dock above the animated playlist scroller. The
+     dock must be its sibling: a transformed ancestor would otherwise become
+     its containing block and move/scale it during the panel transition. */
+  z-index: 31;
   box-sizing: border-box;
   width: auto;
   height: 200px;
   padding: 8px var(--playlist-dock-inline-padding) 0;
-  overflow: hidden;
+  /* Shared cover/title projections temporarily grow beyond the compact dock
+     while returning to the player. Clipping here would cut the transition at
+     the dock edge even though both endpoints are already laid out. */
+  overflow: visible;
   border-radius: 30px;
   background: var(--player-dock);
   box-shadow: 0 4px 4px rgb(0 0 0 / var(--player-controls-shadow));
@@ -83,6 +89,22 @@
 .playlist-playback-toggle,
 .playlist-playback-nav-button {
   color: var(--player-blue);
+}
+
+/* Transport settlement temporarily locks the controls against a second
+   command. Keep that lock visually stable: Base UI's disabled treatment
+   otherwise halves the slider and play-button opacity for a single frame. */
+.playlist-playback-dock[data-playback-command-busy] .playlist-playback-toggle:disabled,
+.playlist-playback-dock[data-playback-command-busy] .control-progress-slider [data-disabled] {
+  opacity: 1;
+}
+
+/* PlayerShell deliberately disables playlist actions while a transport
+   command settles. With an existing track this is an interaction lock, not
+   an unavailable action, so keep the hero buttons visually unchanged. */
+.player-shell[data-playlist-transport-only-busy] .playlist-hero-play-button:disabled,
+.player-shell[data-playlist-transport-only-busy] .playlist-hero-more-button:disabled {
+  opacity: 1;
 }
 
 .playlist-playback-toggle {

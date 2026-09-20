@@ -486,16 +486,18 @@ export function PlaylistPanel({
   }, [firstTrack?.coverImageFallback])
 
   return (
-    <motion.section
-      ref={panelRef}
-      className="playlist-panel"
-      data-select-mode={selectMode ? 'true' : undefined}
-      variants={appearanceMotion.variants.panel}
-      initial="initial"
-      animate="animate"
-      exit="exit"
-      aria-label={appCopy.playlistPage.title}
-    >
+    <>
+      <motion.section
+        ref={panelRef}
+        className="playlist-panel"
+        data-select-mode={selectMode ? 'true' : undefined}
+        variants={appearanceMotion.variants.backdrop}
+        transition={appearanceMotion.layoutTransition}
+        initial="initial"
+        animate="animate"
+        exit="exit"
+        aria-label={appCopy.playlistPage.title}
+      >
       <header className="playlist-hero">
         {firstTrack?.coverThumbnail ? (
           <PlaylistCoverImage className="playlist-hero-image" image={firstTrack.coverThumbnail} />
@@ -553,7 +555,7 @@ export function PlaylistPanel({
             >
               {selectMode ? appCopy.playlistPage.done : appCopy.playlistPage.select}
             </Button>
-            <IconButton className="playlist-hero-icon" icon={systemIcons.more} label={appCopy.playlistPage.more} disabled={isOpenAudioDisabled || !onOpenAudio} onClick={handleMore} />
+            <IconButton className="playlist-hero-icon playlist-hero-more-button" icon={systemIcons.more} label={appCopy.playlistPage.more} disabled={isOpenAudioDisabled || !onOpenAudio} onClick={handleMore} />
           </div>
         </div>
       </header>
@@ -620,6 +622,7 @@ export function PlaylistPanel({
           </EmptyHeader>
         </Empty>
       )}
+      </motion.section>
       <PlaylistPlaybackDock
         playback={playback}
         timeline={timeline}
@@ -631,6 +634,6 @@ export function PlaylistPanel({
         onSearchToggle={handleSearchToggle}
         onClose={onClose}
       />
-    </motion.section>
+    </>
   )
 }

@@ -32,6 +32,16 @@
 
 .ambient-cover-image { width: 100%; height: 100%; display: block; }
 
+.artwork-readiness-probe {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 2px;
+  height: 2px;
+  opacity: 0;
+  pointer-events: none;
+}
+
 .player-shell::before,
 .player-shell::after {
   content: "";

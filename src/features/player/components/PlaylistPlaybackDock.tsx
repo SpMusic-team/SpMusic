@@ -1,7 +1,8 @@
 import { DataHistogram24Filled, Grid24Filled } from '@fluentui/react-icons'
 import { Menu, Search } from 'lucide-react'
+import { motion } from 'motion/react'
 import { Button } from '@/components/ui/button'
-import { useSystemIcons } from '@/features/appearance/hooks/useAppearance'
+import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { ProgressControl } from '@/features/player/components/ControlDock'
 import { IconButton } from '@/features/player/components/IconButton'
 import { PlaylistCoverImage } from '@/features/player/components/PlaylistCoverImage'
@@ -32,6 +33,7 @@ export function PlaylistPlaybackDock({
   onClose,
 }: PlaylistPlaybackDockProps) {
   const systemIcons = useSystemIcons()
+  const appearanceMotion = useAppearanceMotion()
   const track = playback.track
   const artwork = playback.artwork
   const imageFallback = artwork?.coverImageFallback ?? track?.coverImageFallback
@@ -45,7 +47,15 @@ export function PlaylistPlaybackDock({
     || playback.isTransportBusy
 
   return (
-    <aside className="playlist-playback-dock" aria-label="当前播放">
+    <motion.aside
+      className="playlist-playback-dock"
+      data-playback-command-busy={commandBusy && !disabled ? '' : undefined}
+      variants={appearanceMotion.variants.backdrop}
+      initial="initial"
+      animate="animate"
+      exit="exit"
+      aria-label="当前播放"
+    >
       <div className="playlist-playback-track" data-tone={track?.coverTone ?? coverToneForTrackId(track?.id ?? '')}>
         <button
           type="button"
@@ -53,7 +63,12 @@ export function PlaylistPlaybackDock({
           aria-label={track ? `返回播放界面：${track.title}` : '返回播放界面'}
           onClick={onClose}
         >
-          <span className="playlist-playback-cover" aria-hidden="true">
+          <motion.span
+            className="playlist-playback-cover"
+            layoutId={track ? `player-view-cover:${track.id}` : undefined}
+            transition={{ layout: appearanceMotion.layoutTransition }}
+            aria-hidden="true"
+          >
             {playlistTrack?.coverThumbnail ? (
               <PlaylistCoverImage image={playlistTrack.coverThumbnail} />
             ) : !localArtwork && imageSource ? (
@@ -71,11 +86,15 @@ export function PlaylistPlaybackDock({
                 }}
               />
             ) : null}
-          </span>
-          <span className="playlist-playback-copy">
+          </motion.span>
+          <motion.span
+            className="playlist-playback-copy"
+            layoutId={track ? `player-view-copy:${track.id}` : undefined}
+            transition={{ layout: appearanceMotion.layoutTransition }}
+          >
             <strong>{track?.title ?? '未在播放'}</strong>
             <span>{track ? `${track.artist}/${track.album}` : '选择一首歌曲开始播放'}</span>
-          </span>
+          </motion.span>
         </button>
         <Button
           className="playlist-playback-toggle"
@@ -135,6 +154,6 @@ export function PlaylistPlaybackDock({
           onClick={onClose}
         />
       </nav>
-    </aside>
+    </motion.aside>
   )
 }

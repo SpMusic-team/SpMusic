@@ -21,6 +21,7 @@
   -webkit-app-region: no-drag;
 }
 .window-bar { cursor: grab; }
+.window-bar[data-playlist-open="true"] { background: var(--app-bg); }
 .window-bar:active { cursor: grabbing; }
 .window-bar[data-fullscreen="true"] { cursor: default; -webkit-app-region: no-drag; }
 .window-bar button {

@@ -378,19 +378,21 @@
 }
 
 .responsive-player-layout .lyrics-panel li {
-  gap: 0;
   transform: none;
 }
 
-.responsive-player-layout .lyrics-panel li[data-position="past"],
-.responsive-player-layout .lyrics-panel li[data-position="future"] {
+.responsive-player-layout .lyrics-panel li .lyric-content {
+  gap: 0;
+}
+
+.responsive-player-layout .lyrics-panel li .lyric-original-line,
+.responsive-player-layout .lyrics-panel li .translation-line {
   transform: none;
 }
 
 .responsive-player-layout .lyrics-panel li[data-active="true"] {
   font-size: calc(23.333333 * var(--player-lyrics-font-scale) * var(--player-layout-unit));
   line-height: calc(30 * var(--player-lyrics-font-scale) * var(--player-layout-unit));
-  transform: none;
 }
 
 .responsive-player-layout .lyrics-panel li[data-active="true"] .translation-line {

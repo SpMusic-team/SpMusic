@@ -6,34 +6,16 @@ import type { DemoLyricLine } from '@/features/player/model/playerTypes'
 const FOLLOW_SCROLL_FALLBACK_MS = 240
 const INTERACTIVE_SCROLL_FALLBACK_MS = 160
 const USER_SCROLL_IDLE_MS = 5000
-const FOLLOWING_STAGGER_VISIBLE_RANGE = 12
 const LYRIC_NAVIGATION_TIMEOUT_MS = 15000
 const FOLLOWING_STEP_FAST_DURATION_MULTIPLIER = 1.625
-const FOLLOWING_STEP_STAGGER_MULTIPLIER = 0.2
-const FOLLOWING_STEP_MAX_STAGGERED_LINES = 6
 const FOLLOWING_STEP_EASING = 'cubic-bezier(0, 0, 0.58, 1)'
-const NAVIGATION_STYLE_DURATION_MS = 180
-const NAVIGATION_POSITION_DURATION_MS = 520
-const NAVIGATION_POSITION_STAGGER_MS = 32
-const NAVIGATION_POSITION_MAX_DELAY_MS = 256
-const NAVIGATION_RIGID_FALLBACK_DURATION_MS = 460
 const NAVIGATION_NEAR_ANCHOR_PX = 0
 const NAVIGATION_EASING = 'cubic-bezier(0, 0, 0.58, 1)'
 
-type LyricVisualStyle = {
-  color: string
-  filter: string
-  fontSize: string
-  fontWeight: string
-  lineHeight: string
-  opacity: string
-  transform: string
-}
-
-type LyricVisualAnimation = {
+type LyricTextPresentation = {
   element: HTMLElement
-  startStyle: LyricVisualStyle
-  endStyle: LyricVisualStyle
+  opacity: number
+  visualFontSize: number
 }
 
 type NavigationCapturedLine = {
@@ -42,9 +24,7 @@ type NavigationCapturedLine = {
   index: number
   top: number
   bottom: number
-  style: LyricVisualStyle
-  translationElement: HTMLElement | null
-  translationStyle: LyricVisualStyle | null
+  textPresentations: LyricTextPresentation[]
 }
 
 type LyricNavigationSession = {
@@ -75,26 +55,54 @@ function motionDurationMs(variableName: string, fallbackMs: number) {
   return value.endsWith('s') && !value.endsWith('ms') ? duration * 1000 : duration
 }
 
-function captureLyricVisualStyle(element: HTMLElement): LyricVisualStyle {
+function transformScale(transform: string) {
+  if (!transform || transform === 'none') return 1
+  const matrix = transform.match(/^matrix\(([^)]+)\)$/)
+  if (!matrix) return 1
+  const values = matrix[1].split(',').map(Number)
+  if (values.length < 2 || values.some((value) => !Number.isFinite(value))) return 1
+  return Math.hypot(values[0], values[1])
+}
+
+function captureTextPresentation(element: HTMLElement): LyricTextPresentation {
   const style = window.getComputedStyle(element)
+  const fontSize = Number.parseFloat(style.fontSize)
+  const opacity = Number.parseFloat(style.opacity)
   return {
-    color: style.color,
-    filter: style.filter,
-    fontSize: style.fontSize,
-    fontWeight: style.fontWeight,
-    lineHeight: style.lineHeight,
-    opacity: style.opacity,
-    transform: style.transform,
+    element,
+    opacity: Number.isFinite(opacity) ? opacity : 1,
+    visualFontSize: (Number.isFinite(fontSize) ? fontSize : 0) * transformScale(style.transform),
   }
 }
 
-function captureFinalLyricVisualStyle(element: HTMLElement): LyricVisualStyle {
-  const inlineTransition = element.style.transition
-  element.style.transition = 'none'
-  const style = captureLyricVisualStyle(element)
-  if (inlineTransition) element.style.transition = inlineTransition
-  else element.style.removeProperty('transition')
-  return style
+function captureLyricLines(
+  lyricList: HTMLOListElement,
+  lyrics: readonly DemoLyricLine[],
+) {
+  const capturedLines: NavigationCapturedLine[] = []
+  for (let index = 0; index < lyrics.length; index += 1) {
+    const element = lyricList.children.item(index)
+    const lyric = lyrics[index]
+    if (
+      !(element instanceof HTMLElement)
+      || element.dataset.lyricIndex !== String(index)
+      || element.dataset.lyricId !== lyric.id
+    ) return null
+
+    const rect = element.getBoundingClientRect()
+    const textElements = Array.from(
+      element.querySelectorAll<HTMLElement>('.lyric-original-line, .translation-line'),
+    )
+    capturedLines.push({
+      element,
+      id: lyric.id,
+      index,
+      top: rect.top,
+      bottom: rect.bottom,
+      textPresentations: textElements.map(captureTextPresentation),
+    })
+  }
+  return capturedLines
 }
 
 function standardEaseOut(progress: number) {
@@ -136,6 +144,10 @@ export function useActiveLyricScroll(
   const navigationMeasurementPendingRef = useRef(false)
   const followingLineAnimationsRef = useRef<Set<Animation>>(new Set())
   const followingLineAnimationStateTimerRef = useRef<number | null>(null)
+  const preparedFollowingLinesRef = useRef<{
+    targetIndex: number
+    lines: NavigationCapturedLine[]
+  } | null>(null)
   const userScrollingRef = useRef(false)
   const userScrollWaitForFollowingRef = useRef(false)
   const activeIndexRef = useRef<number | null>(null)
@@ -166,10 +178,25 @@ export function useActiveLyricScroll(
     }
   }, [])
 
-  const cancelLyricNavigation = useCallback(() => {
+  const finishDeferredMeasurement = useCallback(() => {
+    const lyricList = lyricListRef.current
+    const hadActiveMotion = lyricList?.dataset.followingStep === 'true'
+    const hadPendingMeasurement = navigationMeasurementPendingRef.current
+    if (!hadActiveMotion && !hadPendingMeasurement) return
+    if (lyricList) {
+      delete lyricList.dataset.followingStep
+      lyricList.style.removeProperty('--lyrics-following-step-duration')
+      lyricList.dispatchEvent(new Event('spmusic:lyric-motion-end'))
+    }
+    if (hadPendingMeasurement) {
+      navigationMeasurementPendingRef.current = false
+      measureAndRecenterRef.current()
+    }
+  }, [lyricListRef])
+
+  const cancelLyricNavigation = useCallback((preserveMotionState = false) => {
     navigationGenerationRef.current += 1
     navigationSessionRef.current = null
-    navigationMeasurementPendingRef.current = false
     if (navigationStartFrameRef.current !== null) {
       window.cancelAnimationFrame(navigationStartFrameRef.current)
       navigationStartFrameRef.current = null
@@ -184,7 +211,8 @@ export function useActiveLyricScroll(
     }
     navigationAnimationsRef.current.forEach((animation) => animation.cancel())
     navigationAnimationsRef.current.clear()
-  }, [])
+    if (!preserveMotionState) finishDeferredMeasurement()
+  }, [finishDeferredMeasurement])
 
   const isCurrentNavigationSession = useCallback((session: LyricNavigationSession) => {
     const currentLyrics = latestLyricsRef.current
@@ -200,23 +228,18 @@ export function useActiveLyricScroll(
   const finalizeLyricNavigation = useCallback((session: LyricNavigationSession) => {
     if (!isCurrentNavigationSession(session)) return false
     navigationSessionRef.current = null
-    if (navigationMeasurementPendingRef.current) {
-      navigationMeasurementPendingRef.current = false
-      measureAndRecenterRef.current()
-    }
+    finishDeferredMeasurement()
     return true
-  }, [isCurrentNavigationSession])
+  }, [finishDeferredMeasurement, isCurrentNavigationSession])
 
   const clearFollowingLineAnimationState = useCallback(() => {
     if (followingLineAnimationStateTimerRef.current !== null) {
       window.clearTimeout(followingLineAnimationStateTimerRef.current)
       followingLineAnimationStateTimerRef.current = null
     }
-    const lyricList = lyricListRef.current
-    if (!lyricList) return
-    delete lyricList.dataset.followingStep
-    lyricList.style.removeProperty('--lyrics-following-step-duration')
-  }, [lyricListRef])
+    preparedFollowingLinesRef.current = null
+    finishDeferredMeasurement()
+  }, [finishDeferredMeasurement])
 
   const cancelFollowingLineAnimations = useCallback((preservePreparedTransition = false) => {
     followingLineAnimationsRef.current.forEach((animation) => animation.cancel())
@@ -235,19 +258,13 @@ export function useActiveLyricScroll(
     const fastDurationMs = motionDurationMs('--app-motion-fast', INTERACTIVE_SCROLL_FALLBACK_MS)
     const baseDurationMs = motionDurationMs('--app-motion-standard', FOLLOW_SCROLL_FALLBACK_MS)
       + fastDurationMs * FOLLOWING_STEP_FAST_DURATION_MULTIPLIER
-    const maximumDelayMs = fastDurationMs
-      * FOLLOWING_STEP_STAGGER_MULTIPLIER
-      * FOLLOWING_STEP_MAX_STAGGERED_LINES
     if (followingLineAnimationStateTimerRef.current !== null) {
       window.clearTimeout(followingLineAnimationStateTimerRef.current)
+      followingLineAnimationStateTimerRef.current = null
     }
     lyricList.dataset.followingStep = 'true'
     lyricList.style.setProperty('--lyrics-following-step-duration', `${baseDurationMs}ms`)
-    followingLineAnimationStateTimerRef.current = window.setTimeout(
-      clearFollowingLineAnimationState,
-      baseDurationMs + maximumDelayMs,
-    )
-  }, [clearFollowingLineAnimationState, lyricListRef])
+  }, [lyricListRef])
 
   const prepareFollowingStep = useCallback((targetIndex: number) => {
     const currentIndex = activeIndexRef.current
@@ -259,8 +276,18 @@ export function useActiveLyricScroll(
       || targetIndex !== currentIndex + 1
     ) return
 
+    const lyricList = lyricListRef.current
+    const currentLyrics = latestLyricsRef.current
+    if (!lyricList || lyricList.children.length !== currentLyrics.length) return
+    const capturedLines = captureLyricLines(lyricList, currentLyrics)
+    if (!capturedLines) return
+
+    // Capture the current presentation before cancelling a prior step so rapid
+    // changes continue from the pixels currently on screen.
+    cancelFollowingLineAnimations(true)
+    preparedFollowingLinesRef.current = { targetIndex, lines: capturedLines }
     prepareFollowingTransitionState()
-  }, [prepareFollowingTransitionState])
+  }, [cancelFollowingLineAnimations, lyricListRef, prepareFollowingTransitionState])
 
   const targetScrollTop = useCallback((currentIndex: number) => {
     const lyricList = lyricListRef.current
@@ -313,7 +340,7 @@ export function useActiveLyricScroll(
       navigationTimerRef.current = null
     }
     cancelScrollFrame()
-    cancelFollowingLineAnimations()
+    cancelFollowingLineAnimations(true)
 
     const finishSessionAfter = (delayMs: number) => {
       const completionTimer = window.setTimeout(() => {
@@ -338,29 +365,41 @@ export function useActiveLyricScroll(
       animation.addEventListener('cancel', forgetAnimation, { once: true })
     }
 
-    // Visual state starts immediately. Its old values were captured before the
-    // player commit, so the active/inactive styles cannot collapse into one frame.
-    session.capturedLines.forEach((captured) => {
-      if (!lyricList.contains(captured.element)) return
-      const endStyle = captureFinalLyricVisualStyle(captured.element)
-      if (JSON.stringify(captured.style) !== JSON.stringify(endStyle)) {
-        registerAnimation(captured.element.animate(
-          [captured.style, endStyle],
-          { duration: NAVIGATION_STYLE_DURATION_MS, easing: NAVIGATION_EASING },
-        ))
-      }
-      if (captured.translationElement && captured.translationStyle) {
-        const translation = captured.translationElement
-        if (!lyricList.contains(translation)) return
-        const translationEndStyle = captureFinalLyricVisualStyle(translation)
-        if (JSON.stringify(captured.translationStyle) !== JSON.stringify(translationEndStyle)) {
-          registerAnimation(translation.animate(
-            [captured.translationStyle, translationEndStyle],
-            { duration: NAVIGATION_STYLE_DURATION_MS, easing: NAVIGATION_EASING },
+    const fastDurationMs = motionDurationMs('--app-motion-fast', INTERACTIVE_SCROLL_FALLBACK_MS)
+    const motionDuration = motionDurationMs('--app-motion-standard', FOLLOW_SCROLL_FALLBACK_MS)
+      + fastDurationMs * FOLLOWING_STEP_FAST_DURATION_MULTIPLIER
+    lyricList.dataset.followingStep = 'true'
+    lyricList.style.setProperty('--lyrics-following-step-duration', `${motionDuration}ms`)
+
+    let textMotionStarted = false
+    const startTextMotion = () => {
+      if (textMotionStarted) return
+      textMotionStarted = true
+      // Real typography has already snapped to its final responsive layout. Only
+      // compositor-friendly text transforms/opacity bridge the visual size change.
+      session.capturedLines.forEach((captured) => {
+        if (!lyricList.contains(captured.element)) return
+        captured.textPresentations.forEach((presentation) => {
+          if (!lyricList.contains(presentation.element)) return
+          const finalStyle = window.getComputedStyle(presentation.element)
+          const finalFontSize = Number.parseFloat(finalStyle.fontSize)
+          const finalOpacity = Number.parseFloat(finalStyle.opacity)
+          const startScale = Number.isFinite(finalFontSize) && finalFontSize > 0
+            ? presentation.visualFontSize / finalFontSize
+            : 1
+          registerAnimation(presentation.element.animate(
+            [
+              { transform: `scale(${startScale})`, opacity: presentation.opacity },
+              {
+                transform: finalStyle.transform === 'none' ? 'scale(1)' : finalStyle.transform,
+                opacity: Number.isFinite(finalOpacity) ? finalOpacity : 1,
+              },
+            ],
+            { duration: motionDuration, easing: NAVIGATION_EASING },
           ))
-        }
-      }
-    })
+        })
+      })
+    }
 
     const capturedTarget = session.capturedLines[session.targetIndex]
     const oldTargetCenter = capturedTarget
@@ -371,7 +410,8 @@ export function useActiveLyricScroll(
       Number.isFinite(oldTargetCenter)
       && Math.abs(oldTargetCenter - oldListCenter) <= NAVIGATION_NEAR_ANCHOR_PX
     ) {
-      finishSessionAfter(NAVIGATION_STYLE_DURATION_MS)
+      startTextMotion()
+      finishSessionAfter(motionDuration)
       return true
     }
 
@@ -412,13 +452,14 @@ export function useActiveLyricScroll(
             if (navigationSessionRef.current === session) cancelLyricNavigation()
             return
           }
+          startTextMotion()
           const animateRigidFallback = (now: number) => {
             if (!isCurrentNavigationSession(session)) {
               if (navigationSessionRef.current === session) cancelLyricNavigation()
               return
             }
             const progress = Math.min(Math.max(
-              (now - startTime) / NAVIGATION_RIGID_FALLBACK_DURATION_MS,
+              (now - startTime) / motionDuration,
               0,
             ), 1)
             lyricList.scrollTop = startTop + distance * standardEaseOut(progress)
@@ -430,7 +471,7 @@ export function useActiveLyricScroll(
             navigationPositionFrameRef.current = null
             if (isCurrentNavigationSession(session)) finalizeLyricNavigation(session)
           }
-          navigationPositionFrameRef.current = window.requestAnimationFrame(animateRigidFallback)
+          animateRigidFallback(startTime)
         })
         navigationPositionFrameRef.current = fallbackStartFrame
         return
@@ -438,6 +479,7 @@ export function useActiveLyricScroll(
 
       lyricList.scrollTop = finalTop
       const finalListRect = lyricList.getBoundingClientRect()
+      startTextMotion()
       session.capturedLines.forEach((captured) => {
         const finalRect = captured.element.getBoundingClientRect()
         const wasVisible = captured.bottom >= session.listTop && captured.top <= session.listBottom
@@ -445,26 +487,19 @@ export function useActiveLyricScroll(
         if (!wasVisible && !isVisible) return
         const inverseOffset = captured.top - finalRect.top
         if (Math.abs(inverseOffset) < 0.5) return
-        const delay = captured.index > session.targetIndex
-          ? Math.min(
-            (captured.index - session.targetIndex) * NAVIGATION_POSITION_STAGGER_MS,
-            NAVIGATION_POSITION_MAX_DELAY_MS,
-          )
-          : 0
         registerAnimation(captured.element.animate(
           [
             { translate: `0 ${inverseOffset}px` },
             { translate: '0 0' },
           ],
           {
-            duration: NAVIGATION_POSITION_DURATION_MS,
-            delay,
+            duration: motionDuration,
             easing: NAVIGATION_EASING,
             fill: 'backwards',
           },
         ))
       })
-      finishSessionAfter(NAVIGATION_POSITION_DURATION_MS + NAVIGATION_POSITION_MAX_DELAY_MS)
+      finishSessionAfter(motionDuration)
     })
     navigationPositionFrameRef.current = positionFrame
     return true
@@ -497,39 +532,19 @@ export function useActiveLyricScroll(
     }
 
     const listRect = lyricList.getBoundingClientRect()
-    const capturedLines: NavigationCapturedLine[] = []
-    for (let index = 0; index < currentLyrics.length; index += 1) {
-      const element = lyricList.children.item(index)
-      const lyric = currentLyrics[index]
-      if (
-        !(element instanceof HTMLElement)
-        || element.dataset.lyricIndex !== String(index)
-        || element.dataset.lyricId !== lyric.id
-      ) {
-        cancelLyricNavigation()
-        cancelFollowingLineAnimations()
-        cancelScrollFrame()
-        commit()
-        return
-      }
-      const rect = element.getBoundingClientRect()
-      const translationElement = element.querySelector<HTMLElement>('.translation-line')
-      capturedLines.push({
-        element,
-        id: lyric.id,
-        index,
-        top: rect.top,
-        bottom: rect.bottom,
-        style: captureLyricVisualStyle(element),
-        translationElement,
-        translationStyle: translationElement ? captureLyricVisualStyle(translationElement) : null,
-      })
+    const capturedLines = captureLyricLines(lyricList, currentLyrics)
+    if (!capturedLines) {
+      cancelLyricNavigation()
+      cancelFollowingLineAnimations()
+      cancelScrollFrame()
+      commit()
+      return
     }
 
     // Capture the current presentation before cancelling an in-flight request;
     // a rapid A→B→C click therefore continues from what the user actually saw.
-    cancelLyricNavigation()
-    cancelFollowingLineAnimations()
+    cancelLyricNavigation(true)
+    cancelFollowingLineAnimations(true)
     cancelScrollFrame()
 
     const session: LyricNavigationSession = {
@@ -683,65 +698,19 @@ export function useActiveLyricScroll(
     )
   }, [animateScroll, lyricListRef])
 
-  const animateFollowingStep = useCallback((targetTop: number, previousIndex: number, currentIndex: number) => {
+  const animateFollowingStep = useCallback((targetTop: number, currentIndex: number) => {
     const lyricList = lyricListRef.current
     if (!lyricList) return
 
-    const firstCandidateIndex = Math.max(0, Math.min(previousIndex, currentIndex) - FOLLOWING_STAGGER_VISIBLE_RANGE)
-    const lastCandidateIndex = Math.min(
-      lyricList.children.length - 1,
-      Math.max(previousIndex, currentIndex) + FOLLOWING_STAGGER_VISIBLE_RANGE,
-    )
-    const startTops = new Map<HTMLElement, number>()
-    for (let index = firstCandidateIndex; index <= lastCandidateIndex; index += 1) {
-      const child = lyricList.children.item(index)
-      if (child instanceof HTMLElement) startTops.set(child, child.getBoundingClientRect().top)
-    }
-
+    const preparedMotion = preparedFollowingLinesRef.current?.targetIndex === currentIndex
+      ? preparedFollowingLinesRef.current
+      : null
+    const capturedLines = preparedMotion?.lines
+      ?? captureLyricLines(lyricList, latestLyricsRef.current)
+      ?? []
     cancelScrollFrame()
     cancelFollowingLineAnimations(true)
-
-    const previousLine = lyricList.children.item(previousIndex)
-    const currentLine = lyricList.children.item(currentIndex)
-    const visualAnimations: LyricVisualAnimation[] = []
-    if (previousLine instanceof HTMLElement && currentLine instanceof HTMLElement) {
-      const visualElements = [
-        previousLine,
-        previousLine.querySelector<HTMLElement>('.translation-line'),
-        currentLine,
-        currentLine.querySelector<HTMLElement>('.translation-line'),
-      ].filter((element): element is HTMLElement => element !== null)
-      const inlineTransitions = visualElements.map((element) => element.style.transition)
-      const previousActive = previousLine.getAttribute('data-active')
-      const previousPosition = previousLine.getAttribute('data-position')
-      const currentActive = currentLine.getAttribute('data-active')
-      const currentPosition = currentLine.getAttribute('data-position')
-
-      visualElements.forEach((element) => { element.style.transition = 'none' })
-      previousLine.dataset.active = 'true'
-      previousLine.dataset.position = 'active'
-      currentLine.dataset.active = 'false'
-      currentLine.dataset.position = 'future'
-      const startStyles = visualElements.map(captureLyricVisualStyle)
-
-      if (previousActive === null) previousLine.removeAttribute('data-active')
-      else previousLine.setAttribute('data-active', previousActive)
-      if (previousPosition === null) previousLine.removeAttribute('data-position')
-      else previousLine.setAttribute('data-position', previousPosition)
-      if (currentActive === null) currentLine.removeAttribute('data-active')
-      else currentLine.setAttribute('data-active', currentActive)
-      if (currentPosition === null) currentLine.removeAttribute('data-position')
-      else currentLine.setAttribute('data-position', currentPosition)
-      const endStyles = visualElements.map(captureLyricVisualStyle)
-
-      visualElements.forEach((element, index) => {
-        const inlineTransition = inlineTransitions[index]
-        if (inlineTransition) element.style.transition = inlineTransition
-        else element.style.removeProperty('transition')
-        visualAnimations.push({ element, startStyle: startStyles[index], endStyle: endStyles[index] })
-      })
-    }
-
+    preparedFollowingLinesRef.current = null
     lyricList.scrollTop = targetTop
     if (prefersReducedMotion()) {
       clearFollowingLineAnimationState()
@@ -752,52 +721,66 @@ export function useActiveLyricScroll(
     const fastDurationMs = motionDurationMs('--app-motion-fast', INTERACTIVE_SCROLL_FALLBACK_MS)
     const baseDurationMs = motionDurationMs('--app-motion-standard', FOLLOW_SCROLL_FALLBACK_MS)
       + fastDurationMs * FOLLOWING_STEP_FAST_DURATION_MULTIPLIER
-    const perLineDelayMs = fastDurationMs * FOLLOWING_STEP_STAGGER_MULTIPLIER
-    const maximumDelayMs = perLineDelayMs * FOLLOWING_STEP_MAX_STAGGERED_LINES
     lyricList.dataset.followingStep = 'true'
     lyricList.style.setProperty('--lyrics-following-step-duration', `${baseDurationMs}ms`)
     followingLineAnimationStateTimerRef.current = window.setTimeout(
       clearFollowingLineAnimationState,
-      baseDurationMs + maximumDelayMs,
+      baseDurationMs,
     )
 
-    visualAnimations.forEach((visual) => {
-      if (!lyricList.contains(visual.element)) return
-      const animation = visual.element.animate(
-        [visual.startStyle, visual.endStyle],
-        { duration: baseDurationMs, easing: FOLLOWING_STEP_EASING },
-      )
+    const registerAnimation = (animation: Animation) => {
       followingLineAnimationsRef.current.add(animation)
       const forgetAnimation = () => followingLineAnimationsRef.current.delete(animation)
       animation.addEventListener('finish', forgetAnimation, { once: true })
       animation.addEventListener('cancel', forgetAnimation, { once: true })
-    })
+    }
 
-    startTops.forEach((startTop, child) => {
-      const index = Number.parseInt(child.dataset.lyricIndex ?? '', 10)
-      if (!Number.isInteger(index)) return
+    capturedLines.forEach((captured) => {
+      const child = captured.element
+      if (!lyricList.contains(child)) return
       const lineRect = child.getBoundingClientRect()
+      const wasVisible = captured.bottom >= listRect.top && captured.top <= listRect.bottom
+      const isVisible = lineRect.bottom >= listRect.top && lineRect.top <= listRect.bottom
+      if (!wasVisible && !isVisible) return
+
+      captured.textPresentations.forEach((presentation) => {
+        if (!lyricList.contains(presentation.element)) return
+        const finalStyle = window.getComputedStyle(presentation.element)
+        const finalFontSize = Number.parseFloat(finalStyle.fontSize)
+        const finalOpacity = Number.parseFloat(finalStyle.opacity)
+        const startScale = Number.isFinite(finalFontSize) && finalFontSize > 0
+          ? presentation.visualFontSize / finalFontSize
+          : 1
+        registerAnimation(presentation.element.animate(
+          [
+            { transform: `scale(${startScale})`, opacity: presentation.opacity },
+            {
+              transform: finalStyle.transform === 'none' ? 'scale(1)' : finalStyle.transform,
+              opacity: Number.isFinite(finalOpacity) ? finalOpacity : 1,
+            },
+          ],
+          { duration: baseDurationMs, easing: FOLLOWING_STEP_EASING },
+        ))
+      })
+
       if (lineRect.bottom < listRect.top || lineRect.top > listRect.bottom) return
-      const inverseOffset = startTop - lineRect.top
+      const inverseOffset = captured.top - lineRect.top
       if (Math.abs(inverseOffset) < 0.5) return
-      const delay = index > currentIndex
-        ? Math.min((index - currentIndex) * perLineDelayMs, maximumDelayMs)
-        : 0
-      const animation = child.animate(
+      registerAnimation(child.animate(
         [
           { translate: `0 ${inverseOffset}px` },
           { translate: '0 0' },
         ],
-        { duration: baseDurationMs, delay, easing: FOLLOWING_STEP_EASING, fill: 'backwards' },
-      )
-      followingLineAnimationsRef.current.add(animation)
-      const forgetAnimation = () => followingLineAnimationsRef.current.delete(animation)
-      animation.addEventListener('finish', forgetAnimation, { once: true })
-      animation.addEventListener('cancel', forgetAnimation, { once: true })
+        { duration: baseDurationMs, easing: FOLLOWING_STEP_EASING, fill: 'backwards' },
+      ))
     })
   }, [cancelFollowingLineAnimations, cancelScrollFrame, clearFollowingLineAnimationState, lyricListRef])
 
   const scheduleMeasurement = useCallback(() => {
+    if (lyricListRef.current?.dataset.followingStep === 'true') {
+      navigationMeasurementPendingRef.current = true
+      return
+    }
     cancelScrollFrame()
     cancelLyricNavigation()
     cancelFollowingLineAnimations()
@@ -805,7 +788,7 @@ export function useActiveLyricScroll(
       scrollFrameRef.current = null
       measureAndRecenterRef.current()
     })
-  }, [cancelFollowingLineAnimations, cancelLyricNavigation, cancelScrollFrame])
+  }, [cancelFollowingLineAnimations, cancelLyricNavigation, cancelScrollFrame, lyricListRef])
 
   useLayoutEffect(() => {
     latestPositionRef.current = positionSeconds
@@ -865,9 +848,9 @@ export function useActiveLyricScroll(
     }
     const handleObservedLyricResize = () => {
       if (disposed) return
-      if (navigationSessionRef.current) {
-        // Active/inactive typography changes are part of the navigation FLIP.
-        // Re-measure after it settles instead of cancelling before its first frame.
+      if (lyricList.dataset.followingStep === 'true' || navigationSessionRef.current) {
+        // Active/inactive typography changes are part of the shared FLIP. Merge
+        // resize notifications and re-measure once after the motion settles.
         navigationMeasurementPendingRef.current = true
         return
       }
@@ -1026,7 +1009,7 @@ export function useActiveLyricScroll(
       && navigationSessionRef.current === null
       && timeline.currentIndex === previousActiveIndex + 1
     if (isNaturalFollowingStep) {
-      animateFollowingStep(targetTop, previousActiveIndex, timeline.currentIndex)
+      animateFollowingStep(targetTop, timeline.currentIndex)
       return
     }
     animateFollowingScroll(targetTop)

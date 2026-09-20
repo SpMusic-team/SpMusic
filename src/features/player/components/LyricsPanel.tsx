@@ -191,14 +191,24 @@ export function LyricsPanel({
     if (!lyricList) return
     let disposed = false
     let measurementFrame: number | null = null
+    let measurementDeferredUntilMotionEnd = false
     const scheduleMeasurement = () => {
       if (disposed) return
+      if (lyricList.dataset.followingStep === 'true') {
+        measurementDeferredUntilMotionEnd = true
+        return
+      }
       if (measurementFrame !== null) window.cancelAnimationFrame(measurementFrame)
       measurementFrame = window.requestAnimationFrame(() => {
         if (disposed) return
         measurementFrame = null
         measureStableVisualLines()
       })
+    }
+    const handleLyricMotionEnd = () => {
+      if (!measurementDeferredUntilMotionEnd) return
+      measurementDeferredUntilMotionEnd = false
+      scheduleMeasurement()
     }
 
     measureStableVisualLines()
@@ -212,6 +222,7 @@ export function LyricsPanel({
     const appearanceRoot = document.querySelector('.spmusic-app') ?? document.documentElement
     const appearanceObserver = new MutationObserver(scheduleMeasurement)
     appearanceObserver.observe(appearanceRoot, { attributes: true })
+    lyricList.addEventListener('spmusic:lyric-motion-end', handleLyricMotionEnd)
     document.fonts?.addEventListener('loadingdone', scheduleMeasurement)
     void document.fonts?.ready.then(() => {
       if (!disposed) scheduleMeasurement()
@@ -220,6 +231,7 @@ export function LyricsPanel({
       disposed = true
       observer.disconnect()
       appearanceObserver.disconnect()
+      lyricList.removeEventListener('spmusic:lyric-motion-end', handleLyricMotionEnd)
       document.fonts?.removeEventListener('loadingdone', scheduleMeasurement)
       if (measurementFrame !== null) window.cancelAnimationFrame(measurementFrame)
     }
@@ -335,18 +347,20 @@ export function LyricsPanel({
                 data-pair-spacing={lyricPairSpacingForDelta(pairDeltaSeconds, tightThresholdSeconds)}
                 data-position={index < activeLyricIndex ? 'past' : index === activeLyricIndex ? 'active' : 'future'}
               >
-                <span className="lyric-original-line">
-                  {(visualLines?.original ?? [line.original]).map((visualLine, visualLineIndex) => (
-                    <span className="lyric-visual-line" aria-hidden="true" key={`${line.id}:original:${visualLineIndex}`}>{visualLine}</span>
-                  ))}
-                </span>
-                {line.translation ? (
-                  <span className="translation-line" lang="zh-CN">
-                    {(visualLines?.translation ?? [line.translation]).map((visualLine, visualLineIndex) => (
-                      <span className="lyric-visual-line" aria-hidden="true" key={`${line.id}:translation:${visualLineIndex}`}>{visualLine}</span>
+                <span className="lyric-content" aria-hidden="true">
+                  <span className="lyric-original-line">
+                    {(visualLines?.original ?? [line.original]).map((visualLine, visualLineIndex) => (
+                      <span className="lyric-visual-line" key={`${line.id}:original:${visualLineIndex}`}>{visualLine}</span>
                     ))}
                   </span>
-                ) : null}
+                  {line.translation ? (
+                    <span className="translation-line" lang="zh-CN">
+                      {(visualLines?.translation ?? [line.translation]).map((visualLine, visualLineIndex) => (
+                        <span className="lyric-visual-line" key={`${line.id}:translation:${visualLineIndex}`}>{visualLine}</span>
+                      ))}
+                    </span>
+                  ) : null}
+                </span>
               </li>
             )
           })}

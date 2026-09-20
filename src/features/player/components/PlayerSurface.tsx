@@ -1,7 +1,7 @@
 import '@/features/player/styles/player.css'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, type TransitionEvent } from 'react'
 import { flushSync } from 'react-dom'
-import { AnimatePresence, animate, motion, useMotionValue, useReducedMotion, useTransform, type MotionValue } from 'motion/react'
+import { AnimatePresence, LayoutGroup, animate, motion, useMotionValue, useReducedMotion, useTransform, type MotionValue } from 'motion/react'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useAppearance, useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { CoverPanel } from '@/features/player/components/CoverPanel'
@@ -96,6 +96,38 @@ const AmbientArtwork = memo(function AmbientArtwork({ layer, role, progress, pre
     </motion.div>
   )
 })
+
+type ArtworkReadinessProbeProps = {
+  layer: ArtworkVisualLayer | null
+  onReady: (layerId: number) => void
+  onLoadError: (layerId: number) => void
+}
+
+const ArtworkReadinessProbe = memo(function ArtworkReadinessProbe({
+  layer,
+  onReady,
+  onLoadError,
+}: ArtworkReadinessProbeProps) {
+  useArtworkResourceConsumer(layer?.resource)
+
+  useEffect(() => {
+    if (layer?.phase === 'incoming' && !layer.resource.view) onReady(layer.id)
+  }, [layer, onReady])
+
+  if (!layer || layer.phase !== 'incoming' || !layer.resource.view) return null
+
+  return (
+    <ArtworkCanvas
+      className="artwork-readiness-probe"
+      source={layer.resource.view}
+      hidden
+      maxBackingEdge={2}
+      onReady={() => onReady(layer.id)}
+      onError={() => onLoadError(layer.id)}
+    />
+  )
+})
+
 type TrackCardMotionLayerProps = {
   layer: ArtworkVisualLayer
   feedbackValue?: TrackFeedback
@@ -495,6 +527,7 @@ export function PlayerSurface({
   }, [])
   const [coverDragActive, setCoverDragActive] = useState(false)
   const [moreMenuOpen, setMoreMenuOpen] = useState(false)
+  const playlistCloseRequestedRef = useRef(false)
   const observedTrackContextRef = useRef({
     trackId: track?.id ?? null,
     sequence: playback.selectionActivitySequence ?? 0,
@@ -526,7 +559,6 @@ export function PlayerSurface({
     playback.selectionActivitySequence ?? 0,
     playback.selectionVisualIntent ?? null,
     trackCardPreviewToken,
-    playlist.isOpen,
   )
   const activeArtworkLayerId = artworkSlots.find((layer) => layer?.phase === 'active')?.id ?? null
   const trackCardGeometryReady = Boolean(
@@ -549,6 +581,26 @@ export function PlayerSurface({
   const contentState = playback.contentState ?? (track ? 'track' : 'empty')
   const { appearance } = useAppearance()
   const appearanceMotion = useAppearanceMotion()
+  const playlistOpen = playlist.isOpen
+  const onPlaylistOpenChange = playlist.onOpenChange
+  const requestPlaylistOpenChange = useCallback((nextOpen: boolean) => {
+    if (nextOpen || !track || currentArtworkReady) {
+      playlistCloseRequestedRef.current = false
+      onPlaylistOpenChange(nextOpen)
+      return
+    }
+    playlistCloseRequestedRef.current = true
+  }, [currentArtworkReady, onPlaylistOpenChange, track])
+
+  useEffect(() => {
+    if (!playlistOpen) {
+      playlistCloseRequestedRef.current = false
+      return
+    }
+    if (!playlistCloseRequestedRef.current || !currentArtworkReady) return
+    playlistCloseRequestedRef.current = false
+    onPlaylistOpenChange(false)
+  }, [currentArtworkReady, onPlaylistOpenChange, playlistOpen])
   const reduceMotion = useReducedMotion()
   const trackCardReducedMotion = Boolean(reduceMotion || appearanceMotion.disabled)
   const [nativeWindowState, setNativeWindowState] = useState<WindowLayoutState>({ maximized: false, fullscreen: false })
@@ -1472,6 +1524,14 @@ export function PlayerSurface({
     renderedTrackCardSession?.kind === 'drag'
     && renderedTrackCardSession.incomingLayerId < 0,
   )
+  const playlistTransportOnlyBusy = Boolean(
+    playlist.isOpen
+    && track
+    && playback.isTransportBusy
+    && !playback.isAudioBusy
+    && !playback.isSelectionPending
+    && timeline.interaction !== 'seeking',
+  )
 
   return (
     <TooltipProvider>
@@ -1479,11 +1539,12 @@ export function PlayerSurface({
         className="player-shell"
         data-cover={toneLayer?.artwork.coverTone ?? track?.coverTone ?? 'empty'}
         data-content-state={contentState}
+        data-playlist-transport-only-busy={playlistTransportOnlyBusy ? '' : undefined}
         data-window-fullscreen={nativeWindowState.fullscreen}
         aria-busy={contentState === 'loading'}
         aria-labelledby="app-title"
       >
-        {!playlist.isOpen ? artworkSlots.map((layer, slot) => (
+        {artworkSlots.map((layer, slot) => (
           <AmbientArtwork
             key={`ambient-slot:${slot}`}
             layer={layer}
@@ -1493,27 +1554,42 @@ export function PlayerSurface({
             progress={trackCardProgress}
             preserveOutgoingOpacity={preservePendingOutgoingOpacity}
           />
+        ))}
+        {playlist.isOpen ? artworkSlots.map((layer, slot) => (
+          <ArtworkReadinessProbe
+            key={`artwork-readiness:${slot}`}
+            layer={layer}
+            onReady={markArtworkReady}
+            onLoadError={markArtworkLoadError}
+          />
         )) : null}
         {devAudioTools?.content}
 
-        <ResponsivePlayerLayout
-          nativeWindowState={nativeWindowState}
-          windowBar={(
-            <WindowBar
-              onWindowStateChange={setNativeWindowState}
-              debugToolsEnabled={devAudioTools !== undefined}
-              debugToolsOpen={devAudioTools?.isOpen ?? false}
-              onDebugToolsOpenChange={devAudioTools?.onOpenChange}
-              playlistOpen={playlist.isOpen}
-              onTogglePlaylist={() => playlist.onOpenChange(!playlist.isOpen)}
-            />
-          )}
-        >
-          {!playlist.isOpen ? <section
+        <LayoutGroup id="playlist-player-view-transition">
+          <ResponsivePlayerLayout
+            nativeWindowState={nativeWindowState}
+            windowBar={(
+              <WindowBar
+                onWindowStateChange={setNativeWindowState}
+                debugToolsEnabled={devAudioTools !== undefined}
+                debugToolsOpen={devAudioTools?.isOpen ?? false}
+                onDebugToolsOpenChange={devAudioTools?.onOpenChange}
+                playlistOpen={playlist.isOpen}
+                onTogglePlaylist={() => requestPlaylistOpenChange(!playlist.isOpen)}
+              />
+            )}
+          >
+            <AnimatePresence initial={false}>
+              {!playlist.isOpen ? <motion.section
+            key="player-detail"
             ref={playerStageRef}
             className="player-stage"
             data-playback-state={visualPlaybackState}
             style={playbackTransitionStyle}
+            initial={{ opacity: appearanceMotion.disabled ? 1 : 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: appearanceMotion.disabled ? 1 : 0 }}
+            transition={appearanceMotion.layoutTransition}
             onTransitionEnd={handlePlaybackVisualTransitionEnd}
             aria-label={appCopy.shellLabel}
           >
@@ -1615,12 +1691,13 @@ export function PlayerSurface({
                 onPlayToggle={handlePlayToggle}
               />
             </div>
-          </section> : null}
-        </ResponsivePlayerLayout>
+              </motion.section> : null}
+            </AnimatePresence>
+          </ResponsivePlayerLayout>
 
-        <AnimatePresence initial={false}>
-          {playlist.isOpen ? (
-            <PlaylistPanel
+          <AnimatePresence initial={false}>
+            {playlist.isOpen ? (
+              <PlaylistPanel
               key={`${playlist.playlistName ?? 'playlist'}:${playlist.tracks.length}:${playlist.tracks[0]?.id ?? ''}:${playlist.tracks[playlist.tracks.length - 1]?.id ?? ''}`}
               tracks={playlist.tracks}
               unavailableTrackIds={playlist.unavailableTrackIds}
@@ -1629,7 +1706,7 @@ export function PlayerSurface({
               totalDurationSeconds={playlist.totalDurationSeconds}
               shuffleMode={playlist.shuffleMode}
               onShuffleCycle={playlist.onShuffleCycle}
-              isOpenAudioDisabled={playlist.isOpenAudioDisabled || playbackTransitionPending}
+              isOpenAudioDisabled={playlist.isOpenAudioDisabled}
               onOpenAudio={playlist.onOpenAudio}
               onTrackSelect={playlist.onTrackSelect}
               onVisibleTrackIdsChange={playlist.onVisibleTrackIdsChange}
@@ -1638,10 +1715,11 @@ export function PlayerSurface({
               visualIsPlaying={visualPlaybackState === 'playing'}
               playbackTransitionPending={playbackTransitionPending}
               onPlayToggle={handlePlayToggle}
-              onClose={() => playlist.onOpenChange(false)}
-            />
-          ) : null}
-        </AnimatePresence>
+              onClose={() => requestPlaylistOpenChange(false)}
+              />
+            ) : null}
+          </AnimatePresence>
+        </LayoutGroup>
       </main>
     </TooltipProvider>
   )

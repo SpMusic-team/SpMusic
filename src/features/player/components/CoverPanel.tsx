@@ -1,5 +1,6 @@
 import { memo, useEffect } from 'react'
-import { useSystemIcons } from '@/features/appearance/hooks/useAppearance'
+import { motion } from 'motion/react'
+import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { appCopy } from '@/features/player/model/playerCopy'
 import type { SystemIcon } from '@/icons/systemIcons'
 import type { ArtworkVisualLayer } from '@/features/player/hooks/useArtworkVisualResource'
@@ -35,6 +36,7 @@ export const CoverPanel = memo(function CoverPanel({
   moreOpen,
 }: CoverPanelProps) {
   const systemIcons = useSystemIcons()
+  const appearanceMotion = useAppearanceMotion()
   const track = layer?.track
   const artwork = layer?.artwork
   const phase = layer?.phase
@@ -48,7 +50,11 @@ export const CoverPanel = memo(function CoverPanel({
     <article
       className="cover-column"
     >
-      <div className="cover-frame">
+      <motion.div
+        className="cover-frame"
+        layoutId={phase === 'active' && track ? `player-view-cover:${track.id}` : undefined}
+        transition={{ layout: appearanceMotion.layoutTransition }}
+      >
         <div
           className="cover-art"
           data-tone={artwork?.coverTone ?? 'blue'}
@@ -85,7 +91,7 @@ export const CoverPanel = memo(function CoverPanel({
             </div>
           </> : null}
         </div>
-      </div>
+      </motion.div>
     </article>
   )
 })

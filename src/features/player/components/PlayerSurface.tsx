@@ -29,6 +29,7 @@ import {
   trackCardDirection,
   type TrackCardInteractionPhase,
 } from '@/features/player/model/trackCardGesture'
+import { selectPlayerViewTransitionOwnerIds } from '@/features/player/model/playerViewTransition'
 
 export type PlayerSurfaceDevAudioTools = {
   isOpen: boolean
@@ -144,6 +145,7 @@ type TrackCardMotionLayerProps = {
   outgoingHandoff?: TrackCardHandoffPose
   onMoreOpenChange?: (open: boolean) => void
   moreOpen?: boolean
+  ownsPlayerViewTransition: boolean
 }
 
 const TrackCardMotionLayer = memo(function TrackCardMotionLayer({
@@ -162,6 +164,7 @@ const TrackCardMotionLayer = memo(function TrackCardMotionLayer({
   outgoingHandoff,
   onMoreOpenChange,
   moreOpen,
+  ownsPlayerViewTransition,
 }: TrackCardMotionLayerProps) {
   const systemIcons = useSystemIcons()
   const phase = layer.phase
@@ -309,10 +312,11 @@ const TrackCardMotionLayer = memo(function TrackCardMotionLayer({
           onDislike={handleDislike}
           onReady={handleReady}
           onLoadError={handleLoadError}
+          ownsPlayerViewTransition={ownsPlayerViewTransition}
           onMoreOpenChange={onMoreOpenChange}
           moreOpen={moreOpen}
         />
-        <TrackMeta layer={layer} />
+        <TrackMeta layer={layer} ownsPlayerViewTransition={ownsPlayerViewTransition} />
       </motion.div>
     </motion.div>
   )
@@ -561,6 +565,13 @@ export function PlayerSurface({
     trackCardPreviewToken,
   )
   const activeArtworkLayerId = artworkSlots.find((layer) => layer?.phase === 'active')?.id ?? null
+  const playerViewTransitionOwnerIds = useMemo(() => selectPlayerViewTransitionOwnerIds(
+    artworkSlots.flatMap((layer) => layer ? [{
+      id: layer.id,
+      trackId: layer.track.id,
+      phase: layer.phase,
+    }] : []),
+  ), [artworkSlots])
   const trackCardGeometryReady = Boolean(
     trackCardCoverGeometry
     && trackCardCoverGeometry.width > 1
@@ -1630,6 +1641,7 @@ export function PlayerSurface({
                         outgoingHandoff={role === 'outgoing' ? renderedTrackCardSession?.outgoingHandoff : undefined}
                         onMoreOpenChange={layer.phase === 'active' ? handleMoreOpenChange : undefined}
                         moreOpen={layer.phase === 'active' && role === null && moreMenuOpen}
+                        ownsPlayerViewTransition={playerViewTransitionOwnerIds.has(layer.id)}
                       />
                     )
                   })}

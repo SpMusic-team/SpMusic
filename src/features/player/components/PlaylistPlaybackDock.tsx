@@ -8,6 +8,7 @@ import { IconButton } from '@/features/player/components/IconButton'
 import { PlaylistCoverImage } from '@/features/player/components/PlaylistCoverImage'
 import type { PlayerPlaybackViewModel, PlayerTimelineViewModel, PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
 import { coverToneForTrackId } from '@/features/player/model/audioTrackModel'
+import { playerViewTransitionLayoutId } from '@/features/player/model/playerViewTransition'
 
 type PlaylistPlaybackDockProps = {
   playback: PlayerPlaybackViewModel
@@ -65,7 +66,7 @@ export function PlaylistPlaybackDock({
         >
           <motion.span
             className="playlist-playback-cover"
-            layoutId={track ? `player-view-cover:${track.id}` : undefined}
+            layoutId={playerViewTransitionLayoutId('cover', track?.id)}
             transition={{ layout: appearanceMotion.layoutTransition }}
             aria-hidden="true"
           >
@@ -89,7 +90,7 @@ export function PlaylistPlaybackDock({
           </motion.span>
           <motion.span
             className="playlist-playback-copy"
-            layoutId={track ? `player-view-copy:${track.id}` : undefined}
+            layoutId={playerViewTransitionLayoutId('copy', track?.id)}
             transition={{ layout: appearanceMotion.layoutTransition }}
           >
             <strong>{track?.title ?? '未在播放'}</strong>

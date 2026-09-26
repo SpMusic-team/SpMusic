@@ -4,6 +4,7 @@ import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks
 import { appCopy } from '@/features/player/model/playerCopy'
 import type { SystemIcon } from '@/icons/systemIcons'
 import type { ArtworkVisualLayer } from '@/features/player/hooks/useArtworkVisualResource'
+import { playerViewTransitionLayoutId } from '@/features/player/model/playerViewTransition'
 import { ArtworkCanvas } from './ArtworkCanvas'
 import { IconButton } from './IconButton'
 import { MoreActionsMenu } from './MoreActionsMenu'
@@ -18,6 +19,7 @@ type CoverPanelProps = {
   onDislike: () => void
   onReady: () => void
   onLoadError: () => void
+  ownsPlayerViewTransition: boolean
   onMoreOpenChange?: (open: boolean) => void
   moreOpen?: boolean
 }
@@ -32,6 +34,7 @@ export const CoverPanel = memo(function CoverPanel({
   onDislike,
   onReady,
   onLoadError,
+  ownsPlayerViewTransition,
   onMoreOpenChange,
   moreOpen,
 }: CoverPanelProps) {
@@ -52,7 +55,7 @@ export const CoverPanel = memo(function CoverPanel({
     >
       <motion.div
         className="cover-frame"
-        layoutId={phase === 'active' && track ? `player-view-cover:${track.id}` : undefined}
+        layoutId={ownsPlayerViewTransition ? playerViewTransitionLayoutId('cover', track?.id) : undefined}
         transition={{ layout: appearanceMotion.layoutTransition }}
       >
         <div

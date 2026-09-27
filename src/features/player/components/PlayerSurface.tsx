@@ -1,7 +1,7 @@
 import '@/features/player/styles/player.css'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, type TransitionEvent } from 'react'
 import { flushSync } from 'react-dom'
-import { AnimatePresence, LayoutGroup, animate, motion, useMotionValue, useReducedMotion, useTransform, type MotionValue } from 'motion/react'
+import { AnimatePresence, LayoutGroup, animate, motion, useMotionValue, useReducedMotion, type MotionValue } from 'motion/react'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useAppearance, useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { CoverPanel } from '@/features/player/components/CoverPanel'
@@ -71,15 +71,25 @@ type AmbientArtworkProps = {
   layer: ArtworkVisualLayer | null
   role: TrackCardRole | null
   progress: MotionValue<number>
-  preserveOutgoingOpacity: boolean
+  outgoingHandoffOpacity?: number
+  outgoingReturnToCenter?: boolean
 }
 
-const AmbientArtwork = memo(function AmbientArtwork({ layer, role, progress, preserveOutgoingOpacity }: AmbientArtworkProps) {
+const AmbientArtwork = memo(function AmbientArtwork({ layer, role, progress, outgoingHandoffOpacity, outgoingReturnToCenter }: AmbientArtworkProps) {
   useArtworkResourceConsumer(layer?.resource)
-  const transitionOpacity = useTransform(progress, (value) => role === 'outgoing' ? 1 - value : value)
-  const opacity = role === 'outgoing' && preserveOutgoingOpacity
-    ? 1
-    : role ? transitionOpacity : layer?.phase === 'active' ? 1 : 0
+  const opacity = useMotionValue(0)
+  useLayoutEffect(() => {
+    const update = (value: number) => {
+      const regular = role === 'outgoing'
+        ? outgoingReturnToCenter ? 1 : 1 - value
+        : role === 'incoming' ? value : layer?.phase === 'active' ? 1 : 0
+      opacity.set(role === 'outgoing' && outgoingHandoffOpacity !== undefined
+        ? outgoingHandoffOpacity + (regular - outgoingHandoffOpacity) * value
+        : regular)
+    }
+    update(progress.get())
+    return progress.on('change', update)
+  }, [layer?.phase, opacity, outgoingHandoffOpacity, outgoingReturnToCenter, progress, role])
   return (
     <motion.div
       className="ambient-cover"
@@ -138,11 +148,12 @@ type TrackCardMotionLayerProps = {
   role: TrackCardRole | null
   direction: -1 | 1
   progress: MotionValue<number>
+  overshootX: MotionValue<number>
   reducedMotion: boolean
   coverGeometry: { width: number; height: number; centerX: number; centerY: number; perspective: number } | null
   acceptsDrag: boolean
-  preserveOutgoingOpacity: boolean
   outgoingHandoff?: TrackCardHandoffPose
+  outgoingReturnToCenter?: boolean
   onMoreOpenChange?: (open: boolean) => void
   moreOpen?: boolean
   ownsPlayerViewTransition: boolean
@@ -157,11 +168,12 @@ const TrackCardMotionLayer = memo(function TrackCardMotionLayer({
   role,
   direction,
   progress,
+  overshootX,
   reducedMotion,
   coverGeometry,
   acceptsDrag,
-  preserveOutgoingOpacity,
   outgoingHandoff,
+  outgoingReturnToCenter,
   onMoreOpenChange,
   moreOpen,
   ownsPlayerViewTransition,
@@ -189,7 +201,7 @@ const TrackCardMotionLayer = memo(function TrackCardMotionLayer({
         ? getTrackCardPose(
             role,
             direction,
-            value,
+            outgoingReturnToCenter && role === 'outgoing' ? 0 : value,
             measuredCoverWidth,
             reducedMotion,
             measuredCoverHeight,
@@ -199,21 +211,29 @@ const TrackCardMotionLayer = memo(function TrackCardMotionLayer({
       const handoffPose = role === 'outgoing' && outgoingHandoff && coverGeometry
         ? outgoingHandoff.pose
         : null
-      planeTransform.set(regularPose
-        ? trackCardTransform(handoffPose ? mixTrackCardPose(handoffPose, regularPose, value) : regularPose)
+      const pose = regularPose
+        ? handoffPose ? mixTrackCardPose(handoffPose, regularPose, value) : regularPose
+        : null
+      planeTransform.set(pose
+        ? trackCardTransform(role === 'incoming' ? { ...pose, xPx: pose.xPx + overshootX.get() } : pose)
         : 'none')
-      const regularOpacity = role ? getTrackCardOpacity(role, value) : 1
+      const regularOpacity = role
+        ? outgoingReturnToCenter && role === 'outgoing' ? 1 : getTrackCardOpacity(role, value)
+        : 1
       const handoffOpacity = outgoingHandoff
         ? outgoingHandoff.opacity
         : regularOpacity
-      contentOpacity.set(role === 'outgoing' && preserveOutgoingOpacity
-        ? 1
-        : role === 'outgoing' && outgoingHandoff
-          ? handoffOpacity + (regularOpacity - handoffOpacity) * value
-          : regularOpacity)
+      contentOpacity.set(role === 'outgoing' && outgoingHandoff
+           ? handoffOpacity + (regularOpacity - handoffOpacity) * value
+           : regularOpacity)
     }
     update(progress.get())
-    return progress.on('change', update)
+    const unsubscribeProgress = progress.on('change', update)
+    const unsubscribeOvershoot = overshootX.on('change', () => update(progress.get()))
+    return () => {
+      unsubscribeProgress()
+      unsubscribeOvershoot()
+    }
   }, [
     contentOpacity,
     coverGeometry,
@@ -222,9 +242,10 @@ const TrackCardMotionLayer = memo(function TrackCardMotionLayer({
     measuredCoverWidth,
     measuredPerspective,
     outgoingHandoff,
+    outgoingReturnToCenter,
+    overshootX,
     planeTransform,
     progress,
-    preserveOutgoingOpacity,
     reducedMotion,
     role,
   ])
@@ -329,6 +350,7 @@ type TrackCardTransitionSession = {
   direction: -1 | 1
   kind: 'automatic' | 'drag'
   outgoingHandoff?: TrackCardHandoffPose
+  outgoingReturnToCenter?: boolean
 }
 
 type TrackCardHandoffPose = {
@@ -341,6 +363,7 @@ type TrackCardSettleContext = {
   session: TrackCardTransitionSession
   target: 0 | 1
   durationSeconds: number
+  overshootPx?: number
   onComplete: () => void
 }
 
@@ -375,6 +398,12 @@ function resolveRenderedTrackCardSession(
   artworkSlots: readonly [ArtworkVisualLayer | null, ArtworkVisualLayer | null, ArtworkVisualLayer | null],
   previewToken: TrackCardPreviewToken | null,
 ): TrackCardTransitionSession | null {
+  // A new gesture can own the entering card before its adjacent preview is
+  // painted. The old exiting card has already been retired at this point.
+  if (liveSession?.kind === 'drag' && liveSession.incomingLayerId < 0
+    && artworkSlots.some((layer) => layer?.id === liveSession.outgoingLayerId && layer.phase === 'active')) {
+    return liveSession
+  }
   const liveDragOutgoing = liveSession?.kind === 'drag'
     ? artworkSlots.find((layer) => (
       layer?.id === liveSession.outgoingLayerId
@@ -476,8 +505,10 @@ type CoverDragGesture = {
   signedProgress: number
   moved: boolean
   released: boolean
-  captureLost: boolean
+  captureRecoveryAttempts: number
+  deferredHandoff: boolean
   interruptedSettle: TrackCardSettleContext | null
+  interruptedOvershootX: number
   handoffLayerId: number | null
   handoffPose: TrackCardHandoffPose | null
   targetReady: boolean
@@ -490,6 +521,12 @@ const TRACK_CARD_CANCEL_SECONDS = 0.19
 const TRACK_CARD_DRAG_LOCK_PX = 6
 const TRACK_CARD_COMMIT_PROGRESS = 0.28
 const TRACK_CARD_COMMIT_VELOCITY = 650
+const TRACK_CARD_OVERSHOOT_VELOCITY = 1100
+const TRACK_CARD_RELEASE_FRESH_MS = 70
+const TRACK_CARD_OVERSHOOT_SECONDS = 0.09
+const TRACK_CARD_OVERSHOOT_WIDTH = 0.07
+const TRACK_CARD_SETTLE_DEADLINE_MS = 800
+const TRACK_CARD_CAPTURE_IDLE_DEADLINE_MS = 2000
 let lastCoverDragGestureId = 0
 
 export function PlayerSurface({
@@ -502,10 +539,17 @@ export function PlayerSurface({
   const commitTrackPreview = playback.onCommitTrackPreview
   const discardTrackPreview = playback.onDiscardTrackPreview
   const trackCardProgress = useMotionValue(0)
+  const retiringTrackCardProgress = useMotionValue(0)
+  const trackCardOvershootX = useMotionValue(0)
   const trackCardAnimationRef = useRef<ReturnType<typeof animate> | null>(null)
+  const trackCardOvershootAnimationRef = useRef<ReturnType<typeof animate> | null>(null)
   const trackCardStartFrameRef = useRef<number | null>(null)
   const trackCardRunIdRef = useRef(0)
   const trackCardSettleRef = useRef<TrackCardSettleContext | null>(null)
+  const retiringTrackCardAnimationRef = useRef<ReturnType<typeof animate> | null>(null)
+  const retiringTrackCardSessionRef = useRef<TrackCardTransitionSession | null>(null)
+  const retiringTrackCardStartedAtRef = useRef(0)
+  const [retiringTrackCardSession, setRetiringTrackCardSession] = useState<TrackCardTransitionSession | null>(null)
   const trackCardDeckRef = useRef<HTMLDivElement>(null)
   const [trackCardCoverGeometry, setTrackCardCoverGeometry] = useState<{
     width: number
@@ -520,6 +564,9 @@ export function PlayerSurface({
   const [trackCardPreviewToken, setTrackCardPreviewToken] = useState<TrackCardPreviewToken | null>(null)
   const [trackCardSession, setTrackCardSession] = useState<TrackCardTransitionSession | null>(null)
   const trackCardSessionRef = useRef<TrackCardTransitionSession | null>(null)
+  const [retiredTrackCardSession, setRetiredTrackCardSession] = useState<TrackCardTransitionSession | null>(null)
+  const retiredTrackCardSessionRef = useRef<TrackCardTransitionSession | null>(null)
+  const [retiredExitingLayerIds, setRetiredExitingLayerIds] = useState<ReadonlySet<number>>(() => new Set())
   const publishTrackCardSession = useCallback((session: TrackCardTransitionSession | null) => {
     const current = trackCardSessionRef.current
     if (
@@ -579,6 +626,16 @@ export function PlayerSurface({
     && Number.isFinite(trackCardCoverGeometry.centerX)
     && Number.isFinite(trackCardCoverGeometry.centerY),
   )
+  const artworkSlotsRef = useRef(artworkSlots)
+  useLayoutEffect(() => {
+    artworkSlotsRef.current = artworkSlots
+    const exitingIds = new Set(artworkSlots.flatMap((layer) => layer?.phase === 'exiting' ? [layer.id] : []))
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setRetiredExitingLayerIds((current) => {
+      const remaining = [...current].filter((id) => exitingIds.has(id))
+      return remaining.length === current.size ? current : new Set(remaining)
+    })
+  }, [artworkSlots])
   const completeTrackCardExit = useCallback(
     (layerId: number) => {
       markArtworkExitComplete(layerId, 'ambient')
@@ -586,6 +643,71 @@ export function PlayerSurface({
     },
     [markArtworkExitComplete],
   )
+  const finishRetiringTrackCard = useCallback(() => {
+    const retiring = retiringTrackCardSessionRef.current
+    retiringTrackCardSessionRef.current = null
+    retiringTrackCardAnimationRef.current?.stop()
+    retiringTrackCardAnimationRef.current = null
+    if (!retiring) return
+    completeTrackCardExit(retiring.outgoingLayerId)
+    setRetiredExitingLayerIds((current) => new Set(current).add(retiring.outgoingLayerId))
+    setRetiringTrackCardSession(null)
+  }, [completeTrackCardExit])
+  useEffect(() => {
+    if (!retiringTrackCardSession) return
+    const remainingMs = Math.max(0, TRACK_CARD_SETTLE_DEADLINE_MS
+      - (performance.now() - retiringTrackCardStartedAtRef.current))
+    const timeoutId = window.setTimeout(() => {
+      if (retiringTrackCardSessionRef.current === retiringTrackCardSession) finishRetiringTrackCard()
+    }, remainingMs)
+    return () => window.clearTimeout(timeoutId)
+  }, [finishRetiringTrackCard, retiringTrackCardSession])
+  useEffect(() => {
+    if (retiringTrackCardSession && !artworkSlots.some((layer) => (
+      layer?.id === retiringTrackCardSession.outgoingLayerId && layer.phase === 'exiting'
+    ))) finishRetiringTrackCard()
+  }, [artworkSlots, finishRetiringTrackCard, retiringTrackCardSession])
+  useEffect(() => () => {
+    retiringTrackCardSessionRef.current = null
+    retiringTrackCardAnimationRef.current?.stop()
+    retiringTrackCardAnimationRef.current = null
+  }, [])
+  const selectionMatchesTrackCardSession = useCallback((
+    session: TrackCardTransitionSession,
+    incomingTrackId: string,
+  ) => {
+    const { trackId, sequence, intent } = latestTrackContextRef.current
+    return Boolean(intent
+      && trackId === incomingTrackId
+      && intent.targetTrackId === incomingTrackId
+      && intent.sequence === sequence
+      && (session.kind === 'drag'
+        ? session.key === `drag:${intent.previewTokenId}`
+        : session.key === `selection:${intent.requestId}`))
+  }, [])
+  const canResumeInterruptedSettle = useCallback((settle: TrackCardSettleContext | null) => Boolean(
+    settle?.target === 1
+    && artworkSlotsRef.current.some((layer) => layer?.id === settle.session.outgoingLayerId && layer.phase === 'exiting')
+    && artworkSlotsRef.current.some((layer) => layer?.id === settle.session.incomingLayerId
+      && layer.phase === 'active' && selectionMatchesTrackCardSession(settle.session, layer.track.id)),
+  ), [selectionMatchesTrackCardSession])
+  const hasValidTrackCardSessionPair = useCallback((session: TrackCardTransitionSession) => {
+    const outgoing = artworkSlotsRef.current.find((layer) => layer?.id === session.outgoingLayerId)
+    const incoming = artworkSlotsRef.current.find((layer) => layer?.id === session.incomingLayerId)
+    if (!outgoing || !incoming || outgoing.id === incoming.id) return false
+    if (session.kind === 'automatic') return outgoing.phase === 'exiting'
+      && incoming.phase === 'active'
+      && selectionMatchesTrackCardSession(session, incoming.track.id)
+    if ((outgoing.phase !== 'active' && outgoing.phase !== 'exiting')
+      || (incoming.phase !== 'preview' && incoming.phase !== 'incoming' && incoming.phase !== 'active')) return false
+    const settle = trackCardSettleRef.current
+    if (settle?.session === session && settle.target === 1) {
+      return selectionMatchesTrackCardSession(session, incoming.track.id)
+    }
+    if (coverDragRef.current && !coverDragRef.current.released) return true
+    if (settle?.session === session && settle.target === 0) return true
+    return false
+  }, [selectionMatchesTrackCardSession])
   const toneLayer = artworkSlots.find((layer) => layer?.phase === 'active')
     ?? artworkSlots.find((layer) => layer?.phase === 'incoming')
     ?? artworkSlots.find((layer) => layer?.phase === 'exiting')
@@ -701,7 +823,7 @@ export function PlayerSurface({
     }
   }, [activeArtworkLayerId, visualPlaybackState])
 
-  const stopTrackCardAnimation = useCallback(() => {
+  const stopTrackCardAnimation = useCallback((clearSettle = true) => {
     // This monotonic run id is also the settle id: all completion callbacks are
     // fenced by it inside animateTrackCardProgress.
     trackCardRunIdRef.current += 1
@@ -711,6 +833,9 @@ export function PlayerSurface({
     }
     trackCardAnimationRef.current?.stop()
     trackCardAnimationRef.current = null
+    trackCardOvershootAnimationRef.current?.stop()
+    trackCardOvershootAnimationRef.current = null
+    if (clearSettle) trackCardSettleRef.current = null
   }, [])
 
   useEffect(() => stopTrackCardAnimation, [stopTrackCardAnimation])
@@ -719,13 +844,38 @@ export function PlayerSurface({
     target: number,
     durationSeconds: number,
     onComplete: () => void,
+    overshootPx = 0,
   ) => {
-    stopTrackCardAnimation()
+    stopTrackCardAnimation(false)
     const runId = trackCardRunIdRef.current
+    const overshootReturnSeconds = TRACK_CARD_OVERSHOOT_SECONDS * appearance.motion.durationScale
     if (durationSeconds <= 0) {
       trackCardProgress.set(target)
+      trackCardOvershootX.set(0)
       if (trackCardRunIdRef.current === runId) onComplete()
       return
+    }
+    let progressComplete = false
+    let residualOvershootComplete = trackCardOvershootX.get() === 0
+    if (overshootPx !== 0) {
+      trackCardOvershootX.set(0)
+      trackCardOvershootAnimationRef.current = animate(trackCardOvershootX, overshootPx, {
+        duration: durationSeconds,
+        ease: 'easeIn',
+      })
+    } else if (trackCardOvershootX.get() !== 0) {
+      // An interrupted fast settle keeps its painted x until the pointer
+      // handoff is known. Ease that residual translation away on rollback.
+      trackCardOvershootAnimationRef.current = animate(trackCardOvershootX, 0, {
+        duration: Math.min(durationSeconds, overshootReturnSeconds),
+        ease: 'easeOut',
+        onComplete: () => {
+          if (trackCardRunIdRef.current !== runId) return
+          trackCardOvershootAnimationRef.current = null
+          residualOvershootComplete = true
+          if (progressComplete) onComplete()
+        },
+      })
     }
     const controls = animate(trackCardProgress, target, {
       duration: durationSeconds,
@@ -735,11 +885,25 @@ export function PlayerSurface({
       onComplete: () => {
         if (trackCardRunIdRef.current !== runId) return
         if (trackCardAnimationRef.current === controls) trackCardAnimationRef.current = null
-        onComplete()
+        if (overshootPx === 0) {
+          progressComplete = true
+          if (residualOvershootComplete) onComplete()
+          return
+        }
+        trackCardOvershootAnimationRef.current?.stop()
+        trackCardOvershootAnimationRef.current = animate(trackCardOvershootX, 0, {
+          duration: overshootReturnSeconds,
+          ease: 'easeOut',
+          onComplete: () => {
+            if (trackCardRunIdRef.current !== runId) return
+            trackCardOvershootAnimationRef.current = null
+            onComplete()
+          },
+        })
       },
     })
     trackCardAnimationRef.current = controls
-  }, [stopTrackCardAnimation, trackCardProgress])
+  }, [appearance.motion.durationScale, stopTrackCardAnimation, trackCardOvershootX, trackCardProgress])
 
   const runTrackCardSettle = useCallback((context: TrackCardSettleContext) => {
     trackCardSettleRef.current = context
@@ -751,9 +915,10 @@ export function PlayerSurface({
       () => {
         if (trackCardSettleRef.current !== context) return
         trackCardSettleRef.current = null
-        coverInteractionPhaseRef.current = 'idle'
+        coverInteractionPhaseRef.current = coverDragRef.current?.deferredHandoff ? 'dragging' : 'idle'
         context.onComplete()
       },
+      context.target === 1 ? context.overshootPx : 0,
     )
   }, [animateTrackCardProgress, trackCardProgress])
 
@@ -768,6 +933,7 @@ export function PlayerSurface({
     }
     const tokenId = gesture?.token?.id ?? trackCardPreviewToken?.id ?? -1
     discardTrackPreview?.(tokenId)
+    finishRetiringTrackCard()
     stopTrackCardAnimation()
     trackCardSettleRef.current = null
     suppressCoverClickRef.current = false
@@ -777,7 +943,8 @@ export function PlayerSurface({
     setTrackCardPreviewToken(null)
     publishTrackCardSession(null)
     trackCardProgress.set(0)
-  }, [discardTrackPreview, publishTrackCardSession, stopTrackCardAnimation, trackCardPreviewToken?.id, trackCardProgress])
+    trackCardOvershootX.set(0)
+  }, [discardTrackPreview, finishRetiringTrackCard, publishTrackCardSession, stopTrackCardAnimation, trackCardPreviewToken?.id, trackCardOvershootX, trackCardProgress])
 
   const handleMoreOpenChange = useCallback((open: boolean) => {
     if (open) hardResetTrackCardInteraction()
@@ -810,6 +977,35 @@ export function PlayerSurface({
 
   const discardCoverDrag = useCallback((animateBack = true) => {
     const gesture = coverDragRef.current
+    if (gesture?.deferredHandoff) {
+      // The pointer never became a drag, so it never acquired the old pair.
+      // Releasing it must not stop or rewind the committed settle.
+      coverDragRef.current = null
+      gesture.released = true
+      if (gesture.captureElement.hasPointerCapture(gesture.pointerId)) {
+        gesture.captureElement.releasePointerCapture(gesture.pointerId)
+      }
+      setCoverDragActive(false)
+      suppressCoverClickRef.current = false
+      coverInteractionPhaseRef.current = trackCardSettleRef.current ? 'settling' : 'idle'
+      return
+    }
+    const session = trackCardSessionRef.current
+    // A released pointer is no longer a live gesture, but its painted pair
+    // still owns progress until the rollback reaches zero. Capture that
+    // ownership before clearing the pointer ref/released flag below.
+    const canAnimateBack = Boolean(
+      animateBack
+      && gesture?.targetReady
+      && gesture.token
+      && session?.kind === 'drag'
+      && session.key === `drag:${gesture.token.id}`
+      && session.direction === gesture.direction
+      && artworkSlotsRef.current.some((layer) => layer?.id === session.outgoingLayerId
+        && layer.phase === 'active' && layer.track.id === gesture.originTrackId)
+      && artworkSlotsRef.current.some((layer) => layer?.id === session.incomingLayerId
+        && layer.phase === 'preview' && layer.previewTokenId === gesture.token?.id),
+    )
     coverDragRef.current = null
     setCoverDragActive(false)
     suppressCoverClickRef.current = false
@@ -820,20 +1016,57 @@ export function PlayerSurface({
     }
     const cleanup = () => {
       discardTrackPreview?.(gesture.token?.id ?? -1)
-      setTrackCardPreviewToken((current) => current?.id === gesture.token?.id ? null : current)
       suppressCoverClickRef.current = false
-      if (gesture.interruptedSettle && gesture.handoffPose) {
-        publishTrackCardSession(gesture.interruptedSettle.session)
+      if (gesture.handoffPose && canResumeInterruptedSettle(gesture.interruptedSettle)) {
+        setTrackCardPreviewToken((current) => current?.id === gesture.token?.id ? null : current)
+        trackCardOvershootX.set(gesture.interruptedOvershootX)
+        publishTrackCardSession(gesture.interruptedSettle!.session)
         trackCardProgress.set(gesture.handoffPose.sessionProgress)
-        runTrackCardSettle(gesture.interruptedSettle)
+        runTrackCardSettle(gesture.interruptedSettle!)
         return
       }
-      if (trackCardSessionRef.current?.kind === 'drag') publishTrackCardSession(null)
-      trackCardProgress.set(0)
-      coverInteractionPhaseRef.current = 'idle'
+      const clearSession = () => {
+        // Drop render roles before resetting the shared MotionValue.
+        flushSync(() => {
+          setTrackCardPreviewToken((current) => current?.id === gesture.token?.id ? null : current)
+          if (trackCardSessionRef.current) publishTrackCardSession(null)
+        })
+        trackCardProgress.set(0)
+        trackCardOvershootX.set(0)
+        coverInteractionPhaseRef.current = coverDragRef.current?.deferredHandoff ? 'dragging' : 'idle'
+      }
+      const activeLayer = artworkSlotsRef.current.find((layer) => layer?.id === gesture.handoffLayerId
+        && layer.phase === 'active' && layer.track.id === gesture.originTrackId)
+      if (gesture.handoffPose && activeLayer) {
+        // The old incoming card was caught before it reached the centre.
+        // Rolling the new drag back to zero only reaches that captured pose;
+        // give the card its remaining trip home before dropping its role.
+        const recenterSession: TrackCardTransitionSession = {
+          key: `recenter:${gesture.gestureId}`,
+          outgoingLayerId: activeLayer.id,
+          incomingLayerId: -1,
+          direction: gesture.direction ?? 1,
+          kind: 'drag',
+          outgoingHandoff: gesture.handoffPose,
+          outgoingReturnToCenter: true,
+        }
+        flushSync(() => {
+          setTrackCardPreviewToken((current) => current?.id === gesture.token?.id ? null : current)
+          publishTrackCardSession(recenterSession)
+        })
+        trackCardProgress.set(0)
+        trackCardOvershootX.set(0)
+        runTrackCardSettle({
+          session: recenterSession,
+          target: 1,
+          durationSeconds: trackCardReducedMotion ? 0 : TRACK_CARD_CANCEL_SECONDS,
+          onComplete: clearSession,
+        })
+        return
+      }
+      clearSession()
     }
-    const session = trackCardSessionRef.current
-    if (animateBack && session?.kind === 'drag') {
+    if (canAnimateBack && session) {
       runTrackCardSettle({
         session,
         target: 0,
@@ -845,9 +1078,9 @@ export function PlayerSurface({
       trackCardSettleRef.current = null
       cleanup()
     }
-  }, [discardTrackPreview, publishTrackCardSession, runTrackCardSettle, stopTrackCardAnimation, trackCardProgress, trackCardReducedMotion])
+  }, [canResumeInterruptedSettle, discardTrackPreview, publishTrackCardSession, runTrackCardSettle, stopTrackCardAnimation, trackCardOvershootX, trackCardProgress, trackCardReducedMotion])
 
-  const commitCoverDrag = useCallback((gesture: CoverDragGesture) => {
+  const commitCoverDrag = useCallback((gesture: CoverDragGesture, releaseVelocityX: number) => {
     const activeSession = trackCardSessionRef.current
     if (
       !gesture.token
@@ -876,6 +1109,9 @@ export function PlayerSurface({
       session: activeSession,
       target: 1,
       durationSeconds: trackCardReducedMotion ? 0.08 : TRACK_CARD_DURATION_SECONDS,
+      overshootPx: !trackCardReducedMotion && -releaseVelocityX * gesture.direction >= TRACK_CARD_OVERSHOOT_VELOCITY
+        ? -gesture.direction * gesture.coverWidth * TRACK_CARD_OVERSHOOT_WIDTH
+        : 0,
       onComplete: () => {
         // Keep the completed pose until React has committed removal of the
         // exiting layer. The stale-session effect clears the session and
@@ -897,10 +1133,22 @@ export function PlayerSurface({
       || !event.currentTarget.contains(coverFrame)
       || (event.target as HTMLElement).closest('button, [role="button"], a, input')
     ) return
+    // A committed preview can advance the logical track before its artwork
+    // becomes active. Do not start a new pair from the previous track's card.
+    if (!artworkSlots.some((layer) => layer?.phase === 'active' && layer.track.id === track.id)) return
     let interruptedSession = trackCardSessionRef.current
-    const interruptedSettle = trackCardSettleRef.current
+    let interruptedSettle = trackCardSettleRef.current
     const interruptedProgress = trackCardProgress.get()
-    if (interruptedSession && !interruptedSettle) {
+    const deferredHandoff = Boolean(interruptedSession && (
+      canResumeInterruptedSettle(interruptedSettle)
+      || (interruptedSession.outgoingReturnToCenter
+        && artworkSlots.some((layer) => layer?.id === interruptedSession?.outgoingLayerId
+          && layer?.phase === 'active' && layer.track.id === track.id))
+    ))
+    if (interruptedSession && !deferredHandoff) {
+      const outgoingIsExiting = artworkSlots.some((layer) => (
+        layer?.id === interruptedSession?.outgoingLayerId && layer?.phase === 'exiting'
+      ))
       // A completed settle clears its context before React necessarily removes
       // the outgoing layer. Retire that session synchronously before the new
       // gesture is allowed to reset the shared MotionValue; otherwise the old
@@ -908,10 +1156,14 @@ export function PlayerSurface({
       stopTrackCardAnimation()
       const completedOutgoingLayerId = interruptedSession.outgoingLayerId
       flushSync(() => {
-        completeTrackCardExit(completedOutgoingLayerId)
+        if (outgoingIsExiting) completeTrackCardExit(completedOutgoingLayerId)
         publishTrackCardSession(null)
+        setTrackCardPreviewToken(null)
       })
+      trackCardProgress.set(0)
+      trackCardOvershootX.set(0)
       interruptedSession = null
+      interruptedSettle = null
     }
     const plane = coverFrame.closest<HTMLElement>('.track-card-plane')
     const planeLayerId = Number.parseInt(plane?.dataset.trackCardLayerId ?? '', 10)
@@ -936,7 +1188,9 @@ export function PlayerSurface({
       ? {
           pose: handoffRole === 'outgoing' && interruptedSession.outgoingHandoff
             ? mixTrackCardPose(interruptedSession.outgoingHandoff.pose, regularHandoffPose, interruptedProgress)
-            : regularHandoffPose,
+            : handoffRole === 'incoming'
+              ? { ...regularHandoffPose, xPx: regularHandoffPose.xPx + trackCardOvershootX.get() }
+              : regularHandoffPose,
           opacity: handoffRole === 'outgoing' && interruptedSession.outgoingHandoff
             ? interruptedSession.outgoingHandoff.opacity
               + (getTrackCardOpacity(handoffRole, interruptedProgress) - interruptedSession.outgoingHandoff.opacity)
@@ -945,8 +1199,9 @@ export function PlayerSurface({
           sessionProgress: interruptedProgress,
         } satisfies TrackCardHandoffPose
       : null
-    stopTrackCardAnimation()
-    trackCardSettleRef.current = null
+    // A press is not yet a new drag. Let the committed A→B animation finish
+    // unless this pointer actually crosses the direction lock threshold.
+    if (!deferredHandoff) stopTrackCardAnimation()
     // The deck survives preview insertion and active/incoming phase changes.
     // Keeping capture here prevents a layer hand-off from terminating the
     // gesture merely because the card subtree changed its interaction role.
@@ -970,16 +1225,20 @@ export function PlayerSurface({
       signedProgress: 0,
       moved: false,
       released: false,
-      captureLost: false,
-      interruptedSettle,
+      captureRecoveryAttempts: 0,
+      deferredHandoff,
+      interruptedSettle: canResumeInterruptedSettle(interruptedSettle)
+        ? { ...interruptedSettle!, overshootPx: 0 }
+        : null,
+      interruptedOvershootX: trackCardOvershootX.get(),
       handoffLayerId,
-      handoffPose,
+      handoffPose: deferredHandoff ? null : handoffPose,
       targetReady: false,
     }
     setCoverDragActive(true)
     coverInteractionPhaseRef.current = 'dragging'
     suppressCoverClickRef.current = false
-  }, [completeTrackCardExit, prepareTrackPreview, publishTrackCardSession, stopTrackCardAnimation, track, trackCardCoverGeometry, trackCardGeometryReady, trackCardProgress, trackCardReducedMotion])
+  }, [artworkSlots, canResumeInterruptedSettle, completeTrackCardExit, prepareTrackPreview, publishTrackCardSession, stopTrackCardAnimation, track, trackCardCoverGeometry, trackCardGeometryReady, trackCardOvershootX, trackCardProgress, trackCardReducedMotion])
 
   const handleCoverPointerMove = useCallback((event: CoverPointerSample) => {
     const gesture = coverDragRef.current
@@ -1014,6 +1273,94 @@ export function PlayerSurface({
       TRACK_CARD_DRAG_LOCK_PX,
     )
 
+    if (nextDirection && gesture.deferredHandoff) {
+      const oldSession = trackCardSessionRef.current
+      const oldProgress = trackCardProgress.get()
+      const currentLayer = artworkSlotsRef.current.find((layer) => (
+        layer?.phase === 'active' && layer.track.id === gesture.originTrackId
+      ))
+      const oldOutgoing = artworkSlotsRef.current.find((layer) => layer?.id === oldSession?.outgoingLayerId)
+      const oldRole: TrackCardRole | null = currentLayer && oldSession
+        ? oldSession.incomingLayerId === currentLayer.id ? 'incoming'
+          : oldSession.outgoingLayerId === currentLayer.id ? 'outgoing' : null
+        : null
+       const regularPose = oldRole && oldSession && trackCardCoverGeometry
+         ? getTrackCardPose(
+             oldRole, oldSession.direction,
+             oldRole === 'outgoing' && oldSession.outgoingReturnToCenter ? 0 : oldProgress,
+            trackCardCoverGeometry.width, trackCardReducedMotion,
+            trackCardCoverGeometry.height, trackCardCoverGeometry.perspective,
+          )
+        : null
+      gesture.handoffPose = regularPose && oldRole && oldSession
+        ? {
+            pose: oldRole === 'outgoing' && oldSession.outgoingHandoff
+              ? mixTrackCardPose(oldSession.outgoingHandoff.pose, regularPose, oldProgress)
+              : oldRole === 'incoming'
+                ? { ...regularPose, xPx: regularPose.xPx + trackCardOvershootX.get() }
+                : regularPose,
+             opacity: oldRole === 'outgoing' && oldSession.outgoingHandoff
+               ? oldSession.outgoingHandoff.opacity
+                 + ((oldSession.outgoingReturnToCenter ? 1 : getTrackCardOpacity(oldRole, oldProgress))
+                   - oldSession.outgoingHandoff.opacity) * oldProgress
+               : getTrackCardOpacity(oldRole, oldProgress),
+            sessionProgress: oldProgress,
+          }
+        : null
+      gesture.handoffLayerId = currentLayer?.id ?? null
+      gesture.interruptedSettle = null
+      gesture.deferredHandoff = false
+      stopTrackCardAnimation()
+      finishRetiringTrackCard()
+      const retiringSession = oldOutgoing?.phase === 'exiting' ? oldSession : null
+      if (retiringSession) retiringTrackCardProgress.set(oldProgress)
+      const intent = currentLayer?.transitionIntent
+      const retiredSession: TrackCardTransitionSession | null = oldSession && intent
+        ? {
+            key: `selection:${intent.requestId}`,
+            outgoingLayerId: oldSession.outgoingLayerId,
+            incomingLayerId: currentLayer.id,
+            direction: intent.direction,
+            kind: 'automatic',
+          }
+        : oldSession
+      flushSync(() => {
+        if (retiringSession) {
+          retiringTrackCardStartedAtRef.current = performance.now()
+          retiringTrackCardSessionRef.current = retiringSession
+          setRetiringTrackCardSession(retiringSession)
+        }
+        if (retiredSession) {
+          retiredTrackCardSessionRef.current = retiredSession
+          setRetiredTrackCardSession(retiredSession)
+        }
+        setTrackCardPreviewToken(null)
+        publishTrackCardSession(currentLayer ? {
+          key: `pending:${gesture.gestureId}:${gesture.revision + 1}`,
+          outgoingLayerId: currentLayer.id,
+          incomingLayerId: -1,
+          direction: nextDirection,
+          kind: 'drag',
+          outgoingHandoff: gesture.handoffPose ?? undefined,
+        } : null)
+      })
+      trackCardProgress.set(0)
+      trackCardOvershootX.set(0)
+      if (retiringSession) {
+        if (oldProgress >= 0.999) {
+          finishRetiringTrackCard()
+        } else {
+          retiringTrackCardAnimationRef.current = animate(retiringTrackCardProgress, 1, {
+            duration: TRACK_CARD_DURATION_SECONDS * Math.max(0.15, 1 - oldProgress),
+            ease: 'linear',
+            onComplete: () => {
+              if (retiringTrackCardSessionRef.current === retiringSession) finishRetiringTrackCard()
+            },
+          })
+        }
+      }
+    }
+
     if (nextDirection !== gesture.direction) {
       gesture.revision += 1
       const revision = gesture.revision
@@ -1026,12 +1373,19 @@ export function PlayerSurface({
       setTrackCardPreviewToken(null)
       stopTrackCardAnimation()
       if (!nextDirection) {
-        if (gesture.interruptedSettle && gesture.handoffPose) {
-          publishTrackCardSession(gesture.interruptedSettle.session)
+        if (gesture.handoffPose && canResumeInterruptedSettle(gesture.interruptedSettle)) {
+          trackCardOvershootX.set(gesture.interruptedOvershootX)
+          publishTrackCardSession(gesture.interruptedSettle!.session)
           trackCardProgress.set(gesture.handoffPose.sessionProgress)
+        } else if (gesture.handoffPose) {
+          // Retain the captured incoming pose until release. Clearing this
+          // role here would snap the half-entered card to the centre.
+          trackCardProgress.set(0)
+          trackCardOvershootX.set(0)
         } else {
           publishTrackCardSession(null)
           trackCardProgress.set(0)
+          trackCardOvershootX.set(0)
         }
         return
       }
@@ -1041,7 +1395,7 @@ export function PlayerSurface({
       // Keep the current card at rest; there is no outgoing-only drag session.
       gesture.signedProgress = 0
       gesture.progress = 0
-      if (!gesture.interruptedSettle || !gesture.handoffPose) trackCardProgress.set(0)
+      if (!gesture.handoffPose || !canResumeInterruptedSettle(gesture.interruptedSettle)) trackCardProgress.set(0)
       const requestedDirection = nextDirection
       void prepareTrackPreview?.(requestedDirection).then((token) => {
         const activeGesture = coverDragRef.current
@@ -1082,20 +1436,29 @@ export function PlayerSurface({
     if (activeSession?.kind === 'drag') {
       trackCardProgress.set(gesture.progress)
     }
-  }, [discardTrackPreview, prepareTrackPreview, publishTrackCardSession, stopTrackCardAnimation, trackCardProgress])
+  }, [canResumeInterruptedSettle, discardTrackPreview, finishRetiringTrackCard, prepareTrackPreview, publishTrackCardSession, retiringTrackCardProgress, stopTrackCardAnimation, trackCardCoverGeometry, trackCardOvershootX, trackCardProgress, trackCardReducedMotion])
 
   const handleCoverPointerUp = useCallback((event: CoverPointerSample) => {
     let gesture = coverDragRef.current
-    if (
-      coverInteractionPhaseRef.current !== 'dragging'
-      || !gesture
-      || gesture.pointerId !== event.pointerId
-    ) return
+    if (!gesture || gesture.pointerId !== event.pointerId || gesture.released) return
+    if (coverInteractionPhaseRef.current !== 'dragging') {
+      discardCoverDrag(true)
+      return
+    }
     // WebView may coalesce the last move into pointerup. Always integrate that
     // physical coordinate before deciding direction, velocity or commitment.
+    const releaseAt = performance.now()
+    const finalDeltaX = event.clientX - gesture.latestX
+    const previousVelocityX = gesture.velocityX
+    const sampleAgeMs = releaseAt - gesture.latestAt
     handleCoverPointerMove(event)
     gesture = coverDragRef.current
     if (!gesture || gesture.pointerId !== event.pointerId) return
+    const releaseVelocityX = sampleAgeMs > TRACK_CARD_RELEASE_FRESH_MS
+      ? finalDeltaX / (sampleAgeMs / 1000)
+      : Math.abs(finalDeltaX) >= TRACK_CARD_DRAG_LOCK_PX
+        ? gesture.velocityX
+        : previousVelocityX
     gesture.released = true
     if (gesture.captureElement.hasPointerCapture(event.pointerId)) {
       gesture.captureElement.releasePointerCapture(event.pointerId)
@@ -1139,7 +1502,7 @@ export function PlayerSurface({
     // other state immediately starts the existing rollback settle. Keeping a
     // released gesture alive while waiting for artwork would leave progress
     // ownerless if that asynchronous request never obtained a canvas lease.
-    if (previewLayerReady) commitCoverDrag(gesture)
+    if (previewLayerReady) commitCoverDrag(gesture, releaseVelocityX)
     else discardCoverDrag(true)
   }, [artworkSlots, commitCoverDrag, discardCoverDrag, handleCoverPointerMove, trackCardGeometryReady])
 
@@ -1150,11 +1513,20 @@ export function PlayerSurface({
   const handleCoverLostPointerCapture = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     const gesture = coverDragRef.current
     if (!gesture || gesture.pointerId !== event.pointerId || gesture.released) return
-    // lostpointercapture is not a cancellation signal. WebView can emit it
-    // when DOM interaction roles change; the native pointercancel event owns
-    // cancellation, while pointerup owns completion.
-    gesture.captureLost = true
-  }, [])
+    // WebView may release capture while replacing a child card. Recover once
+    // while the pointer is still pressed; a failed or repeated loss cannot
+    // safely wait for a pointerup that may occur outside this window.
+    if (event.buttons !== 0 && gesture.captureRecoveryAttempts === 0 && gesture.captureElement.isConnected) {
+      gesture.captureRecoveryAttempts += 1
+      try {
+        gesture.captureElement.setPointerCapture(event.pointerId)
+        if (gesture.captureElement.hasPointerCapture(event.pointerId)) return
+      } catch {
+        // The pointer is no longer active, so finish through rollback below.
+      }
+    }
+    discardCoverDrag(true)
+  }, [discardCoverDrag])
   const handleCoverClickCapture = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     if (!suppressCoverClickRef.current) return
     suppressCoverClickRef.current = false
@@ -1183,9 +1555,11 @@ export function PlayerSurface({
     if (!coverDragActive) return
     const handleWindowPointerMove = (event: PointerEvent) => {
       const gesture = coverDragRef.current
-      if (!gesture?.captureLost || gesture.pointerId !== event.pointerId) return
-      if (event.composedPath().includes(gesture.captureElement)) return
-      handleCoverPointerMove(event)
+      if (!gesture || gesture.pointerId !== event.pointerId || event.buttons !== 0) return
+      // A hover event with no pressed buttons proves the release was missed,
+      // even when WebView still incorrectly reports pointer capture. Its new
+      // coordinate is no longer a drag sample, so only roll back the preview.
+      discardCoverDrag(true)
     }
     const handleWindowPointerUp = (event: PointerEvent) => {
       const gesture = coverDragRef.current
@@ -1197,18 +1571,18 @@ export function PlayerSurface({
       if (!gesture || gesture.pointerId !== event.pointerId) return
       handleCoverPointerCancel()
     }
-    window.addEventListener('pointermove', handleWindowPointerMove)
     // Capture release before a synchronous preview/session render can change
     // the event target subtree. The React handler becomes a harmless no-op
     // after this path clears the gesture.
+    window.addEventListener('pointermove', handleWindowPointerMove, true)
     window.addEventListener('pointerup', handleWindowPointerUp, true)
     window.addEventListener('pointercancel', handleWindowPointerCancel, true)
     return () => {
-      window.removeEventListener('pointermove', handleWindowPointerMove)
+      window.removeEventListener('pointermove', handleWindowPointerMove, true)
       window.removeEventListener('pointerup', handleWindowPointerUp, true)
       window.removeEventListener('pointercancel', handleWindowPointerCancel, true)
     }
-  }, [coverDragActive, handleCoverPointerCancel, handleCoverPointerMove, handleCoverPointerUp])
+  }, [coverDragActive, discardCoverDrag, handleCoverPointerCancel, handleCoverPointerUp])
 
   useLayoutEffect(() => {
     if (!trackCardPreviewToken || !previewArtworkReady) return
@@ -1242,6 +1616,12 @@ export function PlayerSurface({
       && activeSession.direction === session.direction
       && activeSession.kind === session.kind,
     )
+    // Resource refreshes can rerun this layout effect for the same painted
+    // pair. Resetting an already live gesture would jump its progress to zero.
+    if (gesture.targetReady && sessionIsCurrent) return
+    // The pointer handoff already initialized the shared MotionValues before
+    // this preview can paint. A layout effect cannot flush React's pending
+    // session update; writing progress here would notify the old DOM roles.
     if (!sessionIsCurrent) publishTrackCardSession(session)
     // Real pixels have reached the target DOM canvas. Begin interaction from
     // the current pointer coordinate so waiting never turns into a visual jump.
@@ -1251,20 +1631,23 @@ export function PlayerSurface({
     gesture.progress = 0
     gesture.velocityX = 0
     gesture.latestAt = performance.now()
-    trackCardProgress.set(0)
-  }, [artworkSlots, previewArtworkReady, publishTrackCardSession, trackCardPreviewToken, trackCardProgress])
+  }, [artworkSlots, previewArtworkReady, publishTrackCardSession, trackCardPreviewToken])
 
   // Automatic navigation can expose the new layer pair while the shared
   // MotionValue still contains the completed pose from the previous session.
   // Reset it before paint; drag navigation already establishes its progress
   // before assigning roles, which is why that path never showed the size jump.
   useLayoutEffect(() => {
-    const outgoing = artworkSlots.find((layer) => layer?.phase === 'exiting')
     const incoming = artworkSlots.find((layer) => layer?.phase === 'active' && layer.transitionIntent)
     const intent = incoming?.transitionIntent
+    const outgoing = intent ? artworkSlots.find((layer) => layer?.phase === 'exiting'
+      && layer.transitionIntent?.requestId === intent.requestId) : null
     if (!outgoing || !incoming || !intent) return
     if (!trackCardGeometryReady) return
     const sessionKey = `selection:${intent.requestId}`
+    if (retiredTrackCardSessionRef.current?.key === sessionKey
+      && retiredTrackCardSessionRef.current.outgoingLayerId === outgoing.id
+      && retiredTrackCardSessionRef.current.incomingLayerId === incoming.id) return
     const activeSession = trackCardSessionRef.current
     const activeGesture = coverDragRef.current
     // A live pointer gesture owns the card pair. Publishing an automatic
@@ -1279,19 +1662,44 @@ export function PlayerSurface({
       && activeSession.direction === intent.direction
       && activeSession.kind === 'automatic'
     ) {
-      if (trackCardProgress.get() >= 0.999) completeTrackCardExit(outgoing.id)
+      const pendingSettle = trackCardSettleRef.current
+      const settlingThisPair = pendingSettle?.target === 1
+        && pendingSettle.session.outgoingLayerId === outgoing.id
+        && pendingSettle.session.incomingLayerId === incoming.id
+        && (pendingSettle.session === activeSession
+          || (pendingSettle.session.kind === 'drag'
+            && pendingSettle.session.key === `drag:${intent.previewTokenId}`))
+        && (trackCardAnimationRef.current !== null || trackCardOvershootAnimationRef.current !== null)
+      if (settlingThisPair || trackCardStartFrameRef.current !== null) return
+      if (trackCardProgress.get() >= 0.999 && trackCardOvershootX.get() === 0) {
+        completeTrackCardExit(outgoing.id)
+      } else {
+        runTrackCardSettle({
+          session: activeSession,
+          target: 1,
+          durationSeconds: trackCardReducedMotion ? 0.08 : TRACK_CARD_DURATION_SECONDS,
+          onComplete: () => completeTrackCardExit(outgoing.id),
+        })
+      }
       return
     }
-    const continuesCommittedDrag = Boolean(
+    const pendingDragSettle = trackCardSettleRef.current
+    const isCommittedDragPair = Boolean(
       intent.previewTokenId !== undefined
       && activeSession?.kind === 'drag'
+      && activeSession.key === `drag:${intent.previewTokenId}`
       && activeSession.outgoingLayerId === outgoing.id
       && activeSession.incomingLayerId === incoming.id
       && activeSession.direction === intent.direction
-      && trackCardSettleRef.current?.target === 1
-      && trackCardSettleRef.current.session === activeSession,
     )
-    if (continuesCommittedDrag) {
+    const continuesCommittedDrag = isCommittedDragPair
+      && pendingDragSettle?.target === 1
+      && pendingDragSettle.session === activeSession
+    const completedCommittedDrag = isCommittedDragPair
+      && !pendingDragSettle
+      && trackCardProgress.get() >= 0.999
+      && trackCardOvershootX.get() === 0
+    if (continuesCommittedDrag || completedCommittedDrag) {
       // Committing a prepared drag promotes the same preview layer pair into
       // the selection transition. Only re-key the session: resetting progress
       // here would replay the whole animation after pointerup instead of
@@ -1305,11 +1713,12 @@ export function PlayerSurface({
         outgoingHandoff: activeSession?.outgoingHandoff,
       })
       setTrackCardPreviewToken(null)
+      if (completedCommittedDrag) completeTrackCardExit(outgoing.id)
       return
     }
     // Drag rollback/cleanup retains ownership until its session is removed.
-    // A mismatched promoted pair is stale and must be handled by the existing
-    // cancellation/stale-session paths instead of falling through to auto.
+    // An ownerless drag is retired by the stale-session effect below before
+    // this automatic pair can take ownership.
     if (activeSession?.kind === 'drag') return
     stopTrackCardAnimation()
     const runId = trackCardRunIdRef.current
@@ -1321,6 +1730,7 @@ export function PlayerSurface({
       kind: 'automatic',
     }
     trackCardProgress.set(0)
+    trackCardOvershootX.set(0)
     // Register the layer pair in the same commit that exposes it. Artwork and
     // metadata can settle before the next frame; leaving the session unowned
     // until then lets that render enter this branch again, cancel the pending
@@ -1342,30 +1752,55 @@ export function PlayerSurface({
     publishTrackCardSession,
     runTrackCardSettle,
     stopTrackCardAnimation,
+    trackCardOvershootX,
     trackCardProgress,
     trackCardReducedMotion,
     trackCardGeometryReady,
     trackCardSession,
   ])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!trackCardSession) return
     if (
       trackCardSession.kind === 'drag'
       && trackCardSession.incomingLayerId < 0
     ) return
-    const layerIds = new Set(artworkSlots.filter(Boolean).map((layer) => layer!.id))
-    if (layerIds.has(trackCardSession.outgoingLayerId) && layerIds.has(trackCardSession.incomingLayerId)) return
-    const staleSessionKey = trackCardSession.key
-    const frameId = requestAnimationFrame(() => {
-      if (trackCardSessionRef.current?.key !== staleSessionKey) return
-      stopTrackCardAnimation()
-      publishTrackCardSession(null)
-      setTrackCardPreviewToken(null)
-      trackCardProgress.set(0)
-    })
-    return () => cancelAnimationFrame(frameId)
-  }, [artworkSlots, publishTrackCardSession, stopTrackCardAnimation, trackCardProgress, trackCardSession])
+    if (coverDragRef.current && !coverDragRef.current.released) return
+    if (hasValidTrackCardSessionPair(trackCardSession)) return
+    if (!trackCardSessionRef.current || !trackCardSessionsMatch(trackCardSessionRef.current, trackCardSession)) return
+    const outgoing = artworkSlots.find((layer) => layer?.id === trackCardSession.outgoingLayerId)
+    const incoming = artworkSlots.find((layer) => layer?.id === trackCardSession.incomingLayerId)
+    if (
+      trackCardSession.kind === 'drag'
+      && outgoing?.phase === 'exiting'
+      && incoming?.phase === 'active'
+      && selectionMatchesTrackCardSession(trackCardSession, incoming.track.id)
+    ) {
+      // The preview was committed, but its prior animation owner disappeared.
+      // Continue from the painted pose so the old card cannot remain midway.
+      if (trackCardProgress.get() >= 0.999 && trackCardOvershootX.get() === 0) {
+        completeTrackCardExit(outgoing.id)
+      } else {
+        runTrackCardSettle({
+          session: trackCardSession,
+          target: 1,
+          durationSeconds: trackCardReducedMotion ? 0.08 : TRACK_CARD_DURATION_SECONDS,
+          onComplete: () => completeTrackCardExit(outgoing.id),
+        })
+      }
+      return
+    }
+    stopTrackCardAnimation()
+    if (outgoing?.phase === 'exiting') completeTrackCardExit(outgoing.id)
+    discardTrackPreview?.(trackCardPreviewToken?.id ?? -1)
+    publishTrackCardSession(null)
+    // The stale render roles must disappear before resetting shared progress.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setTrackCardPreviewToken(null)
+    trackCardProgress.set(0)
+    trackCardOvershootX.set(0)
+    coverInteractionPhaseRef.current = 'idle'
+  }, [artworkSlots, completeTrackCardExit, discardTrackPreview, hasValidTrackCardSessionPair, playback.selectionActivitySequence, playback.selectionVisualIntent, publishTrackCardSession, runTrackCardSettle, selectionMatchesTrackCardSession, stopTrackCardAnimation, track?.id, trackCardOvershootX, trackCardPreviewToken?.id, trackCardProgress, trackCardReducedMotion, trackCardSession])
 
   useEffect(() => {
     const cancel = () => discardCoverDrag(true)
@@ -1383,7 +1818,7 @@ export function PlayerSurface({
   // Session state schedules React renders, but the ref is the synchronous
   // source of truth for role assignment. In particular, preview insertion can
   // render before its paired state update commits in production Win32 builds.
-  const renderedTrackCardSession = resolveRenderedTrackCardSession(
+  const candidateTrackCardSession = resolveRenderedTrackCardSession(
     // Intentional live render snapshot: publishTrackCardSession updates this
     // ref before scheduling state, closing the production batching race.
     // eslint-disable-next-line react-hooks/refs
@@ -1391,6 +1826,154 @@ export function PlayerSurface({
     artworkSlots,
     trackCardPreviewToken,
   )
+  const renderedTrackCardSession = candidateTrackCardSession && retiredTrackCardSession
+    && trackCardSessionsMatch(candidateTrackCardSession, retiredTrackCardSession)
+    ? null
+    : candidateTrackCardSession
+
+  // MotionValue updates do not render React. Reconcile the pair that is
+  // actually painted, even if its animation callback or live session was lost.
+  // A captured pointer may be held still beyond a normal settle; a separate
+  // idle bound covers WebView releases that deliver no pointer event at all.
+  const renderedTrackCardKey = renderedTrackCardSession?.key ?? null
+  const renderedOutgoingLayerId = renderedTrackCardSession?.outgoingLayerId ?? null
+  const renderedIncomingLayerId = renderedTrackCardSession?.incomingLayerId ?? null
+  const renderedTrackCardDirection = renderedTrackCardSession?.direction ?? null
+  const renderedTrackCardKind = renderedTrackCardSession?.kind ?? null
+  useEffect(() => {
+    const session: TrackCardTransitionSession | null = renderedTrackCardKey !== null
+      && renderedOutgoingLayerId !== null && renderedIncomingLayerId !== null
+      && renderedTrackCardDirection !== null && renderedTrackCardKind !== null
+      ? {
+          key: renderedTrackCardKey,
+          outgoingLayerId: renderedOutgoingLayerId,
+          incomingLayerId: renderedIncomingLayerId,
+          direction: renderedTrackCardDirection,
+          kind: renderedTrackCardKind,
+        }
+      : null
+    if (!session && !coverDragActive) return
+    const startedAt = performance.now()
+    let disposed = false
+    const reconcile = () => {
+      if (disposed) return
+      const now = performance.now()
+      const outgoing = session
+        ? artworkSlotsRef.current.find((layer) => layer?.id === session.outgoingLayerId)
+        : null
+      const incoming = session
+        ? artworkSlotsRef.current.find((layer) => layer?.id === session.incomingLayerId)
+        : null
+      const committedPair = outgoing?.phase === 'exiting'
+        && incoming?.phase === 'active'
+        && incoming.track.id === latestTrackContextRef.current.trackId
+      const gesture = coverDragRef.current
+      if (gesture && !gesture.released) {
+        const captured = gesture.captureElement.isConnected
+          && gesture.captureElement.hasPointerCapture(gesture.pointerId)
+        if (committedPair && gesture.originTrackId !== latestTrackContextRef.current.trackId) {
+          // The logical selection has already advanced. An orphaned pointer
+          // cannot own this pair, even when WebView still reports capture.
+          gesture.released = true
+          coverDragRef.current = null
+          if (captured) gesture.captureElement.releasePointerCapture(gesture.pointerId)
+          if (gesture.token) {
+            discardTrackPreview?.(gesture.token.id)
+            setTrackCardPreviewToken((current) => current?.id === gesture.token?.id ? null : current)
+          }
+          setCoverDragActive(false)
+          coverInteractionPhaseRef.current = 'settling'
+        } else if (
+          gesture.originTrackId !== latestTrackContextRef.current.trackId
+          || coverInteractionPhaseRef.current !== 'dragging'
+          || (!captured && now - gesture.latestAt > 250)
+          || now - gesture.latestAt > TRACK_CARD_CAPTURE_IDLE_DEADLINE_MS
+        ) {
+          discardCoverDrag(true)
+          return
+        } else if (!committedPair) {
+          // A current captured drag keeps its pose until a release signal or
+          // the bounded idle limit above, whichever arrives first.
+          return
+        }
+      }
+      if (!session || now - startedAt < TRACK_CARD_SETTLE_DEADLINE_MS) return
+      const liveSession = trackCardSessionRef.current
+      const currentGesture = coverDragRef.current
+      const gestureOwnsMotion = Boolean(currentGesture && !currentGesture.released
+        && currentGesture.originTrackId === latestTrackContextRef.current.trackId
+        && coverInteractionPhaseRef.current === 'dragging')
+      const liveSettle = trackCardSettleRef.current
+      const differentLiveIsCurrent = Boolean(liveSession
+        && !trackCardSessionsMatch(liveSession, session)
+        && hasValidTrackCardSessionPair(liveSession)
+        && (liveSession.kind === 'automatic'
+          || (gestureOwnsMotion && currentGesture?.token
+            && liveSession.key === `drag:${currentGesture.token.id}`)
+          || liveSettle?.session === liveSession))
+      // A mismatched ref is preserved only when it owns a real, newer pair.
+      // Otherwise it must not republish the retired cards on the next render.
+      const ownsMotion = !differentLiveIsCurrent && !gestureOwnsMotion
+      if (ownsMotion) stopTrackCardAnimation()
+      if (committedPair) {
+        completeTrackCardExit(outgoing.id)
+        // Resource exit completion may be ignored after a rapid phase reuse.
+        // Retire this exact painted pair before touching the shared progress,
+        // so even a still-present exiting resource cannot retain a mid-pose.
+        flushSync(() => {
+          setRetiredExitingLayerIds((current) => current.has(outgoing.id)
+            ? current : new Set(current).add(outgoing.id))
+          retiredTrackCardSessionRef.current = session
+          setRetiredTrackCardSession(session)
+          if (!differentLiveIsCurrent) publishTrackCardSession(null)
+        })
+        if (gestureOwnsMotion && currentGesture) {
+          currentGesture.handoffPose = null
+          currentGesture.interruptedSettle = null
+          currentGesture.interruptedOvershootX = 0
+        }
+        if (ownsMotion) {
+          trackCardProgress.set(0)
+          trackCardOvershootX.set(0)
+          coverInteractionPhaseRef.current = 'idle'
+        }
+        return
+      }
+      if (outgoing?.phase === 'exiting') completeTrackCardExit(outgoing.id)
+      if (session.kind === 'drag' && trackCardPreviewToken?.id !== undefined
+        && session.key === `drag:${trackCardPreviewToken.id}`) {
+        discardTrackPreview?.(trackCardPreviewToken.id)
+        setTrackCardPreviewToken((current) => current?.id === trackCardPreviewToken.id ? null : current)
+      }
+      if (!differentLiveIsCurrent) publishTrackCardSession(null)
+      if (ownsMotion) {
+        trackCardProgress.set(0)
+        trackCardOvershootX.set(0)
+        coverInteractionPhaseRef.current = 'idle'
+      }
+    }
+    const intervalId = window.setInterval(reconcile, 100)
+    return () => {
+      disposed = true
+      window.clearInterval(intervalId)
+    }
+  }, [
+    completeTrackCardExit,
+    coverDragActive,
+    discardCoverDrag,
+    discardTrackPreview,
+    hasValidTrackCardSessionPair,
+    publishTrackCardSession,
+    renderedTrackCardKey,
+    renderedOutgoingLayerId,
+    renderedIncomingLayerId,
+    renderedTrackCardDirection,
+    renderedTrackCardKind,
+    stopTrackCardAnimation,
+    trackCardOvershootX,
+    trackCardPreviewToken?.id,
+    trackCardProgress,
+  ])
 
   const cancelPlaybackTransition = useCallback(() => {
     playbackTransitionRequestRef.current = null
@@ -1531,10 +2114,6 @@ export function PlayerSurface({
     playbackTransitionRequestRef.current = null
   }, [])
 
-  const preservePendingOutgoingOpacity = Boolean(
-    renderedTrackCardSession?.kind === 'drag'
-    && renderedTrackCardSession.incomingLayerId < 0,
-  )
   const playlistTransportOnlyBusy = Boolean(
     playlist.isOpen
     && track
@@ -1558,12 +2137,20 @@ export function PlayerSurface({
         {artworkSlots.map((layer, slot) => (
           <AmbientArtwork
             key={`ambient-slot:${slot}`}
-            layer={layer}
-            role={layer && renderedTrackCardSession?.outgoingLayerId === layer.id
+            layer={layer?.phase === 'exiting' && retiredExitingLayerIds.has(layer.id) ? null : layer}
+            role={layer && retiringTrackCardSession?.outgoingLayerId === layer.id && layer.phase === 'exiting'
+              ? 'outgoing'
+              : layer && renderedTrackCardSession?.outgoingLayerId === layer.id
               ? 'outgoing'
               : layer && renderedTrackCardSession?.incomingLayerId === layer.id ? 'incoming' : null}
-            progress={trackCardProgress}
-            preserveOutgoingOpacity={preservePendingOutgoingOpacity}
+            progress={retiringTrackCardSession?.outgoingLayerId === layer?.id && layer?.phase === 'exiting'
+              ? retiringTrackCardProgress : trackCardProgress}
+            outgoingHandoffOpacity={retiringTrackCardSession?.outgoingLayerId === layer?.id && layer?.phase === 'exiting'
+              ? retiringTrackCardSession?.outgoingHandoff?.opacity
+              : renderedTrackCardSession?.outgoingLayerId === layer?.id
+                ? renderedTrackCardSession?.outgoingHandoff?.opacity : undefined}
+            outgoingReturnToCenter={retiringTrackCardSession?.outgoingLayerId === layer?.id && layer?.phase === 'exiting'
+              ? retiringTrackCardSession?.outgoingReturnToCenter : renderedTrackCardSession?.outgoingReturnToCenter}
           />
         ))}
         {playlist.isOpen ? artworkSlots.map((layer, slot) => (
@@ -1614,8 +2201,15 @@ export function PlayerSurface({
                     perspectiveOrigin: `${trackCardCoverGeometry.centerX}px ${trackCardCoverGeometry.centerY}px`,
                   } : undefined}
                 >
-                  {artworkSlots.filter((layer): layer is ArtworkVisualLayer => layer !== null).map((layer) => {
-                    const role: TrackCardRole | null = renderedTrackCardSession?.outgoingLayerId === layer.id
+                  {artworkSlots.filter((layer): layer is ArtworkVisualLayer => (
+                    layer !== null && !(layer.phase === 'exiting' && retiredExitingLayerIds.has(layer.id))
+                  )).map((layer) => {
+                    const retiringLayer = layer.phase === 'exiting'
+                      && retiringTrackCardSession?.outgoingLayerId === layer.id
+                    const layerSession = retiringLayer ? retiringTrackCardSession : renderedTrackCardSession
+                    const role: TrackCardRole | null = retiringLayer
+                      ? 'outgoing'
+                      : renderedTrackCardSession?.outgoingLayerId === layer.id
                       ? 'outgoing'
                       : renderedTrackCardSession?.incomingLayerId === layer.id ? 'incoming' : null
                     const acceptsDrag = layer.phase === 'active'
@@ -1630,18 +2224,26 @@ export function PlayerSurface({
                         onReady={markArtworkReady}
                         onLoadError={markArtworkLoadError}
                         role={role}
-                        direction={renderedTrackCardSession?.direction ?? 1}
-                        progress={trackCardProgress}
+                        direction={layerSession?.direction ?? 1}
+                        progress={retiringLayer ? retiringTrackCardProgress : trackCardProgress}
+                        overshootX={trackCardOvershootX}
                         reducedMotion={trackCardReducedMotion}
                         coverGeometry={trackCardGeometryReady && trackCardCoverGeometry
                           ? trackCardCoverGeometry
                           : null}
                         acceptsDrag={acceptsDrag}
-                        preserveOutgoingOpacity={preservePendingOutgoingOpacity}
-                        outgoingHandoff={role === 'outgoing' ? renderedTrackCardSession?.outgoingHandoff : undefined}
+                        outgoingHandoff={role === 'outgoing' ? layerSession?.outgoingHandoff : undefined}
+                        outgoingReturnToCenter={layerSession?.outgoingReturnToCenter}
                         onMoreOpenChange={layer.phase === 'active' ? handleMoreOpenChange : undefined}
                         moreOpen={layer.phase === 'active' && role === null && moreMenuOpen}
-                        ownsPlayerViewTransition={playerViewTransitionOwnerIds.has(layer.id)}
+                        ownsPlayerViewTransition={
+                          !coverDragActive
+                          && renderedTrackCardSession === null
+                          && trackCardPreviewToken === null
+                          && layer.phase === 'active'
+                          && layer.track.id === track.id
+                          && playerViewTransitionOwnerIds.has(layer.id)
+                        }
                       />
                     )
                   })}

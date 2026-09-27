@@ -1047,14 +1047,6 @@ export function useAudioPlayer() {
 
   const settleSelectionFailure = useCallback((requestId: number, error: AudioCommandError) => {
     if (!selectionIsCurrent(requestId)) return
-    if (error.code === 'SUPERSEDED') {
-      pendingSelectionRef.current = null
-      audioSelectionInProgressRef.current = false
-      setSelectionPending(false)
-      setAudioBusy(false)
-      commitDetailsPending(false)
-      return
-    }
     const pending = pendingSelectionRef.current
     if (stagedTrackDetailsRef.current?.requestId === requestId) {
       stagedTrackDetailsRef.current = null
@@ -1069,6 +1061,8 @@ export function useAudioPlayer() {
       && pending?.previousPresentationTrack
       && latestAudioStateRef.current?.currentTrackId === pending.previousPresentationTrack.id
     ) {
+      logicalCursorTrackIdRef.current = pending.previousPresentationTrack.id
+      desiredAudioTrackIdRef.current = pending.previousPresentationTrack.id
       presentationTrackRef.current = pending.previousPresentationTrack
       presentationArtworkRef.current = pending.previousArtwork
       if (pending.previousAudioTrack?.id === pending.previousPresentationTrack.id) {
@@ -1124,9 +1118,11 @@ export function useAudioPlayer() {
         commitDetailsPending(false)
       }
     } else {
+      logicalCursorTrackIdRef.current = latestAudioStateRef.current?.currentTrackId ?? null
+      desiredAudioTrackIdRef.current = latestAudioStateRef.current?.currentTrackId ?? null
       clearPresentationTrack(error.code === 'USER_CANCELLED' ? 'empty' : 'error')
     }
-    commitAudioError(error)
+    if (error.code !== 'SUPERSEDED') commitAudioError(error)
   }, [
     clearPresentationTrack,
     commitAudioError,
@@ -1820,7 +1816,9 @@ export function useAudioPlayer() {
       && target.id === token.targetTrackId,
     )
     preparedTrackCardPreviewRef.current = null
-    if (!valid || !playlist || !target) return false
+    if (!valid || !playlist || !target
+      || transportOperationInProgress()
+      || timelineInteractionRef.current === 'seeking') return false
     const hydratedTarget = hydratedCacheGet(hydratedAudioTrackCacheRef.current, target.sourcePath)
     const committedTrack = hydratedTarget ? audioTrackToTrack(hydratedTarget) : token.track
     const committedArtwork = hydratedTarget ? prefetchArtworkFromTrack(committedTrack) : token.artwork

@@ -507,6 +507,7 @@ type CoverDragGesture = {
   released: boolean
   captureRecoveryAttempts: number
   deferredHandoff: boolean
+  interruptedRollbackTokenId: number | null
   interruptedSettle: TrackCardSettleContext | null
   interruptedOvershootX: number
   handoffLayerId: number | null
@@ -517,7 +518,8 @@ type CoverDragGesture = {
 type CoverPointerSample = Pick<PointerEvent, 'clientX' | 'pointerId'>
 
 const TRACK_CARD_DURATION_SECONDS = 0.3
-const TRACK_CARD_CANCEL_SECONDS = 0.19
+const TRACK_CARD_CANCEL_SECONDS = 0.38
+const TRACK_CARD_RECENTER_SECONDS = 0.19
 const TRACK_CARD_DRAG_LOCK_PX = 6
 const TRACK_CARD_COMMIT_PROGRESS = 0.28
 const TRACK_CARD_COMMIT_VELOCITY = 650
@@ -879,9 +881,10 @@ export function PlayerSurface({
     }
     const controls = animate(trackCardProgress, target, {
       duration: durationSeconds,
-      // Progress is deliberately linear: card opacity owns exact 10%/90%
-      // timing windows and drag gestures share this same raw timeline.
-      ease: 'linear',
+      // A canceled drag returns from its release pose with a visible,
+      // decelerating finish. Completed transitions keep their linear timeline
+      // because card opacity owns exact 10%/90% timing windows.
+      ease: target === 0 ? 'easeOut' : 'linear',
       onComplete: () => {
         if (trackCardRunIdRef.current !== runId) return
         if (trackCardAnimationRef.current === controls) trackCardAnimationRef.current = null
@@ -909,18 +912,25 @@ export function PlayerSurface({
     trackCardSettleRef.current = context
     coverInteractionPhaseRef.current = 'settling'
     const distance = Math.abs(context.target - trackCardProgress.get())
+    // Scaling a sub-threshold rollback by distance reduced it to 29–53 ms.
+    // The release pose already encodes the traveled distance; animate that
+    // pose all the way home on the cancellation timeline instead.
+    const durationSeconds = context.target === 0
+      ? context.durationSeconds * appearance.motion.durationScale
+      : context.durationSeconds * Math.max(0.15, distance)
     animateTrackCardProgress(
       context.target,
-      context.durationSeconds * Math.max(0.15, distance),
+      durationSeconds,
       () => {
         if (trackCardSettleRef.current !== context) return
         trackCardSettleRef.current = null
-        coverInteractionPhaseRef.current = coverDragRef.current?.deferredHandoff ? 'dragging' : 'idle'
+        coverInteractionPhaseRef.current = coverDragRef.current && !coverDragRef.current.released
+          ? 'dragging' : 'idle'
         context.onComplete()
       },
       context.target === 1 ? context.overshootPx : 0,
     )
-  }, [animateTrackCardProgress, trackCardProgress])
+  }, [animateTrackCardProgress, appearance.motion.durationScale, trackCardProgress])
 
   const hardResetTrackCardInteraction = useCallback(() => {
     const gesture = coverDragRef.current
@@ -1016,6 +1026,9 @@ export function PlayerSurface({
     }
     const cleanup = () => {
       discardTrackPreview?.(gesture.token?.id ?? -1)
+      const waitingRollbackGesture = coverDragRef.current?.interruptedRollbackTokenId === gesture.token?.id
+        ? coverDragRef.current : null
+      if (waitingRollbackGesture) waitingRollbackGesture.interruptedRollbackTokenId = null
       suppressCoverClickRef.current = false
       if (gesture.handoffPose && canResumeInterruptedSettle(gesture.interruptedSettle)) {
         setTrackCardPreviewToken((current) => current?.id === gesture.token?.id ? null : current)
@@ -1033,7 +1046,11 @@ export function PlayerSurface({
         })
         trackCardProgress.set(0)
         trackCardOvershootX.set(0)
-        coverInteractionPhaseRef.current = coverDragRef.current?.deferredHandoff ? 'dragging' : 'idle'
+        if (waitingRollbackGesture && coverDragRef.current === waitingRollbackGesture) {
+          waitingRollbackGesture.deferredHandoff = false
+        }
+        coverInteractionPhaseRef.current = coverDragRef.current && !coverDragRef.current.released
+          ? 'dragging' : 'idle'
       }
       const activeLayer = artworkSlotsRef.current.find((layer) => layer?.id === gesture.handoffLayerId
         && layer.phase === 'active' && layer.track.id === gesture.originTrackId)
@@ -1059,7 +1076,7 @@ export function PlayerSurface({
         runTrackCardSettle({
           session: recenterSession,
           target: 1,
-          durationSeconds: trackCardReducedMotion ? 0 : TRACK_CARD_CANCEL_SECONDS,
+          durationSeconds: trackCardReducedMotion ? 0 : TRACK_CARD_RECENTER_SECONDS,
           onComplete: clearSession,
         })
         return
@@ -1139,8 +1156,21 @@ export function PlayerSurface({
     let interruptedSession = trackCardSessionRef.current
     let interruptedSettle = trackCardSettleRef.current
     const interruptedProgress = trackCardProgress.get()
+    // A press during rollback has not chosen a new drag yet. Keep the old
+    // pair moving until the pointer crosses the lock threshold, then hand its
+    // current pose to the new gesture instead of snapping progress to zero.
+    const interruptedRollbackTokenId = interruptedSettle?.target === 0
+      && interruptedSettle.session === interruptedSession
+      && trackCardPreviewToken
+      && interruptedSession?.key === `drag:${trackCardPreviewToken.id}`
+      && artworkSlots.some((layer) => layer?.id === interruptedSession?.outgoingLayerId
+        && layer?.phase === 'active' && layer.track.id === track.id)
+      && artworkSlots.some((layer) => layer?.id === interruptedSession?.incomingLayerId
+        && layer?.phase === 'preview' && layer.previewTokenId === trackCardPreviewToken.id)
+      ? trackCardPreviewToken.id : null
     const deferredHandoff = Boolean(interruptedSession && (
       canResumeInterruptedSettle(interruptedSettle)
+      || interruptedRollbackTokenId !== null
       || (interruptedSession.outgoingReturnToCenter
         && artworkSlots.some((layer) => layer?.id === interruptedSession?.outgoingLayerId
           && layer?.phase === 'active' && layer.track.id === track.id))
@@ -1227,6 +1257,7 @@ export function PlayerSurface({
       released: false,
       captureRecoveryAttempts: 0,
       deferredHandoff,
+      interruptedRollbackTokenId,
       interruptedSettle: canResumeInterruptedSettle(interruptedSettle)
         ? { ...interruptedSettle!, overshootPx: 0 }
         : null,
@@ -1238,7 +1269,7 @@ export function PlayerSurface({
     setCoverDragActive(true)
     coverInteractionPhaseRef.current = 'dragging'
     suppressCoverClickRef.current = false
-  }, [artworkSlots, canResumeInterruptedSettle, completeTrackCardExit, prepareTrackPreview, publishTrackCardSession, stopTrackCardAnimation, track, trackCardCoverGeometry, trackCardGeometryReady, trackCardOvershootX, trackCardProgress, trackCardReducedMotion])
+  }, [artworkSlots, canResumeInterruptedSettle, completeTrackCardExit, prepareTrackPreview, publishTrackCardSession, stopTrackCardAnimation, track, trackCardCoverGeometry, trackCardGeometryReady, trackCardOvershootX, trackCardPreviewToken, trackCardProgress, trackCardReducedMotion])
 
   const handleCoverPointerMove = useCallback((event: CoverPointerSample) => {
     const gesture = coverDragRef.current
@@ -1344,6 +1375,12 @@ export function PlayerSurface({
           outgoingHandoff: gesture.handoffPose ?? undefined,
         } : null)
       })
+      // The old rollback callback no longer runs after this handoff, so its
+      // preview lease must be retired by the new gesture.
+      if (gesture.interruptedRollbackTokenId !== null) {
+        discardTrackPreview?.(gesture.interruptedRollbackTokenId)
+        gesture.interruptedRollbackTokenId = null
+      }
       trackCardProgress.set(0)
       trackCardOvershootX.set(0)
       if (retiringSession) {
@@ -1623,15 +1660,31 @@ export function PlayerSurface({
     // this preview can paint. A layout effect cannot flush React's pending
     // session update; writing progress here would notify the old DOM roles.
     if (!sessionIsCurrent) publishTrackCardSession(session)
-    // Real pixels have reached the target DOM canvas. Begin interaction from
-    // the current pointer coordinate so waiting never turns into a visual jump.
+    // The pointer has kept moving while the target canvas was prepared. Keep
+    // the displacement from pointerdown: rebasing startX here makes a slow
+    // drag lose most of its distance and fail the release threshold.
     gesture.targetReady = true
-    gesture.startX = gesture.latestX
-    gesture.signedProgress = 0
-    gesture.progress = 0
+    gesture.signedProgress = Math.min(0.96, Math.max(-0.96,
+      (gesture.startX - gesture.latestX) / (gesture.coverWidth * 0.55),
+    ))
+    gesture.progress = Math.abs(gesture.signedProgress)
     gesture.velocityX = 0
     gesture.latestAt = performance.now()
   }, [artworkSlots, previewArtworkReady, publishTrackCardSession, trackCardPreviewToken])
+
+  useLayoutEffect(() => {
+    const gesture = coverDragRef.current
+    if (
+      !gesture?.targetReady
+      || gesture.released
+      || !gesture.token
+      || trackCardSession?.key !== `drag:${gesture.token.id}`
+      || trackCardSessionRef.current !== trackCardSession
+    ) return
+    // The new pair's subscribers are mounted now. Applying the accumulated
+    // distance in the readiness effect would move the previous pair instead.
+    trackCardProgress.set(gesture.progress)
+  }, [trackCardProgress, trackCardSession])
 
   // Automatic navigation can expose the new layer pair while the shared
   // MotionValue still contains the completed pose from the previous session.

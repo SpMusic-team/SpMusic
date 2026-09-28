@@ -32,7 +32,7 @@ const FLAG_ORIENTATION_APPLIED: u32 = 1 << 0;
 const FLAG_RESIZED: u32 = 1 << 1;
 
 const ALLOWED_MAX_EDGES: [u32; 7] = [256, 512, 768, 1024, 1536, 2048, 3072];
-const ALLOWED_PLAYLIST_MAX_EDGES: [u32; 2] = [256, 512];
+const ALLOWED_PLAYLIST_MAX_EDGES: [u32; 3] = [128, 256, 512];
 const MAX_PLAYLIST_CLIENTS: usize = 16;
 
 static REQUEST_COORDINATOR: OnceLock<CoverRequestCoordinator> = OnceLock::new();
@@ -364,8 +364,16 @@ fn validate_playlist_max_edge(max_edge: u32) -> Result<(), CoverPixelsError> {
     } else {
         Err(CoverPixelsError::recoverable(
             CoverPixelsErrorCode::InvalidMaxEdge,
-            "playlist cover maxEdge must be 256 or 512",
+            "playlist cover maxEdge must be 128, 256, or 512",
         ))
+    }
+}
+
+fn validate_decode_max_edge(max_edge: u32) -> Result<(), CoverPixelsError> {
+    if ALLOWED_PLAYLIST_MAX_EDGES.contains(&max_edge) {
+        Ok(())
+    } else {
+        validate_max_edge(max_edge)
     }
 }
 
@@ -532,7 +540,7 @@ fn read_bounded_file(path: &Path) -> Result<Vec<u8>, CoverPixelsError> {
 }
 
 fn decode_and_pack(bytes: &[u8], max_edge: u32) -> Result<Vec<u8>, CoverPixelsError> {
-    validate_max_edge(max_edge)?;
+    validate_decode_max_edge(max_edge)?;
 
     let mut reader = ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()
@@ -617,7 +625,7 @@ fn scaled_dimensions(
     height: u32,
     max_edge: u32,
 ) -> Result<(u32, u32), CoverPixelsError> {
-    validate_max_edge(max_edge)?;
+    validate_decode_max_edge(max_edge)?;
     if width == 0 || height == 0 {
         return Err(CoverPixelsError::recoverable(
             CoverPixelsErrorCode::InvalidImage,
@@ -879,6 +887,19 @@ mod tests {
     }
 
     #[test]
+    fn playlist_thumbnail_128_scales_and_packs_with_existing_protocol() {
+        validate_playlist_max_edge(128).expect("128 px playlist thumbnail is allowed");
+        let response = decode_and_pack(&png_bytes(400, 200), 128).expect("decode fixture");
+
+        assert_eq!(u32_at(&response, 8), 128);
+        assert_eq!(u32_at(&response, 12), 64);
+        assert_eq!(u32_at(&response, 16), 512);
+        assert_eq!(u32_at(&response, 24), 128 * 64 * 4);
+        assert_eq!(u32_at(&response, 28), FLAG_RESIZED);
+        assert_eq!(response.len(), 40 + 128 * 64 * 4);
+    }
+
+    #[test]
     fn exif_orientation_is_applied_before_scaling_and_packing() {
         let response =
             decode_and_pack(&jpeg_with_orientation(2, 1, 6), 256).expect("decode oriented fixture");
@@ -916,11 +937,13 @@ mod tests {
 
     #[test]
     fn max_edge_is_discrete_and_bounded() {
+        assert!(validate_max_edge(128).is_err());
         assert!(validate_max_edge(256).is_ok());
         assert!(validate_max_edge(3072).is_ok());
         assert!(validate_max_edge(255).is_err());
         assert!(validate_max_edge(3000).is_err());
         assert!(validate_max_edge(3073).is_err());
+        assert!(validate_playlist_max_edge(128).is_ok());
         assert!(validate_playlist_max_edge(256).is_ok());
         assert!(validate_playlist_max_edge(512).is_ok());
         assert!(validate_playlist_max_edge(768).is_err());

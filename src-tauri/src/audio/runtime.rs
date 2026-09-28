@@ -506,7 +506,7 @@ impl AudioRuntime {
             let file_name = track.file_name.clone();
             self.current_path = Some(normalized_path);
             self.current_track = Some(track);
-            self.sink = Some(sink);
+            self.install_prepared_sink(sink);
             self.accumulated = Duration::ZERO;
             self.started_at = Some(Instant::now());
             self.phase = AudioPlaybackPhase::Playing;
@@ -1125,6 +1125,13 @@ impl AudioRuntime {
         self.current_track = None;
         self.accumulated = Duration::ZERO;
         self.started_at = None;
+    }
+
+    fn install_prepared_sink(&mut self, sink: Sink) {
+        self.sink = Some(sink);
+        // Preparation may have used the previous track's pause/fade gain.
+        // The commit resets transport gain, so synchronize the new sink before play.
+        self.apply_effective_volume();
     }
 
     fn apply_effective_volume(&self) {
@@ -1818,6 +1825,31 @@ mod tests {
         assert_eq!(runtime.transport_gain, 0.25);
         assert_eq!(runtime.volume, 0.6);
         assert_eq!(state.volume, 0.6);
+    }
+
+    #[test]
+    fn replacement_sink_restores_user_volume_after_paused_or_fading_track() {
+        for (phase, old_gain) in [
+            (AudioPlaybackPhase::Paused, 0.0),
+            (AudioPlaybackPhase::Playing, 0.4),
+        ] {
+            let mut runtime = AudioRuntime {
+                phase,
+                volume: 0.6,
+                transport_gain: old_gain,
+                ..AudioRuntime::default()
+            };
+            let (sink, _queue) = Sink::new_idle();
+            // Preparation inherits the outgoing track's gain before the
+            // latest-intent commit invalidates that track.
+            sink.set_volume(runtime.volume * runtime.transport_gain);
+
+            runtime.invalidate_loaded_audio();
+            runtime.install_prepared_sink(sink);
+
+            assert_eq!(runtime.transport_gain, 1.0);
+            assert_eq!(runtime.sink.as_ref().unwrap().volume(), 0.6);
+        }
     }
 
     #[test]

@@ -23,6 +23,7 @@ import { appCopy } from '@/features/player/model/playerCopy'
 import type {
   PlayerContentState,
   PlayerTimelineInteraction,
+  PlaylistArtworkDemand,
   PlaylistCoverImage,
   PlaylistTrackMetadata,
   PlaylistTrackVisual,
@@ -44,6 +45,7 @@ import {
   getAudioOutputInfo,
   getCurrentAudioTrack,
   hydrateAudioTrack,
+  isAudioCoverPixelsError,
   isAudioCommandError,
   listAudioFolderTracks,
   listenAudioTrackDetailsChanged,
@@ -103,6 +105,8 @@ type PlaylistVisualHydrationJob = {
   trackId: string
   sourcePath: string
   normalizedSourcePath: string
+  maxEdge: 128 | 256 | 512
+  attempt: number
 }
 
 type PlaylistMetadataHydrationJob = Pick<
@@ -111,6 +115,23 @@ type PlaylistMetadataHydrationJob = Pick<
 >
 
 const HYDRATED_TRACK_CACHE_CAPACITY = 8
+// Application-owned BMP URLs and in-flight RGBA buffers. Renderer/GPU memory
+// still needs Release measurement; visible minimum quality is never truncated.
+const PLAYLIST_ARTWORK_RESIDENT_BUDGET = 96 * 1024 * 1024
+const PLAYLIST_ARTWORK_INFLIGHT_BUDGET = 2 * 512 * 512 * 4
+
+function playlistImageBytes(image: PlaylistCoverImage): number {
+  return image.encodedBytes + image.width * image.height * 4
+}
+
+function playlistArtworkEdge(cssPixels: number, dpr: number): 128 | 256 | 512 {
+  const required = Math.max(1, cssPixels) * Math.max(1, dpr)
+  return required <= 128 ? 128 : required <= 256 ? 256 : 512
+}
+
+function playlistArtworkBytes(edge: number): number {
+  return edge * edge * 7 + 54
+}
 
 function createPlaylistCoverClientId(): string {
   if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID()
@@ -400,6 +421,7 @@ export function useAudioPlayer() {
   const playlistVisualGenerationRef = useRef(0)
   const playlistVisualDesiredIdsRef = useRef<ReadonlySet<string>>(new Set())
   const visiblePlaylistTrackIdsRef = useRef<readonly string[]>([])
+  const playlistArtworkDemandRef = useRef<PlaylistArtworkDemand | undefined>(undefined)
   const keepPersistentPlaylistArtworkRef = useRef(false)
   const showPlaylistArtworkRef = useRef(true)
   const playlistMetadataGenerationRef = useRef(0)
@@ -409,6 +431,9 @@ export function useAudioPlayer() {
   const playlistMetadataHydrationActiveRef = useRef(0)
   const playlistVisualWindowKeyRef = useRef<string | null>(null)
   const playlistTrackVisualsRef = useRef<Readonly<Record<string, PlaylistTrackVisual>>>({})
+  const playlistVisualEdgeRef = useRef(new Map<string, 128 | 256 | 512>())
+  const playlistVisualSourceRef = useRef(new Map<string, string>())
+  const playlistDesiredEdgeRef = useRef(new Map<string, 128 | 256 | 512>())
   const playlistVisualHydrationQueueRef = useRef<PlaylistVisualHydrationJob[]>([])
   const playlistVisualHydrationActiveRef = useRef(0)
   const playlistVisualHydrationActiveJobsRef = useRef(new Map<string, PlaylistVisualHydrationJob>())
@@ -417,6 +442,14 @@ export function useAudioPlayer() {
     playlistCoverClientIdRef.current = createPlaylistCoverClientId()
   }
   const playlistCoverWindowBeginRef = useRef<Promise<void>>(Promise.resolve())
+  const playlistCoverSessionRef = useRef<Promise<number> | null>(null)
+  const playlistCoverSessionFailuresRef = useRef(0)
+  const playlistCoverSessionRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const refreshPlaylistVisualDemandRef = useRef<() => void>(() => undefined)
+  const playlistVisualRetryTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>())
+  const playlistImageErrorCountsRef = useRef(new Map<string, number>())
+  const playlistVisualFailedRef = useRef(new Map<string, string>())
+  const playlistPendingReplacementRef = useRef(new Map<string, { trackId: string; previous: PlaylistTrackVisual; edge: 128 | 256 | 512; olderVisuals: Array<{ visual: PlaylistTrackVisual; edge: 128 | 256 | 512 }> }>())
   const artworkPrimeDirectionRef = useRef<Direction>(1)
   const stagedTrackDetailsRef = useRef<{
     requestId: number
@@ -451,17 +484,48 @@ export function useAudioPlayer() {
     return request
   }, [])
 
+  const ensurePlaylistCoverSession = useCallback(() => {
+    if (playlistCoverSessionRef.current) return playlistCoverSessionRef.current
+    const pending = requestPlaylistCoverWindowGeneration().then((generation) => {
+      playlistCoverSessionFailuresRef.current = 0
+      return generation
+    }).catch((error: unknown) => {
+      if (playlistCoverSessionRef.current === pending) playlistCoverSessionRef.current = null
+      throw error
+    })
+    playlistCoverSessionRef.current = pending
+    return pending
+  }, [requestPlaylistCoverWindowGeneration])
+
   useEffect(() => () => {
+    playlistScopeEpochRef.current += 1
     playlistVisualGenerationRef.current += 1
     playlistVisualDesiredIdsRef.current = new Set()
     visiblePlaylistTrackIdsRef.current = []
+    playlistArtworkDemandRef.current = undefined
     keepPersistentPlaylistArtworkRef.current = false
     playlistMetadataGenerationRef.current += 1
     playlistMetadataHydrationQueueRef.current = []
     playlistVisualHydrationQueueRef.current = []
+    if (playlistCoverSessionRetryTimerRef.current) clearTimeout(playlistCoverSessionRetryTimerRef.current)
+    playlistCoverSessionRetryTimerRef.current = null
+    for (const timer of playlistVisualRetryTimersRef.current.values()) clearTimeout(timer)
+    playlistVisualRetryTimersRef.current.clear()
+    playlistImageErrorCountsRef.current.clear()
+    playlistVisualFailedRef.current.clear()
+    for (const pending of playlistPendingReplacementRef.current.values()) {
+      for (const older of pending.olderVisuals) {
+        if (older.visual.coverThumbnail) URL.revokeObjectURL(older.visual.coverThumbnail.src)
+      }
+      if (pending.previous.coverThumbnail) URL.revokeObjectURL(pending.previous.coverThumbnail.src)
+    }
+    playlistPendingReplacementRef.current.clear()
     void requestPlaylistCoverWindowGeneration().catch(() => undefined)
     releasePlaylistVisuals(playlistTrackVisualsRef.current)
     playlistTrackVisualsRef.current = {}
+    playlistVisualEdgeRef.current.clear()
+    playlistVisualSourceRef.current.clear()
+    playlistDesiredEdgeRef.current.clear()
   }, [requestPlaylistCoverWindowGeneration])
 
   const currentTrackId = audioState?.currentTrackId ?? null
@@ -586,10 +650,27 @@ export function useAudioPlayer() {
     }
 
     playlistScopeRef.current = nextScope
+    playlistCoverSessionRef.current = null
+    playlistCoverSessionFailuresRef.current = 0
+    if (playlistCoverSessionRetryTimerRef.current) clearTimeout(playlistCoverSessionRetryTimerRef.current)
+    playlistCoverSessionRetryTimerRef.current = null
+    void ensurePlaylistCoverSession().catch(() => undefined)
+    for (const timer of playlistVisualRetryTimersRef.current.values()) clearTimeout(timer)
+    playlistVisualRetryTimersRef.current.clear()
+    playlistImageErrorCountsRef.current.clear()
+    playlistVisualFailedRef.current.clear()
+    for (const pending of playlistPendingReplacementRef.current.values()) {
+      for (const older of pending.olderVisuals) {
+        if (older.visual.coverThumbnail) URL.revokeObjectURL(older.visual.coverThumbnail.src)
+      }
+      if (pending.previous.coverThumbnail) URL.revokeObjectURL(pending.previous.coverThumbnail.src)
+    }
+    playlistPendingReplacementRef.current.clear()
     playlistScopeEpochRef.current += 1
     playlistVisualGenerationRef.current += 1
     playlistVisualDesiredIdsRef.current = new Set()
     visiblePlaylistTrackIdsRef.current = []
+    playlistArtworkDemandRef.current = undefined
     keepPersistentPlaylistArtworkRef.current = false
     showPlaylistArtworkRef.current = true
     playlistMetadataGenerationRef.current += 1
@@ -600,6 +681,9 @@ export function useAudioPlayer() {
     playlistVisualWindowKeyRef.current = null
     releasePlaylistVisuals(playlistTrackVisualsRef.current)
     playlistTrackVisualsRef.current = {}
+    playlistVisualEdgeRef.current.clear()
+    playlistVisualSourceRef.current.clear()
+    playlistDesiredEdgeRef.current.clear()
     playlistVisualHydrationQueueRef.current = []
     setPlaylistTrackVisuals({})
     preparedTrackCardPreviewRef.current = null
@@ -625,7 +709,7 @@ export function useAudioPlayer() {
     }
     folderPlaylistRef.current = playlist
     setFolderPlaylist(playlist)
-  }, [])
+  }, [ensurePlaylistCoverSession])
 
   const clearPresentationTrack = useCallback((nextContentState: Exclude<PlayerContentState, 'track'>) => {
     presentationTrackRef.current = null
@@ -884,15 +968,18 @@ export function useAudioPlayer() {
               const pixels = await loadAudioPlaylistCoverPixels({
                 clientId: job.clientId,
                 filePath: coverFilePath,
-                maxEdge: job.trackId === firstPlaylistTrackId ? 512 : 256,
+                maxEdge: job.trackId === firstPlaylistTrackId ? 512 : job.maxEdge,
                 windowGeneration: job.backendGeneration,
               })
+              if (jobIsStale()) return
               coverThumbnail = playlistCoverImageFromPixels(pixels)
             }
 
             if (
               jobIsStale()
-              || playlistTrackVisualsRef.current[job.trackId]
+              || job.maxEdge < (playlistDesiredEdgeRef.current.get(job.trackId) ?? job.maxEdge)
+              || (playlistTrackVisualsRef.current[job.trackId]
+                && (playlistVisualEdgeRef.current.get(job.trackId) ?? 0) >= job.maxEdge)
             ) {
               if (coverThumbnail) URL.revokeObjectURL(coverThumbnail.src)
               return
@@ -901,11 +988,67 @@ export function useAudioPlayer() {
               ...audioTrackToPlaylistVisual(hydratedTrack),
               coverThumbnail,
             }
+            const previousVisual = playlistTrackVisualsRef.current[job.trackId]
+            const previousThumbnail = previousVisual?.coverThumbnail
+            const previousEdge = playlistVisualEdgeRef.current.get(job.trackId)
             const nextVisuals = { ...playlistTrackVisualsRef.current, [job.trackId]: visual }
             playlistTrackVisualsRef.current = nextVisuals
+            playlistVisualEdgeRef.current.set(job.trackId, job.maxEdge)
+            playlistVisualSourceRef.current.set(job.trackId, job.normalizedSourcePath)
             setPlaylistTrackVisuals(nextVisuals)
+            if (previousThumbnail && previousVisual && previousEdge && coverThumbnail) {
+              const pendingPrevious = playlistPendingReplacementRef.current.get(previousThumbnail.src)
+              playlistPendingReplacementRef.current.delete(previousThumbnail.src)
+              playlistPendingReplacementRef.current.set(coverThumbnail.src, {
+                trackId: job.trackId,
+                previous: previousVisual,
+                edge: previousEdge,
+                olderVisuals: pendingPrevious
+                  ? [{ visual: pendingPrevious.previous, edge: pendingPrevious.edge }, ...pendingPrevious.olderVisuals]
+                  : [],
+              })
+            } else if (previousThumbnail) {
+              const pendingPrevious = playlistPendingReplacementRef.current.get(previousThumbnail.src)
+              playlistPendingReplacementRef.current.delete(previousThumbnail.src)
+              requestAnimationFrame(() => {
+                URL.revokeObjectURL(previousThumbnail.src)
+                if (pendingPrevious?.previous.coverThumbnail) URL.revokeObjectURL(pendingPrevious.previous.coverThumbnail.src)
+                for (const older of pendingPrevious?.olderVisuals ?? []) {
+                  if (older.visual.coverThumbnail) URL.revokeObjectURL(older.visual.coverThumbnail.src)
+                }
+              })
+            }
           })
-          .catch(() => undefined)
+          .catch((error: unknown) => {
+            const code = isAudioCoverPixelsError(error) ? error.code : 'WORKER_FAILED'
+            if (
+              job.attempt >= 2
+              || !['WORKER_FAILED', 'ALLOCATION_FAILED', 'STALE_REQUEST'].includes(code)
+              || playlistScopeEpochRef.current !== job.playlistEpoch
+              || !playlistVisualDesiredIdsRef.current.has(job.trackId)
+            ) {
+              if (playlistScopeEpochRef.current === job.playlistEpoch && code !== 'STALE_REQUEST') {
+                playlistVisualFailedRef.current.set(job.trackId, job.normalizedSourcePath)
+              }
+              return
+            }
+            const delay = code === 'STALE_REQUEST' ? 0 : 500 * (2 ** job.attempt)
+            const previousTimer = playlistVisualRetryTimersRef.current.get(job.trackId)
+            if (previousTimer) clearTimeout(previousTimer)
+            const timer = setTimeout(() => {
+              playlistVisualRetryTimersRef.current.delete(job.trackId)
+              if (
+                playlistScopeEpochRef.current !== job.playlistEpoch
+                || !playlistVisualDesiredIdsRef.current.has(job.trackId)
+                || (playlistTrackVisualsRef.current[job.trackId]
+                  && (playlistVisualEdgeRef.current.get(job.trackId) ?? 0) >= job.maxEdge)
+              ) return
+              if (playlistVisualHydrationActiveJobsRef.current.has(job.trackId)) return
+              playlistVisualHydrationQueueRef.current.unshift({ ...job, attempt: job.attempt + 1 })
+              pump()
+            }, delay)
+            playlistVisualRetryTimersRef.current.set(job.trackId, timer)
+          })
           .finally(() => {
             playlistVisualHydrationActiveRef.current -= 1
             if (playlistVisualHydrationActiveJobsRef.current.get(job.trackId) === job) {
@@ -922,8 +1065,10 @@ export function useAudioPlayer() {
     trackIds: readonly string[],
     keepPersistentArtwork = true,
     showArtwork = true,
+    demand?: PlaylistArtworkDemand,
   ) => {
-    visiblePlaylistTrackIdsRef.current = showArtwork ? trackIds.slice(0, 40) : trackIds
+    visiblePlaylistTrackIdsRef.current = trackIds
+    if (demand) playlistArtworkDemandRef.current = demand
     keepPersistentPlaylistArtworkRef.current = keepPersistentArtwork
     showPlaylistArtworkRef.current = showArtwork
     const playlist = folderPlaylistRef.current
@@ -971,21 +1116,83 @@ export function useAudioPlayer() {
     // the last artwork window or its object URLs during a view transition.
     if (!showArtwork && keepPersistentArtwork) return
 
-    const windowKey = `${playlistScopeEpochRef.current}\u0000${scope}\u0000${keepPersistentArtwork}\u0000${orderedDesiredIds.join('\u0000')}`
+    const currentDemand = playlistArtworkDemandRef.current
+    const visibleIds = new Set(currentDemand?.visibleIds ?? trackIds)
+    const heldIds = new Set(currentDemand?.heldIds ?? [])
+    let cardEdge = playlistArtworkEdge(currentDemand?.coverCssPixels ?? 128, currentDemand?.dpr ?? 1)
+    const firstEdge = 512
+    const heldOnly = (id: string) => heldIds.has(id) && !visibleIds.has(id) && id !== firstTrackId && id !== dockTrackId
+    const targetEdgeFor = (id: string, edge: 128 | 256 | 512): 128 | 256 | 512 => {
+      if (id === firstTrackId) return firstEdge
+      return heldOnly(id) ? playlistVisualEdgeRef.current.get(id) ?? edge : edge
+    }
+    // Reserve all screen items before offering spare bytes to prefetch. A dense
+    // viewport can exceed the nominal cache target, but it never loses eligibility.
+    const requiredBytesAt = (edge: 128 | 256 | 512) => orderedDesiredIds.reduce((total, id) => {
+      if (!visibleIds.has(id) && !heldIds.has(id) && id !== firstTrackId && id !== dockTrackId) return total
+      const targetEdge = targetEdgeFor(id, edge)
+      const current = playlistTrackVisualsRef.current[id]?.coverThumbnail
+      const currentEdge = playlistVisualEdgeRef.current.get(id) ?? 0
+      const currentBytes = current ? playlistImageBytes(current) : 0
+      // A replacement temporarily owns both images until every consumer has
+      // loaded the new URL. Charge that overlap before optional prefetch.
+      return total + Math.max(playlistArtworkBytes(targetEdge), currentBytes)
+        + (currentEdge < targetEdge ? currentBytes : 0)
+    }, 0)
+    if (requiredBytesAt(cardEdge) + PLAYLIST_ARTWORK_INFLIGHT_BUDGET > PLAYLIST_ARTWORK_RESIDENT_BUDGET) cardEdge = 128
+    const requiredBytes = requiredBytesAt(cardEdge)
+    const oldReplacementBytes = [...playlistPendingReplacementRef.current.values()]
+      .reduce((total, pending) => total
+        + (pending.previous.coverThumbnail ? playlistImageBytes(pending.previous.coverThumbnail) : 0)
+        + pending.olderVisuals.reduce((sum, older) => sum + (older.visual.coverThumbnail ? playlistImageBytes(older.visual.coverThumbnail) : 0), 0), 0)
+    const activeBytes = [...playlistVisualHydrationActiveJobsRef.current.values()]
+      .reduce((total, job) => total + job.maxEdge * job.maxEdge * 4, 0)
+    if (requiredBytes + oldReplacementBytes + activeBytes > PLAYLIST_ARTWORK_RESIDENT_BUDGET) {
+      console.warn('Playlist artwork viewport exceeds the 96 MiB managed-resource budget', {
+        visibleCount: visibleIds.size,
+        requiredBytes,
+      })
+    }
+    let committedBytes = requiredBytes + oldReplacementBytes + activeBytes
+    const budgetedIds = orderedDesiredIds.filter((id) => {
+      if (visibleIds.has(id) || heldIds.has(id) || id === firstTrackId || id === dockTrackId) return true
+      const current = playlistTrackVisualsRef.current[id]?.coverThumbnail
+      const bytes = Math.max(playlistArtworkBytes(cardEdge), current ? playlistImageBytes(current) : 0)
+      if (committedBytes + bytes + PLAYLIST_ARTWORK_INFLIGHT_BUDGET > PLAYLIST_ARTWORK_RESIDENT_BUDGET) return false
+      committedBytes += bytes
+      return true
+    })
+    const windowKey = `${playlistScopeEpochRef.current}\u0000${scope}\u0000${keepPersistentArtwork}\u0000${cardEdge}\u0000${[...visibleIds].join('\u0000')}\u0001${[...heldIds].join('\u0000')}\u0002${budgetedIds.map((id) => `${id}:${normalizeAudioSourcePath(descriptorsById.get(id)?.sourcePath ?? '')}`).join('\u0000')}`
     if (playlistVisualWindowKeyRef.current === windowKey) return
     playlistVisualWindowKeyRef.current = windowKey
-    const generation = playlistVisualGenerationRef.current + 1
-    playlistVisualGenerationRef.current = generation
-    const desiredIds = new Set(orderedDesiredIds)
+    const generation = playlistVisualGenerationRef.current
+    const desiredIds = new Set(budgetedIds)
+    playlistDesiredEdgeRef.current = new Map(budgetedIds.map((id) => [id, targetEdgeFor(id, cardEdge)]))
     playlistVisualDesiredIdsRef.current = desiredIds
     playlistVisualHydrationQueueRef.current = []
     const currentVisuals = playlistTrackVisualsRef.current
     const retained = Object.fromEntries(
-      Object.entries(currentVisuals).filter(([trackId]) => desiredIds.has(trackId)),
+      Object.entries(currentVisuals).filter(([trackId]) => desiredIds.has(trackId)
+        && playlistVisualSourceRef.current.get(trackId) === normalizeAudioSourcePath(descriptorsById.get(trackId)?.sourcePath ?? '')),
     )
     for (const [trackId, visual] of Object.entries(currentVisuals)) {
-      if (!desiredIds.has(trackId) && visual.coverThumbnail) {
+      const sourceChanged = playlistVisualSourceRef.current.get(trackId) !== normalizeAudioSourcePath(descriptorsById.get(trackId)?.sourcePath ?? '')
+      if ((!desiredIds.has(trackId) || sourceChanged) && visual.coverThumbnail) {
         URL.revokeObjectURL(visual.coverThumbnail.src)
+      }
+      if (!desiredIds.has(trackId) || sourceChanged) {
+        for (const [src, pending] of playlistPendingReplacementRef.current) {
+          if (pending.trackId !== trackId) continue
+          if (pending.previous.coverThumbnail) URL.revokeObjectURL(pending.previous.coverThumbnail.src)
+          for (const older of pending.olderVisuals) {
+            if (older.visual.coverThumbnail) URL.revokeObjectURL(older.visual.coverThumbnail.src)
+          }
+          playlistPendingReplacementRef.current.delete(src)
+        }
+      }
+      if (!desiredIds.has(trackId) || sourceChanged) {
+        playlistVisualEdgeRef.current.delete(trackId)
+        playlistVisualSourceRef.current.delete(trackId)
       }
     }
     const nextVisuals = Object.keys(retained).length === Object.keys(currentVisuals).length
@@ -994,7 +1201,7 @@ export function useAudioPlayer() {
     playlistTrackVisualsRef.current = nextVisuals
     if (nextVisuals !== currentVisuals) setPlaylistTrackVisuals(nextVisuals)
 
-    const backendWindowGeneration = requestPlaylistCoverWindowGeneration()
+    const backendWindowGeneration = ensurePlaylistCoverSession()
     if (!playlist || desiredIds.size === 0) {
       void backendWindowGeneration.catch(() => undefined)
       return
@@ -1007,15 +1214,20 @@ export function useAudioPlayer() {
         || playlistScopeRef.current !== scope
       ) return
       const jobs: PlaylistVisualHydrationJob[] = []
-      for (const trackId of orderedDesiredIds) {
+      for (const trackId of budgetedIds) {
         const descriptor = descriptorsById.get(trackId)
         if (!descriptor) continue
+        if (heldOnly(trackId) && !playlistTrackVisualsRef.current[trackId]) continue
         const activeJob = playlistVisualHydrationActiveJobsRef.current.get(descriptor.id)
         if (
           !descriptor.available
           || !desiredIds.has(descriptor.id)
-          || playlistTrackVisualsRef.current[descriptor.id]
-          || activeJob?.generation === generation
+          || playlistVisualFailedRef.current.get(descriptor.id) === normalizeAudioSourcePath(descriptor.sourcePath)
+          || (playlistTrackVisualsRef.current[descriptor.id]
+            && (playlistVisualEdgeRef.current.get(descriptor.id) ?? 0) >= targetEdgeFor(descriptor.id, cardEdge))
+          || (activeJob?.generation === generation
+            && activeJob.normalizedSourcePath === normalizeAudioSourcePath(descriptor.sourcePath)
+            && activeJob.maxEdge >= targetEdgeFor(descriptor.id, cardEdge))
         ) continue
         jobs.push({
           clientId: playlistCoverClientIdRef.current!,
@@ -1026,12 +1238,113 @@ export function useAudioPlayer() {
           trackId: descriptor.id,
           sourcePath: descriptor.sourcePath,
           normalizedSourcePath: normalizeAudioSourcePath(descriptor.sourcePath),
+          maxEdge: targetEdgeFor(descriptor.id, cardEdge),
+          attempt: 0,
         })
       }
       playlistVisualHydrationQueueRef.current = jobs
       pumpPlaylistVisualHydration()
-    }).catch(() => undefined)
-  }, [pumpPlaylistMetadataHydration, pumpPlaylistVisualHydration, requestPlaylistCoverWindowGeneration])
+    }).catch(() => {
+      if (playlistScopeEpochRef.current !== playlistEpoch || playlistCoverSessionFailuresRef.current >= 2) return
+      playlistCoverSessionFailuresRef.current += 1
+      playlistCoverSessionRetryTimerRef.current = setTimeout(() => {
+        playlistCoverSessionRetryTimerRef.current = null
+        if (playlistScopeEpochRef.current !== playlistEpoch) return
+        playlistVisualWindowKeyRef.current = null
+        refreshPlaylistVisualDemandRef.current()
+      }, 500 * playlistCoverSessionFailuresRef.current)
+    })
+  }, [pumpPlaylistMetadataHydration, pumpPlaylistVisualHydration, ensurePlaylistCoverSession])
+
+  useEffect(() => {
+    refreshPlaylistVisualDemandRef.current = () => setVisiblePlaylistTrackIds(
+      visiblePlaylistTrackIdsRef.current,
+      keepPersistentPlaylistArtworkRef.current,
+      showPlaylistArtworkRef.current,
+      playlistArtworkDemandRef.current,
+    )
+  }, [setVisiblePlaylistTrackIds])
+
+  useEffect(() => {
+    const retireLoadedReplacement = (src: string) => {
+      const pending = playlistPendingReplacementRef.current.get(src)
+      if (!pending) return
+      const consumers = [...document.querySelectorAll<HTMLImageElement>('img')]
+        .filter((image) => image.src === src)
+      if (consumers.length === 0 || consumers.some((image) => !image.complete || image.naturalWidth === 0)) return
+      const oldUrls = [pending.previous.coverThumbnail?.src, ...pending.olderVisuals.map((older) => older.visual.coverThumbnail?.src)]
+        .filter((url): url is string => Boolean(url) && url !== src)
+      if ([...document.querySelectorAll<HTMLImageElement>('img')].some((image) => oldUrls.includes(image.src))) return
+      playlistPendingReplacementRef.current.delete(src)
+      if (pending.previous.coverThumbnail?.src !== src && pending.previous.coverThumbnail) URL.revokeObjectURL(pending.previous.coverThumbnail.src)
+      for (const older of pending.olderVisuals) {
+        if (older.visual.coverThumbnail) URL.revokeObjectURL(older.visual.coverThumbnail.src)
+      }
+    }
+    const onImageLoad = (event: Event) => {
+      const src = (event as CustomEvent<unknown>).detail
+      if (typeof src === 'string') retireLoadedReplacement(src)
+    }
+    const observer = new MutationObserver(() => {
+      for (const src of playlistPendingReplacementRef.current.keys()) retireLoadedReplacement(src)
+    })
+    observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['src'] })
+    const onImageError = (event: Event) => {
+      const src = (event as CustomEvent<unknown>).detail
+      if (typeof src !== 'string') return
+      const match = Object.entries(playlistTrackVisualsRef.current).find(([, visual]) => visual.coverThumbnail?.src === src)
+      if (!match) return
+      const [trackId] = match
+      const pending = playlistPendingReplacementRef.current.get(src)
+      if (pending) {
+        playlistPendingReplacementRef.current.delete(src)
+        const restored = { ...playlistTrackVisualsRef.current, [trackId]: pending.previous }
+        playlistTrackVisualsRef.current = restored
+        playlistVisualEdgeRef.current.set(trackId, pending.edge)
+        setPlaylistTrackVisuals(restored)
+        const [nextFallback, ...remainingFallbacks] = pending.olderVisuals
+        if (pending.previous.coverThumbnail && nextFallback?.visual.coverThumbnail) {
+          playlistPendingReplacementRef.current.set(pending.previous.coverThumbnail.src, {
+            trackId,
+            previous: nextFallback.visual,
+            edge: nextFallback.edge,
+            olderVisuals: remainingFallbacks,
+          })
+        }
+        URL.revokeObjectURL(src)
+        return
+      }
+      const failures = (playlistImageErrorCountsRef.current.get(trackId) ?? 0) + 1
+      playlistImageErrorCountsRef.current.set(trackId, failures)
+      const next = { ...playlistTrackVisualsRef.current }
+      delete next[trackId]
+      playlistTrackVisualsRef.current = next
+      playlistVisualEdgeRef.current.delete(trackId)
+      playlistVisualSourceRef.current.delete(trackId)
+      setPlaylistTrackVisuals(next)
+      URL.revokeObjectURL(src)
+      if (failures > 2) {
+        const sourcePath = folderPlaylistRef.current?.tracks.find((track) => track.id === trackId)?.sourcePath
+        if (sourcePath) playlistVisualFailedRef.current.set(trackId, normalizeAudioSourcePath(sourcePath))
+        return
+      }
+      if (!playlistVisualDesiredIdsRef.current.has(trackId)) return
+      playlistVisualWindowKeyRef.current = null
+      setVisiblePlaylistTrackIds(
+        visiblePlaylistTrackIdsRef.current,
+        keepPersistentPlaylistArtworkRef.current,
+        showPlaylistArtworkRef.current,
+        playlistArtworkDemandRef.current,
+      )
+    }
+    window.addEventListener('spmusic:playlist-cover-image-load', onImageLoad)
+    window.addEventListener('spmusic:playlist-cover-image-error', onImageError)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('spmusic:playlist-cover-image-load', onImageLoad)
+      window.removeEventListener('spmusic:playlist-cover-image-error', onImageError)
+    }
+  }, [setVisiblePlaylistTrackIds])
 
   useEffect(() => {
     if (
@@ -1042,8 +1355,19 @@ export function useAudioPlayer() {
       visiblePlaylistTrackIdsRef.current,
       keepPersistentPlaylistArtworkRef.current,
       showPlaylistArtworkRef.current,
+      playlistArtworkDemandRef.current,
     )
   }, [setVisiblePlaylistTrackIds, track?.id])
+
+  useEffect(() => {
+    if (!folderPlaylist || visiblePlaylistTrackIdsRef.current.length === 0) return
+    setVisiblePlaylistTrackIds(
+      visiblePlaylistTrackIdsRef.current,
+      keepPersistentPlaylistArtworkRef.current,
+      showPlaylistArtworkRef.current,
+      playlistArtworkDemandRef.current,
+    )
+  }, [folderPlaylist, setVisiblePlaylistTrackIds])
 
   const settleSelectionFailure = useCallback((requestId: number, error: AudioCommandError) => {
     if (!selectionIsCurrent(requestId)) return

@@ -13,7 +13,7 @@ import { PlaylistPlaybackDock } from '@/features/player/components/PlaylistPlayb
 import { coverToneForTrackId } from '@/features/player/model/audioTrackModel'
 import { appCopy } from '@/features/player/model/playerCopy'
 import { nextShuffleMode, type ShuffleMode } from '@/features/player/model/playbackModes'
-import type { PlayerPlaybackViewModel, PlayerTimelineViewModel, PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
+import type { PlayerPlaybackViewModel, PlayerTimelineViewModel, PlaylistArtworkDemand, PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
 
 type PlaylistPanelProps = {
   tracks: PlaylistTrackItemViewModel[]
@@ -26,7 +26,7 @@ type PlaylistPanelProps = {
   isOpenAudioDisabled?: boolean
   onOpenAudio?: () => void
   onTrackSelect?: (trackId: string) => void
-  onVisibleTrackIdsChange?: (trackIds: readonly string[], keepPersistentArtwork?: boolean, showArtwork?: boolean) => void
+  onVisibleTrackIdsChange?: (trackIds: readonly string[], keepPersistentArtwork?: boolean, showArtwork?: boolean, demand?: PlaylistArtworkDemand) => void
   playback: PlayerPlaybackViewModel
   timeline: PlayerTimelineViewModel
   visualIsPlaying: boolean
@@ -61,8 +61,6 @@ const DEFAULT_PLAYLIST_LAYOUT_LEVEL = 3
 const PLAYLIST_LAYOUT_STORAGE_KEY = 'spmusic.playlist.layout-level.v1'
 const PLAYLIST_WHEEL_THRESHOLD = 28
 const PLAYLIST_WHEEL_STEP_LOCK_MS = 150
-const PLAYLIST_ARTWORK_WINDOW_LIMIT = 40
-
 function readPlaylistLayoutLevel(): number {
   if (typeof window === 'undefined') return DEFAULT_PLAYLIST_LAYOUT_LEVEL
   try {
@@ -210,6 +208,16 @@ export function PlaylistPanel({
     setArtworkWindowIds(emptyWindow)
   }, [])
 
+  useEffect(() => () => {
+    onVisibleTrackIdsChange?.([], true, true, {
+      visibleIds: [],
+      prefetchIds: [],
+      heldIds: [],
+      coverCssPixels: 128,
+      dpr: window.devicePixelRatio || 1,
+    })
+  }, [onVisibleTrackIdsChange])
+
   const stopLayoutAnimations = useCallback(() => {
     for (const animation of activeLayoutAnimationsRef.current) animation.cancel()
     activeLayoutAnimationsRef.current.clear()
@@ -320,22 +328,25 @@ export function PlaylistPanel({
     // Text layouts still need visible-track metadata. Their reports must leave
     // the bounded artwork window untouched so decoded covers stay warm.
     metadataWindowKeyRef.current = null
-    const visibleIds = new Set<string>()
     let frameId: number | null = null
     let disposed = false
     const publish = () => {
       frameId = null
       if (disposed) return
       const panelRect = panel.getBoundingClientRect()
+      const dock = panel.parentElement?.querySelector<HTMLElement>('.playlist-playback-dock')
+      const dockTop = dock?.getBoundingClientRect().top ?? panelRect.bottom
+      const viewportBottom = Math.min(panelRect.bottom, dockTop)
       const orderedEntries = [...grid.querySelectorAll<HTMLElement>('[data-playlist-track-id]')]
         .map((card, domIndex) => {
           const trackId = card.dataset.playlistTrackId
-          if (!trackId || !visibleIds.has(trackId)) return null
+          if (!trackId) return null
           const rect = card.getBoundingClientRect()
-          const inViewport = rect.bottom > panelRect.top && rect.top < panelRect.bottom
+          if (rect.bottom <= panelRect.top - panelRect.height || rect.top >= viewportBottom + panelRect.height) return null
+          const inViewport = rect.bottom > panelRect.top && rect.top < viewportBottom
           const viewportDistance = inViewport
             ? 0
-            : rect.bottom <= panelRect.top ? panelRect.top - rect.bottom : rect.top - panelRect.bottom
+            : rect.bottom <= panelRect.top ? panelRect.top - rect.bottom : rect.top - viewportBottom
           return { trackId, domIndex, inViewport, viewportDistance }
         })
         .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
@@ -350,59 +361,62 @@ export function PlaylistPanel({
         onVisibleTrackIdsChange(orderedIds, true, false)
         return
       }
-      // Keep images that were already decoded alive while their covers fly to
-      // the new grid. The consumer has a 40-cover budget, so in-viewport cards
-      // take priority, then previously loaded cards, then nearby prefetches.
+      // Geometry is recalculated on scroll as well as layout changes: the
+      // prefetch observer alone cannot report motion inside its root margin.
       const heldIds = artworkHoldIdsRef.current
+      const visibleTrackIds = orderedEntries.filter((entry) => entry.inViewport).map((entry) => entry.trackId)
+      const prefetchTrackIds = orderedEntries.filter((entry) => !entry.inViewport).map((entry) => entry.trackId)
       const orderedIds = [...new Set([
-        ...orderedEntries.filter((entry) => entry.inViewport).map((entry) => entry.trackId),
+        ...visibleTrackIds,
         ...(heldIds ? [...heldIds] : []),
-        ...orderedEntries.map((entry) => entry.trackId),
-      ])].slice(0, PLAYLIST_ARTWORK_WINDOW_LIMIT)
-      const windowKey = orderedIds.join('\u0000')
+        ...prefetchTrackIds,
+      ])]
+      const cover = grid.querySelector<HTMLElement>('.playlist-card-cover')
+      const coverCssPixels = cover?.getBoundingClientRect().width ?? 128
+      const dpr = window.devicePixelRatio || 1
+      const windowKey = `${coverCssPixels}\u0000${dpr}\u0000${visibleTrackIds.join('\u0000')}\u0001${orderedIds.join('\u0000')}`
       if (artworkWindowKeyRef.current === windowKey) return
       const nextWindow = new Set(orderedIds)
       artworkWindowKeyRef.current = windowKey
       artworkWindowIdsRef.current = nextWindow
       setArtworkWindowIds(nextWindow)
-      onVisibleTrackIdsChange(orderedIds, true)
+      onVisibleTrackIdsChange(orderedIds, true, true, {
+        visibleIds: visibleTrackIds,
+        prefetchIds: prefetchTrackIds,
+        heldIds: heldIds ? [...heldIds] : [],
+        coverCssPixels,
+        dpr,
+      })
     }
-    const observer = new IntersectionObserver((entries) => {
-      for (const entry of entries) {
-        const trackId = (entry.target as HTMLElement).dataset.playlistTrackId
-        if (!trackId) continue
-        if (entry.isIntersecting) visibleIds.add(trackId)
-        else visibleIds.delete(trackId)
-      }
+    const schedulePublish = () => {
       if (frameId === null) frameId = requestAnimationFrame(publish)
-    }, {
-      root: panel,
-      rootMargin: '100% 0px',
-      threshold: 0.01,
-    })
+    }
 
     const cards = grid.querySelectorAll<HTMLElement>('[data-playlist-track-id]')
     if (cards.length === 0) {
       if (layout.showArtwork) clearArtworkWindow()
       onVisibleTrackIdsChange([], true, layout.showArtwork)
     }
-    // Seed the replacement observer from the current geometry. A layout change
-    // must not publish an empty/partial window before IntersectionObserver has
-    // delivered its first batch and revoke artwork that is still on screen.
-    const panelRect = panel.getBoundingClientRect()
-    const margin = panelRect.height
-    cards.forEach((card) => {
-      const rect = card.getBoundingClientRect()
-      if (rect.bottom > panelRect.top - margin && rect.top < panelRect.bottom + margin) {
-        const trackId = card.dataset.playlistTrackId
-        if (trackId) visibleIds.add(trackId)
-      }
-    })
-    if (cards.length > 0) frameId = requestAnimationFrame(publish)
-    cards.forEach((card) => observer.observe(card))
+    if (cards.length > 0) schedulePublish()
+    panel.addEventListener('scroll', schedulePublish, { passive: true })
+    const resizeObserver = new ResizeObserver(schedulePublish)
+    resizeObserver.observe(panel)
+    resizeObserver.observe(grid)
+    window.addEventListener('resize', schedulePublish)
+    let resolution = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`)
+    const onResolutionChange = () => {
+      resolution.removeEventListener('change', onResolutionChange)
+      resolution = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`)
+      resolution.addEventListener('change', onResolutionChange)
+      schedulePublish()
+    }
+    resolution.addEventListener('change', onResolutionChange)
     return () => {
       disposed = true
-      observer.disconnect()
+      panel.removeEventListener('scroll', schedulePublish)
+      resizeObserver.disconnect()
+      window.removeEventListener('resize', schedulePublish)
+      resolution.removeEventListener('change', onResolutionChange)
       if (frameId !== null) cancelAnimationFrame(frameId)
     }
   }, [filteredTrackIdsKey, layout.level, layout.showArtwork, onVisibleTrackIdsChange, artworkWindowRevision, clearArtworkWindow])
@@ -439,8 +453,16 @@ export function PlaylistPanel({
       // Capture the current painted position, including an interrupted in-flight
       // animation, before changing the grid. The same cover/image DOM nodes then
       // animate from these pixels to their new layout in useLayoutEffect.
-      pendingLayoutSnapshotRef.current = appearanceMotion.disabled ? null : snapshotCardLayout(grid, panel)
-      artworkHoldIdsRef.current = appearanceMotion.disabled ? null : new Set(artworkWindowIdsRef.current)
+      const snapshot = appearanceMotion.disabled ? null : snapshotCardLayout(grid, panel)
+      pendingLayoutSnapshotRef.current = snapshot
+      artworkHoldIdsRef.current = snapshot ? new Set(
+        [...grid.querySelectorAll<HTMLElement>('[data-playlist-track-id]')].flatMap((card) => {
+          const trackId = card.dataset.playlistTrackId
+          const image = card.querySelector<HTMLImageElement>('.playlist-card-cover-image')
+          return trackId && snapshot.get(trackId)?.cover && image?.complete && image.naturalWidth > 0
+            && image.src.startsWith('blob:') ? [trackId] : []
+        }),
+      ) : null
       layoutTransitionGenerationRef.current += 1
       stopLayoutAnimations()
       wheelLockedUntilRef.current = now + PLAYLIST_WHEEL_STEP_LOCK_MS

@@ -15,6 +15,8 @@ export function PlaylistCoverImage({ image, className }: PlaylistCoverImageProps
       alt=""
       aria-hidden="true"
       decoding="async"
+      onLoad={() => window.dispatchEvent(new CustomEvent('spmusic:playlist-cover-image-load', { detail: image.src }))}
+      onError={() => window.dispatchEvent(new CustomEvent('spmusic:playlist-cover-image-error', { detail: image.src }))}
     />
   )
 }

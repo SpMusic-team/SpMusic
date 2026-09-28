@@ -134,7 +134,15 @@ export type PlayerPlaylistViewModel = {
   shuffleMode: ShuffleMode
   onShuffleCycle: () => void
   onTrackSelect?: (trackId: string) => void
-  onVisibleTrackIdsChange?: (trackIds: readonly string[], keepPersistentArtwork?: boolean, showArtwork?: boolean) => void
+  onVisibleTrackIdsChange?: (trackIds: readonly string[], keepPersistentArtwork?: boolean, showArtwork?: boolean, demand?: PlaylistArtworkDemand) => void
+}
+
+export type PlaylistArtworkDemand = {
+  visibleIds: readonly string[]
+  prefetchIds: readonly string[]
+  heldIds: readonly string[]
+  coverCssPixels: number
+  dpr: number
 }
 
 export type PlayerFeedbackViewModel = {

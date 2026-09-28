@@ -81,7 +81,7 @@ export type AudioLoadCoverPixelsInput = {
 export type AudioLoadPlaylistCoverPixelsInput = {
   clientId: string
   filePath: string
-  maxEdge: 256 | 512
+  maxEdge: 128 | 256 | 512
   windowGeneration: number
 }
 

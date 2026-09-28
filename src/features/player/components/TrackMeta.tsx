@@ -13,11 +13,16 @@ export function TrackMeta({ layer, ownsPlayerViewTransition }: TrackMetaProps) {
   const appearanceMotion = useAppearanceMotion()
   const track = layer?.track
   const phase = layer?.phase
+  const sharedLayoutId = ownsPlayerViewTransition
+    ? playerViewTransitionLayoutId('copy', track?.id)
+    : undefined
 
   return (
     <motion.div
+      // Keep the projection node's mount-time identity in sync with its owner.
+      key={sharedLayoutId ?? 'unshared-copy'}
       className="track-pills"
-      layoutId={ownsPlayerViewTransition ? playerViewTransitionLayoutId('copy', track?.id) : undefined}
+      layoutId={sharedLayoutId}
       transition={{ layout: appearanceMotion.layoutTransition }}
       aria-live={phase === 'active' ? 'polite' : undefined}
     >

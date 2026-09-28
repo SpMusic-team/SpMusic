@@ -1412,6 +1412,7 @@ export function useAudioPlayer() {
     const previousPhase = previousAudioState?.phase
     const previousDurationMs = previousAudioState?.durationMs ?? null
     const nextTrackId = nextAudioState.currentTrackId
+    const isSamePlaybackGeneration = previousAudioState?.generation === nextAudioState.generation
     if (previousTrackId !== nextTrackId) {
       seekRequestIdRef.current += 1
       audioStateRequestGenerationRef.current += 1
@@ -1462,10 +1463,12 @@ export function useAudioPlayer() {
         && !acceptSeekPosition
         && transportIntentRef.current === null
         && previousTrackId === nextTrackId
+        && isSamePlaybackGeneration
         && previousPhase === 'playing'
         && nextAudioState.phase === 'playing'
       const preservesActiveTransportPosition = !acceptSeekPosition
         && previousTrackId === nextTrackId
+        && isSamePlaybackGeneration
         && (activePlaybackTransition !== null || nextTransportTransition !== null)
       const positionSeconds = acceptedPausedSeekPosition ?? (
         isNormalPlayingCalibration || preservesActiveTransportPosition

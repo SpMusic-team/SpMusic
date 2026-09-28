@@ -44,6 +44,9 @@ export const CoverPanel = memo(function CoverPanel({
   const artwork = layer?.artwork
   const phase = layer?.phase
   const coverSource = layer?.resource.view
+  const sharedLayoutId = ownsPlayerViewTransition
+    ? playerViewTransitionLayoutId('cover', track?.id)
+    : undefined
 
   useEffect(() => {
     if (phase === 'incoming' && !coverSource) onReady()
@@ -54,8 +57,11 @@ export const CoverPanel = memo(function CoverPanel({
       className="cover-column"
     >
       <motion.div
+        // Motion registers layoutId when the projection node mounts. Recreate
+        // only this node when ownership changes; the artwork layer stays alive.
+        key={sharedLayoutId ?? 'unshared-cover'}
         className="cover-frame"
-        layoutId={ownsPlayerViewTransition ? playerViewTransitionLayoutId('cover', track?.id) : undefined}
+        layoutId={sharedLayoutId}
         transition={{ layout: appearanceMotion.layoutTransition }}
       >
         <div

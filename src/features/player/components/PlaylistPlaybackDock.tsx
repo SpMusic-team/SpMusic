@@ -40,6 +40,8 @@ export function PlaylistPlaybackDock({
   const imageFallback = artwork?.coverImageFallback ?? track?.coverImageFallback
   const imageSource = artwork?.coverImage ?? track?.coverImage ?? imageFallback
   const localArtwork = playlistTrack?.hasLocalArtwork ?? Boolean(artwork?.coverFilePath ?? track?.coverFilePath)
+  const coverLayoutId = playerViewTransitionLayoutId('cover', track?.id)
+  const copyLayoutId = playerViewTransitionLayoutId('copy', track?.id)
   const disabled = !track
   const commandBusy = playback.isAudioBusy
     || playback.isSelectionPending
@@ -65,8 +67,9 @@ export function PlaylistPlaybackDock({
           onClick={onClose}
         >
           <motion.span
+            key={coverLayoutId ?? 'unshared-cover'}
             className="playlist-playback-cover"
-            layoutId={playerViewTransitionLayoutId('cover', track?.id)}
+            layoutId={coverLayoutId}
             transition={{ layout: appearanceMotion.layoutTransition }}
             aria-hidden="true"
           >
@@ -89,8 +92,9 @@ export function PlaylistPlaybackDock({
             ) : null}
           </motion.span>
           <motion.span
+            key={copyLayoutId ?? 'unshared-copy'}
             className="playlist-playback-copy"
-            layoutId={playerViewTransitionLayoutId('copy', track?.id)}
+            layoutId={copyLayoutId}
             transition={{ layout: appearanceMotion.layoutTransition }}
           >
             <strong>{track?.title ?? '未在播放'}</strong>

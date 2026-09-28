@@ -235,9 +235,23 @@
 .playlist-grid[data-layout-columns="2"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .playlist-grid[data-layout-columns="3"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .playlist-grid[data-layout-columns="4"] { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-.playlist-grid[data-layout-level="0"] { --playlist-grid-gap: 20px; }
-.playlist-grid[data-layout-level="1"] { --playlist-grid-gap: 18px; }
-.playlist-grid[data-layout-level="2"] { --playlist-grid-gap: 14px; }
+.playlist-grid[data-layout-level="0"] {
+  grid-template-columns: repeat(auto-fill, 270px);
+  gap: 20px;
+  justify-content: center;
+}
+.playlist-grid[data-layout-level="1"] {
+  grid-template-columns: repeat(auto-fill, 165px);
+  gap: 20px 28px;
+  justify-content: center;
+}
+.playlist-grid[data-layout-level="2"] {
+  width: calc(100% + 16px);
+  grid-template-columns: repeat(auto-fill, 130px);
+  gap: 21px;
+  justify-content: center;
+  margin-left: -8px;
+}
 .playlist-grid[data-layout-level="5"] { --playlist-grid-gap: 8px; }
 .playlist-grid[data-layout-level="6"] { --playlist-grid-gap: 6px; }
 .playlist-grid[data-layout-level="7"] { --playlist-grid-gap: 3px; }
@@ -381,9 +395,28 @@
 }
 
 .playlist-grid[data-layout-flow="tile"] .playlist-card-copy {
-  align-self: stretch;
+  width: min(100%, var(--playlist-cover-size));
+  align-self: center;
   gap: 3px;
+  text-align: left;
 }
+
+.playlist-grid[data-layout-level="1"] .playlist-card {
+  width: 165px;
+  height: 253px;
+  gap: 24px;
+  padding: 15px 5px;
+}
+
+.playlist-grid[data-layout-level="1"] .playlist-card-cover {
+  width: 155px;
+  height: 155px;
+  flex: 0 0 155px;
+}
+
+.playlist-grid[data-layout-level="1"] .playlist-card-copy { width: 135px; }
+
+.playlist-grid[data-layout-level="2"] .playlist-card-copy { width: 100px; }
 
 .playlist-grid[data-layout-flow="row"] .playlist-card {
   --playlist-card-gap: clamp(12px, 2.4vw, 24px);

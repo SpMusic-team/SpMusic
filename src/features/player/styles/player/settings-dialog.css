@@ -1,0 +1,47 @@
+.player-settings-dialog {
+  width: min(520px, calc(100vw - 32px));
+  max-width: min(520px, calc(100vw - 32px));
+}
+
+.player-settings-dialog[data-theme-manager-open="true"] {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.player-settings-overlay-hidden {
+  background: transparent;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.theme-manager-overlay {
+  background: transparent;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.player-settings-group {
+  gap: 12px;
+}
+
+.player-settings-row {
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 0;
+}
+
+.player-settings-row + .player-settings-row {
+  border-top: 1px solid color-mix(in srgb, var(--player-muted) 16%, transparent);
+}
+
+.player-settings-row [data-slot="field-content"] {
+  min-width: 0;
+}
+
+.player-settings-theme-row button {
+  flex: 0 0 auto;
+}

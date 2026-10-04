@@ -1,13 +1,16 @@
+#[cfg(test)]
+use std::time::Instant;
 use std::{
     collections::{HashMap, VecDeque},
-    fs::{self, File},
+    fs::{self, File, OpenOptions},
     future::Future,
-    io::{Cursor, Read},
+    io::{self, Cursor, Read, Write},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU64, Ordering},
-        Mutex as StdMutex, OnceLock,
+        Arc, Condvar, Mutex as StdMutex, OnceLock,
     },
+    time::SystemTime,
 };
 
 use image::{
@@ -34,6 +37,295 @@ const FLAG_RESIZED: u32 = 1 << 1;
 const ALLOWED_MAX_EDGES: [u32; 7] = [256, 512, 768, 1024, 1536, 2048, 3072];
 const ALLOWED_PLAYLIST_MAX_EDGES: [u32; 3] = [128, 256, 512];
 const MAX_PLAYLIST_CLIENTS: usize = 16;
+const THUMBNAIL_DIRECTORY: &str = "thumbnails";
+const THUMBNAIL_CACHE_BYTES: u64 = 256 * 1024 * 1024;
+const THUMBNAIL_CACHE_FILES: usize = 2048;
+const THUMBNAIL_CACHE_SCAN_LIMIT: usize = 4096;
+const THUMBNAIL_TEMP_STALE_AGE: std::time::Duration = std::time::Duration::from_secs(600);
+const THUMBNAIL_PENDING_FILES: usize = 128;
+const THUMBNAIL_PENDING_BYTES: usize = 32 * 1024 * 1024;
+const THUMBNAIL_DISK_MAGIC: [u8; 4] = *b"SPTC";
+const THUMBNAIL_DISK_VERSION: u16 = 1;
+const THUMBNAIL_TRANSFORM_VERSION: u16 = 1;
+const THUMBNAIL_DISK_HEADER_LEN: usize = 44;
+static THUMBNAIL_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static THUMBNAIL_WRITER: OnceLock<ThumbnailWriter> = OnceLock::new();
+#[cfg(test)]
+static THUMBNAIL_BENCH_HITS: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
+static THUMBNAIL_BENCH_MISSES: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
+static THUMBNAIL_BENCH_READ_NS: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
+static THUMBNAIL_BENCH_HASH_NS: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
+static THUMBNAIL_BENCH_LOOKUP_NS: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
+static THUMBNAIL_BENCH_DECODE_NS: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
+static THUMBNAIL_BENCH_WRITE_NS: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
+static THUMBNAIL_BENCH_PENDING_HITS: AtomicU64 = AtomicU64::new(0);
+
+struct ThumbnailWriteJob {
+    cache_dir: PathBuf,
+    filename: String,
+    payload: Arc<Vec<u8>>,
+}
+
+enum ThumbnailWriteOutcome {
+    Written,
+    AlreadyPresent,
+    Skipped(&'static str),
+    Failed(&'static str, io::Error),
+}
+
+struct ThumbnailWriterState {
+    pending: HashMap<PathBuf, Arc<Vec<u8>>>,
+    queue: VecDeque<ThumbnailWriteJob>,
+    bytes: usize,
+    peak_bytes: usize,
+    enqueued: u64,
+    coalesced: u64,
+    skipped: u64,
+    written: u64,
+    already_present: u64,
+    failed: u64,
+    accepting: bool,
+}
+
+struct ThumbnailWriter {
+    shared: Arc<(StdMutex<ThumbnailWriterState>, Condvar)>,
+}
+
+impl ThumbnailWriter {
+    fn new() -> Self {
+        let state = ThumbnailWriterState {
+            pending: HashMap::new(),
+            queue: VecDeque::new(),
+            bytes: 0,
+            peak_bytes: 0,
+            enqueued: 0,
+            coalesced: 0,
+            skipped: 0,
+            written: 0,
+            already_present: 0,
+            failed: 0,
+            accepting: true,
+        };
+        let shared = Arc::new((StdMutex::new(state), Condvar::new()));
+        let worker_shared = Arc::clone(&shared);
+        if let Err(error) = std::thread::Builder::new()
+            .name("thumbnail-cache-writer".into())
+            .spawn(move || thumbnail_writer_loop(worker_shared))
+        {
+            tracing::warn!(operation = "audio.thumbnail.writer.start", error = %error, "thumbnail cache writer unavailable");
+            shared
+                .0
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .accepting = false;
+        }
+        Self { shared }
+    }
+
+    fn pending(&self, target: &Path) -> Option<Vec<u8>> {
+        let state = self
+            .shared
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state
+            .pending
+            .get(target)
+            .map(|payload| payload.as_ref().clone())
+    }
+
+    fn try_enqueue(&self, cache_dir: PathBuf, filename: String, response: &[u8]) {
+        let target = cache_dir.join(&filename);
+        let (lock, wake) = &*self.shared;
+        let mut state = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.pending.contains_key(&target) {
+            state.coalesced += 1;
+            return;
+        }
+        let skip_reason = if !state.accepting {
+            Some("closed")
+        } else if state.pending.len() >= THUMBNAIL_PENDING_FILES {
+            Some("queue_files")
+        } else if state.bytes.saturating_add(response.len()) > THUMBNAIL_PENDING_BYTES {
+            Some("queue_bytes")
+        } else {
+            None
+        };
+        if let Some(reason) = skip_reason {
+            state.skipped += 1;
+            if state.skipped.is_power_of_two() {
+                tracing::info!(
+                    operation = "audio.thumbnail.writer.skip",
+                    reason,
+                    skipped = state.skipped,
+                    pending = state.pending.len(),
+                    bytes = state.bytes,
+                    peak_bytes = state.peak_bytes,
+                    "thumbnail persistence skipped"
+                );
+            }
+            tracing::debug!(
+                operation = "audio.thumbnail.writer.skip",
+                reason,
+                skipped = state.skipped,
+                pending = state.pending.len(),
+                bytes = state.bytes,
+                "thumbnail persistence skipped"
+            );
+            return;
+        }
+        let payload = Arc::new(response.to_vec());
+        state.bytes += payload.len();
+        state.peak_bytes = state.peak_bytes.max(state.bytes);
+        state.enqueued += 1;
+        state.pending.insert(target, Arc::clone(&payload));
+        state.queue.push_back(ThumbnailWriteJob {
+            cache_dir,
+            filename,
+            payload,
+        });
+        wake.notify_one();
+    }
+
+    fn shutdown(&self) {
+        let (lock, wake) = &*self.shared;
+        let mut state = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.accepting = false;
+        let mut dropped = 0_u64;
+        while let Some(job) = state.queue.pop_front() {
+            state.pending.remove(&job.cache_dir.join(&job.filename));
+            state.bytes = state.bytes.saturating_sub(job.payload.len());
+            state.skipped += 1;
+            dropped += 1;
+        }
+        if dropped > 0 {
+            tracing::info!(
+                operation = "audio.thumbnail.writer.shutdown",
+                dropped,
+                skipped = state.skipped,
+                "queued thumbnail persistence canceled"
+            );
+        }
+        wake.notify_all();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while !state.pending.is_empty() {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            state = wake.wait_timeout(state, remaining).unwrap().0;
+        }
+    }
+
+    #[cfg(test)]
+    fn wait_idle(&self) {
+        let (lock, wake) = &*self.shared;
+        let mut state = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !state.pending.is_empty() {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            assert!(!remaining.is_zero(), "thumbnail writer did not drain");
+            state = wake.wait_timeout(state, remaining).unwrap().0;
+        }
+    }
+}
+
+fn thumbnail_writer_loop(shared: Arc<(StdMutex<ThumbnailWriterState>, Condvar)>) {
+    let (lock, wake) = &*shared;
+    loop {
+        let job = {
+            let mut state = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            while state.queue.is_empty() && state.accepting {
+                state = wake
+                    .wait(state)
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+            }
+            if !state.accepting {
+                return;
+            }
+            state.queue.pop_front().unwrap()
+        };
+        std::thread::yield_now();
+        let started = std::time::Instant::now();
+        let outcome = write_thumbnail_cache(&job.cache_dir, &job.filename, &job.payload);
+        let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+        let mut state = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.pending.remove(&job.cache_dir.join(&job.filename));
+        state.bytes = state.bytes.saturating_sub(job.payload.len());
+        match outcome {
+            ThumbnailWriteOutcome::Written => state.written += 1,
+            ThumbnailWriteOutcome::AlreadyPresent => state.already_present += 1,
+            ThumbnailWriteOutcome::Skipped(reason) => {
+                state.skipped += 1;
+                if state.skipped.is_power_of_two() {
+                    tracing::info!(
+                        operation = "audio.thumbnail.writer.skip",
+                        reason,
+                        skipped = state.skipped,
+                        "thumbnail persistence skipped"
+                    );
+                }
+                tracing::debug!(
+                    operation = "audio.thumbnail.writer.skip",
+                    reason,
+                    skipped = state.skipped,
+                    "thumbnail persistence skipped"
+                );
+            }
+            ThumbnailWriteOutcome::Failed(stage, error) => {
+                state.failed += 1;
+                // The error object is not logged because it may include a local path.
+                if state.failed.is_power_of_two() {
+                    tracing::warn!(operation = "audio.thumbnail.writer.fail", stage, error_kind = ?error.kind(), os_error = ?error.raw_os_error(), failed = state.failed, "thumbnail persistence failed");
+                } else {
+                    tracing::debug!(operation = "audio.thumbnail.writer.fail", stage, error_kind = ?error.kind(), os_error = ?error.raw_os_error(), failed = state.failed, "thumbnail persistence failed");
+                }
+            }
+        }
+        tracing::debug!(
+            operation = "audio.thumbnail.writer.result",
+            written = state.written,
+            already_present = state.already_present,
+            skipped = state.skipped,
+            failed = state.failed,
+            pending = state.pending.len(),
+            bytes = state.bytes,
+            elapsed_ms,
+            "thumbnail writer result"
+        );
+        let processed = state.written + state.already_present + state.failed;
+        if processed > 0 && (processed == 1 || processed % 64 == 0) {
+            tracing::info!(
+                operation = "audio.thumbnail.writer.progress",
+                enqueued = state.enqueued,
+                written = state.written,
+                already_present = state.already_present,
+                coalesced = state.coalesced,
+                skipped = state.skipped,
+                failed = state.failed,
+                pending = state.pending.len(),
+                bytes = state.bytes,
+                peak_bytes = state.peak_bytes,
+                elapsed_ms,
+                "thumbnail writer progress"
+            );
+        }
+        wake.notify_all();
+    }
+}
+
+pub fn shutdown_playlist_cover_cache() {
+    if let Some(writer) = THUMBNAIL_WRITER.get() {
+        writer.shutdown();
+    }
+}
 
 static REQUEST_COORDINATOR: OnceLock<CoverRequestCoordinator> = OnceLock::new();
 static PLAYLIST_REQUEST_COORDINATOR: OnceLock<PlaylistCoverRequestCoordinator> = OnceLock::new();
@@ -308,7 +600,12 @@ pub async fn load_playlist_cover_pixels(
     coordinator
         .run_registered(&client_id, window_generation, || async move {
             tauri::async_runtime::spawn_blocking(move || {
-                load_cover_pixels_blocking(&app_cache_dir, &input.file_path, input.max_edge)
+                load_playlist_cover_pixels_blocking_with_session(
+                    &app_cache_dir,
+                    &input.file_path,
+                    input.max_edge,
+                    Some((&input.client_id, input.window_generation)),
+                )
             })
             .await
             .map_err(|error| {
@@ -325,6 +622,395 @@ pub async fn load_playlist_cover_pixels(
             })?
         })
         .await
+}
+
+#[cfg(test)]
+fn load_playlist_cover_pixels_blocking(
+    app_cache_dir: &Path,
+    requested_path: &str,
+    max_edge: u32,
+) -> Result<Vec<u8>, CoverPixelsError> {
+    load_playlist_cover_pixels_blocking_with_session(app_cache_dir, requested_path, max_edge, None)
+}
+
+fn load_playlist_cover_pixels_blocking_with_session(
+    app_cache_dir: &Path,
+    requested_path: &str,
+    max_edge: u32,
+    session: Option<(&str, u64)>,
+) -> Result<Vec<u8>, CoverPixelsError> {
+    #[cfg(test)]
+    let stage_started = Instant::now();
+    let covers_root = app_cache_dir
+        .join(AUDIO_CACHE_DIRECTORY)
+        .join(COVER_DIRECTORY);
+    let path = validate_cover_path(&covers_root, Path::new(requested_path))?;
+    let bytes = read_bounded_file(&path)?;
+    #[cfg(test)]
+    THUMBNAIL_BENCH_READ_NS.fetch_add(stage_started.elapsed().as_nanos() as u64, Ordering::Relaxed);
+    #[cfg(test)]
+    let stage_started = Instant::now();
+    let source_hash = blake3::hash(&bytes);
+    #[cfg(test)]
+    THUMBNAIL_BENCH_HASH_NS.fetch_add(stage_started.elapsed().as_nanos() as u64, Ordering::Relaxed);
+    #[cfg(test)]
+    let stage_started = Instant::now();
+    let cache_dir = app_cache_dir
+        .join(AUDIO_CACHE_DIRECTORY)
+        .join(THUMBNAIL_DIRECTORY);
+    let filename = format!(
+        "{}-{max_edge}-t{THUMBNAIL_TRANSFORM_VERSION}-d{THUMBNAIL_DISK_VERSION}.spxr",
+        source_hash.to_hex()
+    );
+    let cache_path = cache_dir.join(&filename);
+    let pending = THUMBNAIL_WRITER
+        .get_or_init(ThumbnailWriter::new)
+        .pending(&cache_path);
+    #[cfg(test)]
+    if pending.is_some() {
+        THUMBNAIL_BENCH_PENDING_HITS.fetch_add(1, Ordering::Relaxed);
+    }
+    let cached = pending.or_else(|| read_thumbnail_cache(&cache_dir, &filename, max_edge));
+    #[cfg(test)]
+    THUMBNAIL_BENCH_LOOKUP_NS
+        .fetch_add(stage_started.elapsed().as_nanos() as u64, Ordering::Relaxed);
+    if let Some(cached) = cached {
+        #[cfg(test)]
+        THUMBNAIL_BENCH_HITS.fetch_add(1, Ordering::Relaxed);
+        return Ok(cached);
+    }
+    #[cfg(test)]
+    THUMBNAIL_BENCH_MISSES.fetch_add(1, Ordering::Relaxed);
+    #[cfg(test)]
+    let stage_started = Instant::now();
+    let response = decode_and_pack(&bytes, max_edge)?;
+    #[cfg(test)]
+    THUMBNAIL_BENCH_DECODE_NS
+        .fetch_add(stage_started.elapsed().as_nanos() as u64, Ordering::Relaxed);
+    if let Some((client_id, generation)) = session {
+        if let Some(coordinator) = PLAYLIST_REQUEST_COORDINATOR.get() {
+            coordinator.ensure_current(client_id, generation)?;
+        }
+    }
+    #[cfg(test)]
+    let stage_started = Instant::now();
+    THUMBNAIL_WRITER
+        .get_or_init(ThumbnailWriter::new)
+        .try_enqueue(cache_dir, filename, &response);
+    #[cfg(test)]
+    THUMBNAIL_BENCH_WRITE_NS
+        .fetch_add(stage_started.elapsed().as_nanos() as u64, Ordering::Relaxed);
+    Ok(response)
+}
+
+fn thumbnail_cache_root(cache_dir: &Path) -> Option<()> {
+    if fs::create_dir_all(cache_dir).is_err() {
+        return None;
+    }
+    let metadata = fs::symlink_metadata(cache_dir).ok()?;
+    metadata.file_type().is_dir().then_some(())
+}
+
+fn read_thumbnail_cache(cache_dir: &Path, filename: &str, max_edge: u32) -> Option<Vec<u8>> {
+    thumbnail_cache_root(cache_dir)?;
+    let path = cache_dir.join(filename);
+    let metadata = fs::symlink_metadata(&path).ok()?;
+    if !metadata.file_type().is_file()
+        || metadata.len() < THUMBNAIL_DISK_HEADER_LEN as u64
+        || metadata.len() > MAX_OUTPUT_BYTES + HEADER_LEN as u64 + THUMBNAIL_DISK_HEADER_LEN as u64
+    {
+        let _ = fs::remove_file(&path);
+        return None;
+    }
+    if !fs::canonicalize(&path)
+        .ok()?
+        .starts_with(fs::canonicalize(cache_dir).ok()?)
+    {
+        return None;
+    }
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            let _ = fs::remove_file(&path);
+            return None;
+        }
+    };
+    let payload = parse_thumbnail_cache(&bytes, max_edge);
+    if payload.is_some() {
+        let _ = File::open(&path).and_then(|file| file.set_modified(SystemTime::now()));
+    } else {
+        let _ = fs::remove_file(&path);
+    }
+    payload
+}
+
+fn parse_thumbnail_cache(bytes: &[u8], max_edge: u32) -> Option<Vec<u8>> {
+    if bytes.len() < THUMBNAIL_DISK_HEADER_LEN + usize::from(HEADER_LEN)
+        || bytes[0..4] != THUMBNAIL_DISK_MAGIC
+        || u16::from_le_bytes(bytes[4..6].try_into().ok()?) != THUMBNAIL_DISK_VERSION
+        || bytes[6..8] != [0, 0]
+    {
+        return None;
+    }
+    let payload_len = u32::from_le_bytes(bytes[8..12].try_into().ok()?) as usize;
+    let payload = bytes.get(THUMBNAIL_DISK_HEADER_LEN..)?;
+    if payload_len != payload.len()
+        || blake3::hash(payload).as_bytes() != &bytes[12..THUMBNAIL_DISK_HEADER_LEN]
+        || !valid_cached_spxr(payload, max_edge)
+    {
+        return None;
+    }
+    Some(payload.to_vec())
+}
+
+fn valid_cached_spxr(bytes: &[u8], max_edge: u32) -> bool {
+    if bytes.len() < usize::from(HEADER_LEN)
+        || bytes[0..4] != HEADER_MAGIC
+        || u16::from_le_bytes([bytes[4], bytes[5]]) != HEADER_VERSION
+        || u16::from_le_bytes([bytes[6], bytes[7]]) != HEADER_LEN
+    {
+        return false;
+    }
+    let field = |offset| u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
+    let width = field(8);
+    let height = field(12);
+    let stride = field(16);
+    let format = field(20);
+    let pixel_len = field(24);
+    let flags = field(28);
+    let source_width = field(32);
+    let source_height = field(36);
+    width > 0
+        && height > 0
+        && width.max(height) <= max_edge
+        && stride == width.saturating_mul(4)
+        && format == PIXEL_FORMAT_RGBA8_UNPREMULTIPLIED
+        && u64::from(pixel_len) <= MAX_OUTPUT_BYTES
+        && u64::from(stride) * u64::from(height) == u64::from(pixel_len)
+        && bytes.len() == usize::from(HEADER_LEN) + pixel_len as usize
+        && flags & !(FLAG_ORIENTATION_APPLIED | FLAG_RESIZED) == 0
+        && validate_source_dimensions(source_width, source_height, 0).is_ok()
+}
+
+fn write_thumbnail_cache(
+    cache_dir: &Path,
+    filename: &str,
+    response: &[u8],
+) -> ThumbnailWriteOutcome {
+    write_thumbnail_cache_with_limits(
+        cache_dir,
+        filename,
+        response,
+        THUMBNAIL_CACHE_BYTES,
+        THUMBNAIL_CACHE_FILES,
+    )
+}
+
+fn write_thumbnail_cache_with_limits(
+    cache_dir: &Path,
+    filename: &str,
+    response: &[u8],
+    byte_limit: u64,
+    file_limit: usize,
+) -> ThumbnailWriteOutcome {
+    if let Err(error) = fs::create_dir_all(cache_dir) {
+        return ThumbnailWriteOutcome::Failed("cache_directory", error);
+    }
+    match fs::symlink_metadata(cache_dir) {
+        Ok(metadata) if metadata.file_type().is_dir() => {}
+        Ok(_) => {
+            return ThumbnailWriteOutcome::Failed(
+                "cache_directory_type",
+                io::ErrorKind::NotADirectory.into(),
+            );
+        }
+        Err(error) => return ThumbnailWriteOutcome::Failed("cache_directory_metadata", error),
+    }
+    let Some(response_len) = u32::try_from(response.len()).ok() else {
+        return ThumbnailWriteOutcome::Skipped("response_too_large");
+    };
+    let target = cache_dir.join(filename);
+    match thumbnail_target_present(&target) {
+        Ok(true) => return ThumbnailWriteOutcome::AlreadyPresent,
+        Ok(false) => {}
+        Err(error) => return ThumbnailWriteOutcome::Failed("target_metadata", error),
+    }
+    let mut encoded = Vec::with_capacity(THUMBNAIL_DISK_HEADER_LEN + response.len());
+    encoded.extend_from_slice(&THUMBNAIL_DISK_MAGIC);
+    encoded.extend_from_slice(&THUMBNAIL_DISK_VERSION.to_le_bytes());
+    encoded.extend_from_slice(&0_u16.to_le_bytes());
+    encoded.extend_from_slice(&response_len.to_le_bytes());
+    encoded.extend_from_slice(blake3::hash(response).as_bytes());
+    encoded.extend_from_slice(response);
+    match make_thumbnail_room_with_limits_checked(
+        cache_dir,
+        encoded.len() as u64,
+        1,
+        byte_limit,
+        file_limit,
+    ) {
+        Ok(true) => {}
+        Ok(false) => return ThumbnailWriteOutcome::Skipped("disk_budget"),
+        Err(error) => return ThumbnailWriteOutcome::Failed("disk_budget_scan", error),
+    }
+    // The background writer is single-threaded. create_new also isolates
+    // concurrent processes and prevents a crash from exposing partial bytes.
+    let temp_path = cache_dir.join(format!(
+        ".tmp-{}-{}",
+        std::process::id(),
+        THUMBNAIL_TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    let mut file = match OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp_path)
+    {
+        Ok(file) => file,
+        Err(error) => return ThumbnailWriteOutcome::Failed("temp_create", error),
+    };
+    let outcome = (|| -> Result<ThumbnailWriteOutcome, (&'static str, io::Error)> {
+        file.write_all(&encoded).map_err(|error| ("write", error))?;
+        file.sync_all().map_err(|error| ("sync", error))?;
+        drop(file);
+        if thumbnail_target_present(&target).map_err(|error| ("target_metadata", error))? {
+            return Ok(ThumbnailWriteOutcome::AlreadyPresent);
+        }
+        match fs::rename(&temp_path, &target) {
+            Ok(()) => Ok(ThumbnailWriteOutcome::Written),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                if thumbnail_target_present(&target).map_err(|error| ("target_metadata", error))? {
+                    Ok(ThumbnailWriteOutcome::AlreadyPresent)
+                } else {
+                    Err(("publish", error))
+                }
+            }
+            Err(error) => Err(("publish", error)),
+        }
+    })();
+    if let Err(error) = fs::remove_file(&temp_path) {
+        if error.kind() != io::ErrorKind::NotFound {
+            return ThumbnailWriteOutcome::Failed("temp_cleanup", error);
+        }
+    }
+    match outcome {
+        Ok(outcome) => outcome,
+        Err((stage, error)) => ThumbnailWriteOutcome::Failed(stage, error),
+    }
+}
+
+fn thumbnail_target_present(target: &Path) -> io::Result<bool> {
+    match fs::symlink_metadata(target) {
+        Ok(metadata) if metadata.file_type().is_file() => Ok(true),
+        Ok(_) => Err(io::ErrorKind::InvalidData.into()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(test)]
+fn make_thumbnail_room(cache_dir: &Path, additional_bytes: u64, additional_files: usize) -> bool {
+    make_thumbnail_room_with_limits(
+        cache_dir,
+        additional_bytes,
+        additional_files,
+        THUMBNAIL_CACHE_BYTES,
+        THUMBNAIL_CACHE_FILES,
+    )
+}
+
+#[cfg(test)]
+fn make_thumbnail_room_with_limits(
+    cache_dir: &Path,
+    additional_bytes: u64,
+    additional_files: usize,
+    byte_limit: u64,
+    file_limit: usize,
+) -> bool {
+    make_thumbnail_room_with_limits_checked(
+        cache_dir,
+        additional_bytes,
+        additional_files,
+        byte_limit,
+        file_limit,
+    )
+    .unwrap_or(false)
+}
+
+fn make_thumbnail_room_with_limits_checked(
+    cache_dir: &Path,
+    additional_bytes: u64,
+    additional_files: usize,
+    byte_limit: u64,
+    file_limit: usize,
+) -> io::Result<bool> {
+    if additional_bytes > byte_limit || additional_files > file_limit {
+        return Ok(false);
+    }
+    let entries = fs::read_dir(cache_dir)?;
+    let mut files = Vec::new();
+    let mut count = 0usize;
+    let mut bytes = 0u64;
+    for entry in entries.take(THUMBNAIL_CACHE_SCAN_LIMIT + 1) {
+        let entry = entry?;
+        count += 1;
+        if count > THUMBNAIL_CACHE_SCAN_LIMIT {
+            // Never add more bytes to an externally bloated directory. The
+            // normal app path stays at or below the fixed scan bound.
+            return Ok(false);
+        }
+        let path = entry.path();
+        let Ok(metadata) = fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if path
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().starts_with(".tmp-"))
+        {
+            // Another process may still be publishing this file. Only remove
+            // clearly abandoned temporary files.
+            if metadata
+                .modified()
+                .ok()
+                .and_then(|modified| SystemTime::now().duration_since(modified).ok())
+                .is_some_and(|age| age >= THUMBNAIL_TEMP_STALE_AGE)
+            {
+                let _ = fs::remove_file(&path);
+            }
+            continue;
+        }
+        if !metadata.file_type().is_file() || path.extension().is_none_or(|ext| ext != "spxr") {
+            continue;
+        }
+        bytes = bytes.saturating_add(metadata.len());
+        files.push((
+            path,
+            metadata.len(),
+            metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
+        ));
+    }
+    files.sort_by_key(|(_, _, modified)| *modified);
+    let mut file_count = files.len();
+    let mut eviction_error = None;
+    for (path, size, _) in files {
+        if bytes.saturating_add(additional_bytes) <= byte_limit
+            && file_count.saturating_add(additional_files) <= file_limit
+        {
+            break;
+        }
+        match fs::remove_file(path) {
+            Ok(()) => {
+                bytes = bytes.saturating_sub(size);
+                file_count -= 1;
+            }
+            Err(error) => eviction_error = Some(error),
+        }
+    }
+    let has_room = bytes.saturating_add(additional_bytes) <= byte_limit
+        && file_count.saturating_add(additional_files) <= file_limit;
+    match (has_room, eviction_error) {
+        (false, Some(error)) => Err(error),
+        _ => Ok(has_room),
+    }
 }
 
 fn load_cover_pixels_blocking(
@@ -767,9 +1453,11 @@ mod tests {
             atomic::{AtomicU64, AtomicUsize, Ordering},
             Arc,
         },
+        time::Instant,
     };
 
     use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
+    use lofty::file::TaggedFileExt;
 
     use super::*;
 
@@ -797,6 +1485,172 @@ mod tests {
     impl Drop for TestDirectory {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    // Release-only manual probe. It reads the library without changing it, stages
+    // anonymous embedded covers in a temporary app cache, and exercises the same
+    // blocking function as the playlist command. No media paths are printed.
+    #[test]
+    #[ignore]
+    fn benchmark_real_playlist_covers() {
+        let library =
+            PathBuf::from(std::env::var_os("SPMUSIC_BENCH_LIBRARY").expect("library env"));
+        let mut directories = vec![library];
+        let mut candidates = Vec::new();
+        while let Some(directory) = directories.pop() {
+            for entry in fs::read_dir(directory)
+                .expect("read library directory")
+                .flatten()
+            {
+                let path = entry.path();
+                if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                    directories.push(path);
+                } else if path
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("flac"))
+                {
+                    candidates.push(path);
+                }
+            }
+        }
+        candidates.sort_by_key(|path| blake3::hash(path.to_string_lossy().as_bytes()).to_hex());
+        let test_dir = TestDirectory::new();
+        let covers = test_dir.path().join("audio").join("covers");
+        fs::create_dir_all(&covers).unwrap();
+        let mut sample = Vec::new();
+        for path in candidates {
+            let Ok(tagged) = super::super::metadata::read_tagged_file(&path) else {
+                continue;
+            };
+            let Some(tag) = tagged.primary_tag().or_else(|| tagged.first_tag()) else {
+                continue;
+            };
+            let Some(picture) = tag.pictures().first() else {
+                continue;
+            };
+            let bytes = picture.data();
+            if bytes.is_empty() || bytes.len() as u64 > MAX_INPUT_BYTES {
+                continue;
+            }
+            let cover_path = covers.join(format!("{}.bin", blake3::hash(bytes).to_hex()));
+            fs::write(&cover_path, bytes).unwrap();
+            if load_cover_pixels_blocking(test_dir.path(), cover_path.to_str().unwrap(), 256)
+                .is_ok()
+            {
+                sample.push(cover_path);
+            }
+            if sample.len() == 83 {
+                break;
+            }
+        }
+        assert_eq!(sample.len(), 83, "expected 83 valid embedded covers");
+        let digest = blake3::hash(
+            sample
+                .iter()
+                .flat_map(|p| {
+                    p.file_stem()
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned()
+                        .into_bytes()
+                })
+                .collect::<Vec<_>>()
+                .as_slice(),
+        );
+        println!(
+            "SP022 sample_count={} sample_digest={}",
+            sample.len(),
+            digest.to_hex()
+        );
+        let thumbnails = test_dir.path().join("audio").join(THUMBNAIL_DIRECTORY);
+        for pair in 1..=5 {
+            let baseline = || {
+                let started = Instant::now();
+                let mut response_bytes = 0usize;
+                for path in &sample {
+                    response_bytes +=
+                        load_cover_pixels_blocking(test_dir.path(), path.to_str().unwrap(), 256)
+                            .unwrap()
+                            .len();
+                }
+                (started.elapsed().as_secs_f64() * 1000.0, response_bytes)
+            };
+            let cold = || {
+                THUMBNAIL_WRITER
+                    .get_or_init(ThumbnailWriter::new)
+                    .wait_idle();
+                if thumbnails.exists() {
+                    fs::remove_dir_all(&thumbnails).unwrap();
+                }
+                THUMBNAIL_BENCH_HITS.store(0, Ordering::Relaxed);
+                THUMBNAIL_BENCH_MISSES.store(0, Ordering::Relaxed);
+                THUMBNAIL_BENCH_READ_NS.store(0, Ordering::Relaxed);
+                THUMBNAIL_BENCH_HASH_NS.store(0, Ordering::Relaxed);
+                THUMBNAIL_BENCH_LOOKUP_NS.store(0, Ordering::Relaxed);
+                THUMBNAIL_BENCH_DECODE_NS.store(0, Ordering::Relaxed);
+                THUMBNAIL_BENCH_WRITE_NS.store(0, Ordering::Relaxed);
+                let started = Instant::now();
+                let mut response_bytes = 0usize;
+                for path in &sample {
+                    response_bytes += load_playlist_cover_pixels_blocking(
+                        test_dir.path(),
+                        path.to_str().unwrap(),
+                        256,
+                    )
+                    .unwrap()
+                    .len();
+                }
+                let response_ms = started.elapsed().as_secs_f64() * 1000.0;
+                let drain_started = Instant::now();
+                THUMBNAIL_WRITER.get().unwrap().wait_idle();
+                println!(
+                    "SP022 writer_drain_ms={:.3}",
+                    drain_started.elapsed().as_secs_f64() * 1000.0
+                );
+                (response_ms, response_bytes)
+            };
+            let (old, new) = if pair % 2 == 1 {
+                (baseline(), cold())
+            } else {
+                let new = cold();
+                (baseline(), new)
+            };
+            assert_eq!(old.1, new.1);
+            println!("SP022 pair={} old_ms={:.3} cold_ms={:.3} read_ms={:.3} hash_ms={:.3} lookup_ms={:.3} decode_ms={:.3} write_ms={:.3} hits={} misses={}",
+                pair, old.0, new.0,
+                THUMBNAIL_BENCH_READ_NS.load(Ordering::Relaxed) as f64 / 1_000_000.0,
+                THUMBNAIL_BENCH_HASH_NS.load(Ordering::Relaxed) as f64 / 1_000_000.0,
+                THUMBNAIL_BENCH_LOOKUP_NS.load(Ordering::Relaxed) as f64 / 1_000_000.0,
+                THUMBNAIL_BENCH_DECODE_NS.load(Ordering::Relaxed) as f64 / 1_000_000.0,
+                THUMBNAIL_BENCH_WRITE_NS.load(Ordering::Relaxed) as f64 / 1_000_000.0,
+                THUMBNAIL_BENCH_HITS.load(Ordering::Relaxed), THUMBNAIL_BENCH_MISSES.load(Ordering::Relaxed));
+        }
+        for round in 1..=5 {
+            THUMBNAIL_BENCH_HITS.store(0, Ordering::Relaxed);
+            THUMBNAIL_BENCH_MISSES.store(0, Ordering::Relaxed);
+            let started = Instant::now();
+            let mut response_bytes = 0usize;
+            for path in &sample {
+                response_bytes += load_playlist_cover_pixels_blocking(
+                    test_dir.path(),
+                    path.to_str().unwrap(),
+                    256,
+                )
+                .unwrap()
+                .len();
+            }
+            let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+            let thumbnails = test_dir.path().join("audio").join(THUMBNAIL_DIRECTORY);
+            let files = fs::read_dir(thumbnails)
+                .unwrap()
+                .flatten()
+                .collect::<Vec<_>>();
+            let disk_bytes = files
+                .iter()
+                .map(|entry| entry.metadata().unwrap().len())
+                .sum::<u64>();
+            println!("SP022 hot_round={} elapsed_ms={:.3} response_bytes={} hits={} misses={} cache_files={} cache_bytes={}", round, elapsed_ms, response_bytes, THUMBNAIL_BENCH_HITS.load(Ordering::Relaxed), THUMBNAIL_BENCH_MISSES.load(Ordering::Relaxed), files.len(), disk_bytes);
         }
     }
 
@@ -897,6 +1751,293 @@ mod tests {
         assert_eq!(u32_at(&response, 24), 128 * 64 * 4);
         assert_eq!(u32_at(&response, 28), FLAG_RESIZED);
         assert_eq!(response.len(), 40 + 128 * 64 * 4);
+    }
+
+    #[test]
+    fn playlist_cache_hit_and_source_change() {
+        let dir = TestDirectory::new();
+        let covers = dir.path().join("audio").join("covers");
+        fs::create_dir_all(&covers).unwrap();
+        let source = covers.join("source.png");
+        fs::write(&source, png_bytes(400, 200)).unwrap();
+        let path = source.to_str().unwrap();
+        let first = load_playlist_cover_pixels_blocking(dir.path(), path, 128).unwrap();
+        let again = load_playlist_cover_pixels_blocking(dir.path(), path, 128).unwrap();
+        assert_eq!(first, again);
+        assert_eq!(&again[..4], b"SPXR");
+        fs::write(&source, png_bytes(200, 400)).unwrap();
+        let changed = load_playlist_cover_pixels_blocking(dir.path(), path, 128).unwrap();
+        assert_ne!(first, changed);
+        assert_eq!(u32_at(&changed, 8), 64);
+        assert_eq!(u32_at(&changed, 12), 128);
+    }
+
+    #[test]
+    fn playlist_cache_corruption_and_interrupted_temp_rebuild() {
+        let dir = TestDirectory::new();
+        let covers = dir.path().join("audio").join("covers");
+        fs::create_dir_all(&covers).unwrap();
+        let source = covers.join("source.png");
+        let bytes = png_bytes(400, 200);
+        fs::write(&source, &bytes).unwrap();
+        let path = source.to_str().unwrap();
+        let expected = load_playlist_cover_pixels_blocking(dir.path(), path, 128).unwrap();
+        THUMBNAIL_WRITER.get().unwrap().wait_idle();
+        let thumbs = dir.path().join("audio").join(THUMBNAIL_DIRECTORY);
+        let key = format!(
+            "{}-128-t{THUMBNAIL_TRANSFORM_VERSION}-d{THUMBNAIL_DISK_VERSION}.spxr",
+            blake3::hash(&bytes).to_hex()
+        );
+        fs::write(thumbs.join(&key), b"broken").unwrap();
+        fs::write(thumbs.join(".tmp-dead"), b"partial").unwrap();
+        OpenOptions::new()
+            .write(true)
+            .open(thumbs.join(".tmp-dead"))
+            .unwrap()
+            .set_modified(
+                SystemTime::now() - THUMBNAIL_TEMP_STALE_AGE - std::time::Duration::from_secs(1),
+            )
+            .unwrap();
+        let recovered = load_playlist_cover_pixels_blocking(dir.path(), path, 128).unwrap();
+        THUMBNAIL_WRITER.get().unwrap().wait_idle();
+        assert_eq!(expected, recovered);
+        assert!(parse_thumbnail_cache(&fs::read(thumbs.join(key)).unwrap(), 128).is_some());
+        assert!(!thumbs.join(".tmp-dead").exists());
+    }
+
+    #[test]
+    fn playlist_cache_budget_limits_files_without_touching_originals() {
+        let dir = TestDirectory::new();
+        let thumbs = dir.path().join("audio").join(THUMBNAIL_DIRECTORY);
+        let covers = dir.path().join("audio").join("covers");
+        fs::create_dir_all(&thumbs).unwrap();
+        fs::create_dir_all(&covers).unwrap();
+        let source = covers.join("original.png");
+        fs::write(&source, png_bytes(1, 1)).unwrap();
+        for index in 0..(THUMBNAIL_CACHE_FILES + 2) {
+            fs::write(thumbs.join(format!("{index:08}.spxr")), b"x").unwrap();
+        }
+        assert!(make_thumbnail_room(&thumbs, 10, 1));
+        let count = fs::read_dir(&thumbs).unwrap().count();
+        assert!(count + 1 <= THUMBNAIL_CACHE_FILES);
+        assert!(source.exists());
+        assert!(!make_thumbnail_room(&thumbs, THUMBNAIL_CACHE_BYTES + 1, 1));
+    }
+
+    #[test]
+    fn playlist_cache_byte_budget_evicts_oldest() {
+        let dir = TestDirectory::new();
+        let thumbs = dir.path().join("audio").join(THUMBNAIL_DIRECTORY);
+        fs::create_dir_all(&thumbs).unwrap();
+        fs::write(thumbs.join("old.spxr"), [1u8; 8]).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        fs::write(thumbs.join("new.spxr"), [2u8; 8]).unwrap();
+        assert!(make_thumbnail_room_with_limits(&thumbs, 8, 1, 16, 3));
+        assert!(!thumbs.join("old.spxr").exists());
+        assert!(thumbs.join("new.spxr").exists());
+    }
+
+    #[test]
+    fn thumbnail_write_outcomes_distinguish_budget_presence_and_io_failure() {
+        let dir = TestDirectory::new();
+        let thumbs = dir.path().join("audio").join(THUMBNAIL_DIRECTORY);
+        let response = decode_and_pack(&png_bytes(2, 2), 128).unwrap();
+        assert!(matches!(
+            write_thumbnail_cache_with_limits(&thumbs, "small.spxr", &response, 1, 1),
+            ThumbnailWriteOutcome::Skipped("disk_budget")
+        ));
+        assert!(fs::read_dir(&thumbs).unwrap().next().is_none());
+        assert!(matches!(
+            write_thumbnail_cache(&thumbs, "valid.spxr", &response),
+            ThumbnailWriteOutcome::Written
+        ));
+        assert!(matches!(
+            write_thumbnail_cache(&thumbs, "valid.spxr", &response),
+            ThumbnailWriteOutcome::AlreadyPresent
+        ));
+        assert!(
+            parse_thumbnail_cache(&fs::read(thumbs.join("valid.spxr")).unwrap(), 128).is_some()
+        );
+
+        let blocked = dir.path().join("blocked");
+        fs::write(&blocked, b"not a directory").unwrap();
+        assert!(matches!(
+            write_thumbnail_cache(&blocked, "unwritten.spxr", &response),
+            ThumbnailWriteOutcome::Failed("cache_directory", _)
+        ));
+    }
+
+    #[test]
+    fn thumbnail_writer_failure_is_not_counted_as_written() {
+        let dir = TestDirectory::new();
+        let blocked = dir.path().join("blocked");
+        fs::write(&blocked, b"not a directory").unwrap();
+        let writer = ThumbnailWriter::new();
+        writer.try_enqueue(blocked.clone(), "unwritten.spxr".into(), b"response");
+        writer.wait_idle();
+        let state = writer.shared.0.lock().unwrap();
+        assert_eq!(state.failed, 1);
+        assert_eq!(state.written, 0);
+        assert_eq!(state.already_present, 0);
+        assert_eq!(state.skipped, 0);
+        assert!(state.pending.is_empty());
+        assert_eq!(state.bytes, 0);
+        drop(state);
+        writer.shutdown();
+        assert!(!blocked.join("unwritten.spxr").exists());
+    }
+
+    #[test]
+    fn playlist_cover_succeeds_when_thumbnail_directory_is_unwritable() {
+        let dir = TestDirectory::new();
+        let covers = dir.path().join("audio").join(COVER_DIRECTORY);
+        fs::create_dir_all(&covers).unwrap();
+        let source = covers.join("source.png");
+        fs::write(&source, png_bytes(4, 2)).unwrap();
+        let blocked = dir.path().join("audio").join(THUMBNAIL_DIRECTORY);
+        fs::write(&blocked, b"not a directory").unwrap();
+
+        let first = load_playlist_cover_pixels_blocking(dir.path(), source.to_str().unwrap(), 128)
+            .expect("decoding should not depend on thumbnail persistence");
+        THUMBNAIL_WRITER.get().unwrap().wait_idle();
+        let second = load_playlist_cover_pixels_blocking(dir.path(), source.to_str().unwrap(), 128)
+            .expect("subsequent requests should retry from the source");
+        THUMBNAIL_WRITER.get().unwrap().wait_idle();
+        assert_eq!(first, second);
+        assert_eq!(&first[..4], b"SPXR");
+        assert_eq!(fs::read(&blocked).unwrap(), b"not a directory");
+    }
+
+    #[test]
+    fn interrupted_temp_files_are_cleaned_within_bounded_scan() {
+        let dir = TestDirectory::new();
+        let thumbs = dir.path().join("audio").join(THUMBNAIL_DIRECTORY);
+        fs::create_dir_all(&thumbs).unwrap();
+        for index in 0..3000 {
+            let path = thumbs.join(format!(".tmp-{index}"));
+            fs::write(&path, b"partial").unwrap();
+            OpenOptions::new()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_modified(
+                    SystemTime::now()
+                        - THUMBNAIL_TEMP_STALE_AGE
+                        - std::time::Duration::from_secs(1),
+                )
+                .unwrap();
+        }
+        fs::write(thumbs.join(".tmp-active"), b"still writing").unwrap();
+        assert!(make_thumbnail_room(&thumbs, 10, 1));
+        assert_eq!(fs::read_dir(&thumbs).unwrap().count(), 1);
+        assert!(thumbs.join(".tmp-active").exists());
+    }
+
+    #[test]
+    fn concurrent_same_key_returns_identical_complete_responses() {
+        let dir = TestDirectory::new();
+        let covers = dir.path().join("audio").join("covers");
+        fs::create_dir_all(&covers).unwrap();
+        let source = covers.join("source.png");
+        fs::write(&source, png_bytes(400, 200)).unwrap();
+        let root = dir.path().to_owned();
+        let workers = (0..4)
+            .map(|_| {
+                let root = root.clone();
+                let source = source.clone();
+                std::thread::spawn(move || {
+                    load_playlist_cover_pixels_blocking(&root, source.to_str().unwrap(), 128)
+                        .unwrap()
+                })
+            })
+            .collect::<Vec<_>>();
+        let responses = workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .collect::<Vec<_>>();
+        assert!(responses.iter().all(|response| response == &responses[0]));
+        THUMBNAIL_WRITER.get().unwrap().wait_idle();
+        let thumbnails = root.join("audio").join(THUMBNAIL_DIRECTORY);
+        let entries = fs::read_dir(&thumbnails).unwrap().collect::<Vec<_>>();
+        assert_eq!(entries.len(), 1);
+        assert!(parse_thumbnail_cache(
+            &fs::read(entries[0].as_ref().unwrap().path()).unwrap(),
+            128
+        )
+        .is_some());
+    }
+
+    #[test]
+    fn thumbnail_writer_queue_is_bounded_and_shutdown_rejects_new_work() {
+        let state = ThumbnailWriterState {
+            pending: HashMap::new(),
+            queue: VecDeque::new(),
+            bytes: 0,
+            peak_bytes: 0,
+            enqueued: 0,
+            coalesced: 0,
+            skipped: 0,
+            written: 0,
+            already_present: 0,
+            failed: 0,
+            accepting: true,
+        };
+        // An unstarted writer makes the queue boundary deterministic.
+        let writer = ThumbnailWriter {
+            shared: Arc::new((StdMutex::new(state), Condvar::new())),
+        };
+        let cache_dir = PathBuf::from("bounded-thumbnail-test");
+        for index in 0..THUMBNAIL_PENDING_FILES {
+            writer.try_enqueue(cache_dir.clone(), format!("{index}.spxr"), b"x");
+        }
+        writer.try_enqueue(cache_dir.clone(), "overflow.spxr".into(), b"x");
+        {
+            let state = writer.shared.0.lock().unwrap();
+            assert_eq!(state.pending.len(), THUMBNAIL_PENDING_FILES);
+            assert_eq!(state.bytes, THUMBNAIL_PENDING_FILES);
+            assert_eq!(state.skipped, 1);
+        }
+        assert_eq!(
+            writer.pending(&cache_dir.join("0.spxr")),
+            Some(b"x".to_vec())
+        );
+        writer.shutdown();
+        writer.try_enqueue(cache_dir, "after-shutdown.spxr".into(), b"x");
+        let state = writer.shared.0.lock().unwrap();
+        assert!(!state.accepting);
+        assert!(state.pending.is_empty());
+        assert_eq!(state.bytes, 0);
+        assert_eq!(state.skipped, THUMBNAIL_PENDING_FILES as u64 + 2);
+    }
+
+    #[test]
+    fn stale_playlist_session_does_not_enqueue_thumbnail() {
+        let dir = TestDirectory::new();
+        let covers = dir.path().join("audio").join("covers");
+        fs::create_dir_all(&covers).unwrap();
+        let source = covers.join("source.png");
+        fs::write(&source, png_bytes(400, 200)).unwrap();
+        let client_id = format!(
+            "stale-cache-{}",
+            THUMBNAIL_TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        );
+        let stale_generation = begin_playlist_cover_window(&client_id).unwrap();
+        let _current_generation = begin_playlist_cover_window(&client_id).unwrap();
+        let result = load_playlist_cover_pixels_blocking_with_session(
+            dir.path(),
+            source.to_str().unwrap(),
+            128,
+            Some((&client_id, stale_generation)),
+        );
+        assert!(matches!(
+            result,
+            Err(CoverPixelsError {
+                code: CoverPixelsErrorCode::StaleRequest,
+                ..
+            })
+        ));
+        let thumbnails = dir.path().join("audio").join(THUMBNAIL_DIRECTORY);
+        assert!(fs::read_dir(thumbnails).unwrap().next().is_none());
     }
 
     #[test]

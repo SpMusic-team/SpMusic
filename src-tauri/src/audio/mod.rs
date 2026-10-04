@@ -24,7 +24,7 @@ mod source_tests;
 pub use controller::AudioController;
 pub use cover_pixels::{
     begin_playlist_cover_window, load_cover_pixels, load_playlist_cover_pixels,
-    AudioBeginPlaylistCoverWindowInput, AudioLoadCoverPixelsInput,
+    shutdown_playlist_cover_cache, AudioBeginPlaylistCoverWindowInput, AudioLoadCoverPixelsInput,
     AudioLoadPlaylistCoverPixelsInput, CoverPixelsError,
 };
 pub(crate) use device::current_output_info;

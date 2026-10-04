@@ -8,12 +8,12 @@ use app_paths::AppPaths;
 use audio::current_output_info;
 use audio::{
     begin_playlist_cover_window, load_cover_pixels, load_playlist_cover_pixels,
-    AudioBeginPlaylistCoverWindowInput, AudioCommandError, AudioController, AudioEmbedLyricsInput,
-    AudioFolderPlaylist, AudioFolderPlaylistInput, AudioLoadAndPlayInput, AudioLoadAndPlayResult,
-    AudioLoadCoverPixelsInput, AudioLoadFileInput, AudioLoadPlaylistCoverPixelsInput,
-    AudioOpenFileInput, AudioOpenSourceResult, AudioOutputInfo, AudioPlayInput, AudioPlaybackState,
-    AudioSeekInput, AudioSetVolumeInput, AudioTrackRef, AudioTransitionPlaybackInput,
-    CoverPixelsError,
+    shutdown_playlist_cover_cache, AudioBeginPlaylistCoverWindowInput, AudioCommandError,
+    AudioController, AudioEmbedLyricsInput, AudioFolderPlaylist, AudioFolderPlaylistInput,
+    AudioLoadAndPlayInput, AudioLoadAndPlayResult, AudioLoadCoverPixelsInput, AudioLoadFileInput,
+    AudioLoadPlaylistCoverPixelsInput, AudioOpenFileInput, AudioOpenSourceResult, AudioOutputInfo,
+    AudioPlayInput, AudioPlaybackState, AudioSeekInput, AudioSetVolumeInput, AudioTrackRef,
+    AudioTransitionPlaybackInput, CoverPixelsError,
 };
 use tauri::{ipc::Response, Manager, State};
 use tracing_subscriber::EnvFilter;
@@ -384,8 +384,13 @@ pub fn run() {
             }
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                shutdown_playlist_cover_cache();
+            }
+        });
 }
 
 fn init_tracing() {

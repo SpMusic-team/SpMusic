@@ -1,5 +1,5 @@
 import '@/features/player/styles/player.css'
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, type TransitionEvent } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject, type TransitionEvent } from 'react'
 import { flushSync } from 'react-dom'
 import { AnimatePresence, LayoutGroup, animate, motion, useMotionValue, useReducedMotion, type MotionValue } from 'motion/react'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -40,6 +40,48 @@ export type PlayerSurfaceDevAudioTools = {
 export type PlayerSurfaceProps = {
   viewModel: PlayerUiViewModel
   devAudioTools?: PlayerSurfaceDevAudioTools
+}
+
+type PlaylistWindowReport = NonNullable<ComponentProps<typeof PlaylistPanel>['onVisibleTrackIdsChange']>
+type PlaylistWindowOwners = { active: symbol | null; closing: symbol | null }
+
+function OwnedPlaylistPanel({
+  ownerStateRef,
+  onVisibleTrackIdsChange,
+  ...props
+}: ComponentProps<typeof PlaylistPanel> & { ownerStateRef: RefObject<PlaylistWindowOwners> }) {
+  const [owner] = useState(() => Symbol('playlist-panel'))
+  const reportRef = useRef(onVisibleTrackIdsChange)
+  useLayoutEffect(() => { reportRef.current = onVisibleTrackIdsChange }, [onVisibleTrackIdsChange])
+
+  useLayoutEffect(() => {
+    const owners = ownerStateRef.current
+    owners.active = owner
+    owners.closing = null
+    return () => {
+      if (owners.active === owner) {
+        owners.active = null
+        owners.closing = owner
+      }
+    }
+  }, [owner, ownerStateRef])
+
+  const reportWindow = useCallback<PlaylistWindowReport>((trackIds, keepPersistentArtwork, showArtwork, demand) => {
+    const state = ownerStateRef.current
+    if (state.active === owner) {
+      reportRef.current?.(trackIds, keepPersistentArtwork, showArtwork, demand)
+      return
+    }
+    // An exiting panel may clear the window once only when no successor owns it.
+    const finalClear = trackIds.length === 0 && keepPersistentArtwork === true && showArtwork === true
+      && demand?.visibleIds.length === 0 && demand.prefetchIds.length === 0 && demand.heldIds.length === 0
+    if (state.closing === owner && finalClear) {
+      state.closing = null
+      reportRef.current?.(trackIds, keepPersistentArtwork, showArtwork, demand)
+    }
+  }, [owner, ownerStateRef])
+
+  return <PlaylistPanel {...props} onVisibleTrackIdsChange={onVisibleTrackIdsChange ? reportWindow : undefined} />
 }
 
 type PlaybackVisualState = 'playing' | 'paused'
@@ -718,6 +760,20 @@ export function PlayerSurface({
   const appearanceMotion = useAppearanceMotion()
   const playlistOpen = playlist.isOpen
   const onPlaylistOpenChange = playlist.onOpenChange
+  const playlistWindowOwnersRef = useRef<PlaylistWindowOwners>({ active: null, closing: null })
+  useLayoutEffect(() => {
+    const owners = playlistWindowOwnersRef.current
+    if (playlistOpen) {
+      // A rapid reopen can reuse the exiting keyed panel instead of mounting a new one.
+      if (owners.active === null && owners.closing !== null) {
+        owners.active = owners.closing
+        owners.closing = null
+      }
+    } else if (owners.active !== null) {
+      owners.closing = owners.active
+      owners.active = null
+    }
+  }, [playlistOpen])
   const requestPlaylistOpenChange = useCallback((nextOpen: boolean) => {
     if (nextOpen || !track || currentArtworkReady) {
       playlistCloseRequestedRef.current = false
@@ -2364,8 +2420,9 @@ export function PlayerSurface({
 
           <AnimatePresence initial={false}>
             {playlist.isOpen ? (
-              <PlaylistPanel
+              <OwnedPlaylistPanel
               key={`${playlist.playlistName ?? 'playlist'}:${playlist.tracks.length}:${playlist.tracks[0]?.id ?? ''}:${playlist.tracks[playlist.tracks.length - 1]?.id ?? ''}`}
+              ownerStateRef={playlistWindowOwnersRef}
               tracks={playlist.tracks}
               unavailableTrackIds={playlist.unavailableTrackIds}
               playlistName={playlist.playlistName}

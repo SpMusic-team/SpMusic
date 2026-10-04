@@ -88,6 +88,125 @@ type CardLayoutSnapshot = {
   copy: DOMRect
 }
 
+type PlaylistCardRow = {
+  start: number
+  end: number
+  top: number
+  height: number
+  anchor: HTMLElement
+}
+
+type PlaylistCardIndex = {
+  cards: HTMLElement[]
+  rows: PlaylistCardRow[]
+  gridWidth: number
+  gridHeight: number
+  panelWidth: number
+  panelHeight: number
+}
+
+// Build only when the DOM or layout changes. CSS can place more columns than
+// data-layout-columns says, so the actual card offsets define the rows.
+function buildPlaylistCardIndex(grid: HTMLElement, panel: HTMLElement): PlaylistCardIndex | null {
+  if (grid.dataset.layoutLevel !== '0' || getComputedStyle(grid).display !== 'grid') return null
+  const cards = [...grid.querySelectorAll<HTMLElement>('[data-playlist-track-id]')]
+  if (cards.length === 0 || cards.length !== grid.children.length) return null
+  const rows: PlaylistCardRow[] = []
+  let rowLeft = -Infinity
+  let cardWidth = 0
+  const offsetParent = cards[0]?.offsetParent
+  for (const [index, card] of cards.entries()) {
+    if (card.parentElement !== grid || card.offsetParent !== offsetParent || !card.dataset.playlistTrackId) return null
+    const top = card.offsetTop
+    const left = card.offsetLeft
+    const height = card.offsetHeight
+    const width = card.offsetWidth
+    if (height <= 0 || width <= 0 || (cardWidth && Math.abs(width - cardWidth) > 1)) return null
+    cardWidth = width
+    const row = rows[rows.length - 1]
+    if (!row || top > row.top + 1) {
+      if (row && (top < row.top + row.height - 1 || left > rowLeft + 1)) return null
+      rows.push({ start: index, end: index + 1, top, height, anchor: card })
+      rowLeft = left
+    } else {
+      if (top < row.top - 1 || Math.abs(height - row.height) > 1 || left <= rowLeft) return null
+      row.end = index + 1
+      rowLeft = left
+    }
+  }
+  const columns = rows[0]!.end - rows[0]!.start
+  if (rows.some((row, index) => index < rows.length - 1 && row.end - row.start !== columns)) return null
+  return { cards, rows, gridWidth: grid.clientWidth, gridHeight: grid.clientHeight, panelWidth: panel.clientWidth, panelHeight: panel.clientHeight }
+}
+
+// Return complete rows around both boundaries, then use each card's live rect
+// and the original ordering rules. Null means the full scan must be used.
+function indexedPlaylistCandidates(index: PlaylistCardIndex, grid: HTMLElement, panel: HTMLElement, upper: number, lower: number): { card: HTMLElement; domIndex: number }[] | null {
+  const { cards, rows } = index
+  if (
+    grid.children.length !== cards.length || cards[0] !== grid.firstElementChild
+    || cards[cards.length - 1] !== grid.lastElementChild
+    || index.gridWidth !== grid.clientWidth || index.gridHeight !== grid.clientHeight
+    || index.panelWidth !== panel.clientWidth || index.panelHeight !== panel.clientHeight
+    || grid.querySelector('.playlist-card:active')
+  ) return null
+
+  const rects = new Map<number, DOMRect>()
+  const rowRect = (at: number): DOMRect | null => {
+    const row = rows[at]
+    if (!row || !row.anchor.isConnected || row.anchor.parentElement !== grid || cards[row.start] !== row.anchor
+      || Math.abs(row.anchor.offsetTop - row.top) > 1 || Math.abs(row.anchor.offsetHeight - row.height) > 1) return null
+    let rect = rects.get(at)
+    if (!rect) {
+      rect = row.anchor.getBoundingClientRect()
+      if (Math.abs(rect.height - row.height) > 1) return null
+      rects.set(at, rect)
+    }
+    return rect
+  }
+  const firstRect = rowRect(0)
+  const lastRect = rowRect(rows.length - 1)
+  if (!firstRect || !lastRect || Math.abs((lastRect.top - firstRect.top) - (rows[rows.length - 1]!.top - rows[0]!.top)) > 1) return null
+
+  const boundary = (edge: number, useBottom: boolean): number | null => {
+    let low = 0
+    let high = rows.length
+    while (low < high) {
+      const mid = (low + high) >>> 1
+      const rect = rowRect(mid)
+      if (!rect) return null
+      if ((useBottom ? rect.bottom : rect.top) <= edge) low = mid + 1
+      else high = mid
+    }
+    return low
+  }
+  const first = boundary(upper, true)
+  const after = boundary(lower, false)
+  if (first === null || after === null || first > after) return null
+  const start = Math.max(0, first - 1)
+  const end = Math.min(rows.length, after + 1)
+  for (const at of [start - 1, start, first, first + 1, after - 1, after, end - 1, end]) {
+    if (at < 0 || at >= rows.length) continue
+    const rect = rowRect(at)
+    if (!rect) return null
+    for (const neighbor of [at - 1, at + 1]) {
+      if (neighbor < 0 || neighbor >= rows.length) continue
+      const neighborRect = rowRect(neighbor)
+      if (!neighborRect || (neighbor < at ? neighborRect.bottom > rect.top + 1 : rect.bottom > neighborRect.top + 1)) return null
+    }
+  }
+  const candidates: { card: HTMLElement; domIndex: number }[] = []
+  for (let rowIndex = start; rowIndex < end; rowIndex += 1) {
+    const row = rows[rowIndex]!
+    for (let domIndex = row.start; domIndex < row.end; domIndex += 1) {
+      const card = cards[domIndex]!
+      if (!card.isConnected || card.parentElement !== grid) return null
+      candidates.push({ card, domIndex })
+    }
+  }
+  return candidates
+}
+
 function snapshotCardLayout(grid: HTMLElement, panel: HTMLElement): Map<string, CardLayoutSnapshot> {
   const bounds = panel.getBoundingClientRect()
   const snapshots = new Map<string, CardLayoutSnapshot>()
@@ -330,6 +449,9 @@ export function PlaylistPanel({
     metadataWindowKeyRef.current = null
     let frameId: number | null = null
     let disposed = false
+    let cardIndex: PlaylistCardIndex | null = null
+    let indexDirty = true
+    const transformingCards = new Set<EventTarget>()
     const publish = () => {
       frameId = null
       if (disposed) return
@@ -337,8 +459,18 @@ export function PlaylistPanel({
       const dock = panel.parentElement?.querySelector<HTMLElement>('.playlist-playback-dock')
       const dockTop = dock?.getBoundingClientRect().top ?? panelRect.bottom
       const viewportBottom = Math.min(panelRect.bottom, dockTop)
-      const orderedEntries = [...grid.querySelectorAll<HTMLElement>('[data-playlist-track-id]')]
-        .map((card, domIndex) => {
+      if (indexDirty) {
+        cardIndex = buildPlaylistCardIndex(grid, panel)
+        indexDirty = false
+      }
+      const candidates = layout.level === 0 && cardIndex && transformingCards.size === 0
+        ? indexedPlaylistCandidates(cardIndex, grid, panel, panelRect.top - panelRect.height, viewportBottom + panelRect.height)
+        : null
+      if (layout.level === 0 && cardIndex && !candidates && transformingCards.size === 0
+        && !grid.querySelector('.playlist-card:active')) indexDirty = true
+      const orderedEntries = (candidates ?? [...grid.querySelectorAll<HTMLElement>('[data-playlist-track-id]')]
+        .map((card, domIndex) => ({ card, domIndex })))
+        .map(({ card, domIndex }) => {
           const trackId = card.dataset.playlistTrackId
           if (!trackId) return null
           const rect = card.getBoundingClientRect()
@@ -391,6 +523,21 @@ export function PlaylistPanel({
     const schedulePublish = () => {
       if (frameId === null) frameId = requestAnimationFrame(publish)
     }
+    const invalidateIndex = () => {
+      indexDirty = true
+      schedulePublish()
+    }
+    const onTransformStart = (event: TransitionEvent) => {
+      if (event.propertyName !== 'transform' || !(event.target instanceof Element)
+        || !event.target.matches('.playlist-card')) return
+      transformingCards.add(event.target)
+      schedulePublish()
+    }
+    const onTransformEnd = (event: TransitionEvent) => {
+      if (event.propertyName !== 'transform' || !event.target) return
+      transformingCards.delete(event.target)
+      schedulePublish()
+    }
 
     const cards = grid.querySelectorAll<HTMLElement>('[data-playlist-track-id]')
     if (cards.length === 0) {
@@ -399,10 +546,15 @@ export function PlaylistPanel({
     }
     if (cards.length > 0) schedulePublish()
     panel.addEventListener('scroll', schedulePublish, { passive: true })
-    const resizeObserver = new ResizeObserver(schedulePublish)
+    grid.addEventListener('transitionrun', onTransformStart)
+    grid.addEventListener('transitionend', onTransformEnd)
+    grid.addEventListener('transitioncancel', onTransformEnd)
+    const mutationObserver = new MutationObserver(invalidateIndex)
+    mutationObserver.observe(grid, { childList: true })
+    const resizeObserver = new ResizeObserver(invalidateIndex)
     resizeObserver.observe(panel)
     resizeObserver.observe(grid)
-    window.addEventListener('resize', schedulePublish)
+    window.addEventListener('resize', invalidateIndex)
     let resolution = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`)
     const onResolutionChange = () => {
       resolution.removeEventListener('change', onResolutionChange)
@@ -414,8 +566,12 @@ export function PlaylistPanel({
     return () => {
       disposed = true
       panel.removeEventListener('scroll', schedulePublish)
+      grid.removeEventListener('transitionrun', onTransformStart)
+      grid.removeEventListener('transitionend', onTransformEnd)
+      grid.removeEventListener('transitioncancel', onTransformEnd)
+      mutationObserver.disconnect()
       resizeObserver.disconnect()
-      window.removeEventListener('resize', schedulePublish)
+      window.removeEventListener('resize', invalidateIndex)
       resolution.removeEventListener('change', onResolutionChange)
       if (frameId !== null) cancelAnimationFrame(frameId)
     }

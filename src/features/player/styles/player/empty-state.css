@@ -7,6 +7,14 @@
 
 .empty-cover-art::after { background: none; }
 
+/* The dashed frame is the "there is no artwork here" language. While the
+   player is still fetching, the frame would outline the full-bleed placeholder
+   inside it, so it steps aside (transparent rather than `none`, to keep the box
+   metrics identical). */
+.empty-cover-art:has(.empty-cover-state[data-content-state="loading"]) {
+  border-color: transparent;
+}
+
 .empty-cover-state,
 .empty-lyrics-state {
   height: 100%;
@@ -51,10 +59,40 @@
   line-height: var(--player-lyrics-line-height);
 }
 
+/* The player loading placeholder fills the whole cover frame with the same
+   flat surface and pulse as the playlist covers (keyframes live in
+   playlist-panel.css). The absolute box is positioned by .cover-art. */
 .player-loading-cover-skeleton {
-  width: calc(120 * var(--player-layout-unit, var(--prototype-unit)));
-  height: calc(120 * var(--player-layout-unit, var(--prototype-unit)));
-  border-radius: 999px;
+  position: absolute;
+  inset: 0;
+  width: auto;
+  height: auto;
+  border-radius: inherit;
+  background: var(--cover-placeholder-surface);
+  box-shadow: inset 0 1px 0 var(--cover-placeholder-sheen);
+  animation: cover-placeholder-pulse 2.6s ease-in-out 12;
+  animation-delay: calc(350ms + var(--cover-placeholder-stagger, 0ms));
+}
+
+/* The absolute placeholder above would otherwise paint over the in-flow
+   loading title. Lift the title itself: positioning the header instead would
+   turn the header into the placeholder's containing block and shrink the
+   placeholder from the whole cover frame down to the header's text box. */
+.empty-cover-state [data-slot="empty-title"] {
+  position: relative;
+  z-index: 1;
+}
+
+/* motion.level === 'off' also lands here through the global app rule; keep the
+   explicit backstop next to the animation it disables. */
+.spmusic-app[data-motion="off"] .player-loading-cover-skeleton {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .player-loading-cover-skeleton {
+    animation: none;
+  }
 }
 
 .player-loading-title-skeleton {

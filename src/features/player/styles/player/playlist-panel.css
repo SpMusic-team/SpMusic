@@ -27,7 +27,10 @@
   margin: 0 auto;
   overflow: hidden;
   border-radius: 30px;
-  background: var(--app-surface);
+  /* The hero always sits on the placeholder surface, cover or not, so a hero
+     cover dissolves in over the same material the cards use instead of the
+     image fading up out of an empty page-coloured block. */
+  background: var(--cover-placeholder-surface);
   box-shadow: 0 6px 3px rgb(23 33 43 / 26%);
   color: var(--player-ink);
 }
@@ -39,6 +42,15 @@
   height: 100%;
   object-fit: cover;
   object-position: center;
+  transition: opacity var(--app-motion-standard, 240ms) cubic-bezier(.2, 0, .2, 1);
+}
+
+/* Only the thumbnail path reports `data-loaded`; the eager fallback <img> has no
+   attribute and must keep painting at full opacity. */
+.playlist-hero-image[data-loaded="false"] { opacity: 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  .playlist-hero-image { transition: none; }
 }
 
 .playlist-hero::after {
@@ -297,8 +309,13 @@
   height: var(--playlist-cover-size, 135px);
   overflow: hidden;
   border-radius: 20px;
-  background: var(--app-accent-soft);
-  box-shadow: 0 2px 3px rgb(23 33 43 / 20%);
+  /* Placeholder and real cover share one material: the same drop shadow. The
+     placeholder adds a 1px top sheen and never draws a stroke, so its boundary
+     is carried by the shadow exactly like a photograph. The surface stays on
+     the container even when a thumbnail paints over it: that is the color the
+     image dissolves against. */
+  background: var(--cover-placeholder-surface);
+  box-shadow: 0 2px 3px rgb(23 33 43 / 20%), inset 0 1px 0 var(--cover-placeholder-sheen);
 }
 
 .playlist-card-cover-image {
@@ -307,24 +324,97 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
+  /* Thumbnails cross-dissolve over the placeholder surface instead of popping
+     in from nothing. The duration follows the appearance motion scale. */
+  opacity: 0;
+  transition: opacity var(--app-motion-standard, 240ms) cubic-bezier(.2, 0, .2, 1);
 }
 
-.playlist-card[data-tone="lagoon"] .playlist-card-cover { background: linear-gradient(145deg, #0f5d72 2%, #73c7bb 36%, #f3dd9b 68%, #263c45); }
-.playlist-card[data-tone="violet"] .playlist-card-cover { background: linear-gradient(145deg, #20274d, #796da6 42%, #efc3b6 72%, #283547); }
-.playlist-card[data-tone="rose"] .playlist-card-cover { background: linear-gradient(145deg, #522d4c, #c47687 42%, #f4cba8 72%, #4f5868); }
-.playlist-card[data-tone="amber"] .playlist-card-cover { background: linear-gradient(145deg, #304f5c, #d9a85e 50%, #f4e0ae 72%, #475058); }
-.playlist-card[data-tone="blue"] .playlist-card-cover { background: linear-gradient(145deg, #173957, #477fa7 48%, #b8d9d0 72%, #223449); }
+.playlist-card-cover-image[data-loaded="true"] { opacity: 1; }
 
-.playlist-card[data-current="true"] .playlist-card-cover { box-shadow: 0 2px 4px rgb(23 33 43 / 22%); }
+/* The URL fallback cover is rendered eagerly (it has its own onError fallback
+   chain and no thumbnail load signal), so it stays outside the dissolve and
+   must not inherit the base opacity: 0. */
+.playlist-card-cover-image.playlist-card-cover-image-eager { opacity: 1; transition: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .playlist-card-cover-image { transition: none; }
+}
+
+/* No `ready` override: the sheen lives on the container and stays painted
+   underneath the dissolving image, so the top highlight does not vanish for the
+   half of the dissolve where `data-cover-state` is already `ready`. */
+
+.playlist-card-cover-mark {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  display: grid;
+  /* Tracks the layout descriptor: 46px on the default 135px cover, and it
+     shrinks with the compact levels (the smallest one is 58px) instead of
+     dominating the tile. */
+  width: calc(var(--playlist-cover-size, 135px) * 0.34);
+  aspect-ratio: 1;
+  place-items: center;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: var(--player-blue-soft);
+  color: var(--player-blue-ink);
+}
+
+.playlist-card-cover-mark svg {
+  width: 52%;
+  height: 52%;
+}
+
+@keyframes cover-placeholder-pulse {
+  0%,
+  100% { background-color: var(--cover-placeholder-surface); }
+  50% { background-color: var(--cover-placeholder-pulse); }
+}
+
+.playlist-card[data-cover-state="loading"] .playlist-card-cover {
+  /* A local hit resolves within a few frames: the delay keeps it from
+     flashing a pulse that never completes. Cards share the phase offset set
+     as --cover-placeholder-stagger by the card itself. The iteration count is
+     bounded on purpose: a thumbnail that failed permanently (retry exhausted,
+     or a cover that only exists as a data URL and can never produce a file
+     path) would otherwise pulse forever. After ~31s the tile settles on the
+     flat surface until the artwork state actually changes. */
+  animation: cover-placeholder-pulse 2.6s ease-in-out 12;
+  animation-delay: calc(350ms + var(--cover-placeholder-stagger, 0ms));
+}
+
+.playlist-grid[data-cover-motion="off"] .playlist-card[data-cover-state="loading"] .playlist-card-cover {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .playlist-card[data-cover-state="loading"] .playlist-card-cover {
+    animation: none;
+  }
+}
+
+/* The focused card lifts on the same material in every state: a placeholder
+   that only gained the stronger shadow once its cover arrived used to jump. */
+.playlist-card[data-current="true"] .playlist-card-cover {
+  box-shadow: 0 2px 4px rgb(23 33 43 / 22%), inset 0 1px 0 var(--cover-placeholder-sheen);
+}
 
 .playlist-card-cover-state {
   position: absolute;
   inset: 0;
   display: grid;
   place-items: center;
-  color: rgb(255 255 255 / 90%);
+  /* Over a real cover the label keeps the original light-on-photo treatment;
+     over the flat placeholder surface it has to use the scheme ink instead. */
+  color: var(--player-ink);
   font-size: 15px;
   font-weight: 600;
+}
+
+.playlist-card[data-cover-state="ready"] .playlist-card-cover-state {
+  color: rgb(255 255 255 / 90%);
   text-shadow: 0 1px 8px rgb(0 0 0 / 35%);
 }
 

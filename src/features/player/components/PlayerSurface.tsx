@@ -135,7 +135,6 @@ const AmbientArtwork = memo(function AmbientArtwork({ layer, role, progress, out
   return (
     <motion.div
       className="ambient-cover"
-      data-tone={layer?.artwork.coverTone ?? 'blue'}
       data-has-image={Boolean(layer?.resource.view)}
       style={layer ? { opacity } : { display: 'none' }}
       aria-hidden="true"
@@ -752,9 +751,6 @@ export function PlayerSurface({
     if (settle?.session === session && settle.target === 0) return true
     return false
   }, [selectionMatchesTrackCardSession])
-  const toneLayer = artworkSlots.find((layer) => layer?.phase === 'active')
-    ?? artworkSlots.find((layer) => layer?.phase === 'incoming')
-    ?? artworkSlots.find((layer) => layer?.phase === 'exiting')
   const contentState = playback.contentState ?? (track ? 'track' : 'empty')
   const { appearance } = useAppearance()
   const appearanceMotion = useAppearanceMotion()
@@ -2236,7 +2232,6 @@ export function PlayerSurface({
     <TooltipProvider>
       <main
         className="player-shell"
-        data-cover={toneLayer?.artwork.coverTone ?? track?.coverTone ?? 'empty'}
         data-content-state={contentState}
         data-playlist-transport-only-busy={playlistTransportOnlyBusy ? '' : undefined}
         data-window-fullscreen={nativeWindowState.fullscreen}

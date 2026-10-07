@@ -29,9 +29,14 @@
 }
 
 .more-track-summary { display: grid; grid-template-columns: calc(240 * var(--more-unit)) minmax(0, calc(258 * var(--more-unit))); gap: calc(16 * var(--more-unit)); align-items: center; padding: calc(20 * var(--more-unit)) 0; }
-.more-menu-cover { width: calc(240 * var(--more-unit)); aspect-ratio: 1; overflow: hidden; border-radius: calc(30 * var(--more-unit)); background: var(--cover-art); box-shadow: 0 calc(4 * var(--more-unit)) calc(4 * var(--more-unit)) rgba(0,0,0,.25); }
+.more-menu-cover { width: calc(240 * var(--more-unit)); aspect-ratio: 1; overflow: hidden; border-radius: calc(30 * var(--more-unit)); background: var(--cover-art); box-shadow: 0 calc(4 * var(--more-unit)) calc(4 * var(--more-unit)) rgba(0,0,0,.25), inset 0 1px 0 var(--cover-placeholder-sheen); }
+/* A real cover keeps the same drop shadow and drops the placeholder sheen. */
+.more-menu-cover:has(canvas) { box-shadow: 0 calc(4 * var(--more-unit)) calc(4 * var(--more-unit)) rgba(0,0,0,.25); }
 .more-menu-cover canvas { width: 100%; height: 100%; display: block; }
-.more-menu-cover > svg { width: 38%; height: 38%; margin: 31%; color: var(--player-blue-ink); }
+/* Same placeholder language as the cards and the dock: a soft disc under the
+   glyph instead of a bare icon on a flat surface. */
+.more-menu-cover-mark { width: 44%; aspect-ratio: 1; margin: 28%; display: grid; place-items: center; border-radius: 50%; background: var(--player-blue-soft); color: var(--player-blue-ink); }
+.more-menu-cover-mark > svg { width: 52%; height: 52%; }
 .more-track-details { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: calc(21 * var(--more-unit)); padding-left: calc(9 * var(--more-unit)); }
 .more-track-title, .more-track-byline { width: 100%; min-width: 0; overflow: hidden; color: var(--player-blue-ink); font-weight: 500; white-space: nowrap; }
 .more-track-title { font-size: calc(28 * var(--more-unit)); line-height: calc(36 * var(--more-unit)); }

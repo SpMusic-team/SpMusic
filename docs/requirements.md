@@ -6,7 +6,7 @@ status: "active"
 owner_agent: "PM Agent"
 version_scope: "project"
 created: "2026-07-09"
-updated: "2026-07-27"
+updated: "2026-10-01"
 source_documents:
   - "docs/requirements/v0-1-foundation.md"
   - "docs/requirements/v0-2-playlist-ui-prototype.md"
@@ -14,6 +14,11 @@ source_documents:
   - "docs/decisions/2026-07-27-v0-1-implemented-capabilities-boundary.md"
   - "docs/decisions/2026-07-27-v0-1-local-m3u8-temporary-queue.md"
   - "user request: CC 图标是桌面字幕开关，不是翻译功能"
+  - "docs/requirements/all-business-plugin-system.md"
+  - "docs/decisions/2026-09-30-all-business-plugin-system-goal.md"
+  - "docs/architecture/plugin-host-design.md"
+  - "docs/decisions/2026-09-30-plugin-host-architecture.md"
+  - "docs/test/plugin-host-design-review.md"
 ---
 # SpMusic 需求索引
 
@@ -22,6 +27,10 @@ source_documents:
 本文件是 SpMusic 的需求总览与版本范围索引。2026-07-24 起，v0.1 从 UI-only 播放界面调整为真实本地播放；2026-07-27 又对仓库中已存在的同目录临时队列、嵌入式歌词 / 封面和格式兼容性证据做了范围收口。旧需求正文仍由 Requirements Agent 维护，SP-020 负责重整；在完成前，PM 范围决策只作为执行和验收边界，不冒充 Requirements Agent 对需求正文的批准。
 
 SpMusic 的长期定位是：美观、高性能、有扩展能力的本地优先桌面音乐播放器。产品不做在线音乐平台、在线曲库搜索、内容推荐或版权音乐服务；核心价值是管理和播放用户自有的本地与网络存储音频内容。
+
+2026-09-30 确认全业务插件化长期目标：参考 dsh/Cordis 建立较完善的宿主框架，全部业务遵守统一插件规则，官方基础插件随产品交付并由默认组合保障基础体验。此目标覆盖旧“插件只能增强”的长期限制；当前代码尚不是该插件系统，v0.1 的插件排除范围继续有效，实施版本和日期未定。
+
+2026-10-01 架构设计基线形成，产品实现与运行验证未完成。技术路线为 Rust 全局治理、选择性 Cordis 核心适配与多执行环境；G1～G5 尚未取得运行验证证据，精确依赖与执行引擎、平台限制及量化预算仍按闸门验证，不改变完整需求的最终验收范围。
 
 ## 来源文档
 
@@ -32,6 +41,11 @@ SpMusic 的长期定位是：美观、高性能、有扩展能力的本地优先
 | `docs/decisions/2026-07-27-v0-1-implemented-capabilities-boundary.md` | Accepted | 已实现临时队列、歌词 / 封面、兼容性能力的收口与验收边界 |
 | `docs/decisions/2026-07-27-v0-1-local-m3u8-temporary-queue.md` | Accepted | 本地 `.m3u8` 临时队列例外；不等于 HLS 或产品级播放列表 |
 | `docs/requirements/v0-2-playlist-ui-prototype.md` | Approved for v0.2 candidate | 播放列表 UI 候选范围 |
+| [全业务插件化需求](requirements/all-business-plugin-system.md) | 长期目标已确认；实施未排期 | 全部业务插件化、完整宿主能力和最终验收范围 |
+| [全业务插件化目标决策](decisions/2026-09-30-all-business-plugin-system-goal.md) | Accepted，long-term | 替代旧长期增强限制；保留版本边界，明确阶段目标和下一步设计闸门 |
+| [插件宿主与跨端契约设计](architecture/plugin-host-design.md) | 架构设计基线；运行待验证 | 服务权威、依赖与生命周期、权限、跨端协议、PH-01～PH-11 和全量业务迁移映射 |
+| [插件宿主技术路线决策](decisions/2026-09-30-plugin-host-architecture.md) | Accepted，long-term-design | Rust 全局治理、选择性 Cordis 适配、多执行环境及 G1～G5 失败处理；不批准实施排期 |
+| [插件宿主设计独立审查](test/plugin-host-design-review.md) | 设计阶段无阻塞；产品运行证据不足 | 设计覆盖与契约反例复核，记录 PH/AC 后续验证证据；不等于产品验收通过 |
 
 ## 当前目标版本：v0.1 真实本地播放可发布闭环
 
@@ -83,8 +97,17 @@ v0.1 当前目标是：把已经存在的真实播放实现收敛为有边界、
 | REQ-QUEUE-001 | 可管理 / 持久化播放队列 | P1 | Deferred after v0.1; excludes v0.1 read-only folder queue | long-term requirements |
 | REQ-PLAYLIST-001 | 播放列表与 `m3u8` 支持 | P1 | Deferred | long-term requirements |
 | REQ-NETWORK-001 | FTP / SMB / WebDAV 网络存储播放 | P2 | Deferred | long-term requirements |
-| REQ-PLUGIN-001 | 插件增强体系 | P3 | Deferred | long-term requirements |
+| REQ-PLUGIN-001 | 全业务插件体系与较完善宿主框架 | P3（相对当前 v0.1） | 长期目标已确认；架构设计基线形成；产品实现与运行验证未完成，实施未排期 | [单项需求](requirements/all-business-plugin-system.md)、[目标决策](decisions/2026-09-30-all-business-plugin-system-goal.md)、[宿主设计](architecture/plugin-host-design.md)、[设计审查](test/plugin-host-design-review.md) |
 | REQ-UI-CUSTOMIZATION-001 | 用户视觉自定义与动效配置 | P2 | In progress in frontend theme system | user-approved theme work |
+
+## 全业务插件化范围决策摘要
+
+- `REQ-PLUGIN-001` 的 P3 表示未进入当前 v0.1 版本计划，不表示最终只做可选增强；长期目标的确认和实施的排期分别记录。
+- 全部现有业务最终迁移为官方插件；媒体库、网络等后续业务在单独批准后遵守同一规则，本次不顺带批准新业务功能。
+- 官方基础插件随产品交付，用户无需额外安装；可选插件停用不破坏默认基础能力，必要插件的停用与替换按已审查规则处理。
+- 十一类宿主能力及三个阶段的完整覆盖以 Requirements Agent 的单项需求和 PM 目标决策为依据；本次不创建实施任务卡，不调整 Sprint 或历史版本候选路线。
+- 架构设计基线已形成：Rust 是全局治理权威，Cordis 仅作为可替换的可信 TS 适配，第三方采用受限 runner；设计独立审查已消除设计阻塞。设计覆盖不作为 PH-01～PH-11 或 AC-01～AC-16 的实现与运行完成证据。
+- 下一步为 G1～G5 选型验证原型与实现任务拆分：G1 Cordis 制品/浏览器/生命周期，G2 第三方执行与权限，G3 装配及安装迁移事务，G4 音频基线/数据面/资源与替换，G5 默认全业务装配/兼容与回归。全部闸门尚未运行验证，具体依赖、平台限制、签名方案和量化预算在对应闸门冻结；本次不生成任务卡或承诺实施排期。
 
 ## 待路由问题
 

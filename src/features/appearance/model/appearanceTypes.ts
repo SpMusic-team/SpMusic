@@ -216,6 +216,9 @@ export type AppearanceCssVars = CSSProperties & {
   '--player-track-title-max-width': string
   '--player-track-details-max-width': string
   '--player-theme-gradient': string
+  '--cover-placeholder-surface': string
+  '--cover-placeholder-sheen': string
+  '--cover-placeholder-pulse': string
   '--background': string
   '--foreground': string
   '--card': string

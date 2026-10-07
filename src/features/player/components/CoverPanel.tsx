@@ -58,7 +58,8 @@ export const CoverPanel = memo(function CoverPanel({
     >
       <motion.div
         // Motion registers layoutId when the projection node mounts. Recreate
-        // only this node when ownership changes; the artwork layer stays alive.
+        // this subtree when ownership changes. ArtworkCanvas paints the retained
+        // artwork resource before paint so the new projection is never blank.
         key={sharedLayoutId ?? 'unshared-cover'}
         className="cover-frame"
         layoutId={sharedLayoutId}
@@ -66,7 +67,6 @@ export const CoverPanel = memo(function CoverPanel({
       >
         <div
           className="cover-art"
-          data-tone={artwork?.coverTone ?? 'blue'}
           data-has-image={Boolean(coverSource)}
         >
           <div hidden={!coverSource}>

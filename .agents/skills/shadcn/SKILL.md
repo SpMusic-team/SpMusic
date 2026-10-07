@@ -1,6 +1,6 @@
 ---
 name: shadcn
-description: Manages shadcn components and projects — adding, searching, fixing, debugging, styling, and composing UI, including chat interfaces. Provides project context, component docs, and usage examples. Applies when working with shadcn/ui, component registries, presets, --preset codes, or any project with a components.json file. Also triggers for "shadcn init", "create an app with --preset", or "switch to --preset".
+description: 管理 shadcn 组件与项目——添加、搜索、修复、调试、设置样式以及组合 UI，含聊天界面。提供项目上下文、组件文档与用法示例。适用于使用 shadcn/ui、组件注册表（registry）、预设（preset）、--preset 代码，或任何带有 components.json 文件的项目。在「shadcn init」「用 --preset 创建应用」「切换到 --preset」时同样触发。
 user-invocable: false
 allowed-tools: Bash(npx shadcn@latest *), Bash(pnpm dlx shadcn@latest *), Bash(bunx --bun shadcn@latest *)
 ---

@@ -17,6 +17,15 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
+    watch: {
+      // Two directories inside the repo must never be watched: the stale
+      // `node_modules_old/` tree (not matched by Vite's default
+      // `**/node_modules/**` ignore, tens of thousands of files) and the local
+      // scratch folder. Editors and tools publish files through short-lived
+      // temp dirs, and watching them makes chokidar throw EBUSY, which kills
+      // the dev server mid-session.
+      ignored: ['**/node_modules_old/**', '**/tmp-cover-explore/**'],
+    },
   },
   resolve: {
     alias: {

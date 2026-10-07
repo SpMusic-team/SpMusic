@@ -10,7 +10,6 @@ import { IconButton } from '@/features/player/components/IconButton'
 import { PlaylistCard } from '@/features/player/components/PlaylistCard'
 import { PlaylistCoverImage } from '@/features/player/components/PlaylistCoverImage'
 import { PlaylistPlaybackDock } from '@/features/player/components/PlaylistPlaybackDock'
-import { coverToneForTrackId } from '@/features/player/model/audioTrackModel'
 import { appCopy } from '@/features/player/model/playerCopy'
 import { nextShuffleMode, type ShuffleMode } from '@/features/player/model/playbackModes'
 import type { PlayerPlaybackViewModel, PlayerTimelineViewModel, PlaylistArtworkDemand, PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
@@ -283,6 +282,12 @@ export function PlaylistPanel({
     () => new Set(tracks.filter((track) => track.coverThumbnail).map((track) => track.id)),
   )
   const [artworkWindowRevision, setArtworkWindowRevision] = useState(0)
+  // The failure state stays out of reach on purpose: the pipeline reports
+  // nothing when artwork is dropped (see the note on PlaylistCardCoverState), and
+  // every client-side heuristic for guessing it - per-src failure events, or a
+  // grace deadline - reported "no cover" for artwork that was merely slow or
+  // outside the decode window. A mute flat tile is the lesser artifact until the
+  // visual pipeline can say "this one is gone".
   const panelRef = useRef<HTMLElement | null>(null)
   const gridRef = useRef<HTMLDivElement | null>(null)
   const initialPositionAppliedRef = useRef(false)
@@ -772,13 +777,14 @@ export function PlaylistPanel({
             data-layout-level={layout.level}
             data-layout-flow={layout.flow}
             data-layout-columns={layout.columns}
+            data-cover-motion={appearanceMotion.disabled ? 'off' : undefined}
             style={layout.style}
           >
-            {filteredTracks.map((track) => (
+            {filteredTracks.map((track, index) => (
               <PlaylistCard
                 key={track.id}
                 track={track}
-                coverTone={coverToneForTrackId(track.id)}
+                index={index}
                 current={track.id === currentTrackId}
                 unavailable={unavailable.has(track.id)}
                 canActivate={onTrackSelect !== undefined}

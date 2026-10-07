@@ -43,6 +43,24 @@ export function createAppearanceCssVars(appearance: AppearancePreset, resolvedCo
   const coverShadow = playerCoverShadow(appearance.player.coverShadow)
   const coverShadowResponsive = playerCoverShadow(appearance.player.coverShadow, true)
   const lyricEmphasis = appearance.player.activeLyricEmphasis
+  const darkScheme = resolvedColorScheme === 'dark'
+  // Placeholder covers are objects, not wireframes: they drop the hairline
+  // stroke and instead reuse the exact material of a real cover (the same drop
+  // shadow, plus a 1px top sheen on the placeholder only). The fill is
+  // accent-soft in both schemes (pale mint in light, deep teal in dark) so the
+  // placeholder stays one flat surface. The glyph carries the signal through
+  // the app's own empty-state language (player-blue-soft disc + player-blue-ink
+  // icon), never a generic "missing image" note.
+  const coverPlaceholderSurface = colors.accentSoft
+  // 1px inner highlight along the top edge. Light needs a visible sheen; on the
+  // dark fill 62% white would blow out, so dark drops to 10%.
+  const coverPlaceholderSheen = darkScheme ? 'rgb(255 255 255 / 10%)' : 'rgb(255 255 255 / 62%)'
+  // The pulse peak mixes accent into the fill itself. The previous formula
+  // mixed accent into `surface`, which is invisible once the fill is
+  // accent-soft (13% mix reads at contrast ratio 1.02 on the light fill) and
+  // collapses back onto the fill in dark (24% mix). Mixing inside the fill
+  // stays even across all six themes x light/dark: 16% lands at CR 1.20-1.34.
+  const coverPlaceholderPulse = `color-mix(in srgb, ${colors.accent} 16%, ${colors.accentSoft})`
 
   return {
     '--prototype-unit': 'min(0.0390625vw, 0.0694444svh)',
@@ -111,6 +129,9 @@ export function createAppearanceCssVars(appearance: AppearancePreset, resolvedCo
     '--player-track-title-max-width': prototypeLength(appearance.player.trackMetadata.titleMaxWidth),
     '--player-track-details-max-width': prototypeLength(appearance.player.trackMetadata.detailsMaxWidth),
     '--player-theme-gradient': `linear-gradient(145deg, ${colors.accent}, ${colors.accentSoft} 48%, ${colors.surfaceMuted})`,
+    '--cover-placeholder-surface': coverPlaceholderSurface,
+    '--cover-placeholder-sheen': coverPlaceholderSheen,
+    '--cover-placeholder-pulse': coverPlaceholderPulse,
     '--background': colors.background,
     '--foreground': colors.textStrong,
     '--card': colors.surface,

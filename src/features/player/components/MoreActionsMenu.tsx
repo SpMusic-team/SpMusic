@@ -115,10 +115,14 @@ export function MoreActionsMenu({
 
         <section className="more-track-group" aria-label={appCopy.moreMenu.title}>
           <div className="more-track-summary">
-            <div className="more-menu-cover" data-tone={track.coverTone}>
+            <div className="more-menu-cover">
               {coverSource
                 ? <ArtworkCanvas source={coverSource} label={`${track.title} 演示封面`} />
-                : <systemIcons.music aria-hidden="true" />}
+                : (
+                  <span className="more-menu-cover-mark">
+                    <systemIcons.music aria-hidden="true" />
+                  </span>
+                )}
             </div>
             <div className="more-track-details">
               <PingPongText as="strong" className="more-track-title" text={track.title} />

@@ -7,7 +7,6 @@ import { ProgressControl } from '@/features/player/components/ControlDock'
 import { IconButton } from '@/features/player/components/IconButton'
 import { PlaylistCoverImage } from '@/features/player/components/PlaylistCoverImage'
 import type { PlayerPlaybackViewModel, PlayerTimelineViewModel, PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
-import { coverToneForTrackId } from '@/features/player/model/audioTrackModel'
 import { playerViewTransitionLayoutId } from '@/features/player/model/playerViewTransition'
 
 type PlaylistPlaybackDockProps = {
@@ -40,6 +39,12 @@ export function PlaylistPlaybackDock({
   const imageFallback = artwork?.coverImageFallback ?? track?.coverImageFallback
   const imageSource = artwork?.coverImage ?? track?.coverImage ?? imageFallback
   const localArtwork = playlistTrack?.hasLocalArtwork ?? Boolean(artwork?.coverFilePath ?? track?.coverFilePath)
+  const coverThumbnail = playlistTrack?.coverThumbnail
+  // Mirrors the playlist card language: a real cover, a still-loading local
+  // artwork slot, or no artwork at all.
+  const coverState = coverThumbnail || (!localArtwork && imageSource)
+    ? 'ready'
+    : localArtwork ? 'loading' : 'empty'
   const coverLayoutId = playerViewTransitionLayoutId('cover', track?.id)
   const copyLayoutId = playerViewTransitionLayoutId('copy', track?.id)
   const disabled = !track
@@ -59,7 +64,7 @@ export function PlaylistPlaybackDock({
       exit="exit"
       aria-label="当前播放"
     >
-      <div className="playlist-playback-track" data-tone={track?.coverTone ?? coverToneForTrackId(track?.id ?? '')}>
+      <div className="playlist-playback-track" data-cover-state={coverState}>
         <button
           type="button"
           className="playlist-playback-track-button"
@@ -73,8 +78,8 @@ export function PlaylistPlaybackDock({
             transition={{ layout: appearanceMotion.layoutTransition }}
             aria-hidden="true"
           >
-            {playlistTrack?.coverThumbnail ? (
-              <PlaylistCoverImage image={playlistTrack.coverThumbnail} />
+            {coverThumbnail ? (
+              <PlaylistCoverImage className="playlist-playback-cover-image" image={coverThumbnail} />
             ) : !localArtwork && imageSource ? (
               <img
                 src={imageSource}
@@ -89,6 +94,11 @@ export function PlaylistPlaybackDock({
                   image.hidden = true
                 }}
               />
+            ) : null}
+            {coverState === 'empty' ? (
+              <span className="playlist-playback-cover-mark">
+                <systemIcons.music />
+              </span>
             ) : null}
           </motion.span>
           <motion.span

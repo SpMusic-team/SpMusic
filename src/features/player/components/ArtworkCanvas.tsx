@@ -107,22 +107,18 @@ export function ArtworkCanvas({
     }
     const observer = new ResizeObserver(scheduleDraw)
     observer.observe(canvas)
-    scheduleDraw()
+    // Shared-layout ownership remounts the visible canvas during drag/return.
+    // Paint its retained source before the first browser paint; deferring this
+    // draw to rAF leaves the new projection node with an empty backing store.
+    draw()
     return () => {
       disposed = true
       observer.disconnect()
       if (frameId !== null) cancelAnimationFrame(frameId)
+      // Motion may still retain the outgoing visual element for projection.
+      // Keep its last pixels; the detached display canvas is collected with it.
     }
   }, [contentRevision, maxBackingEdge, source])
-
-  useLayoutEffect(() => {
-    const canvas = canvasRef.current
-    return () => {
-      if (!canvas) return
-      canvas.width = 0
-      canvas.height = 0
-    }
-  }, [])
 
   return (
     <canvas

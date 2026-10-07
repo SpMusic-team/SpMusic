@@ -36,7 +36,7 @@ export function EmptyPlayerState({ state = 'empty', statusText }: EmptyPlayerSta
           <div className="cover-art empty-cover-art">
             <Empty className="empty-cover-state" data-content-state={state}>
               <EmptyHeader>
-                {loading ? <Skeleton className="player-loading-cover-skeleton" /> : (
+                {loading ? <div className="player-loading-cover-skeleton" aria-hidden="true" /> : (
                   <EmptyMedia variant="icon"><systemIcons.music /></EmptyMedia>
                 )}
                 <EmptyTitle>{title}</EmptyTitle>

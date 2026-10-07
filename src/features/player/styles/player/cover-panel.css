@@ -16,11 +16,11 @@
   background: transparent;
 }
 
-.cover-art[data-has-image="false"]::before { content: ""; position: absolute; inset: 0; background: var(--cover-art); background-position: center; background-repeat: no-repeat; background-size: 108% 108%; pointer-events: none; }
+.cover-art[data-has-image="false"]::before { content: ""; position: absolute; inset: 0; background: var(--cover-art); box-shadow: inset 0 1px 0 var(--cover-placeholder-sheen); pointer-events: none; }
 .cover-art::before, .cover-art::after, .cover-image { border-radius: inherit; }
 .cover-art::after { content: ""; position: absolute; z-index: 1; inset: 0; background: linear-gradient(transparent 70%, rgba(7, 22, 30, 0.08)); pointer-events: none; }
 .cover-image { position: absolute; z-index: 0; inset: 0; width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
-.cover-mark { position: absolute; z-index: 2; left: 10%; top: 28%; display: grid; color: white; text-shadow: 0 2px 20px rgba(0,0,0,.24); }
+.cover-mark { position: absolute; z-index: 2; left: 10%; top: 28%; display: grid; color: var(--player-ink); }
 .cover-mark svg { width: calc(72 * var(--prototype-unit)); height: calc(72 * var(--prototype-unit)); }
 .cover-mark strong { font-size: calc(62 * var(--prototype-unit)); letter-spacing: -.06em; }
 .cover-mark span { font-size: calc(12 * var(--prototype-unit)); font-weight: 700; letter-spacing: .22em; }

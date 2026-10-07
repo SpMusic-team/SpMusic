@@ -68,17 +68,56 @@
   height: 64px;
   overflow: hidden;
   border-radius: 20px;
-  background: var(--app-accent-soft);
-  box-shadow: 0 2px 3px rgb(23 33 43 / 20%);
+  /* Same placeholder material as the playlist cards: one drop shadow shared
+     with real covers, a 1px top sheen on the placeholder, no stroke. */
+  background: var(--cover-placeholder-surface);
+  box-shadow: 0 2px 3px rgb(23 33 43 / 20%), inset 0 1px 0 var(--cover-placeholder-sheen);
 }
 
 .playlist-playback-cover img,
 .playlist-playback-cover canvas { width: 100%; height: 100%; object-fit: cover; }
-.playlist-playback-track[data-tone="lagoon"] .playlist-playback-cover { background: linear-gradient(145deg, #0f5d72 2%, #73c7bb 36%, #f3dd9b 68%, #263c45); }
-.playlist-playback-track[data-tone="violet"] .playlist-playback-cover { background: linear-gradient(145deg, #20274d, #796da6 42%, #efc3b6 72%, #283547); }
-.playlist-playback-track[data-tone="rose"] .playlist-playback-cover { background: linear-gradient(145deg, #522d4c, #c47687 42%, #f4cba8 72%, #4f5868); }
-.playlist-playback-track[data-tone="amber"] .playlist-playback-cover { background: linear-gradient(145deg, #304f5c, #d9a85e 50%, #f4e0ae 72%, #475058); }
-.playlist-playback-track[data-tone="blue"] .playlist-playback-cover { background: linear-gradient(145deg, #173957, #477fa7 48%, #b8d9d0 72%, #223449); }
+
+.playlist-playback-cover-image {
+  opacity: 0;
+  transition: opacity var(--app-motion-standard, 240ms) cubic-bezier(.2, 0, .2, 1);
+}
+
+.playlist-playback-cover-image[data-loaded="true"] { opacity: 1; }
+
+@media (prefers-reduced-motion: reduce) {
+  .playlist-playback-cover-image { transition: none; }
+}
+
+/* The dock states the same "fetching local artwork" case as the cards, so it
+   pulses the same way (keyframes live in playlist-panel.css; both files ship
+   through the single player.css entry). */
+.playlist-playback-track[data-cover-state="loading"] .playlist-playback-cover {
+  animation: cover-placeholder-pulse 2.6s ease-in-out 12;
+  animation-delay: calc(350ms + var(--cover-placeholder-stagger, 0ms));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .playlist-playback-track[data-cover-state="loading"] .playlist-playback-cover { animation: none; }
+}
+
+/* No `ready` override: the sheen stays painted on the container underneath the
+   dissolving image, matching the playlist cards. */
+
+.playlist-playback-cover-mark {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: var(--player-blue-soft);
+  color: var(--player-blue-ink);
+}
+
+.playlist-playback-cover-mark svg { width: 14px; height: 14px; }
 
 .playlist-playback-copy { min-width: 0; color: var(--player-ink); }
 .playlist-playback-copy strong,

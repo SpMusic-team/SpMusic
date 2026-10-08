@@ -350,6 +350,10 @@ export function PlaylistPanel({
       : typeof ease === 'string' ? ease : 'ease-out'
     const generation = layoutTransitionGenerationRef.current
     const animations: Animation[] = []
+    const parts: { element: HTMLElement; from: DOMRect; to: DOMRect }[] = []
+    // Read every destination before starting any animation. animate() installs
+    // a transform immediately (fill: 'both'); interleaving it with the next
+    // geometry read forces synchronous style updates for each cover/copy.
     for (const card of grid.querySelectorAll<HTMLElement>('[data-playlist-track-id]')) {
       const snapshot = snapshots.get(card.dataset.playlistTrackId ?? '')
       if (!snapshot) continue
@@ -360,14 +364,17 @@ export function PlaylistPanel({
         if (!from) continue
         const element = card.querySelector<HTMLElement>(selector)
         if (!element || getComputedStyle(element).display === 'none') continue
-        const animation = animateLayoutPart(element, from, element.getBoundingClientRect(), duration, easing)
-        if (!animation) continue
-        animations.push(animation)
-        activeLayoutAnimationsRef.current.add(animation)
-        animation.onfinish = () => {
-          activeLayoutAnimationsRef.current.delete(animation)
-          animation.cancel()
-        }
+        parts.push({ element, from, to: element.getBoundingClientRect() })
+      }
+    }
+    for (const { element, from, to } of parts) {
+      const animation = animateLayoutPart(element, from, to, duration, easing)
+      if (!animation) continue
+      animations.push(animation)
+      activeLayoutAnimationsRef.current.add(animation)
+      animation.onfinish = () => {
+        activeLayoutAnimationsRef.current.delete(animation)
+        animation.cancel()
       }
     }
     void Promise.allSettled(animations.map((animation) => animation.finished)).then(() => {
@@ -662,6 +669,24 @@ export function PlaylistPanel({
     }
     image.hidden = true
   }, [firstTrack?.coverImageFallback])
+  const showExtendedMetadata = layout.flow !== 'tile'
+  const cards = useMemo(() => filteredTracks.map((track, index) => (
+    <PlaylistCard
+      key={track.id}
+      track={track}
+      index={index}
+      current={track.id === currentTrackId}
+      unavailable={unavailable.has(track.id)}
+      canActivate={onTrackSelect !== undefined}
+      selectMode={selectMode}
+      selected={selectedIds.has(track.id)}
+      artworkVisible={artworkWindowIds.has(track.id)}
+      showExtendedMetadata={showExtendedMetadata}
+      onActivate={handleActivate}
+      onToggleSelect={handleToggleSelect}
+    />
+  )), [filteredTracks, currentTrackId, unavailable, onTrackSelect, selectMode, selectedIds,
+    artworkWindowIds, showExtendedMetadata, handleActivate, handleToggleSelect])
 
   return (
     <>
@@ -790,22 +815,7 @@ export function PlaylistPanel({
             data-cover-motion={appearanceMotion.disabled ? 'off' : undefined}
             style={layout.style}
           >
-            {filteredTracks.map((track, index) => (
-              <PlaylistCard
-                key={track.id}
-                track={track}
-                index={index}
-                current={track.id === currentTrackId}
-                unavailable={unavailable.has(track.id)}
-                canActivate={onTrackSelect !== undefined}
-                selectMode={selectMode}
-                selected={selectedIds.has(track.id)}
-                artworkVisible={artworkWindowIds.has(track.id)}
-                showExtendedMetadata={layout.flow !== 'tile'}
-                onActivate={handleActivate}
-                onToggleSelect={handleToggleSelect}
-              />
-            ))}
+            {cards}
           </div>
         </>
       ) : (

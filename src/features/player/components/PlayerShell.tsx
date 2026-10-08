@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState } from 'react'
 import { DevAudioToolsAvailability, DevAudioToolsSlot } from '@/features/player/components/DevAudioToolsSlot'
 import { PlayerSurface } from '@/features/player/components/PlayerSurface'
 import { useAudioPlayer } from '@/features/player/hooks/useAudioPlayer'
+import { usePlaylistDuration } from '@/features/player/hooks/usePlaylistDuration'
 import type { DevAudioToolsViewModel, PlayerUiViewModel, PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
 
 export function PlayerShell() {
@@ -26,14 +27,25 @@ export function PlayerShell() {
       audioFormat: currentTrack.audioFormat,
     }
   }), [player.playlistTrackMetadata, player.playlistTrackVisuals, player.queueTracks, player.track])
-  const playlistTotalSeconds = useMemo(() => {
-    const knownDurations = playlistTracks
-      .map((track) => track.durationSeconds)
-      .filter((duration): duration is number => duration !== undefined && Number.isFinite(duration))
-    return knownDurations.length === playlistTracks.length && knownDurations.length > 0
-      ? knownDurations.reduce((total, duration) => total + duration, 0)
-      : undefined
-  }, [playlistTracks])
+  const singleTrackSource = player.currentAudioTrack?.sourcePath
+  const durationSources = useMemo<readonly { sourcePath: string; id?: string; available?: boolean }[]>(() => player.playlistDurationTracks
+    ?? (singleTrackSource ? [{ sourcePath: singleTrackSource }] : []), [player.playlistDurationTracks, singleTrackSource])
+  const currentDurationMs = player.currentAudioTrack?.durationMs
+  const knownDurations = useMemo(() => {
+    const known = new Map<string, number>()
+    const tracksById = new Map(playlistTracks.map((item) => [item.id, item]))
+    for (const source of durationSources) {
+      if (source.available === false) continue
+      const duration = source.id ? tracksById.get(source.id)?.durationSeconds : undefined
+      // The presentation mapper uses zero for unknown raw durations. Positive
+      // hydrated values are unambiguous; genuine zero needs the raw DTO below.
+      if (duration != null && Number.isFinite(duration) && duration > 0) known.set(source.sourcePath, duration * 1000)
+    }
+    if (singleTrackSource && currentDurationMs != null && Number.isFinite(currentDurationMs) && currentDurationMs >= 0
+      && !durationSources.some((source) => source.sourcePath === singleTrackSource && source.available === false)) known.set(singleTrackSource, currentDurationMs)
+    return known
+  }, [durationSources, playlistTracks, singleTrackSource, currentDurationMs])
+  const playlistDuration = usePlaylistDuration(durationSources, player.playlistDurationScope, knownDurations)
   const toggleTrackFeedback = player.toggleTrackFeedback
   const handleFeedbackToggle = useCallback((feedback: Parameters<typeof toggleTrackFeedback>[1]) => {
     if (currentTrackId) toggleTrackFeedback(currentTrackId, feedback)
@@ -108,7 +120,9 @@ export function PlayerShell() {
       tracks: playlistTracks,
       unavailableTrackIds: player.unavailableTrackIds,
       playlistName: player.playlistName,
-      totalDurationSeconds: playlistTotalSeconds,
+      totalDurationSeconds: playlistDuration.totalSeconds,
+      totalDurationStatus: playlistDuration.status,
+      totalDurationDetail: playlistDuration.detail,
       currentTrackId: player.track?.id ?? null,
       shuffleMode: player.shuffleMode,
       onShuffleCycle: player.cycleShuffleMode,

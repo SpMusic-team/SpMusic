@@ -1,4 +1,5 @@
 import type { RepeatMode, ShuffleMode } from '@/features/player/model/playbackModes'
+import type { PlaylistDurationStatus } from '@/features/player/model/playlistDuration'
 import type { Track, TrackArtwork, TrackArtworkPrefetchCandidate, TrackFeedback, TrackSummary } from '@/features/player/model/playerTypes'
 import type { PlayerVisualTimelineClock } from '@/features/player/model/visualTimelineClock'
 import type { AudioOutputInfo, AudioTransportTarget, AudioTransportTransition } from '@/features/player/services/audioCommands'
@@ -131,6 +132,8 @@ export type PlayerPlaylistViewModel = {
   playlistName?: string
   currentTrackId?: string | null
   totalDurationSeconds?: number
+  totalDurationStatus?: PlaylistDurationStatus
+  totalDurationDetail?: string
   shuffleMode: ShuffleMode
   onShuffleCycle: () => void
   onTrackSelect?: (trackId: string) => void

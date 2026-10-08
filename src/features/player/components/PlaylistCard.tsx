@@ -70,10 +70,10 @@ export const PlaylistCard = memo(function PlaylistCard({
   // coming, so the card keeps the quiet surface instead of claiming there is no
   // cover. The state stays in the machine for the moment the visual pipeline can
   // report a dropped entry, and `error` outranks `loading` for that case.
-  const coverState: PlaylistCardCoverState = artworkVisible
-    ? track.coverThumbnail
-      ? 'ready'
-      : coverFailed
+  const coverState: PlaylistCardCoverState = track.coverThumbnail
+    ? 'ready'
+    : artworkVisible
+      ? coverFailed
         ? 'error'
         : track.hasLocalArtwork === true
           ? 'loading'
@@ -125,7 +125,7 @@ export const PlaylistCard = memo(function PlaylistCard({
       onClick={handleClick}
     >
       <span className="playlist-card-cover" aria-hidden="true">
-        {artworkVisible && track.coverThumbnail ? (
+        {track.coverThumbnail ? (
           <PlaylistCoverImage className="playlist-card-cover-image" image={track.coverThumbnail} />
         ) : artworkVisible && track.hasLocalArtwork === false && coverSource ? (
           // This eager <img> has no thumbnail pipeline and therefore no load

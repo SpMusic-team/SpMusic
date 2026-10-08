@@ -2423,6 +2423,8 @@ export function PlayerSurface({
               playlistName={playlist.playlistName}
               currentTrackId={playlist.currentTrackId}
               totalDurationSeconds={playlist.totalDurationSeconds}
+              totalDurationStatus={playlist.totalDurationStatus}
+              totalDurationDetail={playlist.totalDurationDetail}
               shuffleMode={playlist.shuffleMode}
               onShuffleCycle={playlist.onShuffleCycle}
               isOpenAudioDisabled={playlist.isOpenAudioDisabled}

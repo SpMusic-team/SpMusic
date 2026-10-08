@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { PlaylistCoverImage as PlaylistCoverImageResource } from '@/features/player/model/playerUiViewModel'
+import { forgetPlaylistCoverDecoded, isPlaylistCoverDecoded, markPlaylistCoverDecoded } from '@/features/player/model/playlistCoverReadiness'
 
 type PlaylistCoverImageProps = {
   image: PlaylistCoverImageResource
@@ -8,7 +9,7 @@ type PlaylistCoverImageProps = {
 
 export function PlaylistCoverImage({ image, className }: PlaylistCoverImageProps) {
   const imageRef = useRef<HTMLImageElement>(null)
-  const [loaded, setLoaded] = useState(false)
+  const [loaded, setLoaded] = useState(() => isPlaylistCoverDecoded(image))
 
   // `onLoad` is the primary trigger, but it is not guaranteed to fire before
   // React attaches it: a cached thumbnail (an object URL over the BMP bytes)
@@ -24,8 +25,11 @@ export function PlaylistCoverImage({ image, className }: PlaylistCoverImageProps
   // upgrades keep the seamless in-place sharpen.
   useEffect(() => {
     const element = imageRef.current
-    if (element && element.complete && element.naturalWidth > 0) setLoaded(true)
-  }, [image.src])
+    if (element && element.complete && element.naturalWidth > 0) {
+      markPlaylistCoverDecoded(image)
+      setLoaded(true)
+    }
+  }, [image])
 
   return (
     <img
@@ -39,10 +43,14 @@ export function PlaylistCoverImage({ image, className }: PlaylistCoverImageProps
       decoding="async"
       data-loaded={loaded ? 'true' : 'false'}
       onLoad={() => {
+        markPlaylistCoverDecoded(image)
         setLoaded(true)
         window.dispatchEvent(new CustomEvent('spmusic:playlist-cover-image-load', { detail: image.src }))
       }}
-      onError={() => window.dispatchEvent(new CustomEvent('spmusic:playlist-cover-image-error', { detail: image.src }))}
+      onError={() => {
+        forgetPlaylistCoverDecoded(image)
+        window.dispatchEvent(new CustomEvent('spmusic:playlist-cover-image-error', { detail: image.src }))
+      }}
     />
   )
 }

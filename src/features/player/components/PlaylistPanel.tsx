@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type SyntheticEvent } from 'react'
 import { motion } from 'motion/react'
-import { Search } from 'lucide-react'
+import { CornerLeftUp, Search } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty'
 import { Input } from '@/components/ui/input'
@@ -10,8 +10,10 @@ import { IconButton } from '@/features/player/components/IconButton'
 import { PlaylistCard } from '@/features/player/components/PlaylistCard'
 import { PlaylistCoverImage } from '@/features/player/components/PlaylistCoverImage'
 import { PlaylistPlaybackDock } from '@/features/player/components/PlaylistPlaybackDock'
+import { PlaylistLibrarySidebar } from '@/features/player/components/PlaylistLibrarySidebar'
 import { appCopy } from '@/features/player/model/playerCopy'
 import { nextShuffleMode, type ShuffleMode } from '@/features/player/model/playbackModes'
+import { formatPlaylistDurationLabel, type PlaylistDurationStatus } from '@/features/player/model/playlistDuration'
 import type { PlayerPlaybackViewModel, PlayerTimelineViewModel, PlaylistArtworkDemand, PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
 
 type PlaylistPanelProps = {
@@ -20,6 +22,8 @@ type PlaylistPanelProps = {
   playlistName?: string
   currentTrackId?: string | null
   totalDurationSeconds?: number
+  totalDurationStatus?: PlaylistDurationStatus
+  totalDurationDetail?: string
   shuffleMode: ShuffleMode
   onShuffleCycle: () => void
   isOpenAudioDisabled?: boolean
@@ -61,16 +65,17 @@ const PLAYLIST_LAYOUT_STORAGE_KEY = 'spmusic.playlist.layout-level.v1'
 const PLAYLIST_WHEEL_THRESHOLD = 28
 const PLAYLIST_WHEEL_STEP_LOCK_MS = 150
 function readPlaylistLayoutLevel(): number {
-  if (typeof window === 'undefined') return DEFAULT_PLAYLIST_LAYOUT_LEVEL
+  const defaultLevel = typeof window !== 'undefined' && window.innerWidth > 1024 ? 0 : DEFAULT_PLAYLIST_LAYOUT_LEVEL
+  if (typeof window === 'undefined') return defaultLevel
   try {
     const stored = window.localStorage.getItem(PLAYLIST_LAYOUT_STORAGE_KEY)
-    if (stored === null || !/^(0|[1-9]\d*)$/.test(stored)) return DEFAULT_PLAYLIST_LAYOUT_LEVEL
+    if (stored === null || !/^(0|[1-9]\d*)$/.test(stored)) return defaultLevel
     const level = Number(stored)
     return Number.isSafeInteger(level) && level < PLAYLIST_LAYOUTS.length
       ? level
-      : DEFAULT_PLAYLIST_LAYOUT_LEVEL
+      : defaultLevel
   } catch {
-    return DEFAULT_PLAYLIST_LAYOUT_LEVEL
+    return defaultLevel
   }
 }
 
@@ -237,24 +242,14 @@ function animateLayoutPart(element: HTMLElement, from: DOMRect, to: DOMRect, dur
   ], { duration, easing, fill: 'both' })
 }
 
-function formatTotalClock(totalSeconds?: number): string | null {
-  if (totalSeconds == null || Number.isNaN(totalSeconds)) return null
-  const seconds = Math.max(0, Math.floor(totalSeconds))
-  const hours = Math.floor(seconds / 3600)
-  const minutes = Math.floor((seconds % 3600) / 60)
-  const secs = seconds % 60
-  if (hours > 0) {
-    return `${hours}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
-  }
-  return `${minutes}:${String(secs).padStart(2, '0')}`
-}
-
 export function PlaylistPanel({
   tracks,
   unavailableTrackIds,
   playlistName,
   currentTrackId,
   totalDurationSeconds,
+  totalDurationStatus,
+  totalDurationDetail,
   shuffleMode,
   onShuffleCycle,
   isOpenAudioDisabled,
@@ -308,7 +303,9 @@ export function PlaylistPanel({
     () => unavailableTrackIds ?? new Set<string>(),
     [unavailableTrackIds],
   )
-  const totalClock = formatTotalClock(totalDurationSeconds)
+  const totalClock = formatPlaylistDurationLabel({
+    status: totalDurationStatus, totalSeconds: totalDurationSeconds,
+  }, tracks.length)
 
   const query = filter.trim().toLowerCase()
   const filteredTracks = useMemo(() => {
@@ -332,15 +329,8 @@ export function PlaylistPanel({
     setArtworkWindowIds(emptyWindow)
   }, [])
 
-  useEffect(() => () => {
-    onVisibleTrackIdsChange?.([], true, true, {
-      visibleIds: [],
-      prefetchIds: [],
-      heldIds: [],
-      coverCssPixels: 128,
-      dpr: window.devicePixelRatio || 1,
-    })
-  }, [onVisibleTrackIdsChange])
+  // The player owns the bounded artwork window. Closing this temporary view
+  // must not revoke its covers; playlist replacement/player disposal do that.
 
   const stopLayoutAnimations = useCallback(() => {
     for (const animation of activeLayoutAnimationsRef.current) animation.cancel()
@@ -445,12 +435,14 @@ export function PlaylistPanel({
     const panel = panelRef.current
     const grid = gridRef.current
     if (!panel || !onVisibleTrackIdsChange) return
+    // Invalidate before even an empty text grid reports metadata-only demand.
+    if (!layout.showArtwork) artworkWindowKeyRef.current = ''
     if (!grid) {
       onVisibleTrackIdsChange([], true, layout.showArtwork)
       return
     }
-    // Text layouts still need visible-track metadata. Their reports must leave
-    // the bounded artwork window untouched so decoded covers stay warm.
+    // Text metadata has its own window. Existing artwork follows the player's
+    // bounded grace policy independently of these row geometry reports.
     metadataWindowKeyRef.current = null
     let frameId: number | null = null
     let disposed = false
@@ -491,6 +483,9 @@ export function PlaylistPanel({
           || (left.inViewport ? left.domIndex - right.domIndex : left.viewportDistance - right.viewportDistance)
           || left.domIndex - right.domIndex)
       if (!layout.showArtwork) {
+        // Returning to artwork must republish even if geometry/IDs are equal to
+        // the last cover layout; the player may have expired its warm leases.
+        artworkWindowKeyRef.current = ''
         const orderedIds = orderedEntries.map((entry) => entry.trackId)
         const windowKey = orderedIds.join('\u0000')
         if (metadataWindowKeyRef.current === windowKey) return
@@ -670,6 +665,13 @@ export function PlaylistPanel({
 
   return (
     <>
+      <PlaylistLibrarySidebar
+        playlistName={playlistName ?? appCopy.playlistPage.title}
+        trackCount={tracks.length}
+        totalClock={totalClock}
+        coverTrack={firstTrack}
+        onCurrentPlaylist={() => panelRef.current?.focus({ preventScroll: true })}
+      />
       <motion.section
         ref={panelRef}
         className="playlist-panel"
@@ -680,6 +682,7 @@ export function PlaylistPanel({
         animate="animate"
         exit="exit"
         aria-label={appCopy.playlistPage.title}
+        tabIndex={-1}
       >
       <header className="playlist-hero">
         {firstTrack?.coverThumbnail ? (
@@ -687,6 +690,17 @@ export function PlaylistPanel({
         ) : firstTrackCoverSource ? (
           <img className="playlist-hero-image" src={firstTrackCoverSource} alt="" aria-hidden="true" decoding="async" onError={handleHeroCoverError} />
         ) : null}
+        <Button
+          type="button"
+          className="playlist-hero-category"
+          size="sm"
+          variant="ghost"
+          aria-current="page"
+          onClick={() => panelRef.current?.focus({ preventScroll: true })}
+        >
+          <CornerLeftUp data-icon="inline-start" aria-hidden="true" />
+          {appCopy.playlistPage.title}
+        </Button>
         <button type="button" className="playlist-close" aria-label={appCopy.playlistPage.close} onClick={onClose}>
           <systemIcons.close />
         </button>
@@ -695,12 +709,8 @@ export function PlaylistPanel({
           <p className="playlist-hero-meta">
             <systemIcons.music aria-hidden="true" />
             <span className="playlist-hero-count" aria-label={appCopy.playlistPage.count(tracks.length)}>{tracks.length}</span>
-            {totalClock ? (
-              <>
-                <span className="playlist-hero-meta-sep" aria-hidden="true">|</span>
-                <span className="playlist-hero-total">{totalClock}</span>
-              </>
-            ) : null}
+            <span className="playlist-hero-meta-sep" aria-hidden="true">|</span>
+            <span className="playlist-hero-total" aria-live="polite" title={totalDurationDetail}>{totalClock}</span>
           </p>
           <div className="playlist-hero-actions">
             <IconButton

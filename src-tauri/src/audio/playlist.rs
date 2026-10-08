@@ -330,7 +330,13 @@ fn resolve_m3u8_entry_path(
     entry: &str,
     allow_external_absolute_paths: bool,
 ) -> Option<PathBuf> {
-    let raw_path = local_file_uri_to_path(entry).unwrap_or_else(|| PathBuf::from(entry));
+    let raw_path = if entry.to_ascii_lowercase().starts_with("file://") {
+        // URI decoding must precede availability and directory-boundary checks.
+        // Malformed file URIs must not fall back to relative filesystem paths.
+        local_file_uri_to_path(entry)?
+    } else {
+        PathBuf::from(entry)
+    };
     let is_absolute = raw_path.is_absolute();
     let candidate = if raw_path.is_absolute() {
         raw_path
@@ -373,11 +379,35 @@ fn local_file_uri_to_path(entry: &str) -> Option<PathBuf> {
         return None;
     }
 
-    let mut path = entry.get("file://".len()..)?.to_owned();
-    if cfg!(windows) && path.starts_with('/') && path.as_bytes().get(2) == Some(&b':') {
-        path.remove(0);
+    // Url accepts malformed percent escapes as literal text; reject those so
+    // URI-encoded paths cannot accidentally name a different local file.
+    let bytes = entry.as_bytes();
+    let mut index = 0;
+    let mut decoded = Vec::with_capacity(bytes.len());
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            if !bytes.get(index + 1)?.is_ascii_hexdigit()
+                || !bytes.get(index + 2)?.is_ascii_hexdigit()
+            {
+                return None;
+            }
+            let high = char::from(bytes[index + 1]).to_digit(16)?;
+            let low = char::from(bytes[index + 2]).to_digit(16)?;
+            decoded.push((high * 16 + low) as u8);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
     }
-    Some(PathBuf::from(path))
+    let decoded = String::from_utf8(decoded).ok()?;
+    if decoded.contains('\0') {
+        return None;
+    }
+
+    let uri = tauri::Url::parse(entry).ok()?;
+    let path = uri.to_file_path().ok()?;
+    Some(path)
 }
 
 fn is_remote_or_unsupported_uri(entry: &str) -> bool {

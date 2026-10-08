@@ -107,6 +107,35 @@ export type AudioCommandError = {
   recoverable: boolean
 }
 
+export type AudioPlaylistDuration = {
+  sourcePath: string
+  durationMs: number | null
+  error: AudioCommandError | null
+}
+
+class PlaylistDurationProtocolError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'PlaylistDurationProtocolError'
+  }
+}
+
+export async function probeAudioPlaylistDurations(paths: string[]): Promise<AudioPlaylistDuration[]> {
+  if (paths.length > 16) throw new PlaylistDurationProtocolError('Playlist duration batch exceeds 16 paths')
+  const response = await invoke<unknown>('audio_probe_playlist_durations', { input: { paths } })
+  if (!Array.isArray(response) || response.length !== paths.length) throw new PlaylistDurationProtocolError('Playlist duration response count is invalid')
+  return response.map((value: unknown, index) => {
+    if (!value || typeof value !== 'object') throw new PlaylistDurationProtocolError('Playlist duration response item is invalid')
+    const item = value as Partial<AudioPlaylistDuration>
+    if (item.sourcePath !== paths[index]
+      || (item.durationMs !== null && (typeof item.durationMs !== 'number' || !Number.isFinite(item.durationMs) || item.durationMs < 0))
+      || (item.error !== null && (!isAudioCommandError(item.error) || typeof item.error.recoverable !== 'boolean'))) {
+      throw new PlaylistDurationProtocolError('Playlist duration response fields are invalid')
+    }
+    return { sourcePath: item.sourcePath, durationMs: item.durationMs, error: item.error }
+  })
+}
+
 export type AudioPlaybackState = {
   phase: AudioPlaybackPhase
   generation: number | null

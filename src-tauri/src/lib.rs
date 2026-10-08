@@ -8,12 +8,13 @@ use app_paths::AppPaths;
 use audio::current_output_info;
 use audio::{
     begin_playlist_cover_window, load_cover_pixels, load_playlist_cover_pixels,
-    shutdown_playlist_cover_cache, AudioBeginPlaylistCoverWindowInput, AudioCommandError,
-    AudioController, AudioEmbedLyricsInput, AudioFolderPlaylist, AudioFolderPlaylistInput,
-    AudioLoadAndPlayInput, AudioLoadAndPlayResult, AudioLoadCoverPixelsInput, AudioLoadFileInput,
-    AudioLoadPlaylistCoverPixelsInput, AudioOpenFileInput, AudioOpenSourceResult, AudioOutputInfo,
-    AudioPlayInput, AudioPlaybackState, AudioSeekInput, AudioSetVolumeInput, AudioTrackRef,
-    AudioTransitionPlaybackInput, CoverPixelsError,
+    probe_playlist_durations, shutdown_playlist_cover_cache, AudioBeginPlaylistCoverWindowInput,
+    AudioCommandError, AudioController, AudioEmbedLyricsInput, AudioFolderPlaylist,
+    AudioFolderPlaylistInput, AudioLoadAndPlayInput, AudioLoadAndPlayResult,
+    AudioLoadCoverPixelsInput, AudioLoadFileInput, AudioLoadPlaylistCoverPixelsInput,
+    AudioOpenFileInput, AudioOpenSourceResult, AudioOutputInfo, AudioPlayInput, AudioPlaybackState,
+    AudioPlaylistDurationItem, AudioProbePlaylistDurationsInput, AudioSeekInput,
+    AudioSetVolumeInput, AudioTrackRef, AudioTransitionPlaybackInput, CoverPixelsError,
 };
 use tauri::{ipc::Response, Manager, State};
 use tracing_subscriber::EnvFilter;
@@ -119,6 +120,18 @@ fn audio_list_folder_tracks(
         "Tauri command invoked",
     );
     state.list_folder_tracks(input)
+}
+
+#[tauri::command]
+async fn audio_probe_playlist_durations(
+    input: AudioProbePlaylistDurationsInput,
+) -> Result<Vec<AudioPlaylistDurationItem>, AudioCommandError> {
+    tracing::debug!(
+        command = "audio_probe_playlist_durations",
+        path_count = input.paths.len(),
+        "Tauri command invoked",
+    );
+    probe_playlist_durations(input).await
 }
 
 #[tauri::command]
@@ -337,6 +350,7 @@ pub fn run() {
             audio_load_and_play,
             audio_hydrate_track,
             audio_list_folder_tracks,
+            audio_probe_playlist_durations,
             audio_embed_lyrics,
             audio_play,
             audio_pause,

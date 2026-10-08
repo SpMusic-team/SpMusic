@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import {
+  persistRepeatMode,
+  persistShuffleMode,
+  readRepeatMode,
+  readShuffleMode,
+} from '@/features/player/model/playbackModeStorage'
+import {
   audioFolderTrackPlaceholder,
   audioTrackToPlaylistVisual,
   audioTrackToTrack,
@@ -20,6 +26,7 @@ import {
   type ShuffleMode,
 } from '@/features/player/model/playbackModes'
 import { appCopy } from '@/features/player/model/playerCopy'
+import { createPlaylistArtworkGrace } from '@/features/player/model/playlistArtworkGrace'
 import type {
   PlayerContentState,
   PlayerTimelineInteraction,
@@ -360,8 +367,16 @@ function audioStatusText(
 export function useAudioPlayer() {
   const [queueTracks, setQueueTracks] = useState<TrackSummary[]>([])
   const [feedbackByTrackId, setFeedbackByTrackId] = useState<Record<string, TrackFeedback>>({})
-  const [shuffleMode, setShuffleMode] = useState<ShuffleMode>('none')
-  const [repeatMode, setRepeatMode] = useState<RepeatMode>('list-loop')
+  const [shuffleMode, setShuffleMode] = useState<ShuffleMode>(readShuffleMode)
+  const [repeatMode, setRepeatMode] = useState<RepeatMode>(readRepeatMode)
+
+  useEffect(() => {
+    persistShuffleMode(shuffleMode)
+  }, [shuffleMode])
+
+  useEffect(() => {
+    persistRepeatMode(repeatMode)
+  }, [repeatMode])
   const [volume, setVolume] = useState(72)
   const [queueOpen, setQueueOpen] = useState(false)
   const [audioState, setAudioState] = useState<AudioPlaybackState | null>(null)
@@ -446,6 +461,14 @@ export function useAudioPlayer() {
   const playlistCoverSessionFailuresRef = useRef(0)
   const playlistCoverSessionRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const refreshPlaylistVisualDemandRef = useRef<() => void>(() => undefined)
+  const expirePlaylistArtworkGrace = useCallback(() => {
+    playlistVisualWindowKeyRef.current = null
+    refreshPlaylistVisualDemandRef.current()
+  }, [])
+  const [playlistArtworkGrace] = useState(() => createPlaylistArtworkGrace())
+  useEffect(() => {
+    playlistArtworkGrace.setExpiryHandler(expirePlaylistArtworkGrace)
+  }, [expirePlaylistArtworkGrace, playlistArtworkGrace])
   const playlistVisualRetryTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>())
   const playlistImageErrorCountsRef = useRef(new Map<string, number>())
   const playlistVisualFailedRef = useRef(new Map<string, string>())
@@ -498,6 +521,7 @@ export function useAudioPlayer() {
   }, [requestPlaylistCoverWindowGeneration])
 
   useEffect(() => () => {
+    playlistArtworkGrace.dispose()
     playlistScopeEpochRef.current += 1
     playlistVisualGenerationRef.current += 1
     playlistVisualDesiredIdsRef.current = new Set()
@@ -526,7 +550,7 @@ export function useAudioPlayer() {
     playlistVisualEdgeRef.current.clear()
     playlistVisualSourceRef.current.clear()
     playlistDesiredEdgeRef.current.clear()
-  }, [requestPlaylistCoverWindowGeneration])
+  }, [requestPlaylistCoverWindowGeneration, playlistArtworkGrace])
 
   const currentTrackId = audioState?.currentTrackId ?? null
   const track = presentationTrack
@@ -650,6 +674,7 @@ export function useAudioPlayer() {
     }
 
     playlistScopeRef.current = nextScope
+    playlistArtworkGrace.reset()
     playlistCoverSessionRef.current = null
     playlistCoverSessionFailuresRef.current = 0
     if (playlistCoverSessionRetryTimerRef.current) clearTimeout(playlistCoverSessionRetryTimerRef.current)
@@ -709,7 +734,7 @@ export function useAudioPlayer() {
     }
     folderPlaylistRef.current = playlist
     setFolderPlaylist(playlist)
-  }, [ensurePlaylistCoverSession])
+  }, [ensurePlaylistCoverSession, playlistArtworkGrace])
 
   const clearPresentationTrack = useCallback((nextContentState: Exclude<PlayerContentState, 'track'>) => {
     presentationTrackRef.current = null
@@ -1112,13 +1137,13 @@ export function useAudioPlayer() {
         pumpPlaylistMetadataHydration()
       }
     }
-    // A text viewport only drives metadata hydration. It must not invalidate
-    // the last artwork window or its object URLs during a view transition.
-    if (!showArtwork && keepPersistentArtwork) return
-
-    const currentDemand = playlistArtworkDemandRef.current
-    const visibleIds = new Set(currentDemand?.visibleIds ?? trackIds)
-    const heldIds = new Set(currentDemand?.heldIds ?? [])
+    // Text rows still hydrate metadata, but only the hero/dock actively demand
+    // artwork. Existing card resources enter a bounded, player-owned grace.
+    const artworkDesiredIds = showArtwork ? orderedDesiredIds
+      : orderedDesiredIds.filter((id) => id === firstTrackId || id === dockTrackId)
+    const currentDemand = showArtwork ? playlistArtworkDemandRef.current : undefined
+    const visibleIds = new Set(showArtwork ? currentDemand?.visibleIds ?? trackIds : [])
+    const heldIds = new Set(showArtwork ? currentDemand?.heldIds ?? [] : [])
     let cardEdge = playlistArtworkEdge(currentDemand?.coverCssPixels ?? 128, currentDemand?.dpr ?? 1)
     const firstEdge = 512
     const heldOnly = (id: string) => heldIds.has(id) && !visibleIds.has(id) && id !== firstTrackId && id !== dockTrackId
@@ -1128,7 +1153,7 @@ export function useAudioPlayer() {
     }
     // Reserve all screen items before offering spare bytes to prefetch. A dense
     // viewport can exceed the nominal cache target, but it never loses eligibility.
-    const requiredBytesAt = (edge: 128 | 256 | 512) => orderedDesiredIds.reduce((total, id) => {
+    const requiredBytesAt = (edge: 128 | 256 | 512) => artworkDesiredIds.reduce((total, id) => {
       if (!visibleIds.has(id) && !heldIds.has(id) && id !== firstTrackId && id !== dockTrackId) return total
       const targetEdge = targetEdgeFor(id, edge)
       const current = playlistTrackVisualsRef.current[id]?.coverThumbnail
@@ -1154,33 +1179,49 @@ export function useAudioPlayer() {
       })
     }
     let committedBytes = requiredBytes + oldReplacementBytes + activeBytes
-    const budgetedIds = orderedDesiredIds.filter((id) => {
-      if (visibleIds.has(id) || heldIds.has(id) || id === firstTrackId || id === dockTrackId) return true
+    const currentVisuals = playlistTrackVisualsRef.current
+    const residents = Object.entries(currentVisuals).flatMap(([id, visual]) => {
+      const source = playlistVisualSourceRef.current.get(id)
+      if (!visual.coverThumbnail || !source || source !== normalizeAudioSourcePath(descriptorsById.get(id)?.sourcePath ?? '')) return []
+      return [{ id, source, bytes: playlistImageBytes(visual.coverThumbnail) }]
+    })
+    const requiredIds = new Set(artworkDesiredIds.filter((id) => visibleIds.has(id) || heldIds.has(id) || id === firstTrackId || id === dockTrackId))
+    // Reserve warm resources before optional cold prefetch. The final retain
+    // below reconciles leases against the actual accepted worker demand.
+    const reservedWarmIds = playlistArtworkGrace.retain(residents, requiredIds,
+      PLAYLIST_ARTWORK_RESIDENT_BUDGET - committedBytes - PLAYLIST_ARTWORK_INFLIGHT_BUDGET)
+    let reservedWarmBytes = residents.reduce((sum, resident) => sum + (reservedWarmIds.has(resident.id) ? resident.bytes : 0), 0)
+    const budgetedIds = artworkDesiredIds.filter((id) => {
+      if (requiredIds.has(id)) return true
       const current = playlistTrackVisualsRef.current[id]?.coverThumbnail
+      const reservedBytes = reservedWarmIds.has(id) && current ? playlistImageBytes(current) : 0
       const bytes = Math.max(playlistArtworkBytes(cardEdge), current ? playlistImageBytes(current) : 0)
-      if (committedBytes + bytes + PLAYLIST_ARTWORK_INFLIGHT_BUDGET > PLAYLIST_ARTWORK_RESIDENT_BUDGET) return false
+      if (committedBytes + reservedWarmBytes + bytes - reservedBytes + PLAYLIST_ARTWORK_INFLIGHT_BUDGET > PLAYLIST_ARTWORK_RESIDENT_BUDGET) return false
+      reservedWarmBytes -= reservedBytes
       committedBytes += bytes
       return true
     })
-    const windowKey = `${playlistScopeEpochRef.current}\u0000${scope}\u0000${keepPersistentArtwork}\u0000${cardEdge}\u0000${[...visibleIds].join('\u0000')}\u0001${[...heldIds].join('\u0000')}\u0002${budgetedIds.map((id) => `${id}:${normalizeAudioSourcePath(descriptorsById.get(id)?.sourcePath ?? '')}`).join('\u0000')}`
+    const desiredIds = new Set(budgetedIds)
+    const warmIds = playlistArtworkGrace.retain(residents, desiredIds,
+      PLAYLIST_ARTWORK_RESIDENT_BUDGET - committedBytes - PLAYLIST_ARTWORK_INFLIGHT_BUDGET)
+    const residentIds = new Set([...desiredIds, ...warmIds])
+    const windowKey = `${playlistScopeEpochRef.current}\u0000${scope}\u0000${keepPersistentArtwork}\u0000${cardEdge}\u0000${[...visibleIds].join('\u0000')}\u0001${[...heldIds].join('\u0000')}\u0002${budgetedIds.map((id) => `${id}:${normalizeAudioSourcePath(descriptorsById.get(id)?.sourcePath ?? '')}`).join('\u0000')}\u0003${[...warmIds].join('\u0000')}`
     if (playlistVisualWindowKeyRef.current === windowKey) return
     playlistVisualWindowKeyRef.current = windowKey
     const generation = playlistVisualGenerationRef.current
-    const desiredIds = new Set(budgetedIds)
     playlistDesiredEdgeRef.current = new Map(budgetedIds.map((id) => [id, targetEdgeFor(id, cardEdge)]))
     playlistVisualDesiredIdsRef.current = desiredIds
     playlistVisualHydrationQueueRef.current = []
-    const currentVisuals = playlistTrackVisualsRef.current
     const retained = Object.fromEntries(
-      Object.entries(currentVisuals).filter(([trackId]) => desiredIds.has(trackId)
+      Object.entries(currentVisuals).filter(([trackId]) => residentIds.has(trackId)
         && playlistVisualSourceRef.current.get(trackId) === normalizeAudioSourcePath(descriptorsById.get(trackId)?.sourcePath ?? '')),
     )
     for (const [trackId, visual] of Object.entries(currentVisuals)) {
       const sourceChanged = playlistVisualSourceRef.current.get(trackId) !== normalizeAudioSourcePath(descriptorsById.get(trackId)?.sourcePath ?? '')
-      if ((!desiredIds.has(trackId) || sourceChanged) && visual.coverThumbnail) {
+      if ((!residentIds.has(trackId) || sourceChanged) && visual.coverThumbnail) {
         URL.revokeObjectURL(visual.coverThumbnail.src)
       }
-      if (!desiredIds.has(trackId) || sourceChanged) {
+      if (!residentIds.has(trackId) || sourceChanged) {
         for (const [src, pending] of playlistPendingReplacementRef.current) {
           if (pending.trackId !== trackId) continue
           if (pending.previous.coverThumbnail) URL.revokeObjectURL(pending.previous.coverThumbnail.src)
@@ -1190,7 +1231,7 @@ export function useAudioPlayer() {
           playlistPendingReplacementRef.current.delete(src)
         }
       }
-      if (!desiredIds.has(trackId) || sourceChanged) {
+      if (!residentIds.has(trackId) || sourceChanged) {
         playlistVisualEdgeRef.current.delete(trackId)
         playlistVisualSourceRef.current.delete(trackId)
       }
@@ -1254,7 +1295,7 @@ export function useAudioPlayer() {
         refreshPlaylistVisualDemandRef.current()
       }, 500 * playlistCoverSessionFailuresRef.current)
     })
-  }, [pumpPlaylistMetadataHydration, pumpPlaylistVisualHydration, ensurePlaylistCoverSession])
+  }, [pumpPlaylistMetadataHydration, pumpPlaylistVisualHydration, ensurePlaylistCoverSession, playlistArtworkGrace])
 
   useEffect(() => {
     refreshPlaylistVisualDemandRef.current = () => setVisiblePlaylistTrackIds(
@@ -2887,6 +2928,8 @@ export function useAudioPlayer() {
     contentState,
     queueTracks,
     unavailableTrackIds,
+    playlistDurationTracks: folderPlaylist?.tracks,
+    playlistDurationScope: folderPlaylist ? playlistScope(folderPlaylist) : currentAudioTrack?.sourcePath ?? '',
     playlistTrackMetadata,
     playlistTrackVisuals,
     playlistName: folderPlaylist ? playlistDisplayName(folderPlaylist) : undefined,

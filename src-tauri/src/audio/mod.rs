@@ -9,6 +9,7 @@ mod error;
 mod lyrics_cache;
 mod metadata;
 mod playlist;
+mod playlist_duration;
 mod runtime;
 mod source;
 mod symphonia_source;
@@ -29,11 +30,13 @@ pub use cover_pixels::{
 };
 pub(crate) use device::current_output_info;
 pub use error::AudioCommandError;
+pub use playlist_duration::probe_playlist_durations;
 pub use types::{
     AudioEmbedLyricsInput, AudioFolderPlaylist, AudioFolderPlaylistInput, AudioLoadAndPlayInput,
     AudioLoadAndPlayResult, AudioLoadFileInput, AudioOpenFileInput, AudioOpenSourceResult,
-    AudioOutputInfo, AudioPlayInput, AudioPlaybackState, AudioSeekInput, AudioSetVolumeInput,
-    AudioTrackRef, AudioTransitionPlaybackInput,
+    AudioOutputInfo, AudioPlayInput, AudioPlaybackState, AudioPlaylistDurationItem,
+    AudioProbePlaylistDurationsInput, AudioSeekInput, AudioSetVolumeInput, AudioTrackRef,
+    AudioTransitionPlaybackInput,
 };
 
 pub const AUDIO_STATE_CHANGED_EVENT: &str = "audio_state_changed";

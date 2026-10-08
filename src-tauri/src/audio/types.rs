@@ -153,6 +153,21 @@ pub struct AudioLoadFileInput {
 
 #[derive(Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+pub struct AudioProbePlaylistDurationsInput {
+    pub paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioPlaylistDurationItem {
+    pub source_path: String,
+    #[ts(type = "number | null")]
+    pub duration_ms: Option<u64>,
+    pub error: Option<AudioCommandError>,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
 pub struct AudioLoadAndPlayInput {
     pub path: String,
     #[ts(type = "number")]

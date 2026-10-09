@@ -4,6 +4,7 @@ import { CornerLeftUp, Search } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty'
 import { Input } from '@/components/ui/input'
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { getShuffleModePresentation, showPlaybackModeToast } from '@/features/player/components/playbackModePresentation'
 import { IconButton } from '@/features/player/components/IconButton'
@@ -36,6 +37,8 @@ type PlaylistPanelProps = {
   playbackTransitionPending: boolean
   onPlayToggle: () => void
   onClose: () => void
+  librarySidebarOpen?: boolean
+  onLibrarySidebarOpenChange?: (open: boolean) => void
 }
 
 type PlaylistLayoutDescriptor = Readonly<{
@@ -262,6 +265,8 @@ export function PlaylistPanel({
   playbackTransitionPending,
   onPlayToggle,
   onClose,
+  librarySidebarOpen = false,
+  onLibrarySidebarOpenChange,
 }: PlaylistPanelProps) {
   const systemIcons = useSystemIcons()
   const appearanceMotion = useAppearanceMotion()
@@ -697,6 +702,32 @@ export function PlaylistPanel({
         coverTrack={firstTrack}
         onCurrentPlaylist={() => panelRef.current?.focus({ preventScroll: true })}
       />
+      <Dialog open={librarySidebarOpen} onOpenChange={onLibrarySidebarOpenChange}>
+        <DialogContent
+          id="playlist-library-overlay"
+          showCloseButton={false}
+          className="playlist-library-dialog"
+          overlayClassName="playlist-library-backdrop"
+          // Keep the longhand inline: CSS optimization folds `translate: none`
+          // into transform, leaving the shared Dialog's centering translate active.
+          style={{ translate: '0 0', animationDuration: appearanceMotion.disabled ? '0s' : 'var(--app-motion-prototype-smart)' }}
+          finalFocus={() => {
+            const menu = document.getElementById('playlist-library-menu')
+            return menu?.getClientRects().length ? menu : false
+          }}
+          aria-describedby={undefined}
+        >
+          <DialogTitle className="sr-only">媒体库</DialogTitle>
+          <PlaylistLibrarySidebar
+            overlay
+            playlistName={playlistName ?? appCopy.playlistPage.title}
+            trackCount={tracks.length}
+            totalClock={totalClock}
+            coverTrack={firstTrack}
+            onCurrentPlaylist={() => onLibrarySidebarOpenChange?.(false)}
+          />
+        </DialogContent>
+      </Dialog>
       <motion.section
         ref={panelRef}
         className="playlist-panel"

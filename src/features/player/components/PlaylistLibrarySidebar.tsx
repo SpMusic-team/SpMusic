@@ -1,4 +1,4 @@
-import type { SyntheticEvent } from 'react'
+import { useId, type SyntheticEvent } from 'react'
 import { motion } from 'motion/react'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
@@ -55,10 +55,12 @@ type PlaylistLibrarySidebarProps = {
   totalClock: string | null
   coverTrack?: PlaylistTrackItemViewModel
   onCurrentPlaylist: () => void
+  overlay?: boolean
 }
 
-export function PlaylistLibrarySidebar({ playlistName, trackCount, totalClock, coverTrack, onCurrentPlaylist }: PlaylistLibrarySidebarProps) {
+export function PlaylistLibrarySidebar({ playlistName, trackCount, totalClock, coverTrack, onCurrentPlaylist, overlay = false }: PlaylistLibrarySidebarProps) {
   const appearanceMotion = useAppearanceMotion()
+  const headingId = useId()
   const systemIcons = useSystemIcons()
   const coverSource = coverTrack?.coverImage ?? coverTrack?.coverImageFallback
   const handleCoverError = (event: SyntheticEvent<HTMLImageElement>) => {
@@ -72,10 +74,11 @@ export function PlaylistLibrarySidebar({ playlistName, trackCount, totalClock, c
   return (
     <motion.aside
       className="playlist-library-sidebar"
+      data-overlay={overlay || undefined}
       aria-label="媒体库"
       variants={appearanceMotion.variants.backdrop}
       transition={appearanceMotion.layoutTransition}
-      initial="initial"
+      initial={overlay ? false : 'initial'}
       animate="animate"
       exit="exit"
     >
@@ -114,8 +117,8 @@ export function PlaylistLibrarySidebar({ playlistName, trackCount, totalClock, c
         })}
       </nav>
       <Separator className="playlist-library-separator" />
-      <section className="playlist-library-lists" aria-labelledby="playlist-library-list-heading">
-        <h2 id="playlist-library-list-heading">播放列表</h2>
+      <section className="playlist-library-lists" aria-labelledby={headingId}>
+        <h2 id={headingId}>播放列表</h2>
         <div className="playlist-library-list-scroll">
           {trackCount > 0 ? (
             <Button className="playlist-library-list" variant="ghost" aria-current="page" onClick={onCurrentPlaylist}>

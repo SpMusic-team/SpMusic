@@ -19,6 +19,9 @@ type WindowBarProps = {
   onDebugToolsOpenChange?: (open: boolean) => void
   playlistOpen?: boolean
   onTogglePlaylist?: () => void
+  compactPlaylist?: boolean
+  librarySidebarOpen?: boolean
+  onOpenLibrarySidebar?: () => void
 }
 
 function getTauriWindow(): TauriWindow | null {
@@ -33,6 +36,9 @@ export function WindowBar({
   onDebugToolsOpenChange,
   playlistOpen = false,
   onTogglePlaylist,
+  compactPlaylist = false,
+  librarySidebarOpen = false,
+  onOpenLibrarySidebar,
 }: WindowBarProps) {
   const systemIcons = useSystemIcons()
   const [maximized, setMaximized] = useState(false)
@@ -127,12 +133,19 @@ export function WindowBar({
   return (
     <header className="window-bar" data-fullscreen={fullscreen} data-playlist-open={playlistOpen} data-tauri-drag-region={!fullscreen || undefined} onDoubleClick={fullscreen ? undefined : toggleMaximize} onPointerDown={startWindowDrag}>
       <div className="window-leading" onDoubleClick={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
-        <IconButton
-          icon={playlistOpen ? systemIcons.queue : systemIcons.collapse}
-          label={appCopy.controls.playlistPage}
-          selected={playlistOpen}
-          onClick={onTogglePlaylist}
-        />
+        {playlistOpen ? compactPlaylist ? (
+          <IconButton
+            id="playlist-library-menu"
+            icon={systemIcons.queue}
+            label="打开媒体库"
+            aria-expanded={librarySidebarOpen}
+            aria-controls={librarySidebarOpen ? 'playlist-library-overlay' : undefined}
+            aria-haspopup="dialog"
+            onClick={onOpenLibrarySidebar}
+          />
+        ) : null : (
+          <IconButton icon={systemIcons.collapse} label={appCopy.controls.playlistPage} onClick={onTogglePlaylist} />
+        )}
       </div>
       <h1 id="app-title" className="sr-only">{appCopy.appTitle}</h1>
       <div className="window-actions" onDoubleClick={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>

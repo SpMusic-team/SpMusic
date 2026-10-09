@@ -1,6 +1,4 @@
-.playlist-library-sidebar { display: none; }
 
-@media (width > 1024px) {
   .playlist-library-sidebar {
     position: absolute;
     inset: 0 auto 0 0;
@@ -127,5 +125,61 @@
   .playlist-library-categories:focus-visible,
   .playlist-library-category:focus-visible,
   .playlist-library-list:focus-visible { outline: 3px solid var(--player-blue); outline-offset: -3px; }
-  .window-bar[data-playlist-open="true"] { left: 320px; width: calc(100% - 320px); }
+
+@media (width > 1024px) {
+  .window-bar[data-playlist-open='true'] { left: 320px; width: calc(100% - 320px); }
+}
+@media (width <= 1024px) {
+  .playlist-library-sidebar:not([data-overlay='true']) { display: none; }
+}
+
+/* The compact library overlays the existing grid and dock without moving them. */
+.playlist-library-dialog[data-slot='dialog-content'] {
+  position: fixed;
+  inset: 0 auto 0 0;
+  display: block;
+  width: min(320px, 100vw);
+  height: 100dvh;
+  max-width: none;
+  padding: 0;
+  border-radius: 0;
+  background: var(--player-dock);
+  color: var(--player-ink);
+  transform: none;
+  translate: none;
+  gap: 0;
+  animation-name: playlist-library-enter;
+  animation-timing-function: var(--app-motion-easing);
+}
+.playlist-library-dialog[data-closed] { animation-name: playlist-library-exit; }
+.playlist-library-dialog .playlist-library-sidebar {
+  z-index: auto;
+  width: 100%;
+  padding-bottom: 24px;
+}
+.playlist-library-dialog > [data-slot='dialog-close'] {
+  z-index: 1;
+  color: var(--player-ink);
+}
+.playlist-library-backdrop[data-slot='dialog-overlay'] {
+  --tw-backdrop-blur: blur(var(--blur-md));
+  background: color-mix(in srgb, var(--player-overlay) 25%, transparent);
+  backdrop-filter: blur(var(--blur-md));
+  -webkit-backdrop-filter: blur(var(--blur-md));
+  animation-duration: var(--app-motion-prototype-smart);
+  animation-timing-function: var(--app-motion-easing);
+}
+@keyframes playlist-library-enter {
+  from { opacity: 0; transform: translateX(-100%); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes playlist-library-exit {
+  from { opacity: 1; transform: translateX(0); }
+  to { opacity: 0; transform: translateX(-100%); }
+}
+body[data-motion='off'] .playlist-library-dialog,
+body[data-motion='off'] .playlist-library-backdrop { animation-duration: 0s; }
+@media (prefers-reduced-motion: reduce) {
+  .playlist-library-dialog[data-slot='dialog-content'],
+  .playlist-library-backdrop[data-slot='dialog-overlay'] { animation-duration: 0s !important; }
 }

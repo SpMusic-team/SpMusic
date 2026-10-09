@@ -770,7 +770,15 @@ export function PlayerSurface({
       owners.active = null
     }
   }, [playlistOpen])
+  const [compactPlaylist, setCompactPlaylist] = useState(() => window.matchMedia('(width <= 1024px)').matches)
+  const [compactSidebarOpen, setCompactSidebarOpen] = useState(false)
+  const [sidebarPlaylistOpen, setSidebarPlaylistOpen] = useState(playlist.isOpen)
+  if (sidebarPlaylistOpen !== playlist.isOpen) {
+    setSidebarPlaylistOpen(playlist.isOpen)
+    setCompactSidebarOpen(false)
+  }
   const requestPlaylistOpenChange = useCallback((nextOpen: boolean) => {
+    if (!nextOpen) setCompactSidebarOpen(false)
     if (nextOpen || !track || currentArtworkReady) {
       playlistCloseRequestedRef.current = false
       onPlaylistOpenChange(nextOpen)
@@ -791,6 +799,17 @@ export function PlayerSurface({
   const reduceMotion = useReducedMotion()
   const trackCardReducedMotion = Boolean(reduceMotion || appearanceMotion.disabled)
   const [nativeWindowState, setNativeWindowState] = useState<WindowLayoutState>({ maximized: false, fullscreen: false })
+  const librarySidebarOpen = playlist.isOpen && compactPlaylist && compactSidebarOpen
+  useEffect(() => {
+    const query = window.matchMedia('(width <= 1024px)')
+    const update = () => {
+      setCompactPlaylist(query.matches)
+      if (!query.matches) setCompactSidebarOpen(false)
+    }
+    update()
+    query.addEventListener('change', update)
+    return () => query.removeEventListener('change', update)
+  }, [])
   const realPlaybackState: PlaybackVisualState = playback.isPlaying ? 'playing' : 'paused'
   const [pendingVisualPlaybackState, setPendingVisualPlaybackState] = useState<PlaybackVisualState | null>(null)
   const visualPlaybackState = pendingVisualPlaybackState ?? realPlaybackState
@@ -2277,6 +2296,9 @@ export function PlayerSurface({
                 debugToolsOpen={devAudioTools?.isOpen ?? false}
                 onDebugToolsOpenChange={devAudioTools?.onOpenChange}
                 playlistOpen={playlist.isOpen}
+                compactPlaylist={compactPlaylist}
+                librarySidebarOpen={librarySidebarOpen}
+                onOpenLibrarySidebar={() => setCompactSidebarOpen(true)}
                 onTogglePlaylist={() => requestPlaylistOpenChange(!playlist.isOpen)}
               />
             )}
@@ -2418,6 +2440,8 @@ export function PlayerSurface({
               <OwnedPlaylistPanel
               key={`${playlist.playlistName ?? 'playlist'}:${playlist.tracks.length}:${playlist.tracks[0]?.id ?? ''}:${playlist.tracks[playlist.tracks.length - 1]?.id ?? ''}`}
               ownerStateRef={playlistWindowOwnersRef}
+              librarySidebarOpen={librarySidebarOpen}
+              onLibrarySidebarOpenChange={setCompactSidebarOpen}
               tracks={playlist.tracks}
               unavailableTrackIds={playlist.unavailableTrackIds}
               playlistName={playlist.playlistName}

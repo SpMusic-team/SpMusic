@@ -108,6 +108,7 @@ export type AppearancePlayer = {
   lyricsTightSpacing: number
   lyricsNormalSpacing: number
   lyricsTightThresholdSeconds: number
+  lyricsOverscrollDistance: number
   activeLyricEmphasis: PlayerActiveLyricEmphasis
   controls: AppearancePlayerControls
   trackMetadata: AppearancePlayerTrackMetadata
@@ -205,6 +206,7 @@ export type AppearanceCssVars = CSSProperties & {
   '--player-lyrics-font-scale': number
   '--player-lyrics-tight-spacing': number
   '--player-lyrics-normal-spacing': number
+  '--player-lyrics-overscroll-distance': string
   '--player-lyrics-item-height': string
   '--player-lyrics-font-size': string
   '--player-lyrics-line-height': string

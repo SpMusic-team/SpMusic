@@ -352,6 +352,7 @@ function parsePlayer(input: JsonObject, fallback: AppearancePlayer, warnings: st
     'lyricsTightSpacing',
     'lyricsNormalSpacing',
     'lyricsTightThresholdSeconds',
+    'lyricsOverscrollDistance',
     'activeLyricEmphasis',
     'controls',
     'trackMetadata',
@@ -385,6 +386,7 @@ function parsePlayer(input: JsonObject, fallback: AppearancePlayer, warnings: st
     lyricsTightSpacing,
     lyricsNormalSpacing,
     lyricsTightThresholdSeconds: boundedNumber(input.lyricsTightThresholdSeconds, fallback.lyricsTightThresholdSeconds, 0, 30, 'theme.player.lyricsTightThresholdSeconds', warnings),
+    lyricsOverscrollDistance: boundedNumber(input.lyricsOverscrollDistance, fallback.lyricsOverscrollDistance, 0, 180, 'theme.player.lyricsOverscrollDistance', warnings),
     activeLyricEmphasis: enumValue(input.activeLyricEmphasis, playerActiveLyricEmphases, fallback.activeLyricEmphasis, 'theme.player.activeLyricEmphasis', warnings),
     controls: parsePlayerControls(controlsInput, fallback.controls, warnings),
     trackMetadata: {

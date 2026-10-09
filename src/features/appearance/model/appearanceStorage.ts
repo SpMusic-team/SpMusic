@@ -4,7 +4,7 @@ import { defaultAppearance } from './defaultAppearance'
 import type { AppearancePreset, ColorSchemePreference } from './appearanceTypes'
 
 export const APPEARANCE_STORAGE_KEY = 'spmusic.appearance.v2'
-const STORAGE_SCHEMA_VERSION = 2
+const STORAGE_SCHEMA_VERSION = 5
 const colorSchemePreferences: ColorSchemePreference[] = ['system', 'light', 'dark']
 
 export type AppearanceStorageState = {
@@ -32,20 +32,33 @@ export function parseAppearanceStorage(source: string): AppearanceStorageLoadRes
   }
 
   const record = parsed as Record<string, unknown>
-  if ((record.schemaVersion !== 1 && record.schemaVersion !== STORAGE_SCHEMA_VERSION) || !Array.isArray(record.userThemes)) {
+  if ((record.schemaVersion !== 1 && record.schemaVersion !== 2 && record.schemaVersion !== 3 && record.schemaVersion !== 4 && record.schemaVersion !== STORAGE_SCHEMA_VERSION) || !Array.isArray(record.userThemes)) {
     return { ...defaultAppearanceStorage(), warning: '主题存储版本不受支持，已恢复默认主题' }
   }
 
   const userThemes = record.userThemes.flatMap((document) => {
     const result = deserializeAppearanceTheme(JSON.stringify(document))
-    return result.ok ? [result.appearance] : []
+    if (!result.ok) return []
+
+    const appearance = result.appearance
+    // Update historical built-in overscroll defaults once, preserving all other settings.
+    if (record.schemaVersion !== STORAGE_SCHEMA_VERSION
+      && builtinAppearanceIds.has(appearance.id)
+      && (appearance.player.lyricsOverscrollDistance === 60
+        || ((record.schemaVersion === 1 || record.schemaVersion === 2 || record.schemaVersion === 3)
+          && appearance.player.lyricsOverscrollDistance === 180)
+        || ((record.schemaVersion === 1 || record.schemaVersion === 2)
+          && appearance.player.lyricsOverscrollDistance === 20))) {
+      appearance.player.lyricsOverscrollDistance = defaultAppearance.player.lyricsOverscrollDistance
+    }
+    return [appearance]
   })
   const requestedId = typeof record.currentThemeId === 'string' ? record.currentThemeId : defaultAppearance.id
   const currentThemeId = builtinAppearanceIds.has(requestedId) || userThemes.some((theme) => theme.id === requestedId)
     ? requestedId
     : defaultAppearance.id
 
-  const colorSchemePreference = record.schemaVersion === STORAGE_SCHEMA_VERSION
+  const colorSchemePreference = (record.schemaVersion === 2 || record.schemaVersion === 3 || record.schemaVersion === 4 || record.schemaVersion === STORAGE_SCHEMA_VERSION)
     && typeof record.colorSchemePreference === 'string'
     && colorSchemePreferences.includes(record.colorSchemePreference as ColorSchemePreference)
     ? record.colorSchemePreference as ColorSchemePreference

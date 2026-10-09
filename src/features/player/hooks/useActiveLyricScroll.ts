@@ -6,6 +6,7 @@ import type { DemoLyricLine } from '@/features/player/model/playerTypes'
 const FOLLOW_SCROLL_FALLBACK_MS = 240
 const INTERACTIVE_SCROLL_FALLBACK_MS = 160
 const USER_SCROLL_IDLE_MS = 5000
+const WHEEL_GESTURE_IDLE_MS = 150
 const LYRIC_NAVIGATION_TIMEOUT_MS = 15000
 const FOLLOWING_STEP_FAST_DURATION_MULTIPLIER = 1.625
 const FOLLOWING_STEP_EASING = 'cubic-bezier(0, 0, 0.58, 1)'
@@ -149,6 +150,9 @@ export function useActiveLyricScroll(
     lines: NavigationCapturedLine[]
   } | null>(null)
   const userScrollingRef = useRef(false)
+  const userDraggingRef = useRef(false)
+  const suppressDragClickRef = useRef(false)
+  const resetOverscrollRef = useRef<() => void>(() => {})
   const userScrollWaitForFollowingRef = useRef(false)
   const activeIndexRef = useRef<number | null>(null)
   const previousInteractionRef = useRef<PlayerTimelineInteraction>(interaction)
@@ -506,6 +510,7 @@ export function useActiveLyricScroll(
   }, [cancelFollowingLineAnimations, cancelLyricNavigation, cancelScrollFrame, finalizeLyricNavigation, isCurrentNavigationSession, lyricListRef, targetScrollTop])
 
   const navigateToLyric = useCallback((targetIndex: number, commit: () => void) => {
+    resetOverscrollRef.current()
     if (targetIndex === activeIndexRef.current) {
       // Selecting the already-active lyric is semantic playback input only. In
       // particular, preserve a manually scrolled viewport instead of re-centering.
@@ -664,6 +669,8 @@ export function useActiveLyricScroll(
 
       userScrollWaitForFollowingRef.current = false
       userScrollingRef.current = false
+
+      resetOverscrollRef.current()
 
       const currentLyrics = latestLyricsRef.current
       const timeline = locateLyricTimeline(currentLyrics, latestPositionRef.current)
@@ -883,41 +890,299 @@ export function useActiveLyricScroll(
     scheduleMeasurement()
   }, [layoutKey, scheduleMeasurement])
 
+  useLayoutEffect(() => {
+    resetOverscrollRef.current()
+  }, [listReady, lyrics, scopeKey])
+
   useEffect(() => {
     const lyricList = lyricListRef.current
     if (!lyricList) return
 
-    const handleWheel = () => {
+    // The scrollport itself moves for elastic feedback. Keep input owned by
+    // the fixed viewport so short layouts cannot move out from under the mouse.
+    const inputSurface = lyricList.closest<HTMLElement>('.lyrics-panel') ?? lyricList
+    let drag: { pointerId: number; startY: number; lastY: number; active: boolean } | null = null
+    let overscrollOffset = 0
+    let elasticAnimation: Animation | null = null
+    let animationTarget = 0
+    let returnAfterOutward = false
+    let wheelGestureTimer: number | null = null
+
+    const setOverscroll = (offset: number) => {
+      overscrollOffset = offset
+      if (offset === 0) lyricList.style.removeProperty('--lyrics-overscroll-offset')
+      else lyricList.style.setProperty('--lyrics-overscroll-offset', `${offset}px`)
+      // A return animation has a zero logical target while its presentation
+      // is still displaced. Keep that presentation visible until it finishes.
+      if (offset !== 0 || elasticAnimation) lyricList.dataset.overscrolling = 'true'
+      else delete lyricList.dataset.overscrolling
+    }
+
+    const clearWheelGestureTimer = () => {
+      if (wheelGestureTimer !== null) window.clearTimeout(wheelGestureTimer)
+      wheelGestureTimer = null
+      returnAfterOutward = false
+    }
+
+    const interruptRebound = () => {
+      clearWheelGestureTimer()
+      if (!elasticAnimation) return
+      const translate = window.getComputedStyle(lyricList).translate.split(/\s+/)
+      const visualOffset = Number.parseFloat(translate[1] ?? '0')
+      elasticAnimation.cancel()
+      elasticAnimation = null
+      setOverscroll(Number.isFinite(visualOffset) ? visualOffset : 0)
+    }
+
+    const resetOverscroll = () => {
+      clearWheelGestureTimer()
+      elasticAnimation?.cancel()
+      elasticAnimation = null
+      animationTarget = 0
+      setOverscroll(0)
+    }
+    resetOverscrollRef.current = resetOverscroll
+
+    const animateOverscroll = (target: number, durationVariable: string, fallbackDuration: number): void => {
+      interruptRebound()
+      if (overscrollOffset === target) return
+      const duration = motionDurationMs(durationVariable, fallbackDuration)
+      if (prefersReducedMotion() || duration <= 0) {
+        resetOverscroll()
+        return
+      }
+      const motionRoot = document.querySelector('.spmusic-app') ?? document.documentElement
+      const easing = window.getComputedStyle(motionRoot).getPropertyValue('--app-motion-easing').trim() || 'ease-out'
+      const animation = lyricList.animate(
+        [{ translate: `0 ${overscrollOffset}px` }, { translate: `0 ${target}px` }],
+        { duration, easing },
+      )
+      animationTarget = target
+      elasticAnimation = animation
+      setOverscroll(target)
+      animation.onfinish = () => {
+        if (elasticAnimation !== animation) return
+        elasticAnimation = null
+        setOverscroll(target)
+        // Quiet wheel input requests a return, but must not truncate the
+        // theme's outward animation before its visible target is reached.
+        if (returnAfterOutward && target !== 0 && !drag?.active) returnFromOverscroll()
+      }
+    }
+
+    const returnFromOverscroll = () => {
+      animateOverscroll(0, '--app-motion-standard', FOLLOW_SCROLL_FALLBACK_MS)
+    }
+
+    const finishWheelGesture = () => {
+      wheelGestureTimer = null
+      if (elasticAnimation && animationTarget !== 0) {
+        returnAfterOutward = true
+        return
+      }
+      returnFromOverscroll()
+    }
+
+    const overscrollLimit = () => {
+      if (prefersReducedMotion()) return 0
+      const distance = Number.parseFloat(window.getComputedStyle(lyricList).getPropertyValue('--player-lyrics-overscroll-distance'))
+      return Number.isFinite(distance) ? Math.min(180, Math.max(0, distance)) : 0
+    }
+
+    const scrollWithOverscroll = (scrollDelta: number, source: 'drag' | 'wheel') => {
+      const limit = overscrollLimit()
+      const previousTop = lyricList.scrollTop
+      const maxTop = Math.max(0, lyricList.scrollHeight - lyricList.clientHeight)
+      const isOutward = (previousTop <= 0 && scrollDelta < 0)
+        || (previousTop >= maxTop && scrollDelta > 0)
+      const outwardTarget = -Math.sign(scrollDelta) * limit
+      if (source === 'wheel' && limit > 0 && isOutward && elasticAnimation && animationTarget === outwardTarget) {
+        // Repeated input in the same direction keeps the current outward
+        // animation running; restarting it every tick would prevent settling.
+        clearWheelGestureTimer()
+        return
+      }
+      interruptRebound()
+      if (limit === 0) setOverscroll(0)
+      // Reverse input first releases the elastic displacement, then consumes
+      // any remaining distance in the real scroll range.
+      if (overscrollOffset * scrollDelta > 0) {
+        const released = Math.min(Math.abs(scrollDelta), Math.abs(overscrollOffset))
+        const direction = Math.sign(scrollDelta)
+        setOverscroll(overscrollOffset - direction * released)
+        scrollDelta -= direction * released
+      }
+      const projectedTop = previousTop + scrollDelta
+      const boundedTop = Math.min(maxTop, Math.max(0, projectedTop))
+      lyricList.scrollTop = boundedTop
+      // Browsers may round scrollTop to device pixels. Only an actual boundary
+      // crossing is excess; rounding inside the range must not trigger feedback.
+      const excess = projectedTop - boundedTop
+      if (limit > 0 && Math.abs(excess) > 0.01) {
+        if (source === 'drag') {
+          // Held input must follow the pointer now. A timed outward animation
+          // can otherwise be cancelled by a quick release before it is visible.
+          setOverscroll(Math.min(limit, Math.max(-limit, overscrollOffset - excess)))
+          return
+        }
+        // Like the volume panel, crossing an edge expresses a direction. Its
+        // theme distance is the visible feedback target, not a pressure limit
+        // that small wheel deltas can never reach.
+        animateOverscroll(-Math.sign(excess) * limit, '--app-motion-fast', INTERACTIVE_SCROLL_FALLBACK_MS)
+      }
+    }
+
+    const scheduleUserScrollResume = () => {
+      cancelUserScrollTimer()
+      if (!userScrollingRef.current || drag?.active) return
+      userScrollTimerRef.current = window.setTimeout(resumeFollowingAfterUserScroll, USER_SCROLL_IDLE_MS)
+    }
+
+    const beginManualScroll = () => {
       const hadLyricNavigation = navigationSessionRef.current !== null
       cancelLyricNavigation()
       cancelFollowingLineAnimations()
       cancelScrollFrame()
-      if (latestInteractionRef.current !== 'following' && !hadLyricNavigation) return
+      if (latestInteractionRef.current !== 'following' && !hadLyricNavigation && !userDraggingRef.current) return
 
-      userScrollWaitForFollowingRef.current = hadLyricNavigation
+      userScrollWaitForFollowingRef.current ||= hadLyricNavigation || userDraggingRef.current
       userScrollingRef.current = true
-      cancelUserScrollTimer()
-      userScrollTimerRef.current = window.setTimeout(
-        resumeFollowingAfterUserScroll,
-        USER_SCROLL_IDLE_MS,
-      )
+      scheduleUserScrollResume()
     }
 
-    lyricList.addEventListener('wheel', handleWheel, { passive: true })
+    const handleWheel = (event: WheelEvent) => {
+      if (event.ctrlKey || !Number.isFinite(event.deltaY) || event.deltaY === 0) return
+      const lineHeight = Number.parseFloat(window.getComputedStyle(lyricList).lineHeight) || 16
+      const delta = event.deltaY * (event.deltaMode === WheelEvent.DOM_DELTA_LINE
+        ? lineHeight
+        : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? lyricList.clientHeight : 1)
+      beginManualScroll()
+      const maxTop = Math.max(0, lyricList.scrollHeight - lyricList.clientHeight)
+      const projectedTop = lyricList.scrollTop + delta
+      if (overscrollOffset !== 0 || elasticAnimation || projectedTop < 0 || projectedTop > maxTop) {
+        event.preventDefault()
+        scrollWithOverscroll(delta, 'wheel')
+      }
+      clearWheelGestureTimer()
+      if (!drag?.active && overscrollOffset !== 0) {
+        wheelGestureTimer = window.setTimeout(finishWheelGesture, WHEEL_GESTURE_IDLE_MS)
+      }
+    }
+
+    const finishDrag = () => {
+      const previousDrag = drag
+      if (!previousDrag) return
+      drag = null
+      userDraggingRef.current = false
+      delete lyricList.dataset.dragging
+      if (lyricList.hasPointerCapture(previousDrag.pointerId)) {
+        lyricList.releasePointerCapture(previousDrag.pointerId)
+      }
+      if (previousDrag.active) {
+        returnFromOverscroll()
+        scheduleUserScrollResume()
+      }
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (event.pointerType !== 'mouse' || event.button !== 0 || !event.isPrimary) return
+      finishDrag()
+      suppressDragClickRef.current = false
+      drag = { pointerId: event.pointerId, startY: event.clientY, lastY: event.clientY, active: false }
+    }
+
+    const handlePointerMove = (event: PointerEvent) => {
+      if (!drag || event.pointerId !== drag.pointerId) return
+      if (!(event.buttons & 1)) {
+        finishDrag()
+        return
+      }
+      if (!drag.active) {
+        if (Math.abs(event.clientY - drag.startY) < 5) return
+        drag.active = true
+        userDraggingRef.current = true
+        suppressDragClickRef.current = true
+        lyricList.dataset.dragging = 'true'
+        lyricList.setPointerCapture(event.pointerId)
+        beginManualScroll()
+      }
+      event.preventDefault()
+      scrollWithOverscroll(drag.lastY - event.clientY, 'drag')
+      drag.lastY = event.clientY
+    }
+
+    const handlePointerEnd = (event: PointerEvent) => {
+      if (event.pointerId === drag?.pointerId) finishDrag()
+    }
+
+    const handlePointerLeave = () => {
+      // Active drags retain capture outside the panel; a click candidate does not.
+      if (!drag?.active) finishDrag()
+    }
+
+    const handleClick = (event: MouseEvent) => {
+      if (!suppressDragClickRef.current || event.detail === 0) return
+      event.preventDefault()
+      event.stopPropagation()
+      suppressDragClickRef.current = false
+    }
+
+    const reducedMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)')
+    const handleMotionChange = () => resetOverscroll()
+    const handleBlur = () => {
+      finishDrag()
+      resetOverscroll()
+    }
+    const motionRoot = document.querySelector('.spmusic-app') ?? document.documentElement
+    const motionObserver = new MutationObserver(handleMotionChange)
+    motionObserver.observe(motionRoot, { attributes: true, attributeFilter: ['data-motion', 'style'] })
+    reducedMotionQuery.addEventListener('change', handleMotionChange)
+
+    inputSurface.addEventListener('wheel', handleWheel, { passive: false })
+    inputSurface.addEventListener('pointerdown', handlePointerDown)
+    inputSurface.addEventListener('pointermove', handlePointerMove)
+    inputSurface.addEventListener('pointerleave', handlePointerLeave)
+    lyricList.addEventListener('lostpointercapture', handlePointerEnd)
+    lyricList.addEventListener('click', handleClick, true)
+    window.addEventListener('pointerup', handlePointerEnd)
+    window.addEventListener('pointercancel', handlePointerEnd)
+    window.addEventListener('blur', handleBlur)
     return () => {
-      lyricList.removeEventListener('wheel', handleWheel)
+      motionObserver.disconnect()
+      reducedMotionQuery.removeEventListener('change', handleMotionChange)
+      resetOverscroll()
+      if (resetOverscrollRef.current === resetOverscroll) resetOverscrollRef.current = () => {}
+      inputSurface.removeEventListener('wheel', handleWheel)
+      inputSurface.removeEventListener('pointerdown', handlePointerDown)
+      inputSurface.removeEventListener('pointermove', handlePointerMove)
+      inputSurface.removeEventListener('pointerleave', handlePointerLeave)
+      lyricList.removeEventListener('lostpointercapture', handlePointerEnd)
+      lyricList.removeEventListener('click', handleClick, true)
+      window.removeEventListener('pointerup', handlePointerEnd)
+      window.removeEventListener('pointercancel', handlePointerEnd)
+      window.removeEventListener('blur', handleBlur)
+      const previousDrag = drag
+      drag = null
+      userDraggingRef.current = false
+      // A lyrics/track replacement may reuse this DOM node while the mouse is
+      // still held. Keep the cancelled gesture's click guard until its release
+      // click or the next pointerdown; a new list must not seek on that release.
+      delete lyricList.dataset.dragging
+      if (previousDrag && lyricList.hasPointerCapture(previousDrag.pointerId)) {
+        lyricList.releasePointerCapture(previousDrag.pointerId)
+      }
       cancelUserScrollTimer()
       userScrollWaitForFollowingRef.current = false
       userScrollingRef.current = false
     }
-  }, [cancelFollowingLineAnimations, cancelLyricNavigation, cancelScrollFrame, cancelUserScrollTimer, lyricLayoutSignature, lyricListRef, resumeFollowingAfterUserScroll])
+  }, [cancelFollowingLineAnimations, cancelLyricNavigation, cancelScrollFrame, cancelUserScrollTimer, listReady, lyrics, lyricListRef, resumeFollowingAfterUserScroll, scopeKey])
 
   useLayoutEffect(() => {
     if (interaction === 'previewing') cancelLyricNavigation()
     if (interaction === 'previewing' || interaction === 'seeking') {
       const preserveNavigationWheel = interaction === 'seeking'
         && userScrollWaitForFollowingRef.current
-      if (!preserveNavigationWheel) {
+      if (!preserveNavigationWheel && !userDraggingRef.current) {
         userScrollWaitForFollowingRef.current = false
         userScrollingRef.current = false
         cancelUserScrollTimer()

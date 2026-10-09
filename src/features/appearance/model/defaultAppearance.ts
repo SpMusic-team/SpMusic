@@ -88,6 +88,7 @@ export const defaultAppearance: AppearancePreset = {
     lyricsTightSpacing: 0,
     lyricsNormalSpacing: 53,
     lyricsTightThresholdSeconds: 15.5,
+    lyricsOverscrollDistance: 40,
     activeLyricEmphasis: 'combined',
     controls: {
       material: 'inherit',

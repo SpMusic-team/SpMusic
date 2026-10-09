@@ -118,6 +118,7 @@ export function createAppearanceCssVars(appearance: AppearancePreset, resolvedCo
     '--player-lyrics-font-scale': appearance.player.lyricsFontScale,
     '--player-lyrics-tight-spacing': appearance.player.lyricsTightSpacing,
     '--player-lyrics-normal-spacing': appearance.player.lyricsNormalSpacing,
+    '--player-lyrics-overscroll-distance': `${appearance.player.lyricsOverscrollDistance}px`,
     '--player-lyrics-item-height': `calc(${84 * appearance.player.lyricsFontScale} * var(--prototype-unit))`,
     '--player-lyrics-font-size': `calc(${24 * appearance.player.lyricsFontScale} * var(--prototype-unit))`,
     '--player-lyrics-line-height': `calc(${32 * appearance.player.lyricsFontScale} * var(--prototype-unit))`,

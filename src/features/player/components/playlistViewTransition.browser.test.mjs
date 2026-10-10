@@ -93,6 +93,9 @@ async function openPage(source, count = 500, level = 0, motion = 'no-preference'
  assert.deepEqual(errors,[])
  await page.evaluate(()=>{const panel=document.querySelector('.playlist-panel'); panel.scrollTop=document.querySelector('.playlist-grid').offsetTop;})
  await page.waitForTimeout(300)
+ // These regressions exercise physical Ctrl+wheel, whose repeated steps remain
+ // supported separately from a touchpad pinch's synthesized ctrlKey wheel burst.
+ await page.keyboard.down('Control')
  return {page,errors}
 }
 

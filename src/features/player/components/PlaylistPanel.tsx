@@ -67,6 +67,8 @@ const DEFAULT_PLAYLIST_LAYOUT_LEVEL = 3
 const PLAYLIST_LAYOUT_STORAGE_KEY = 'spmusic.playlist.layout-level.v1'
 const PLAYLIST_WHEEL_THRESHOLD = 28
 const PLAYLIST_WHEEL_STEP_LOCK_MS = 150
+// Wheel events have no gesture-end signal; silence separates trackpad pinches.
+const PLAYLIST_TRACKPAD_IDLE_MS = 350
 const PLAYLIST_PINCH_MIN_DISTANCE = 24
 const PLAYLIST_PINCH_DISTANCE_RATIO = 0.12
 function readPlaylistLayoutLevel(): number {
@@ -625,11 +627,35 @@ export function PlaylistPanel({
       setLayoutAnnouncement(`歌曲视图已切换为${nextLayout.label}`)
     }
 
+    const pressedControlKeys = new Set<string>()
+    let wheelInput: 'control' | 'trackpad' | null = null
+    let trackpadLastAt = -Infinity
+    let trackpadConsumed = false
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Control') pressedControlKeys.add(event.code || event.key)
+    }
+    const handleKeyUp = (event: KeyboardEvent) => {
+      if (event.key === 'Control') pressedControlKeys.delete(event.code || event.key)
+    }
     const handleWheel = (event: WheelEvent) => {
       const grid = gridRef.current
       if (!grid || !(event.target instanceof Node) || !grid.contains(event.target) || !event.ctrlKey) return
       event.preventDefault()
       const now = performance.now()
+      // Chromium emits ctrlKey wheel for a trackpad pinch without pressing Ctrl.
+      const nextInput = pressedControlKeys.size > 0 ? 'control' : 'trackpad'
+      if (wheelInput !== nextInput) wheelAccumulatedDeltaRef.current = 0
+      wheelInput = nextInput
+      if (nextInput === 'trackpad') {
+        if (now - trackpadLastAt > PLAYLIST_TRACKPAD_IDLE_MS) {
+          trackpadConsumed = false
+          wheelAccumulatedDeltaRef.current = 0
+        }
+        // Refresh even after consumption or during the layout step lock. A long
+        // stream remains one gesture regardless of its duration or direction.
+        trackpadLastAt = now
+        if (trackpadConsumed) return
+      }
       if (now < wheelLockedUntilRef.current) return
       const multiplier = event.deltaMode === WheelEvent.DOM_DELTA_LINE
         ? 16
@@ -645,6 +671,7 @@ export function PlaylistPanel({
 
       const direction = wheelAccumulatedDeltaRef.current < 0 ? -1 : 1
       wheelAccumulatedDeltaRef.current = 0
+      if (nextInput === 'trackpad') trackpadConsumed = true
       changeLayout(direction, now)
     }
 
@@ -675,7 +702,11 @@ export function PlaylistPanel({
       wheelAccumulatedDeltaRef.current = 0
     }
     const handleTouchMove = (event: TouchEvent) => {
-      if (!pinch || touchBlocked) return
+      if (touchBlocked) {
+        if (event.touches.length === 2 && event.cancelable) event.preventDefault()
+        return
+      }
+      if (!pinch) return
       const touches = Array.from(event.touches)
       if (touches.length !== 2 || !touches.every((touch) => pinch!.identifiers.includes(touch.identifier)
         && insidePanel(touch))) {
@@ -691,7 +722,10 @@ export function PlaylistPanel({
       if (Math.abs(delta) < threshold || now < wheelLockedUntilRef.current) return
       // Translation leaves the separation unchanged; spreading matches Ctrl+wheel up.
       changeLayout(delta > 0 ? -1 : 1, now)
-      pinch.distance = distance
+      // Consume this gesture even at a layout boundary. Only lifting every
+      // touch unlocks it, so continuing or replacing one finger cannot repeat.
+      pinch = null
+      touchBlocked = true
     }
     const handleTouchEnd = (event: TouchEvent) => {
       pinch = null
@@ -701,13 +735,29 @@ export function PlaylistPanel({
       pinch = null
       touchBlocked = event.touches.length > 0
     }
+    const handleBlur = () => {
+      pressedControlKeys.clear()
+      wheelInput = null
+      trackpadLastAt = -Infinity
+      trackpadConsumed = false
+      wheelAccumulatedDeltaRef.current = 0
+      wheelLastAtRef.current = 0
+      pinch = null
+      touchBlocked = false
+    }
 
+    window.addEventListener('keydown', handleKeyDown, true)
+    window.addEventListener('keyup', handleKeyUp, true)
+    window.addEventListener('blur', handleBlur)
     panel.addEventListener('wheel', handleWheel, { passive: false })
     panel.addEventListener('touchstart', handleTouchStart, { passive: false })
     panel.addEventListener('touchmove', handleTouchMove, { passive: false })
     panel.addEventListener('touchend', handleTouchEnd)
     panel.addEventListener('touchcancel', handleTouchCancel)
     return () => {
+      window.removeEventListener('keydown', handleKeyDown, true)
+      window.removeEventListener('keyup', handleKeyUp, true)
+      window.removeEventListener('blur', handleBlur)
       panel.removeEventListener('wheel', handleWheel)
       panel.removeEventListener('touchstart', handleTouchStart)
       panel.removeEventListener('touchmove', handleTouchMove)

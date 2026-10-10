@@ -1286,12 +1286,6 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
   display: none;
 }
 
-.responsive-player-layout[data-player-layout="quarter"] .window-settings-trigger,
-.responsive-player-layout[data-player-layout="horizontal"] .window-settings-trigger,
-.responsive-player-layout[data-player-short="true"] .window-settings-trigger {
-  display: none;
-}
-
 .responsive-player-layout[data-player-layout="quarter"] {
   /* Quarter-screen reference frame: 640 x 1440. */
   --player-layout-unit: clamp(0.8px, min(0.15625vw, 0.0694444444svh), 1px);
@@ -2855,7 +2849,6 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
   flex-basis: 84px;
 }
 
-.responsive-player-layout[data-player-layout="compact"] .window-settings-trigger,
 .responsive-player-layout[data-player-layout="compact"] .debug-queue-panel,
 .responsive-player-layout[data-player-layout="compact"][data-player-compact-profile="compact-row"] .lyrics-panel,
 .responsive-player-layout[data-player-layout="compact"][data-player-compact-profile="compact-stacked"] .lyrics-panel {

@@ -409,6 +409,13 @@ export function ControlDock({
       data-playback-visual-ready={playbackVisualReady ? 'true' : 'false'}
       data-timeline-seeking={timeline.interaction === 'seeking' ? '' : undefined}
     >
+      <motion.div
+        className="controller-shared-background"
+        layoutId="player-view-controller-background"
+        layoutCrossfade
+        transition={{ layout: appearanceMotion.layoutTransition }}
+        aria-hidden="true"
+      />
       <p className="audio-status" aria-live="polite">{playback.statusText}</p>
       <ProgressControl
         key={playback.track?.id ?? 'empty'}

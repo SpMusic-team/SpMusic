@@ -67,6 +67,8 @@ const DEFAULT_PLAYLIST_LAYOUT_LEVEL = 3
 const PLAYLIST_LAYOUT_STORAGE_KEY = 'spmusic.playlist.layout-level.v1'
 const PLAYLIST_WHEEL_THRESHOLD = 28
 const PLAYLIST_WHEEL_STEP_LOCK_MS = 150
+const PLAYLIST_PINCH_MIN_DISTANCE = 24
+const PLAYLIST_PINCH_DISTANCE_RATIO = 0.12
 function readPlaylistLayoutLevel(): number {
   const defaultLevel = typeof window !== 'undefined' && window.innerWidth > 1024 ? 0 : DEFAULT_PLAYLIST_LAYOUT_LEVEL
   if (typeof window === 'undefined') return defaultLevel
@@ -593,26 +595,9 @@ export function PlaylistPanel({
     const panel = panelRef.current
     if (!panel) return
 
-    const handleWheel = (event: WheelEvent) => {
+    const changeLayout = (direction: -1 | 1, now: number) => {
       const grid = gridRef.current
-      if (!grid || !(event.target instanceof Node) || !grid.contains(event.target) || !event.ctrlKey) return
-      event.preventDefault()
-      const now = performance.now()
-      if (now < wheelLockedUntilRef.current) return
-      const multiplier = event.deltaMode === WheelEvent.DOM_DELTA_LINE
-        ? 16
-        : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? panel.clientHeight : 1
-      const delta = event.deltaY * multiplier
-      if (
-        now - wheelLastAtRef.current > 250
-        || Math.sign(delta) !== Math.sign(wheelAccumulatedDeltaRef.current)
-      ) wheelAccumulatedDeltaRef.current = 0
-      wheelLastAtRef.current = now
-      wheelAccumulatedDeltaRef.current += delta
-      if (Math.abs(wheelAccumulatedDeltaRef.current) < PLAYLIST_WHEEL_THRESHOLD) return
-
-      const direction = wheelAccumulatedDeltaRef.current < 0 ? -1 : 1
-      wheelAccumulatedDeltaRef.current = 0
+      if (!grid || now < wheelLockedUntilRef.current) return
       const currentLevel = layoutLevelRef.current
       const nextLevel = Math.max(0, Math.min(PLAYLIST_LAYOUTS.length - 1, currentLevel + direction))
       if (nextLevel === currentLevel) return
@@ -640,9 +625,95 @@ export function PlaylistPanel({
       setLayoutAnnouncement(`歌曲视图已切换为${nextLayout.label}`)
     }
 
+    const handleWheel = (event: WheelEvent) => {
+      const grid = gridRef.current
+      if (!grid || !(event.target instanceof Node) || !grid.contains(event.target) || !event.ctrlKey) return
+      event.preventDefault()
+      const now = performance.now()
+      if (now < wheelLockedUntilRef.current) return
+      const multiplier = event.deltaMode === WheelEvent.DOM_DELTA_LINE
+        ? 16
+        : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? panel.clientHeight : 1
+      const delta = event.deltaY * multiplier
+      if (
+        now - wheelLastAtRef.current > 250
+        || Math.sign(delta) !== Math.sign(wheelAccumulatedDeltaRef.current)
+      ) wheelAccumulatedDeltaRef.current = 0
+      wheelLastAtRef.current = now
+      wheelAccumulatedDeltaRef.current += delta
+      if (Math.abs(wheelAccumulatedDeltaRef.current) < PLAYLIST_WHEEL_THRESHOLD) return
+
+      const direction = wheelAccumulatedDeltaRef.current < 0 ? -1 : 1
+      wheelAccumulatedDeltaRef.current = 0
+      changeLayout(direction, now)
+    }
+
+    let pinch: { identifiers: readonly number[]; distance: number } | null = null
+    let touchBlocked = false
+    const touchDistance = (first: Touch, second: Touch) => Math.hypot(
+      second.clientX - first.clientX, second.clientY - first.clientY,
+    )
+    const insidePanel = (touch: Touch) => {
+      const bounds = panel.getBoundingClientRect()
+      return touch.clientX >= bounds.left && touch.clientX <= bounds.right
+        && touch.clientY >= bounds.top && touch.clientY <= bounds.bottom
+    }
+    const handleTouchStart = (event: TouchEvent) => {
+      if (event.touches.length > 2) {
+        pinch = null
+        touchBlocked = true
+        return
+      }
+      const grid = gridRef.current
+      if (touchBlocked || event.touches.length !== 2 || !grid) return
+      const [first, second] = Array.from(event.touches)
+      if (![first!, second!].every((touch) => touch.target instanceof Node
+        && grid.contains(touch.target) && insidePanel(touch))) return
+      // Reserve only the two-finger gesture; one-finger scrolling stays native.
+      if (event.cancelable) event.preventDefault()
+      pinch = { identifiers: [first!.identifier, second!.identifier], distance: touchDistance(first!, second!) }
+      wheelAccumulatedDeltaRef.current = 0
+    }
+    const handleTouchMove = (event: TouchEvent) => {
+      if (!pinch || touchBlocked) return
+      const touches = Array.from(event.touches)
+      if (touches.length !== 2 || !touches.every((touch) => pinch!.identifiers.includes(touch.identifier)
+        && insidePanel(touch))) {
+        pinch = null
+        touchBlocked = true
+        return
+      }
+      if (event.cancelable) event.preventDefault()
+      const distance = touchDistance(touches[0]!, touches[1]!)
+      const delta = distance - pinch.distance
+      const threshold = Math.max(PLAYLIST_PINCH_MIN_DISTANCE, pinch.distance * PLAYLIST_PINCH_DISTANCE_RATIO)
+      const now = performance.now()
+      if (Math.abs(delta) < threshold || now < wheelLockedUntilRef.current) return
+      // Translation leaves the separation unchanged; spreading matches Ctrl+wheel up.
+      changeLayout(delta > 0 ? -1 : 1, now)
+      pinch.distance = distance
+    }
+    const handleTouchEnd = (event: TouchEvent) => {
+      pinch = null
+      if (event.touches.length === 0) touchBlocked = false
+    }
+    const handleTouchCancel = (event: TouchEvent) => {
+      pinch = null
+      touchBlocked = event.touches.length > 0
+    }
+
     panel.addEventListener('wheel', handleWheel, { passive: false })
+    panel.addEventListener('touchstart', handleTouchStart, { passive: false })
+    panel.addEventListener('touchmove', handleTouchMove, { passive: false })
+    panel.addEventListener('touchend', handleTouchEnd)
+    panel.addEventListener('touchcancel', handleTouchCancel)
     return () => {
       panel.removeEventListener('wheel', handleWheel)
+      panel.removeEventListener('touchstart', handleTouchStart)
+      panel.removeEventListener('touchmove', handleTouchMove)
+      panel.removeEventListener('touchend', handleTouchEnd)
+      panel.removeEventListener('touchcancel', handleTouchCancel)
+      pinch = null
       pendingLayoutSnapshotRef.current = null
       stopLayoutAnimations()
     }
@@ -844,7 +915,7 @@ export function PlaylistPanel({
             data-layout-flow={layout.flow}
             data-layout-columns={layout.columns}
             data-cover-motion={appearanceMotion.disabled ? 'off' : undefined}
-            style={layout.style}
+            style={{ ...layout.style, touchAction: 'pan-y' }}
           >
             {cards}
           </div>

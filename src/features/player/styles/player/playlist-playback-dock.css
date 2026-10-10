@@ -28,9 +28,11 @@
      the dock edge even though both endpoints are already laid out. */
   overflow: visible;
   border-radius: 30px;
-  background: var(--player-dock);
-  box-shadow: 0 4px 4px rgb(0 0 0 / var(--player-controls-shadow));
+  --controller-background-shadow: 0 4px 4px rgb(0 0 0 / var(--player-controls-shadow));
   color: var(--player-blue);
+  /* Motion retains its original opacity timeline and presence completion;
+     onUpdate sends that opacity to the content, leaving the surface opaque. */
+  opacity: 1 !important;
 }
 
 .playlist-playback-track {

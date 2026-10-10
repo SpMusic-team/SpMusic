@@ -13,8 +13,36 @@
   overflow: visible;
   border: 0;
   border-radius: var(--player-controls-radius);
+  --controller-background-shadow: 0 calc(4 * var(--control-unit, var(--prototype-unit))) calc(4 * var(--control-unit, var(--prototype-unit))) rgba(0,0,0,var(--player-controls-shadow));
+}
+
+.controller-shared-background {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
   background: var(--player-dock);
-  box-shadow: 0 calc(4 * var(--control-unit, var(--prototype-unit))) calc(4 * var(--control-unit, var(--prototype-unit))) rgba(0,0,0,var(--player-controls-shadow));
+  box-shadow: var(--controller-background-shadow);
+  pointer-events: none;
+  /* Keep both projection peers painted: the old playlist surface carries
+     the return morph above the retiring panel until the player is visible. */
+  opacity: 1 !important;
+}
+
+/* The retained playlist peer alone paints the morph until its original exit
+   completes. Avoid doubling translucent material and shadows with its target. */
+.player-shell[data-controller-background-present] .control-dock > .controller-shared-background {
+  visibility: hidden !important;
+}
+
+.control-dock > :not(.controller-shared-background) {
+  opacity: 1;
+  transition: opacity var(--app-motion-fast) var(--app-motion-easing);
+}
+
+.player-shell[data-controller-background-present] .control-dock > :not(.controller-shared-background) {
+  opacity: 0;
+  transition: none;
 }
 
 .control-dock:is(

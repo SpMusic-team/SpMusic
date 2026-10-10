@@ -1,6 +1,7 @@
 import { DataHistogram24Filled, Grid24Filled } from '@fluentui/react-icons'
 import { Menu, Search } from 'lucide-react'
 import { motion } from 'motion/react'
+import { useLayoutEffect, useRef } from 'react'
 import { Button } from '@/components/ui/button'
 import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { ProgressControl } from '@/features/player/components/ControlDock'
@@ -21,6 +22,9 @@ type PlaylistPlaybackDockProps = {
   onClose: () => void
 }
 
+// Presence can retain an old dock while a replacement mounts in the same shell.
+const controllerBackgroundOwners = new WeakMap<HTMLElement, number>()
+
 export function PlaylistPlaybackDock({
   playback,
   timeline,
@@ -32,6 +36,8 @@ export function PlaylistPlaybackDock({
   onSearchToggle,
   onClose,
 }: PlaylistPlaybackDockProps) {
+  const contentRef = useRef<HTMLDivElement>(null)
+  const dockRef = useRef<HTMLElement>(null)
   const systemIcons = useSystemIcons()
   const appearanceMotion = useAppearanceMotion()
   const track = playback.track
@@ -54,16 +60,59 @@ export function PlaylistPlaybackDock({
     || playbackTransitionPending
     || playback.isTransportBusy
 
+  useLayoutEffect(() => {
+    const shell = dockRef.current?.closest<HTMLElement>('.player-shell')
+    if (!shell) return
+    const owners = controllerBackgroundOwners.get(shell) ?? 0
+    controllerBackgroundOwners.set(shell, owners + 1)
+    if (owners === 0) shell.setAttribute('data-controller-background-present', '')
+    return () => {
+      const remaining = (controllerBackgroundOwners.get(shell) ?? 1) - 1
+      if (remaining > 0) {
+        controllerBackgroundOwners.set(shell, remaining)
+      } else {
+        controllerBackgroundOwners.delete(shell)
+        shell.removeAttribute('data-controller-background-present')
+      }
+    }
+  }, [])
+
+  useLayoutEffect(() => {
+    // AnimatePresence initial=false can begin directly at opacity 1 without an
+    // update callback. Read Motion's inline value, not the opaque surface CSS.
+    if (contentRef.current && dockRef.current) {
+      contentRef.current.style.opacity = dockRef.current.style.opacity || '1'
+    }
+  }, [appearanceMotion.disabled])
+
   return (
     <motion.aside
+      ref={dockRef}
       className="playlist-playback-dock"
       data-playback-command-busy={commandBusy && !disabled ? '' : undefined}
       variants={appearanceMotion.variants.backdrop}
       initial="initial"
       animate="animate"
       exit="exit"
+      onUpdate={(latest) => {
+        if (contentRef.current && typeof latest.opacity === 'number') {
+          contentRef.current.style.opacity = String(latest.opacity)
+        }
+      }}
       aria-label="当前播放"
     >
+      <motion.div
+        className="controller-shared-background"
+        layoutId="player-view-controller-background"
+        layoutCrossfade
+        transition={{ layout: appearanceMotion.layoutTransition }}
+        aria-hidden="true"
+      />
+      <div
+        ref={contentRef}
+        className="playlist-playback-content"
+        style={{ opacity: appearanceMotion.disabled ? 1 : 0 }}
+      >
       <div className="playlist-playback-track" data-cover-state={coverState}>
         <button
           type="button"
@@ -169,6 +218,7 @@ export function PlaylistPlaybackDock({
           onClick={onClose}
         />
       </nav>
+      </div>
     </motion.aside>
   )
 }

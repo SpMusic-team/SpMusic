@@ -423,7 +423,7 @@
   align-self: center;
   justify-self: auto;
   border-radius: calc(30 * var(--player-layout-unit));
-  box-shadow:
+  --controller-background-shadow:
     0
     calc(4 * var(--player-layout-unit))
     calc(4 * var(--player-layout-unit))
@@ -861,7 +861,7 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
   padding: calc(23 * var(--horizontal-control-unit)) 0;
   justify-self: stretch;
   border-radius: 30px;
-  box-shadow: 0 4px 4px rgba(0, 0, 0, var(--player-controls-shadow));
+  --controller-background-shadow: 0 4px 4px rgba(0, 0, 0, var(--player-controls-shadow));
 }
 
 .responsive-player-layout[data-player-layout="horizontal"] .control-progress-slider {

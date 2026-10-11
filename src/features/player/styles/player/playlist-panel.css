@@ -1,0 +1,639 @@
+/* 播放列表详情页：歌曲区由同一张卡片按十档描述符切换布局。 */
+.playlist-panel {
+  --playlist-page-max-width: 970px;
+  position: absolute;
+  top: 40px;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 25px;
+  padding: 0 16px 48px;
+  overflow-y: auto;
+  background: var(--app-bg);
+  color: var(--player-ink);
+  scrollbar-color: color-mix(in srgb, var(--player-muted) 35%, transparent) transparent;
+  scrollbar-width: thin;
+}
+
+.playlist-hero {
+  position: relative;
+  width: 100%;
+  max-width: none;
+  height: clamp(320px, calc(320px + (100vw - 640px) * 0.5), 460px);
+  min-height: 320px;
+  margin: 0 auto;
+  overflow: hidden;
+  border-radius: 30px;
+  /* The hero always sits on the placeholder surface, cover or not, so a hero
+     cover dissolves in over the same material the cards use instead of the
+     image fading up out of an empty page-coloured block. */
+  background: var(--cover-placeholder-surface);
+  box-shadow: 0 6px 3px rgb(23 33 43 / 26%);
+  color: var(--player-ink);
+}
+
+.playlist-hero-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  transition: opacity var(--app-motion-standard, 240ms) cubic-bezier(.2, 0, .2, 1);
+}
+
+/* Only the thumbnail path reports `data-loaded`; the eager fallback <img> has no
+   attribute and must keep painting at full opacity. */
+.playlist-hero-image[data-loaded="false"] { opacity: 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  .playlist-hero-image { transition: none; }
+}
+
+.playlist-hero::after {
+  position: absolute;
+  inset: 0;
+  content: '';
+  pointer-events: none;
+  background: linear-gradient(to top, rgb(15 23 31 / 24%), transparent 42%);
+}
+
+.playlist-hero-copy {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  left: 10px;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+}
+
+.playlist-hero-category {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 1;
+  height: 28px;
+  min-width: 94px;
+  max-width: calc(100% - 20px);
+  gap: 4px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: var(--app-radius-pill);
+  background: color-mix(in srgb, var(--player-blue-soft) 92%, transparent);
+  box-shadow: 0 1px 2px rgb(23 33 43 / 12%);
+  color: var(--player-blue-ink, var(--player-blue));
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+  backdrop-filter: blur(10px);
+}
+
+.playlist-hero-category svg {
+  width: 14px;
+  height: 14px;
+}
+
+.playlist-hero-category:hover,
+.playlist-hero-category:focus-visible {
+  background: color-mix(in srgb, var(--player-blue-soft) 76%, var(--app-surface));
+  color: var(--player-blue-ink, var(--player-blue));
+}
+
+.playlist-hero-category:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--player-blue) 55%, transparent);
+  outline-offset: 3px;
+}
+
+.playlist-hero-title,
+.playlist-hero-meta {
+  width: fit-content;
+  max-width: min(100%, 480px);
+  margin: 0;
+  border-radius: var(--app-radius-pill);
+  background: color-mix(in srgb, var(--player-blue-soft) 92%, transparent);
+  box-shadow: 0 1px 2px rgb(23 33 43 / 12%);
+  color: var(--player-blue-ink, var(--player-blue));
+  backdrop-filter: blur(10px);
+}
+
+.playlist-hero-title {
+  min-height: 42px;
+  padding: 5px 14px;
+  overflow: hidden;
+  font-size: 24px;
+  font-weight: 500;
+  line-height: 32px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.playlist-hero-meta {
+  display: flex;
+  min-height: 30px;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 14px;
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 22px;
+}
+
+.playlist-hero-meta > svg {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+}
+
+.playlist-hero-meta-sep {
+  opacity: 0.7;
+}
+
+.playlist-hero-actions {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 9px;
+  margin-top: 4px;
+}
+
+.playlist-hero-icon,
+.playlist-hero-actions .playlist-select-toggle {
+  height: 44px;
+  min-height: 44px;
+  border: 0;
+  background: color-mix(in srgb, var(--player-blue-soft) 94%, transparent);
+  box-shadow: 0 1px 2px rgb(23 33 43 / 14%);
+  color: var(--player-blue-ink, var(--player-blue));
+  backdrop-filter: blur(10px);
+}
+
+.playlist-hero-icon {
+  width: 44px;
+  border-radius: 999px;
+}
+
+.playlist-hero-icon svg,
+.playlist-hero-icon [data-slot="icon"] {
+  width: 25px;
+  height: 25px;
+}
+
+.playlist-hero-actions .playlist-select-toggle {
+  padding: 0 14px;
+  border-radius: var(--app-radius-pill);
+  font-size: 20px;
+  font-weight: 500;
+}
+
+.playlist-hero-actions > :last-child {
+  margin-left: auto;
+}
+
+.playlist-hero-icon:hover,
+.playlist-hero-actions .playlist-select-toggle:hover,
+.playlist-hero-icon:focus-visible,
+.playlist-hero-actions .playlist-select-toggle:focus-visible {
+  background: color-mix(in srgb, var(--player-blue-soft) 76%, var(--app-surface));
+  color: var(--player-blue-ink, var(--player-blue));
+}
+
+/* The play action uses the same pointer-originated ripple as playback controls;
+   keep its surface stable until it is actually pressed. */
+.playlist-hero-play-button:hover {
+  background: color-mix(in srgb, var(--player-blue-soft) 94%, transparent);
+  color: var(--player-blue-ink, var(--player-blue));
+}
+
+.playlist-hero-icon:focus-visible,
+.playlist-hero-actions .playlist-select-toggle:focus-visible,
+.playlist-card:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--player-blue) 55%, transparent);
+  outline-offset: 3px;
+}
+
+.playlist-hero-icon[data-selected="true"],
+.playlist-hero-actions .playlist-select-toggle[data-selected="true"] {
+  background: var(--player-blue);
+  color: var(--app-accent-contrast);
+}
+
+.playlist-hero-shuffle-button[data-selected="true"] {
+  background: color-mix(in srgb, var(--player-blue-soft) 94%, transparent);
+  color: var(--player-blue-ink, var(--player-blue));
+}
+
+.playlist-search-button[data-selected="true"] {
+  background: color-mix(in srgb, var(--player-blue-soft) 94%, transparent);
+  color: var(--player-blue-ink, var(--player-blue));
+}
+
+.playlist-close {
+  display: none;
+}
+
+.playlist-filter,
+.playlist-selection-bar,
+.playlist-grid,
+.playlist-empty {
+  width: 100%;
+  max-width: var(--playlist-page-max-width);
+  margin-right: auto;
+  margin-left: auto;
+}
+
+.playlist-filter { padding: 0 15px; }
+
+.playlist-filter-input {
+  height: 48px;
+  padding-inline: 18px;
+  border-color: color-mix(in srgb, var(--player-blue) 28%, var(--app-border));
+  border-radius: 999px;
+  background: var(--app-surface);
+  color: var(--player-ink);
+  font-size: 18px;
+}
+
+.playlist-selection-bar {
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 0 15px;
+}
+
+.playlist-selection-count { font-size: 18px; font-weight: 600; }
+
+.playlist-grid {
+  display: grid;
+  gap: var(--playlist-grid-gap, 20px);
+  max-width: none;
+  padding: 0 0 48px;
+  /* Reflowing between tile column counts must not move the scroll position. */
+  overflow-anchor: none;
+}
+
+.playlist-grid[data-layout-columns="1"] { grid-template-columns: minmax(0, 1fr); }
+.playlist-grid[data-layout-columns="2"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.playlist-grid[data-layout-columns="3"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.playlist-grid[data-layout-columns="4"] { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.playlist-grid[data-layout-level="0"] {
+  grid-template-columns: repeat(auto-fill, 270px);
+  gap: 20px;
+  justify-content: center;
+}
+.playlist-grid[data-layout-level="1"] {
+  grid-template-columns: repeat(auto-fill, 165px);
+  gap: 20px 28px;
+  justify-content: center;
+}
+.playlist-grid[data-layout-level="2"] {
+  width: calc(100% + 16px);
+  grid-template-columns: repeat(auto-fill, 130px);
+  gap: 21px;
+  justify-content: center;
+  margin-left: -8px;
+}
+.playlist-grid[data-layout-level="5"] { --playlist-grid-gap: 8px; }
+.playlist-grid[data-layout-level="6"] { --playlist-grid-gap: 6px; }
+.playlist-grid[data-layout-level="7"] { --playlist-grid-gap: 3px; }
+.playlist-grid[data-layout-level="8"],
+.playlist-grid[data-layout-level="9"] { --playlist-grid-gap: 1px 18px; }
+
+.playlist-card {
+  appearance: none;
+  display: grid;
+  width: 100%;
+  min-height: var(--playlist-card-min-height, 165px);
+  grid-template-columns: var(--playlist-cover-size, 135px) minmax(0, 1fr);
+  grid-template-rows: var(--playlist-cover-size, 135px);
+  align-items: stretch;
+  column-gap: var(--playlist-card-gap, 24px);
+  margin: 0;
+  padding: 15px;
+  border: 0;
+  border-radius: 30px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color var(--app-motion-fast) var(--app-motion-easing),
+    transform var(--app-motion-fast) var(--app-motion-easing);
+}
+
+.playlist-card:hover:not(:disabled) { background: color-mix(in srgb, var(--player-surface-variant) 58%, transparent); }
+.playlist-card:active:not(:disabled) { transform: scale(0.995); }
+.playlist-card:disabled { cursor: default; }
+
+.playlist-card[data-current="true"],
+.playlist-card[data-selected="true"] {
+  background: var(--player-surface-variant);
+}
+
+.playlist-card[data-unavailable="true"] { opacity: 0.5; }
+
+.playlist-card-cover {
+  position: relative;
+  width: var(--playlist-cover-size, 135px);
+  height: var(--playlist-cover-size, 135px);
+  overflow: hidden;
+  border-radius: 20px;
+  /* Placeholder and real cover share one material: the same drop shadow. The
+     placeholder adds a 1px top sheen and never draws a stroke, so its boundary
+     is carried by the shadow exactly like a photograph. The surface stays on
+     the container even when a thumbnail paints over it: that is the color the
+     image dissolves against. */
+  background: var(--cover-placeholder-surface);
+  box-shadow: 0 2px 3px rgb(23 33 43 / 20%), inset 0 1px 0 var(--cover-placeholder-sheen);
+}
+
+.playlist-card-cover-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  /* Thumbnails cross-dissolve over the placeholder surface instead of popping
+     in from nothing. The duration follows the appearance motion scale. */
+  opacity: 0;
+  transition: opacity var(--app-motion-standard, 240ms) cubic-bezier(.2, 0, .2, 1);
+}
+
+.playlist-card-cover-image[data-loaded="true"] { opacity: 1; }
+
+/* The URL fallback cover is rendered eagerly (it has its own onError fallback
+   chain and no thumbnail load signal), so it stays outside the dissolve and
+   must not inherit the base opacity: 0. */
+.playlist-card-cover-image.playlist-card-cover-image-eager { opacity: 1; transition: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .playlist-card-cover-image { transition: none; }
+}
+
+/* No `ready` override: the sheen lives on the container and stays painted
+   underneath the dissolving image, so the top highlight does not vanish for the
+   half of the dissolve where `data-cover-state` is already `ready`. */
+
+.playlist-card-cover-mark {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  display: grid;
+  /* Tracks the layout descriptor: 46px on the default 135px cover, and it
+     shrinks with the compact levels (the smallest one is 58px) instead of
+     dominating the tile. */
+  width: calc(var(--playlist-cover-size, 135px) * 0.34);
+  aspect-ratio: 1;
+  place-items: center;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: var(--player-blue-soft);
+  color: var(--player-blue-ink);
+}
+
+.playlist-card-cover-mark svg {
+  width: 52%;
+  height: 52%;
+}
+
+@keyframes cover-placeholder-pulse {
+  0%,
+  100% { background-color: var(--cover-placeholder-surface); }
+  50% { background-color: var(--cover-placeholder-pulse); }
+}
+
+.playlist-card[data-cover-state="loading"] .playlist-card-cover {
+  /* A local hit resolves within a few frames: the delay keeps it from
+     flashing a pulse that never completes. Cards share the phase offset set
+     as --cover-placeholder-stagger by the card itself. The iteration count is
+     bounded on purpose: a thumbnail that failed permanently (retry exhausted,
+     or a cover that only exists as a data URL and can never produce a file
+     path) would otherwise pulse forever. After ~31s the tile settles on the
+     flat surface until the artwork state actually changes. */
+  animation: cover-placeholder-pulse 2.6s ease-in-out 12;
+  animation-delay: calc(350ms + var(--cover-placeholder-stagger, 0ms));
+}
+
+.playlist-grid[data-cover-motion="off"] .playlist-card[data-cover-state="loading"] .playlist-card-cover {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .playlist-card[data-cover-state="loading"] .playlist-card-cover {
+    animation: none;
+  }
+}
+
+/* The focused card lifts on the same material in every state: a placeholder
+   that only gained the stronger shadow once its cover arrived used to jump. */
+.playlist-card[data-current="true"] .playlist-card-cover {
+  box-shadow: 0 2px 4px rgb(23 33 43 / 22%), inset 0 1px 0 var(--cover-placeholder-sheen);
+}
+
+.playlist-card-cover-state {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  /* Over a real cover the label keeps the original light-on-photo treatment;
+     over the flat placeholder surface it has to use the scheme ink instead. */
+  color: var(--player-ink);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.playlist-card[data-cover-state="ready"] .playlist-card-cover-state {
+  color: rgb(255 255 255 / 90%);
+  text-shadow: 0 1px 8px rgb(0 0 0 / 35%);
+}
+
+.playlist-card-checkbox {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: none;
+  width: 28px;
+  height: 28px;
+  border: 2px solid rgb(255 255 255 / 90%);
+  border-radius: 50%;
+  background: rgb(0 0 0 / 35%);
+}
+
+.playlist-card[data-select-mode="true"] .playlist-card-checkbox { display: block; }
+.playlist-card[data-selected="true"] .playlist-card-checkbox { border-color: #fff; background: var(--player-blue, #477fa7); }
+
+.playlist-card-copy {
+  display: flex;
+  min-width: 0;
+  width: 100%;
+  align-self: center;
+  flex-direction: column;
+  gap: 8px;
+  overflow: hidden;
+}
+
+.playlist-card-title,
+.playlist-card-artist,
+.playlist-card-format {
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.playlist-card-title { font-size: var(--playlist-card-title-size, 30px); font-weight: 500; line-height: 1.25; }
+.playlist-card-artist { font-size: var(--playlist-card-artist-size, 24px); font-weight: 400; line-height: 1.3; }
+
+.playlist-card-format {
+  display: flex;
+  align-items: center;
+  color: var(--player-inverse-primary, var(--player-blue));
+  font-size: var(--playlist-card-format-size, 18px);
+  font-weight: 500;
+  line-height: 1.3;
+}
+
+.playlist-card-format > svg { width: 1.05em; height: 1.05em; flex: 0 0 auto; margin-right: 0.35em; }
+
+.playlist-grid[data-layout-flow="tile"] .playlist-card {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  border-radius: 22px;
+}
+
+.playlist-grid[data-layout-flow="tile"] .playlist-card-cover {
+  width: min(100%, var(--playlist-cover-size));
+  height: auto;
+  aspect-ratio: 1;
+  align-self: center;
+  border-radius: 16px;
+}
+
+.playlist-grid[data-layout-flow="tile"] .playlist-card-copy {
+  width: min(100%, var(--playlist-cover-size));
+  align-self: center;
+  gap: 3px;
+  text-align: left;
+}
+
+.playlist-grid[data-layout-level="1"] .playlist-card {
+  width: 165px;
+  height: 253px;
+  gap: 24px;
+  padding: 15px 5px;
+}
+
+.playlist-grid[data-layout-level="1"] .playlist-card-cover {
+  width: 155px;
+  height: 155px;
+  flex: 0 0 155px;
+}
+
+.playlist-grid[data-layout-level="1"] .playlist-card-copy { width: 135px; }
+
+.playlist-grid[data-layout-level="2"] .playlist-card-copy { width: 100px; }
+
+.playlist-grid[data-layout-flow="row"] .playlist-card {
+  --playlist-card-gap: clamp(12px, 2.4vw, 24px);
+}
+
+.playlist-grid[data-layout-flow="text"] .playlist-card {
+  display: block;
+  min-height: var(--playlist-card-min-height);
+  padding: 5px 12px;
+  border-radius: 16px;
+}
+
+.playlist-grid[data-layout-flow="text"] .playlist-card-cover { display: none; }
+
+.playlist-grid[data-layout-flow="text"] .playlist-card-copy {
+  display: grid;
+  min-height: calc(var(--playlist-card-min-height) - 10px);
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  align-content: center;
+  gap: 0 16px;
+}
+
+.playlist-grid[data-layout-flow="text"] .playlist-card-title { grid-column: 1; grid-row: 1; }
+.playlist-grid[data-layout-flow="text"] .playlist-card-artist { grid-column: 1; grid-row: 2; }
+.playlist-grid[data-layout-flow="text"] .playlist-card-format { grid-column: 2; grid-row: 1 / span 2; align-self: center; }
+
+.playlist-grid[data-layout-level="8"] .playlist-card,
+.playlist-grid[data-layout-level="9"] .playlist-card { padding-block: 2px; border-radius: 10px; }
+
+.playlist-grid[data-layout-level="7"] .playlist-card-copy,
+.playlist-grid[data-layout-level="8"] .playlist-card-copy,
+.playlist-grid[data-layout-level="9"] .playlist-card-copy {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.playlist-grid[data-layout-level="8"] .playlist-card-copy,
+.playlist-grid[data-layout-level="9"] .playlist-card-copy { min-height: calc(var(--playlist-card-min-height) - 4px); }
+
+.playlist-grid[data-layout-level="7"] .playlist-card-artist,
+.playlist-grid[data-layout-level="8"] .playlist-card-artist,
+.playlist-grid[data-layout-level="9"] .playlist-card-artist { display: none; }
+
+.playlist-grid[data-layout-level="7"] .playlist-card-title,
+.playlist-grid[data-layout-level="7"] .playlist-card-format,
+.playlist-grid[data-layout-level="8"] .playlist-card-title,
+.playlist-grid[data-layout-level="8"] .playlist-card-format,
+.playlist-grid[data-layout-level="9"] .playlist-card-title,
+.playlist-grid[data-layout-level="9"] .playlist-card-format { grid-row: 1; align-self: center; }
+
+.playlist-empty {
+  display: flex;
+  min-height: 260px;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 48px 24px;
+  color: var(--player-muted);
+  text-align: center;
+}
+
+.playlist-empty [data-slot="empty-title"] { color: var(--player-ink); font-size: 20px; }
+.playlist-empty [data-slot="empty-description"] { color: var(--player-muted); font-size: 16px; }
+
+@media (width > 1024px) {
+  .playlist-panel { left: 320px; padding-inline: 25px; background: var(--player-dock); }
+  .playlist-hero { height: 320px; min-height: 320px; flex-shrink: 0; }
+  .playlist-hero-category { height: 32px; min-width: 100px; font-size: 16px; line-height: 24px; }
+  .playlist-hero-category svg { width: 16px; height: 16px; }
+  .playlist-hero-copy { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; }
+  .playlist-hero-title { grid-column: 1; font-size: 22px; line-height: 28px; }
+  .playlist-hero-meta { grid-column: 2; align-self: center; justify-self: end; }
+  .playlist-hero-actions { grid-column: 1 / -1; margin-top: 0; }
+  .playlist-hero-shuffle-button,
+  .playlist-hero-play-button,
+  .playlist-hero-actions .playlist-search-button {
+    box-sizing: border-box;
+    width: 62px;
+    height: 42px;
+    min-height: 42px;
+    padding: 5px 15px;
+  }
+  .playlist-hero-shuffle-button svg,
+  .playlist-hero-play-button svg,
+  .playlist-hero-actions .playlist-search-button svg { width: 32px; height: 32px; }
+  .playlist-hero-actions .playlist-select-toggle { height: 42px; min-height: 42px; padding: 5px 15px; }
+  .playlist-grid[data-layout-level="0"] { --playlist-cover-size: 240px !important; --playlist-card-title-size: 16px !important; --playlist-card-artist-size: 14px !important; grid-template-columns: repeat(auto-fill, 270px); gap: 22px 48px; }
+  .playlist-grid[data-layout-level="0"] .playlist-card { gap: 24px; padding: 15px; border-radius: calc(var(--app-radius-lg) * 2.5); }
+  .playlist-grid[data-layout-level="0"] .playlist-card-cover { width: 240px; height: 240px; flex: 0 0 240px; border-radius: calc(var(--app-radius-lg) * 5 / 3); }
+  .playlist-grid[data-layout-level="0"] .playlist-card-copy { width: 200px; gap: 0; }
+  .playlist-grid[data-layout-level="0"] .playlist-card-title { line-height: 24px; }
+  .playlist-grid[data-layout-level="0"] .playlist-card-artist { line-height: 20px; }
+}

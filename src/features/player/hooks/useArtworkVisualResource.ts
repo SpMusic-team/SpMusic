@@ -1844,6 +1844,27 @@ export function useArtworkVisualResource(
       )))
       return
     }
+    const existingIncoming = layersRef.current.find(
+      (layer) => layer.phase === 'incoming' && layer.identity === identity,
+    )
+    const incomingIntent = existingIncoming?.transitionIntent
+    const intent = latest.transitionIntent
+    if (
+      incomingIntent && intent
+      && incomingIntent.requestId === intent.requestId
+      && incomingIntent.sequence === intent.sequence
+      && incomingIntent.targetTrackId === intent.targetTrackId
+      && incomingIntent.direction === intent.direction
+      && incomingIntent.source === intent.source
+      && incomingIntent.previewTokenId === intent.previewTokenId
+    ) {
+      // Hydrated details/prefetch refreshes can arrive after preview promotion
+      // but before its paint barrier. Keep the exact incoming layer and lease:
+      // rebuilding it from the same cached resource would orphan the drag pair.
+      registryGet(identity)
+      prefetchDebugRef.current.foregroundDeduplicated += 1
+      return
+    }
     const existingActive = layersRef.current.find(
       (layer) => layer.phase === 'active' && layer.identity === identity,
     )
@@ -2067,6 +2088,7 @@ export function useArtworkVisualResource(
     coverMaxEdge,
     createLayer,
     clearRegistry,
+    currentTransitionIntent,
     detailsPending,
     enqueueOrInstall,
     evictPreparedArtwork,

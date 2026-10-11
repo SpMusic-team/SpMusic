@@ -607,10 +607,18 @@ export function PlayerSurface({
   const [trackCardPreviewToken, setTrackCardPreviewToken] = useState<TrackCardPreviewToken | null>(null)
   const [trackCardSession, setTrackCardSession] = useState<TrackCardTransitionSession | null>(null)
   const trackCardSessionRef = useRef<TrackCardTransitionSession | null>(null)
+  const committedTrackCardPreviewRef = useRef<{
+    session: TrackCardTransitionSession
+    token: TrackCardPreviewToken
+  } | null>(null)
   const [retiredTrackCardSession, setRetiredTrackCardSession] = useState<TrackCardTransitionSession | null>(null)
   const retiredTrackCardSessionRef = useRef<TrackCardTransitionSession | null>(null)
   const [retiredExitingLayerIds, setRetiredExitingLayerIds] = useState<ReadonlySet<number>>(() => new Set())
   const publishTrackCardSession = useCallback((session: TrackCardTransitionSession | null) => {
+    const committed = committedTrackCardPreviewRef.current
+    if (committed && (!session || !trackCardSessionsMatch(session, committed.session))) {
+      committedTrackCardPreviewRef.current = null
+    }
     const current = trackCardSessionRef.current
     if (
       (current === null && session === null)
@@ -724,10 +732,30 @@ export function PlayerSurface({
       && trackId === incomingTrackId
       && intent.targetTrackId === incomingTrackId
       && intent.sequence === sequence
+      && intent.direction === session.direction
       && (session.kind === 'drag'
         ? session.key === `drag:${intent.previewTokenId}`
         : session.key === `selection:${intent.requestId}`))
   }, [])
+  const isCommittedTrackCardAwaitingPromotion = useCallback((session: TrackCardTransitionSession) => {
+    const committed = committedTrackCardPreviewRef.current
+    if (!committed || !trackCardSessionsMatch(session, committed.session)) return false
+    const { token } = committed
+    const outgoing = artworkSlotsRef.current.find((layer) => layer?.id === session.outgoingLayerId)
+    const incoming = artworkSlotsRef.current.find((layer) => layer?.id === session.incomingLayerId)
+    return Boolean(session.kind === 'drag'
+      && session.key === `drag:${token.id}`
+      && session.direction === token.direction
+      && outgoing?.phase === 'active'
+      && outgoing.track.id === token.originTrackId
+      && incoming?.track.id === token.targetTrackId
+      && (incoming.phase === 'preview' || incoming.phase === 'incoming')
+      && incoming.previewTokenId === token.id
+      && incoming.resource.view
+      && (incoming.phase === 'preview'
+        || incoming.transitionIntent?.requestId === latestTrackContextRef.current.intent?.requestId)
+      && selectionMatchesTrackCardSession(session, token.targetTrackId))
+  }, [selectionMatchesTrackCardSession])
   const canResumeInterruptedSettle = useCallback((settle: TrackCardSettleContext | null) => Boolean(
     settle?.target === 1
     && artworkSlotsRef.current.some((layer) => layer?.id === settle.session.outgoingLayerId && layer.phase === 'exiting')
@@ -743,6 +771,9 @@ export function PlayerSurface({
       && selectionMatchesTrackCardSession(session, incoming.track.id)
     if ((outgoing.phase !== 'active' && outgoing.phase !== 'exiting')
       || (incoming.phase !== 'preview' && incoming.phase !== 'incoming' && incoming.phase !== 'active')) return false
+    // Animation completion does not retire a committed preview. Its already
+    // painted pair still owns progress while the incoming paint barrier runs.
+    if (isCommittedTrackCardAwaitingPromotion(session)) return true
     const settle = trackCardSettleRef.current
     if (settle?.session === session && settle.target === 1) {
       return selectionMatchesTrackCardSession(session, incoming.track.id)
@@ -750,7 +781,7 @@ export function PlayerSurface({
     if (coverDragRef.current && !coverDragRef.current.released) return true
     if (settle?.session === session && settle.target === 0) return true
     return false
-  }, [selectionMatchesTrackCardSession])
+  }, [isCommittedTrackCardAwaitingPromotion, selectionMatchesTrackCardSession])
   const contentState = playback.contentState ?? (track ? 'track' : 'empty')
   const { appearance } = useAppearance()
   const appearanceMotion = useAppearanceMotion()
@@ -1189,6 +1220,7 @@ export function PlayerSurface({
       discardCoverDrag(true)
       return
     }
+    committedTrackCardPreviewRef.current = { session: activeSession, token: gesture.token }
     const interruptedOutgoingId = gesture.interruptedSettle?.session.outgoingLayerId
     if (interruptedOutgoingId !== undefined && interruptedOutgoingId !== activeSession.outgoingLayerId) {
       completeTrackCardExit(interruptedOutgoingId)
@@ -2038,6 +2070,24 @@ export function PlayerSurface({
       // A mismatched ref is preserved only when it owns a real, newer pair.
       // Otherwise it must not republish the retired cards on the next render.
       const ownsMotion = !differentLiveIsCurrent && !gestureOwnsMotion
+      if (ownsMotion && session && isCommittedTrackCardAwaitingPromotion(session)) {
+        stopTrackCardAnimation()
+        trackCardProgress.set(1)
+        trackCardOvershootX.set(0)
+        if (incoming?.phase !== 'incoming' || !outgoing) return
+        // This exact preview was painted before commit was accepted. A slow
+        // incoming-only paint barrier must not let the watchdog rewind it.
+        // Promote the retained pair, then remove its roles before any reset.
+        flushSync(() => {
+          markArtworkReady(incoming.id)
+          completeTrackCardExit(outgoing.id)
+          setTrackCardPreviewToken(null)
+          publishTrackCardSession(null)
+        })
+        trackCardProgress.set(0)
+        coverInteractionPhaseRef.current = 'idle'
+        return
+      }
       if (ownsMotion) stopTrackCardAnimation()
       if (committedPair) {
         completeTrackCardExit(outgoing.id)
@@ -2087,6 +2137,8 @@ export function PlayerSurface({
     discardCoverDrag,
     discardTrackPreview,
     hasValidTrackCardSessionPair,
+    isCommittedTrackCardAwaitingPromotion,
+    markArtworkReady,
     publishTrackCardSession,
     renderedTrackCardKey,
     renderedOutgoingLayerId,

@@ -1,5 +1,6 @@
 import { memo, useEffect } from 'react'
 import { motion } from 'motion/react'
+import { Button } from '@/components/ui/button'
 import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { appCopy } from '@/features/player/model/playerCopy'
 import type { SystemIcon } from '@/icons/systemIcons'
@@ -22,6 +23,7 @@ type CoverPanelProps = {
   ownsPlayerViewTransition: boolean
   onMoreOpenChange?: (open: boolean) => void
   moreOpen?: boolean
+  onCollapse: () => void
 }
 
 export const CoverPanel = memo(function CoverPanel({
@@ -37,6 +39,7 @@ export const CoverPanel = memo(function CoverPanel({
   ownsPlayerViewTransition,
   onMoreOpenChange,
   moreOpen,
+  onCollapse,
 }: CoverPanelProps) {
   const systemIcons = useSystemIcons()
   const appearanceMotion = useAppearanceMotion()
@@ -80,6 +83,15 @@ export const CoverPanel = memo(function CoverPanel({
           </div>
           {layer && track && artwork ? <>
             {!coverSource ? <div className="cover-mark"><systemIcons.music /><strong>{appCopy.productName}</strong><span>LOCAL LISTENING</span></div> : null}
+            <Button
+              className="cover-collapse-button"
+              variant="ghost"
+              type="button"
+              aria-label={appCopy.controls.playlistPage}
+              onClick={(event) => {
+                if (event.detail === 0) onCollapse()
+              }}
+            />
             <div className="cover-actions">
               <div className="cover-feedback">
                 <IconButton animated pressFeedback icon={likeIcon} label={appCopy.controls.like} selected={liked} onClick={onLike} />

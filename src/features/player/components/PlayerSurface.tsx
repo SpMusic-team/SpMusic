@@ -198,6 +198,7 @@ type TrackCardMotionLayerProps = {
   onMoreOpenChange?: (open: boolean) => void
   moreOpen?: boolean
   ownsPlayerViewTransition: boolean
+  onCollapse: () => void
 }
 
 const TrackCardMotionLayer = memo(function TrackCardMotionLayer({
@@ -218,6 +219,7 @@ const TrackCardMotionLayer = memo(function TrackCardMotionLayer({
   onMoreOpenChange,
   moreOpen,
   ownsPlayerViewTransition,
+  onCollapse,
 }: TrackCardMotionLayerProps) {
   const systemIcons = useSystemIcons()
   const phase = layer.phase
@@ -377,6 +379,7 @@ const TrackCardMotionLayer = memo(function TrackCardMotionLayer({
           ownsPlayerViewTransition={ownsPlayerViewTransition}
           onMoreOpenChange={onMoreOpenChange}
           moreOpen={moreOpen}
+          onCollapse={onCollapse}
         />
         <TrackMeta layer={layer} ownsPlayerViewTransition={ownsPlayerViewTransition} />
       </motion.div>
@@ -556,12 +559,26 @@ type CoverDragGesture = {
   targetReady: boolean
 }
 
-type CoverPointerSample = Pick<PointerEvent, 'clientX' | 'pointerId'>
+type CoverPointerSample = Pick<PointerEvent, 'clientX' | 'clientY' | 'pointerId'>
+
+type CoverPressGesture = CoverPointerSample & {
+  button: number
+  pointerType: string
+  target: HTMLElement
+  currentTarget: HTMLDivElement
+  coverFrame: HTMLElement
+  coverBounds: DOMRect
+  originTrackId: string
+  tapEligible: boolean
+}
 
 const TRACK_CARD_DURATION_SECONDS = 0.3
 const TRACK_CARD_CANCEL_SECONDS = 0.38
 const TRACK_CARD_RECENTER_SECONDS = 0.19
 const TRACK_CARD_DRAG_LOCK_PX = 6
+// Contact jitter has its own intent boundary; the existing direction lock
+// remains responsible for direction changes after a drag has started.
+const COVER_TOUCH_DRAG_INTENT_PX = 12
 const TRACK_CARD_COMMIT_PROGRESS = 0.28
 const TRACK_CARD_COMMIT_VELOCITY = 650
 const TRACK_CARD_OVERSHOOT_VELOCITY = 1100
@@ -602,6 +619,16 @@ export function PlayerSurface({
     perspective: number
   } | null>(null)
   const coverDragRef = useRef<CoverDragGesture | null>(null)
+  const coverPressRef = useRef<CoverPressGesture | null>(null)
+  const coverTapReadyRef = useRef<{ pointerId: number } | null>(null)
+  const clearCoverPress = useCallback(() => {
+    const press = coverPressRef.current
+    coverPressRef.current = null
+    if (press?.currentTarget.hasPointerCapture(press.pointerId)) {
+      press.currentTarget.releasePointerCapture(press.pointerId)
+    }
+    return press
+  }, [])
   const coverInteractionPhaseRef = useRef<TrackCardInteractionPhase>('idle')
   const suppressCoverClickRef = useRef(false)
   const [trackCardPreviewToken, setTrackCardPreviewToken] = useState<TrackCardPreviewToken | null>(null)
@@ -817,6 +844,7 @@ export function PlayerSurface({
     }
     playlistCloseRequestedRef.current = true
   }, [currentArtworkReady, onPlaylistOpenChange, track])
+  const collapsePlayer = useCallback(() => requestPlaylistOpenChange(true), [requestPlaylistOpenChange])
 
   useEffect(() => {
     if (!playlistOpen) {
@@ -1035,6 +1063,8 @@ export function PlayerSurface({
   }, [animateTrackCardProgress, appearance.motion.durationScale, trackCardProgress])
 
   const hardResetTrackCardInteraction = useCallback(() => {
+    clearCoverPress()
+    coverTapReadyRef.current = null
     const gesture = coverDragRef.current
     coverDragRef.current = null
     if (gesture) {
@@ -1056,7 +1086,7 @@ export function PlayerSurface({
     publishTrackCardSession(null)
     trackCardProgress.set(0)
     trackCardOvershootX.set(0)
-  }, [discardTrackPreview, finishRetiringTrackCard, publishTrackCardSession, stopTrackCardAnimation, trackCardPreviewToken?.id, trackCardOvershootX, trackCardProgress])
+  }, [clearCoverPress, discardTrackPreview, finishRetiringTrackCard, publishTrackCardSession, stopTrackCardAnimation, trackCardPreviewToken?.id, trackCardOvershootX, trackCardProgress])
 
   const handleMoreOpenChange = useCallback((open: boolean) => {
     if (open) hardResetTrackCardInteraction()
@@ -1242,7 +1272,7 @@ export function PlayerSurface({
     })
   }, [commitTrackPreview, completeTrackCardExit, discardCoverDrag, runTrackCardSettle, trackCardReducedMotion])
 
-  const handleCoverPointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+  const startCoverDrag = useCallback((event: CoverPressGesture) => {
     const coverFrame = (event.target as HTMLElement).closest<HTMLElement>('.cover-frame')
     if (
       event.button !== 0
@@ -1251,7 +1281,7 @@ export function PlayerSurface({
       || !trackCardGeometryReady
       || !coverFrame
       || !event.currentTarget.contains(coverFrame)
-      || (event.target as HTMLElement).closest('button, [role="button"], a, input')
+      || (event.target as HTMLElement).closest('button:not(.cover-collapse-button), [role="button"]:not(.cover-collapse-button), a, input')
     ) return
     // A committed preview can advance the logical track before its artwork
     // becomes active. Do not start a new pair from the previous track's card.
@@ -1374,7 +1404,35 @@ export function PlayerSurface({
     suppressCoverClickRef.current = false
   }, [artworkSlots, canResumeInterruptedSettle, completeTrackCardExit, prepareTrackPreview, publishTrackCardSession, stopTrackCardAnimation, track, trackCardCoverGeometry, trackCardGeometryReady, trackCardOvershootX, trackCardPreviewToken, trackCardProgress, trackCardReducedMotion])
 
+  const handleCoverPointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    coverTapReadyRef.current = null
+    const target = event.target as HTMLElement
+    const coverFrame = target.closest<HTMLElement>('.cover-frame')
+    if (event.button !== 0 || !event.isPrimary || !track || !coverFrame
+      || !event.currentTarget.contains(coverFrame)
+      || target.closest('button:not(.cover-collapse-button), [role="button"]:not(.cover-collapse-button), a, input')
+      || coverPressRef.current || (coverDragRef.current && !coverDragRef.current.released)) return
+    // Tracking a press must not change layout ownership, stop a settle, or
+    // mount a preview. Only a deliberate horizontal drag acquires those.
+    coverPressRef.current = {
+      pointerId: event.pointerId, pointerType: event.pointerType, button: event.button,
+      clientX: event.clientX, clientY: event.clientY, target, currentTarget: event.currentTarget,
+      coverFrame, coverBounds: coverFrame.getBoundingClientRect(), originTrackId: track.id, tapEligible: true,
+    }
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }, [track])
+
   const handleCoverPointerMove = useCallback((event: CoverPointerSample) => {
+    const press = coverPressRef.current
+    if (press?.pointerId === event.pointerId) {
+      const dx = Math.abs(event.clientX - press.clientX)
+      const dy = Math.abs(event.clientY - press.clientY)
+      const intentDistance = press.pointerType === 'touch' ? COVER_TOUCH_DRAG_INTENT_PX : TRACK_CARD_DRAG_LOCK_PX
+      if (Math.hypot(dx, dy) >= intentDistance) press.tapEligible = false
+      if (dx < intentDistance || dx <= dy) return
+      coverPressRef.current = null
+      startCoverDrag(press)
+    }
     const gesture = coverDragRef.current
     if (
       coverInteractionPhaseRef.current !== 'dragging'
@@ -1576,9 +1634,24 @@ export function PlayerSurface({
     if (activeSession?.kind === 'drag') {
       trackCardProgress.set(gesture.progress)
     }
-  }, [canResumeInterruptedSettle, discardTrackPreview, finishRetiringTrackCard, prepareTrackPreview, publishTrackCardSession, retiringTrackCardProgress, stopTrackCardAnimation, trackCardCoverGeometry, trackCardOvershootX, trackCardProgress, trackCardReducedMotion])
+  }, [canResumeInterruptedSettle, discardTrackPreview, finishRetiringTrackCard, prepareTrackPreview, publishTrackCardSession, retiringTrackCardProgress, startCoverDrag, stopTrackCardAnimation, trackCardCoverGeometry, trackCardOvershootX, trackCardProgress, trackCardReducedMotion])
 
   const handleCoverPointerUp = useCallback((event: CoverPointerSample) => {
+    if (coverPressRef.current?.pointerId === event.pointerId) {
+      handleCoverPointerMove(event)
+      const press = coverPressRef.current?.pointerId === event.pointerId ? clearCoverPress() : null
+      if (press) {
+        const rect = press.coverBounds
+        coverTapReadyRef.current = press.tapEligible && press.originTrackId === latestTrackContextRef.current.trackId
+          && event.clientX >= rect.left && event.clientX <= rect.right
+          && event.clientY >= rect.top && event.clientY <= rect.bottom
+          ? { pointerId: press.pointerId } : null
+        // Complete navigation in click capture, after the browser has chosen
+        // this gesture's click target. Switching views here lets touch's
+        // compatibility click hit the newly mounted playlist underneath.
+        return
+      }
+    }
     let gesture = coverDragRef.current
     if (!gesture || gesture.pointerId !== event.pointerId || gesture.released) return
     if (coverInteractionPhaseRef.current !== 'dragging') {
@@ -1644,13 +1717,16 @@ export function PlayerSurface({
     // ownerless if that asynchronous request never obtained a canvas lease.
     if (previewLayerReady) commitCoverDrag(gesture, releaseVelocityX)
     else discardCoverDrag(true)
-  }, [artworkSlots, commitCoverDrag, discardCoverDrag, handleCoverPointerMove, trackCardGeometryReady])
+  }, [artworkSlots, clearCoverPress, commitCoverDrag, discardCoverDrag, handleCoverPointerMove, trackCardGeometryReady])
 
   const handleCoverPointerCancel = useCallback(() => {
+    clearCoverPress()
+    coverTapReadyRef.current = null
     if (coverDragRef.current?.released) return
     discardCoverDrag(true)
-  }, [discardCoverDrag])
+  }, [clearCoverPress, discardCoverDrag])
   const handleCoverLostPointerCapture = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (coverPressRef.current?.pointerId === event.pointerId) clearCoverPress()
     const gesture = coverDragRef.current
     if (!gesture || gesture.pointerId !== event.pointerId || gesture.released) return
     // WebView may release capture while replacing a child card. Recover once
@@ -1666,8 +1742,25 @@ export function PlayerSurface({
       }
     }
     discardCoverDrag(true)
-  }, [discardCoverDrag])
+  }, [clearCoverPress, discardCoverDrag])
+  const handleCoverTapClickCapture = useCallback((event: React.MouseEvent<HTMLElement>) => {
+    const tap = coverTapReadyRef.current
+    const pointerId = (event.nativeEvent as PointerEvent).pointerId
+    if (event.detail !== 0 && tap && (pointerId === undefined || pointerId === tap.pointerId)) {
+      coverTapReadyRef.current = null
+      event.preventDefault()
+      event.stopPropagation()
+      collapsePlayer()
+    }
+  }, [collapsePlayer])
   const handleCoverClickCapture = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    // The semantic button owns keyboard activation. Pointer gestures already
+    // chose tap, drag or cancellation; their compatibility click cannot retry.
+    if (event.detail !== 0 && (event.target as HTMLElement).closest('.cover-collapse-button')) {
+      event.preventDefault()
+      event.stopPropagation()
+      return
+    }
     if (!suppressCoverClickRef.current) return
     suppressCoverClickRef.current = false
     if ((event.target as HTMLElement).closest('button, [role="button"], a, input')) return
@@ -1692,8 +1785,8 @@ export function PlayerSurface({
   ])
 
   useEffect(() => {
-    if (!coverDragActive) return
     const handleWindowPointerMove = (event: PointerEvent) => {
+      if (event.buttons === 0 && coverPressRef.current?.pointerId === event.pointerId) clearCoverPress()
       const gesture = coverDragRef.current
       if (!gesture || gesture.pointerId !== event.pointerId || event.buttons !== 0) return
       // A hover event with no pressed buttons proves the release was missed,
@@ -1703,12 +1796,12 @@ export function PlayerSurface({
     }
     const handleWindowPointerUp = (event: PointerEvent) => {
       const gesture = coverDragRef.current
-      if (!gesture || gesture.pointerId !== event.pointerId) return
+      if (gesture?.pointerId !== event.pointerId && coverPressRef.current?.pointerId !== event.pointerId) return
       handleCoverPointerUp(event)
     }
     const handleWindowPointerCancel = (event: PointerEvent) => {
       const gesture = coverDragRef.current
-      if (!gesture || gesture.pointerId !== event.pointerId) return
+      if (gesture?.pointerId !== event.pointerId && coverPressRef.current?.pointerId !== event.pointerId) return
       handleCoverPointerCancel()
     }
     // Capture release before a synchronous preview/session render can change
@@ -1722,7 +1815,7 @@ export function PlayerSurface({
       window.removeEventListener('pointerup', handleWindowPointerUp, true)
       window.removeEventListener('pointercancel', handleWindowPointerCancel, true)
     }
-  }, [coverDragActive, discardCoverDrag, handleCoverPointerCancel, handleCoverPointerUp])
+  }, [clearCoverPress, discardCoverDrag, handleCoverPointerCancel, handleCoverPointerUp])
 
   useLayoutEffect(() => {
     if (!trackCardPreviewToken || !previewArtworkReady) return
@@ -1959,7 +2052,11 @@ export function PlayerSurface({
   }, [artworkSlots, completeTrackCardExit, discardTrackPreview, hasValidTrackCardSessionPair, playback.selectionActivitySequence, playback.selectionVisualIntent, publishTrackCardSession, runTrackCardSettle, selectionMatchesTrackCardSession, stopTrackCardAnimation, track?.id, trackCardOvershootX, trackCardPreviewToken?.id, trackCardProgress, trackCardReducedMotion, trackCardSession])
 
   useEffect(() => {
-    const cancel = () => discardCoverDrag(true)
+    const cancel = () => {
+      clearCoverPress()
+      coverTapReadyRef.current = null
+      discardCoverDrag(true)
+    }
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') cancel()
     }
@@ -1969,7 +2066,12 @@ export function PlayerSurface({
       window.removeEventListener('blur', cancel)
       window.removeEventListener('keydown', handleKeyDown)
     }
-  }, [discardCoverDrag])
+  }, [clearCoverPress, discardCoverDrag])
+
+  useEffect(() => () => {
+    clearCoverPress()
+    coverTapReadyRef.current = null
+  }, [clearCoverPress])
 
   // Session state schedules React renders, but the ref is the synchronous
   // source of truth for role assignment. In particular, preview insertion can
@@ -2303,6 +2405,8 @@ export function PlayerSurface({
     <TooltipProvider>
       <main
         className="player-shell"
+        onPointerDownCapture={() => { coverTapReadyRef.current = null }}
+        onClickCapture={handleCoverTapClickCapture}
         data-content-state={contentState}
         data-playlist-transport-only-busy={playlistTransportOnlyBusy ? '' : undefined}
         data-window-fullscreen={nativeWindowState.fullscreen}
@@ -2397,6 +2501,7 @@ export function PlayerSurface({
                       <TrackCardMotionLayer
                         key={`track-card:${layer.id}`}
                         layer={layer}
+                        onCollapse={collapsePlayer}
                         feedbackValue={feedback.valuesByTrackId?.[layer.track.id]}
                         onFeedbackToggle={feedback.onToggle}
                         onReady={markArtworkReady}

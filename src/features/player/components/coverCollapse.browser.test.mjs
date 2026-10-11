@@ -42,7 +42,7 @@ fixture = fixture.slice(0, prepareStart) + `
    window.previewEvents.push({type:'prepared',id});return pending
  },[]);
 ` + fixture.slice(prepareEnd)
-fixture = `for(const type of ['pointerdown','pointerup','pointercancel','touchend','click'])document.addEventListener(type,e=>window.inputTrace?.push({type,target:e.target.tagName,cls:String(e.target.className),trusted:e.isTrusted}),true);\n` + fixture
+fixture = `for(const type of ['pointerdown','pointerup','pointercancel','gotpointercapture','lostpointercapture','touchend','click'])document.addEventListener(type,e=>window.inputTrace?.push({type,target:e.target.tagName,cls:String(e.target.className),pointerId:e.pointerId,isPrimary:e.isPrimary,detail:e.detail,cancelable:e.cancelable,defaultPrevented:e.defaultPrevented,track:window.fixtureTrackId,captured:document.querySelector('.track-card-deck')?.hasPointerCapture(e.pointerId),time:performance.now(),eventTime:e.timeStamp,trusted:e.isTrusted}),true);\n` + fixture
 const html = (await (await fetch(origin)).text()).replace(/src="\/src\/[^\"]+"/, 'src="/__cover_collapse_fixture.js"')
 const browser = await chromium.launch({ headless: true, ...(process.env.SPMUSIC_BROWSER_EXECUTABLE
   ? { executablePath: process.env.SPMUSIC_BROWSER_EXECUTABLE }
@@ -84,33 +84,49 @@ async function tap(context, dx = 0, dy = 0, hold = 100) {
   await touch('touchEnd')
 }
 
-async function tapMovingCover(context) {
+async function tapMovingCover(context, hold = 0) {
   const { page, touch } = context
-  // A projected cover keeps moving between geometry sampling and CDP input.
-  // Cancel a coordinate miss before retrying target placement; only a trusted
-  // pointerdown on the actual cover is allowed to satisfy this scenario.
-  for (let placement = 0; placement < 3; placement++) {
-    const handle = await page.waitForFunction(() => {
-      for (const button of document.querySelectorAll('.cover-collapse-button')) {
-        const box = button.getBoundingClientRect()
-        const x = box.x + box.width / 2, y = box.y + box.height * .35
-        if (document.elementFromPoint(x, y)?.closest('.cover-collapse-button')) return { x, y }
-      }
-      return false
-    })
-    const point = await handle.jsonValue()
-    await touch('touchStart', point)
-    const hit = await page.evaluate(() => window.inputTrace.filter(e => e.type === 'pointerdown').at(-1)?.cls.includes('cover-collapse-button'))
-    if (!hit) {
-      await touch('touchCancel')
-      continue
+  // Confirm a target before input. Never cancel/retry a first touch or turn a
+  // quick tap into a 60ms hold to make the destination assertion pass.
+  const handle = await page.waitForFunction(() => {
+    for (const button of document.querySelectorAll('.cover-collapse-button')) {
+      const box = button.getBoundingClientRect()
+      const x = box.x + box.width / 2, y = box.y + box.height * .35
+      if (document.elementFromPoint(x, y)?.closest('.cover-collapse-button')) return { x, y }
     }
-    await page.waitForTimeout(60)
-    await touch('touchMove', { x: point.x + 3, y: point.y })
+    return false
+  })
+  const point = await handle.jsonValue()
+  await touch('touchStart', point)
+  if (hold) await page.waitForTimeout(hold)
+  await touch('touchEnd')
+  const down = await page.evaluate(() => window.inputTrace.filter(e => e.type === 'pointerdown').at(-1))
+  assert(down?.cls.includes('cover-collapse-button'), 'first touch must actually start on the sampled cover: ' + JSON.stringify(down))
+}
+
+async function assertFirstQuickCollapsed(context, point, baseline) {
+  const { page, touch } = context
+  await page.waitForTimeout(200)
+  const first = await page.evaluate(() => ({ requests: window.playlistRequests, commits: window.coverCommits.length, prepares: window.previewEvents.filter(e => e.type === 'prepare').length, selections: window.playlistSelections, track: window.fixtureTrackId, panel: !!document.querySelector('.playlist-panel'), trace: window.inputTrace }))
+  // A second click is diagnostic evidence only. It can never rescue a failed
+  // first-click assertion or change the recorded first result.
+  let second = null
+  if (!first.panel) {
+    await page.waitForTimeout(500)
+    await touch('touchStart', point)
     await touch('touchEnd')
-    return
+    await page.waitForTimeout(100)
+    second = await page.evaluate(() => ({ requests: window.playlistRequests, track: window.fixtureTrackId }))
   }
-  assert.fail('could not place a trusted touch on the moving cover')
+  assert.deepEqual(first.requests, [true], JSON.stringify({ first, second }))
+  assert(first.panel, 'the first touch must open and retain the playlist')
+  assert.equal(first.track, baseline.track)
+  assert.equal(first.commits, baseline.commits)
+  assert.equal(first.prepares, baseline.prepares)
+  assert.deepEqual(first.selections, [])
+  const down = first.trace.filter(event => event.type === 'pointerdown').at(-1)
+  const up = first.trace.find(event => event.type === 'pointerup' && event.pointerId === down?.pointerId)
+  console.log('FIRST_TOUCH', JSON.stringify({ down: down?.cls, up: up?.cls, durationMs: up ? up.eventTime - down.eventTime : null, compatibilityClicks: first.trace.filter(event => event.type === 'click' && event.pointerId === down?.pointerId).map(event => event.target), requests: first.requests }))
 }
 
 async function assertCollapsed(page) {
@@ -123,7 +139,7 @@ async function assertCollapsed(page) {
   assert.deepEqual(state.selections, [], 'compatibility click never selects a playlist track')
   assert.deepEqual(state.prepares, [], 'a cover tap never prepares another track')
   assert(state.panel, 'playlist stays mounted after compatibility click')
-  assert(state.trace.some(event => event.type === 'click' && event.trusted), 'native compatibility click observed')
+  assert(state.trace.some(event => event.type === 'pointerup' && event.trusted), 'real touch completion observed; Chromium may omit its compatibility click')
 }
 
 async function assertPlayerStable(page, expected = 0) {
@@ -162,6 +178,67 @@ async function check(name, run, options) {
 }
 
 try {
+  for (const source of ['next', 'drag']) for (const hold of [0, 1, 5, 10, 20]) {
+    await check(`fixed ${source} cover first quick touch hold=${hold}ms`, async context => {
+      const { page, point, touch } = context
+      const { x, y } = await point()
+      const fixed = { x, y }
+      if (source === 'next') {
+        const box = await page.getByRole('button', { name: '下一首', exact: true }).boundingBox()
+        await touch('touchStart', { x: box.x + box.width / 2, y: box.y + box.height / 2 })
+        await touch('touchEnd')
+      } else {
+        await drag(context)
+      }
+      await page.waitForFunction(() => window.fixtureTrackId === 'track-1')
+      // This is the user's fixed cover location while the card transition is
+      // running, rather than chasing its moving DOM or waiting for a settle.
+      await page.waitForTimeout(180)
+      const baseline = await page.evaluate(() => ({ track: window.fixtureTrackId, commits: window.coverCommits.length, prepares: window.previewEvents.filter(e => e.type === 'prepare').length }))
+      await touch('touchStart', fixed)
+      if (hold) await page.waitForTimeout(hold)
+      await touch('touchEnd')
+      await assertFirstQuickCollapsed(context, fixed, baseline)
+    })
+  }
+  await check('fixed cover horizontal motion during animation never collapses', async context => {
+    const { page, point, touch } = context
+    const { x, y } = await point()
+    await page.getByRole('button', { name: '下一首', exact: true }).click()
+    await page.waitForFunction(() => window.fixtureTrackId === 'track-1')
+    await page.waitForTimeout(180)
+    await touch('touchStart', { x, y })
+    await touch('touchMove', { x: x - 50, y })
+    await touch('touchEnd')
+    await assertPlayerStable(page, 1)
+    assert.deepEqual(await page.evaluate(() => window.coverCommits), [])
+  })
+  await check('outside fixed cover and in lyrics never collapses', async context => {
+    const { page, touch } = context
+    const box = await page.locator(active + ' .cover-frame').boundingBox()
+    const point = { x: box.x + box.width + 35, y: box.y + box.height * .35 }
+    await touch('touchStart', point)
+    await touch('touchEnd')
+    await assertPlayerStable(page)
+  })
+  await check('mouse drag pointerId reuse preserves the next and like buttons', async ({ page }) => {
+    const box = await page.locator(active + ' .cover-frame').boundingBox()
+    const x = box.x + box.width * .96, y = box.y + box.height * .35
+    await page.mouse.move(x, y)
+    await page.mouse.down()
+    await page.mouse.move(x - 30, y)
+    await page.waitForSelector('.track-card-plane[data-track-card-phase="preview"]')
+    await page.waitForTimeout(120)
+    await page.mouse.move(x - box.width * .8, y, { steps: 8 })
+    await page.mouse.up()
+    // Do not wait out the released drag ref before reusing mouse pointerId 1.
+    await page.getByRole('button', { name: '下一首', exact: true }).click({ force: true })
+    await page.waitForFunction(() => window.fixtureTrackId === 'track-2')
+    await page.getByRole('button', { name: '喜欢', exact: true }).click()
+    assert.equal(await page.evaluate(() => window.coverEvents.filter(e => e.type === 'feedback').length), 1)
+    assert.equal(await page.evaluate(() => window.coverCommits.length), 1)
+    assert.deepEqual(await page.evaluate(() => window.playlistRequests), [])
+  })
   for (const [dx, dy] of [[0, 0], [4, 0], [-4, 0], [0, 4], [7, 0], [-7, 0], [0, 7]]) {
     await check(`trusted touch tap with ${dx},${dy}px jitter stays in playlist without changing track`, async context => {
       await tap(context, dx, dy)

@@ -536,6 +536,7 @@ type CoverDragGesture = {
   gestureId: number
   revision: number
   pointerId: number
+  pointerType: string
   captureElement: HTMLDivElement
   originTrackId: string
   startX: number
@@ -620,7 +621,7 @@ export function PlayerSurface({
   } | null>(null)
   const coverDragRef = useRef<CoverDragGesture | null>(null)
   const coverPressRef = useRef<CoverPressGesture | null>(null)
-  const coverTapReadyRef = useRef<{ pointerId: number } | null>(null)
+  const consumedCoverPointerRef = useRef<{ pointerId: number; pointerType: string } | null>(null)
   const clearCoverPress = useCallback(() => {
     const press = coverPressRef.current
     coverPressRef.current = null
@@ -1064,7 +1065,6 @@ export function PlayerSurface({
 
   const hardResetTrackCardInteraction = useCallback(() => {
     clearCoverPress()
-    coverTapReadyRef.current = null
     const gesture = coverDragRef.current
     coverDragRef.current = null
     if (gesture) {
@@ -1375,6 +1375,7 @@ export function PlayerSurface({
       gestureId: lastCoverDragGestureId,
       revision: 0,
       pointerId: event.pointerId,
+      pointerType: event.pointerType,
       captureElement: event.currentTarget,
       originTrackId: track.id,
       startX: event.clientX,
@@ -1405,9 +1406,11 @@ export function PlayerSurface({
   }, [artworkSlots, canResumeInterruptedSettle, completeTrackCardExit, prepareTrackPreview, publishTrackCardSession, stopTrackCardAnimation, track, trackCardCoverGeometry, trackCardGeometryReady, trackCardOvershootX, trackCardPreviewToken, trackCardProgress, trackCardReducedMotion])
 
   const handleCoverPointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
-    coverTapReadyRef.current = null
     const target = event.target as HTMLElement
+    const stableInputRegion = target.closest<HTMLElement>('.cover-input-region')
     const coverFrame = target.closest<HTMLElement>('.cover-frame')
+      ?? (stableInputRegion ? event.currentTarget.querySelector<HTMLElement>('.track-card-plane[data-track-card-phase="active"] .cover-frame')
+        ?? event.currentTarget.querySelector<HTMLElement>('.cover-frame') : null)
     if (event.button !== 0 || !event.isPrimary || !track || !coverFrame
       || !event.currentTarget.contains(coverFrame)
       || target.closest('button:not(.cover-collapse-button), [role="button"]:not(.cover-collapse-button), a, input')
@@ -1416,8 +1419,8 @@ export function PlayerSurface({
     // mount a preview. Only a deliberate horizontal drag acquires those.
     coverPressRef.current = {
       pointerId: event.pointerId, pointerType: event.pointerType, button: event.button,
-      clientX: event.clientX, clientY: event.clientY, target, currentTarget: event.currentTarget,
-      coverFrame, coverBounds: coverFrame.getBoundingClientRect(), originTrackId: track.id, tapEligible: true,
+      clientX: event.clientX, clientY: event.clientY, target: stableInputRegion ? coverFrame : target, currentTarget: event.currentTarget,
+      coverFrame, coverBounds: (stableInputRegion ?? coverFrame).getBoundingClientRect(), originTrackId: track.id, tapEligible: true,
     }
     event.currentTarget.setPointerCapture(event.pointerId)
   }, [track])
@@ -1637,18 +1640,23 @@ export function PlayerSurface({
   }, [canResumeInterruptedSettle, discardTrackPreview, finishRetiringTrackCard, prepareTrackPreview, publishTrackCardSession, retiringTrackCardProgress, startCoverDrag, stopTrackCardAnimation, trackCardCoverGeometry, trackCardOvershootX, trackCardProgress, trackCardReducedMotion])
 
   const handleCoverPointerUp = useCallback((event: CoverPointerSample) => {
+    const activeDrag = coverDragRef.current
+    const sequence = coverPressRef.current ?? (activeDrag && !activeDrag.released ? activeDrag : null)
+    if (sequence?.pointerId === event.pointerId) {
+      consumedCoverPointerRef.current = { pointerId: sequence.pointerId, pointerType: sequence.pointerType }
+    }
     if (coverPressRef.current?.pointerId === event.pointerId) {
       handleCoverPointerMove(event)
       const press = coverPressRef.current?.pointerId === event.pointerId ? clearCoverPress() : null
       if (press) {
         const rect = press.coverBounds
-        coverTapReadyRef.current = press.tapEligible && press.originTrackId === latestTrackContextRef.current.trackId
+        // Commit the one terminal action before the browser's optional
+        // compatibility click. A persistent document listener consumes that
+        // click even if navigation retargets it to the playlist underneath.
+        consumedCoverPointerRef.current = { pointerId: press.pointerId, pointerType: press.pointerType }
+        if (press.tapEligible && press.originTrackId === latestTrackContextRef.current.trackId
           && event.clientX >= rect.left && event.clientX <= rect.right
-          && event.clientY >= rect.top && event.clientY <= rect.bottom
-          ? { pointerId: press.pointerId } : null
-        // Complete navigation in click capture, after the browser has chosen
-        // this gesture's click target. Switching views here lets touch's
-        // compatibility click hit the newly mounted playlist underneath.
+          && event.clientY >= rect.top && event.clientY <= rect.bottom) collapsePlayer()
         return
       }
     }
@@ -1717,11 +1725,16 @@ export function PlayerSurface({
     // ownerless if that asynchronous request never obtained a canvas lease.
     if (previewLayerReady) commitCoverDrag(gesture, releaseVelocityX)
     else discardCoverDrag(true)
-  }, [artworkSlots, clearCoverPress, commitCoverDrag, discardCoverDrag, handleCoverPointerMove, trackCardGeometryReady])
+  }, [artworkSlots, clearCoverPress, collapsePlayer, commitCoverDrag, discardCoverDrag, handleCoverPointerMove, trackCardGeometryReady])
 
   const handleCoverPointerCancel = useCallback(() => {
+    const press = coverPressRef.current
+    const drag = coverDragRef.current
+    if (press || (drag && !drag.released)) consumedCoverPointerRef.current = {
+      pointerId: press?.pointerId ?? drag!.pointerId,
+      pointerType: press?.pointerType ?? drag!.pointerType,
+    }
     clearCoverPress()
-    coverTapReadyRef.current = null
     if (coverDragRef.current?.released) return
     discardCoverDrag(true)
   }, [clearCoverPress, discardCoverDrag])
@@ -1743,16 +1756,6 @@ export function PlayerSurface({
     }
     discardCoverDrag(true)
   }, [clearCoverPress, discardCoverDrag])
-  const handleCoverTapClickCapture = useCallback((event: React.MouseEvent<HTMLElement>) => {
-    const tap = coverTapReadyRef.current
-    const pointerId = (event.nativeEvent as PointerEvent).pointerId
-    if (event.detail !== 0 && tap && (pointerId === undefined || pointerId === tap.pointerId)) {
-      coverTapReadyRef.current = null
-      event.preventDefault()
-      event.stopPropagation()
-      collapsePlayer()
-    }
-  }, [collapsePlayer])
   const handleCoverClickCapture = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     // The semantic button owns keyboard activation. Pointer gestures already
     // chose tap, drag or cancellation; their compatibility click cannot retry.
@@ -1783,6 +1786,30 @@ export function PlayerSurface({
     handleCoverPointerMove,
     handleCoverPointerUp,
   ])
+
+  useEffect(() => {
+    const beginPointer = () => { consumedCoverPointerRef.current = null }
+    const consumeClick = (event: MouseEvent) => {
+      const consumed = consumedCoverPointerRef.current
+      if (!consumed || event.detail === 0) return
+      const pointerId = (event as PointerEvent).pointerId
+      // Older touch WebViews may expose a MouseEvent without pointerId.
+      // With no intervening pointerdown, its touch compatibility click still
+      // belongs to the consumed sequence. Keyboard activation stays separate.
+      if (pointerId === consumed.pointerId || (pointerId === undefined && consumed.pointerType === 'touch')) {
+        consumedCoverPointerRef.current = null
+        event.preventDefault()
+        event.stopImmediatePropagation()
+      }
+    }
+    document.addEventListener('pointerdown', beginPointer, true)
+    document.addEventListener('click', consumeClick, true)
+    return () => {
+      document.removeEventListener('pointerdown', beginPointer, true)
+      document.removeEventListener('click', consumeClick, true)
+      consumedCoverPointerRef.current = null
+    }
+  }, [])
 
   useEffect(() => {
     const handleWindowPointerMove = (event: PointerEvent) => {
@@ -2052,11 +2079,7 @@ export function PlayerSurface({
   }, [artworkSlots, completeTrackCardExit, discardTrackPreview, hasValidTrackCardSessionPair, playback.selectionActivitySequence, playback.selectionVisualIntent, publishTrackCardSession, runTrackCardSettle, selectionMatchesTrackCardSession, stopTrackCardAnimation, track?.id, trackCardOvershootX, trackCardPreviewToken?.id, trackCardProgress, trackCardReducedMotion, trackCardSession])
 
   useEffect(() => {
-    const cancel = () => {
-      clearCoverPress()
-      coverTapReadyRef.current = null
-      discardCoverDrag(true)
-    }
+    const cancel = () => handleCoverPointerCancel()
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') cancel()
     }
@@ -2066,11 +2089,11 @@ export function PlayerSurface({
       window.removeEventListener('blur', cancel)
       window.removeEventListener('keydown', handleKeyDown)
     }
-  }, [clearCoverPress, discardCoverDrag])
+  }, [handleCoverPointerCancel])
 
   useEffect(() => () => {
     clearCoverPress()
-    coverTapReadyRef.current = null
+    consumedCoverPointerRef.current = null
   }, [clearCoverPress])
 
   // Session state schedules React renders, but the ref is the synchronous
@@ -2405,8 +2428,6 @@ export function PlayerSurface({
     <TooltipProvider>
       <main
         className="player-shell"
-        onPointerDownCapture={() => { coverTapReadyRef.current = null }}
-        onClickCapture={handleCoverTapClickCapture}
         data-content-state={contentState}
         data-playlist-transport-only-busy={playlistTransportOnlyBusy ? '' : undefined}
         data-window-fullscreen={nativeWindowState.fullscreen}
@@ -2483,6 +2504,25 @@ export function PlayerSurface({
                     perspectiveOrigin: `${trackCardCoverGeometry.centerX}px ${trackCardCoverGeometry.centerY}px`,
                   } : undefined}
                 >
+                  {/* Animated/inert planes can leave an input gap at the
+                      resting cover position. This persistent region sits below
+                      live cards, retaining touch intent without covering their
+                      buttons or making decorative layers interactive. */}
+                  {trackCardGeometryReady && trackCardCoverGeometry && !moreMenuOpen ? <div
+                    className="cover-input-region"
+                    aria-hidden="true"
+                    style={{
+                      position: 'absolute',
+                      left: trackCardCoverGeometry.centerX - trackCardCoverGeometry.width / 2,
+                      top: trackCardCoverGeometry.centerY - trackCardCoverGeometry.height / 2,
+                      width: trackCardCoverGeometry.width,
+                      height: trackCardCoverGeometry.height,
+                      borderRadius: 'var(--player-cover-radius)',
+                      pointerEvents: 'auto',
+                      touchAction: 'pan-y',
+                      zIndex: -1,
+                    }}
+                  /> : null}
                   {artworkSlots.filter((layer): layer is ArtworkVisualLayer => (
                     layer !== null && !(layer.phase === 'exiting' && retiredExitingLayerIds.has(layer.id))
                   )).map((layer) => {

@@ -23,6 +23,7 @@ serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
 tauri = { version = "=2.11.5", features = ["protocol-asset"] }
 tauri-plugin-log = "2"
+tauri-plugin-global-shortcut = "=2.3.2"
 rodio = { version = "0.19.0", default-features = false, features = [
   "symphonia-aac",
   "symphonia-flac",
@@ -68,6 +69,7 @@ windows = { version = "0.54.0", features = [
   "Win32_Foundation",
   "Win32_Media_Audio",
   "Win32_System_Com",
+  "Win32_Storage_FileSystem",
   "Win32_UI_Shell_PropertiesSystem",
 ] }
 

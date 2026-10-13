@@ -1,5 +1,6 @@
 mod app_paths;
 mod audio;
+mod global_shortcuts;
 mod webview_memory;
 
 use std::sync::Once;
@@ -15,6 +16,9 @@ use audio::{
     AudioOpenFileInput, AudioOpenSourceResult, AudioOutputInfo, AudioPlayInput, AudioPlaybackState,
     AudioPlaylistDurationItem, AudioProbePlaylistDurationsInput, AudioSeekInput,
     AudioSetVolumeInput, AudioTrackRef, AudioTransitionPlaybackInput, CoverPixelsError,
+};
+use global_shortcuts::{
+    global_shortcuts_get_settings, global_shortcuts_set_suspended, global_shortcuts_update_settings,
 };
 use tauri::{ipc::Response, Manager, State};
 use tracing_subscriber::EnvFilter;
@@ -343,7 +347,20 @@ pub fn run() {
         "starting SpMusic Tauri backend",
     );
     tauri::Builder::default()
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(global_shortcuts::handle_event)
+                .build(),
+        )
+        .on_window_event(|window, event| {
+            if window.label() == "main" && matches!(event, tauri::WindowEvent::Focused(false)) {
+                global_shortcuts::restore_after_focus_loss(window.app_handle());
+            }
+        })
         .invoke_handler(tauri::generate_handler![
+            global_shortcuts_get_settings,
+            global_shortcuts_update_settings,
+            global_shortcuts_set_suspended,
             audio_open_file,
             audio_open_source,
             audio_load_file,
@@ -375,6 +392,7 @@ pub fn run() {
                 "prepared app directories",
             );
             let audio_cache_dir = app_paths.cache_dir.clone();
+            global_shortcuts::GlobalShortcuts::initialize(app.handle(), &app_paths.config_dir);
             app.manage(app_paths);
             app.manage(AudioController::new(app.handle().clone(), audio_cache_dir));
 
@@ -400,8 +418,9 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|_, event| {
+        .run(|app, event| {
             if matches!(event, tauri::RunEvent::Exit) {
+                global_shortcuts::shutdown(app);
                 shutdown_playlist_cover_cache();
             }
         });

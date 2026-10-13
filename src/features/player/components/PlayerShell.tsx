@@ -3,10 +3,12 @@ import { DevAudioToolsAvailability, DevAudioToolsSlot } from '@/features/player/
 import { PlayerSurface } from '@/features/player/components/PlayerSurface'
 import { useAudioPlayer } from '@/features/player/hooks/useAudioPlayer'
 import { usePlaylistDuration } from '@/features/player/hooks/usePlaylistDuration'
+import { useGlobalShortcuts } from '@/features/shortcuts/hooks/useGlobalShortcuts'
 import type { DevAudioToolsViewModel, PlayerUiViewModel, PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
 
 export function PlayerShell() {
   const player = useAudioPlayer()
+  useGlobalShortcuts(player)
   const [isDevAudioToolsOpen, setIsDevAudioToolsOpen] = useState(false)
   const [isPlaylistOpen, setIsPlaylistOpen] = useState(false)
   const currentTrackId = player.track?.id ?? null

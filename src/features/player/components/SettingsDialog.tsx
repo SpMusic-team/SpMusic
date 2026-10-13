@@ -13,6 +13,7 @@ import { Field, FieldContent, FieldDescription, FieldGroup, FieldLabel } from '@
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { IconButton } from '@/features/player/components/IconButton'
 import { appCopy } from '@/features/player/model/playerCopy'
+import { GlobalShortcutSettings } from '@/features/shortcuts/components/GlobalShortcutSettings'
 
 const ThemeManager = lazy(() => import('@/features/appearance/components/ThemeManager').then((module) => ({
   default: module.ThemeManager,
@@ -83,6 +84,7 @@ export function SettingsDialog({
               onClick={() => setThemeManagerOpen(true)}
             />
           </Field>
+          {settingsOpen && !themeManagerOpen ? <GlobalShortcutSettings /> : null}
         </FieldGroup>
       </DialogContent>
       {themeManagerOpen ? (

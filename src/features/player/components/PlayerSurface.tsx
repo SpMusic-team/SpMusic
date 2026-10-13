@@ -16,6 +16,7 @@ import { TrackMeta } from '@/features/player/components/TrackMeta'
 import { WindowBar, type WindowLayoutState } from '@/features/player/components/WindowBar'
 import { ArtworkCanvas } from '@/features/player/components/ArtworkCanvas'
 import { appCopy } from '@/features/player/model/playerCopy'
+import { isShortcutCaptureSuspended } from '@/features/shortcuts/services/globalShortcutCommands'
 import type { TrackFeedback } from '@/features/player/model/playerTypes'
 import {
   useArtworkResourceConsumer,
@@ -830,6 +831,8 @@ export function PlayerSurface({
     }
   }, [playlistOpen])
   const [compactPlaylist, setCompactPlaylist] = useState(() => window.matchMedia('(width <= 1024px)').matches)
+  const [searchRequestId, setSearchRequestId] = useState(0)
+  const searchRequestSequenceRef = useRef(0)
   const [compactSidebarOpen, setCompactSidebarOpen] = useState(false)
   const [sidebarPlaylistOpen, setSidebarPlaylistOpen] = useState(playlist.isOpen)
   if (sidebarPlaylistOpen !== playlist.isOpen) {
@@ -837,7 +840,10 @@ export function PlayerSurface({
     setCompactSidebarOpen(false)
   }
   const requestPlaylistOpenChange = useCallback((nextOpen: boolean) => {
-    if (!nextOpen) setCompactSidebarOpen(false)
+    if (!nextOpen) {
+      setCompactSidebarOpen(false)
+      setSearchRequestId(0)
+    }
     if (nextOpen || !track || currentArtworkReady) {
       playlistCloseRequestedRef.current = false
       onPlaylistOpenChange(nextOpen)
@@ -846,6 +852,23 @@ export function PlayerSurface({
     playlistCloseRequestedRef.current = true
   }, [currentArtworkReady, onPlaylistOpenChange, track])
   const collapsePlayer = useCallback(() => requestPlaylistOpenChange(true), [requestPlaylistOpenChange])
+
+  useEffect(() => {
+    const handleSearchKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing || event.repeat
+        || !event.ctrlKey || event.altKey || event.shiftKey || event.metaKey
+        || event.key.toLowerCase() !== 'f') return
+      if (isShortcutCaptureSuspended()) return
+      const modalOpen = document.querySelector('[data-slot="dialog-content"][data-open], [data-slot="alert-dialog-content"][data-open]')
+      const insideModal = event.target instanceof Element && event.target.closest('[role="dialog"], [role="alertdialog"]')
+      if (modalOpen || insideModal) return
+      event.preventDefault()
+      requestPlaylistOpenChange(true)
+      setSearchRequestId(++searchRequestSequenceRef.current)
+    }
+    window.addEventListener('keydown', handleSearchKeyDown)
+    return () => window.removeEventListener('keydown', handleSearchKeyDown)
+  }, [requestPlaylistOpenChange])
 
   useEffect(() => {
     if (!playlistOpen) {
@@ -2637,6 +2660,7 @@ export function PlayerSurface({
               <OwnedPlaylistPanel
               key={`${playlist.playlistName ?? 'playlist'}:${playlist.tracks.length}:${playlist.tracks[0]?.id ?? ''}:${playlist.tracks[playlist.tracks.length - 1]?.id ?? ''}`}
               ownerStateRef={playlistWindowOwnersRef}
+              searchRequestId={searchRequestId}
               librarySidebarOpen={librarySidebarOpen}
               onLibrarySidebarOpenChange={setCompactSidebarOpen}
               tracks={playlist.tracks}

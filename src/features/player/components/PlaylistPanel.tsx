@@ -39,6 +39,7 @@ type PlaylistPanelProps = {
   onClose: () => void
   librarySidebarOpen?: boolean
   onLibrarySidebarOpenChange?: (open: boolean) => void
+  searchRequestId?: number
 }
 
 type PlaylistLayoutDescriptor = Readonly<{
@@ -271,6 +272,7 @@ export function PlaylistPanel({
   onClose,
   librarySidebarOpen = false,
   onLibrarySidebarOpenChange,
+  searchRequestId = 0,
 }: PlaylistPanelProps) {
   const systemIcons = useSystemIcons()
   const appearanceMotion = useAppearanceMotion()
@@ -278,6 +280,14 @@ export function PlaylistPanel({
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(new Set())
   const [filter, setFilter] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
+  const [handledSearchRequestId, setHandledSearchRequestId] = useState(0)
+  const searchInputRef = useRef<HTMLInputElement | null>(null)
+  // A request can arrive before this animated panel mounts. Apply it on render
+  // so the input exists when the layout effect focuses it, without a timer.
+  if (searchRequestId !== handledSearchRequestId) {
+    setHandledSearchRequestId(searchRequestId)
+    if (searchRequestId > 0) setSearchOpen(true)
+  }
   const [layoutLevel, setLayoutLevel] = useState(readPlaylistLayoutLevel)
   const [layoutAnnouncement, setLayoutAnnouncement] = useState('')
   // The player owns the bounded thumbnail window across panel opens. Render
@@ -293,6 +303,7 @@ export function PlaylistPanel({
   // outside the decode window. A mute flat tile is the lesser artifact until the
   // visual pipeline can say "this one is gone".
   const panelRef = useRef<HTMLElement | null>(null)
+  const focusedSearchRequestIdRef = useRef(0)
   const gridRef = useRef<HTMLDivElement | null>(null)
   const initialPositionAppliedRef = useRef(false)
   const layoutLevelRef = useRef(layoutLevel)
@@ -446,6 +457,19 @@ export function PlaylistPanel({
     panel.scrollTop += cardRect.top - panelRect.top - (panel.clientHeight - cardRect.height) / 2
     initialPositionAppliedRef.current = true
   }, [currentTrackId, filteredTrackIdsKey])
+
+  useLayoutEffect(() => {
+    if (!searchOpen || searchRequestId <= 0 || focusedSearchRequestIdRef.current === searchRequestId) return
+    const panel = panelRef.current
+    const input = searchInputRef.current
+    if (!panel || !input) return
+    focusedSearchRequestIdRef.current = searchRequestId
+    // An explicit search request wins over initial current-track positioning.
+    // Consume each request once so ordinary search-button toggles keep their behavior.
+    initialPositionAppliedRef.current = true
+    panel.scrollTo({ top: 0, behavior: 'instant' })
+    input.focus({ preventScroll: true })
+  }, [searchOpen, searchRequestId])
 
   useEffect(() => {
     const panel = panelRef.current
@@ -933,6 +957,7 @@ export function PlaylistPanel({
       {searchOpen ? (
         <div className="playlist-filter">
           <Input
+            ref={searchInputRef}
             className="playlist-filter-input"
             autoFocus
             value={filter}

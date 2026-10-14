@@ -2619,14 +2619,6 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
   width: 100%;
   min-width: 0;
   height: 100%;
-  overflow: hidden;
-  justify-content: center;
-}
-
-.responsive-player-layout[data-player-layout="compact"] .lyrics-panel > ol::before,
-.responsive-player-layout[data-player-layout="compact"] .lyrics-panel > ol::after,
-.responsive-player-layout[data-player-layout="compact"] .lyrics-panel li:not([data-active="true"]) {
-  display: none;
 }
 
 .responsive-player-layout[data-player-layout="compact"] .lyrics-panel li[data-active="true"] {

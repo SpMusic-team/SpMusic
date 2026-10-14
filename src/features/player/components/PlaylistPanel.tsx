@@ -12,6 +12,7 @@ import { PlaylistCard } from '@/features/player/components/PlaylistCard'
 import { PlaylistCoverImage } from '@/features/player/components/PlaylistCoverImage'
 import { PlaylistPlaybackDock } from '@/features/player/components/PlaylistPlaybackDock'
 import { PlaylistLibrarySidebar } from '@/features/player/components/PlaylistLibrarySidebar'
+import { usePlaylistOverscroll } from '@/features/player/hooks/usePlaylistOverscroll'
 import { appCopy } from '@/features/player/model/playerCopy'
 import { nextShuffleMode, type ShuffleMode } from '@/features/player/model/playbackModes'
 import { formatPlaylistDurationLabel, type PlaylistDurationStatus } from '@/features/player/model/playlistDuration'
@@ -340,6 +341,7 @@ export function PlaylistPanel({
     () => filteredTracks.map((track) => track.id).join('\u0000'),
     [filteredTracks],
   )
+  usePlaylistOverscroll(panelRef, appearanceMotion.disabled, `${playlistName}:${layoutLevel}:${filteredTrackIdsKey}:${searchOpen}:${selectMode}`)
 
   const clearArtworkWindow = useCallback(() => {
     if (artworkWindowIdsRef.current.size === 0) return

@@ -1,4 +1,16 @@
 /* 播放列表详情页：歌曲区由同一张卡片按十档描述符切换布局。 */
+@property --playlist-hero-overscroll-scale {
+  syntax: '<number>';
+  inherits: true;
+  initial-value: 1;
+}
+
+@property --playlist-overscroll-offset {
+  syntax: '<length>';
+  inherits: false;
+  initial-value: 0px;
+}
+
 .playlist-panel {
   --playlist-page-max-width: 970px;
   position: absolute;
@@ -12,6 +24,9 @@
   gap: 25px;
   padding: 0 16px 48px;
   overflow-y: auto;
+  overflow-x: hidden;
+  /* The custom hero stretch owns feedback, including native pans to an edge. */
+  overscroll-behavior-y: none;
   background: var(--app-bg);
   color: var(--player-ink);
   scrollbar-color: color-mix(in srgb, var(--player-muted) 35%, transparent) transparent;
@@ -19,6 +34,8 @@
 }
 
 .playlist-hero {
+  scale: 1 var(--playlist-hero-overscroll-scale, 1);
+  transform-origin: center top;
   position: relative;
   width: 100%;
   max-width: none;
@@ -39,10 +56,28 @@
   position: absolute;
   inset: 0;
   width: 100%;
-  height: 100%;
+  /* Fit into the enlarged crop before cancelling the frame's vertical scale.
+     This preserves the source ratio and fills the entire extended region. */
+  height: calc(100% * var(--playlist-hero-overscroll-scale, 1));
+  scale: 1 calc(1 / var(--playlist-hero-overscroll-scale, 1));
+  transform-origin: center top;
   object-fit: cover;
   object-position: center;
   transition: opacity var(--app-motion-standard, 240ms) cubic-bezier(.2, 0, .2, 1);
+}
+
+/* Stretch the banner surface while keeping its text and controls legible. */
+.playlist-hero-copy,
+.playlist-hero-category,
+.playlist-close {
+  scale: 1 calc(1 / var(--playlist-hero-overscroll-scale, 1));
+  transform-origin: center top;
+  /* Button's transition-all must not lag behind the shared frame scale. */
+  transition-property: color, background-color, border-color, box-shadow, opacity, transform, translate;
+}
+
+.playlist-hero-copy {
+  transform-origin: center bottom;
 }
 
 /* Only the thumbnail path reports `data-loaded`; the eager fallback <img> has no
@@ -64,7 +99,7 @@
 .playlist-hero-copy {
   position: absolute;
   right: 10px;
-  bottom: 10px;
+  bottom: calc(10px / var(--playlist-hero-overscroll-scale, 1));
   left: 10px;
   z-index: 1;
   display: flex;
@@ -75,7 +110,7 @@
 
 .playlist-hero-category {
   position: absolute;
-  top: 10px;
+  top: calc(100% + (10px - 100%) / var(--playlist-hero-overscroll-scale, 1));
   left: 10px;
   z-index: 1;
   height: 28px;

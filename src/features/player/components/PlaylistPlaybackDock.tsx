@@ -117,7 +117,7 @@ export function PlaylistPlaybackDock({
         <button
           type="button"
           className="playlist-playback-track-button"
-          aria-label={track ? `返回播放界面：${track.title}` : '返回播放界面'}
+          aria-label={track ? `打开播放界面：${track.title}` : '打开播放界面'}
           onClick={onClose}
         >
           <motion.span
@@ -212,7 +212,7 @@ export function PlaylistPlaybackDock({
         <IconButton
           className="playlist-playback-nav-button"
           icon={Menu}
-          label="返回播放界面"
+          label="打开播放界面"
           pressFeedback
           pressFeedbackTone="surface-variant"
           onClick={onClose}

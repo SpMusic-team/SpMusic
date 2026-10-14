@@ -209,7 +209,7 @@ function hydratedCacheSet(cache: Map<string, AudioTrackRef>, sourcePath: string,
   }
 }
 
-function playlistScope(playlist: AudioFolderPlaylist): string {
+export function playlistScope(playlist: AudioFolderPlaylist): string {
   return `${playlist.sourceKind}\u0000${normalizeAudioSourcePath(playlist.sourcePath)}`
 }
 
@@ -394,6 +394,7 @@ export function useAudioPlayer() {
   const [detailsPending, setDetailsPending] = useState(false)
   const [contentState, setContentState] = useState<PlayerContentState>('empty')
   const [folderPlaylist, setFolderPlaylist] = useState<AudioFolderPlaylist | null>(null)
+  const [sessionPlaylists, setSessionPlaylists] = useState<readonly AudioFolderPlaylist[]>([])
   const [playlistTrackVisuals, setPlaylistTrackVisuals] = useState<Readonly<Record<string, PlaylistTrackVisual>>>({})
   const [playlistTrackMetadata, setPlaylistTrackMetadata] = useState<Readonly<Record<string, PlaylistTrackMetadata>>>({})
   const [audioError, setAudioError] = useState<AudioCommandError | null>(null)
@@ -647,6 +648,10 @@ export function useAudioPlayer() {
 
   const activatePlaylistScope = useCallback((playlist: AudioFolderPlaylist) => {
     const nextScope = playlistScope(playlist)
+    // Store descriptors only; thumbnail object URLs belong to the active scope.
+    setSessionPlaylists((previous) => previous.some((item) => playlistScope(item) === nextScope)
+      ? previous.map((item) => playlistScope(item) === nextScope ? playlist : item)
+      : [...previous, playlist])
     const nextQueueTracks = playlistTrackSummaries(playlist)
     const currentPresentation = presentationTrackRef.current
     const currentIndex = currentPresentation
@@ -2894,6 +2899,21 @@ export function useAudioPlayer() {
     }
   }, [folderPlaylist, loadPlaylistTrackOrSkip])
 
+  const selectSessionPlaylistTrack = useCallback(async (scope: string, trackId: string) => {
+    if (audioSelectionInProgressRef.current || transportOperationInProgress()
+      || timelineInteractionRef.current === 'seeking') return false
+    const playlist = sessionPlaylists.find((item) => playlistScope(item) === scope)
+    const index = playlist?.tracks.findIndex((item) => item.id === trackId) ?? -1
+    if (!playlist || index < 0) return false
+    const expectedRequestId = selectionRequestIdRef.current + 1
+    const loaded = await loadPlaylistTrackOrSkip(playlist, index, true, 1, false, false, false, 'queue')
+    if (!loaded || selectionRequestIdRef.current !== expectedRequestId
+      || latestAudioStateRef.current?.currentTrackId !== trackId) return false
+    activatePlaylistScope(playlist)
+    prefetchAdjacentPlaylistTracks(trackId)
+    return true
+  }, [sessionPlaylists, loadPlaylistTrackOrSkip, activatePlaylistScope, prefetchAdjacentPlaylistTracks])
+
   function refreshAudioState() {
     if (
       audioSelectionInProgressRef.current
@@ -2955,6 +2975,9 @@ export function useAudioPlayer() {
     queueTracks,
     unavailableTrackIds,
     playlistDurationTracks: folderPlaylist?.tracks,
+    sessionPlaylists,
+    activePlaylistScope: folderPlaylist ? playlistScope(folderPlaylist) : null,
+    selectSessionPlaylistTrack,
     playlistDurationScope: folderPlaylist ? playlistScope(folderPlaylist) : currentAudioTrack?.sourcePath ?? '',
     playlistTrackMetadata,
     playlistTrackVisuals,

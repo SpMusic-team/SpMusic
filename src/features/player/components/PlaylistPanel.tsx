@@ -16,9 +16,10 @@ import { usePlaylistOverscroll } from '@/features/player/hooks/usePlaylistOversc
 import { appCopy } from '@/features/player/model/playerCopy'
 import { nextShuffleMode, type ShuffleMode } from '@/features/player/model/playbackModes'
 import { formatPlaylistDurationLabel, type PlaylistDurationStatus } from '@/features/player/model/playlistDuration'
-import type { PlayerPlaybackViewModel, PlayerTimelineViewModel, PlaylistArtworkDemand, PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
+import type { PlayerPlaybackViewModel, PlayerTimelineViewModel, PlaylistLibraryViewModel, PlaylistArtworkDemand, PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
 
 type PlaylistPanelProps = {
+  library?: PlaylistLibraryViewModel
   tracks: PlaylistTrackItemViewModel[]
   unavailableTrackIds?: ReadonlySet<string>
   playlistName?: string
@@ -252,6 +253,7 @@ function animateLayoutPart(element: HTMLElement, from: DOMRect, to: DOMRect, dur
 }
 
 export function PlaylistPanel({
+  library,
   tracks,
   unavailableTrackIds,
   playlistName,
@@ -843,6 +845,7 @@ export function PlaylistPanel({
   return (
     <>
       <PlaylistLibrarySidebar
+        library={library}
         playlistName={playlistName ?? appCopy.playlistPage.title}
         trackCount={tracks.length}
         totalClock={totalClock}
@@ -866,6 +869,7 @@ export function PlaylistPanel({
         >
           <DialogTitle className="sr-only">媒体库</DialogTitle>
           <PlaylistLibrarySidebar
+            library={library ? { ...library, onOpen: () => { onLibrarySidebarOpenChange?.(false); library.onOpen() }, onSelect: (scope) => { onLibrarySidebarOpenChange?.(false); library.onSelect(scope) } } : undefined}
             overlay
             playlistName={playlistName ?? appCopy.playlistPage.title}
             trackCount={tracks.length}
@@ -899,12 +903,13 @@ export function PlaylistPanel({
           size="sm"
           variant="ghost"
           aria-current="page"
-          onClick={() => panelRef.current?.focus({ preventScroll: true })}
+          aria-label={library ? "返回播放列表管理" : undefined}
+          onClick={library?.onOpen ?? (() => panelRef.current?.focus({ preventScroll: true }))}
         >
           <CornerLeftUp data-icon="inline-start" aria-hidden="true" />
           {appCopy.playlistPage.title}
         </Button>
-        <button type="button" className="playlist-close" aria-label={appCopy.playlistPage.close} onClick={onClose}>
+        <button type="button" className="playlist-close" aria-label={library ? "返回播放列表管理" : appCopy.playlistPage.close} onClick={library?.onOpen ?? onClose}>
           <systemIcons.close />
         </button>
         <div className="playlist-hero-copy">

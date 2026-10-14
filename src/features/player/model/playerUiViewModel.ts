@@ -122,7 +122,25 @@ export type PlaylistTrackVisual = Pick<
 
 export type PlaylistTrackMetadata = Omit<PlaylistTrackVisual, 'coverThumbnail'>
 
+export type PlaylistLibraryItem = {
+  scope: string
+  name: string
+  trackCount: number
+  coverTrack?: PlaylistTrackItemViewModel
+  totalClock?: string | null
+}
+
+export type PlaylistLibraryViewModel = {
+  isOpen: boolean
+  items: readonly PlaylistLibraryItem[]
+  currentScope?: string | null
+  onOpen: () => void
+  onSelect: (scope: string) => void
+  onPlay: (scope: string) => void
+}
+
 export type PlayerPlaylistViewModel = {
+  library?: PlaylistLibraryViewModel
   isOpen: boolean
   onOpenChange: (isOpen: boolean) => void
   isOpenAudioDisabled?: boolean

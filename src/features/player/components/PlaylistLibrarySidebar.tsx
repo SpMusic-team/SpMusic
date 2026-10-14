@@ -5,7 +5,7 @@ import { Separator } from '@/components/ui/separator'
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty'
 import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { PlaylistCoverImage } from '@/features/player/components/PlaylistCoverImage'
-import type { PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
+import type { PlaylistLibraryViewModel, PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
 import logo from '@/assets/playlist-library/f8690.png'
 import songs from '@/assets/playlist-library/2705a.svg'
 import folder from '@/assets/playlist-library/39148.svg'
@@ -56,21 +56,14 @@ type PlaylistLibrarySidebarProps = {
   coverTrack?: PlaylistTrackItemViewModel
   onCurrentPlaylist: () => void
   overlay?: boolean
+  library?: PlaylistLibraryViewModel
 }
 
-export function PlaylistLibrarySidebar({ playlistName, trackCount, totalClock, coverTrack, onCurrentPlaylist, overlay = false }: PlaylistLibrarySidebarProps) {
+export function PlaylistLibrarySidebar({ playlistName, trackCount, totalClock, coverTrack, onCurrentPlaylist, overlay = false, library }: PlaylistLibrarySidebarProps) {
   const appearanceMotion = useAppearanceMotion()
   const headingId = useId()
   const systemIcons = useSystemIcons()
-  const coverSource = coverTrack?.coverImage ?? coverTrack?.coverImageFallback
-  const handleCoverError = (event: SyntheticEvent<HTMLImageElement>) => {
-    const image = event.currentTarget
-    const fallback = coverTrack?.coverImageFallback
-    if (fallback && image.dataset.fallbackAttempted !== 'true' && image.src !== new URL(fallback, window.location.href).href) {
-      image.dataset.fallbackAttempted = 'true'
-      image.src = fallback
-    } else image.hidden = true
-  }
+  const items = library?.items ?? (trackCount > 0 ? [{ scope: 'current', name: playlistName, trackCount, coverTrack, totalClock }] : [])
   return (
     <motion.aside
       className="playlist-library-sidebar"
@@ -97,7 +90,7 @@ export function PlaylistLibrarySidebar({ playlistName, trackCount, totalClock, c
               aria-current={current ? 'page' : undefined}
               aria-disabled={!current || undefined}
               title={current ? category.label : `${category.label}：暂不可用`}
-              onClick={current ? onCurrentPlaylist : undefined}
+              onClick={current ? library?.onOpen ?? onCurrentPlaylist : undefined}
             >
               <span className="playlist-library-category-icon" aria-hidden="true">
                 <span
@@ -120,19 +113,19 @@ export function PlaylistLibrarySidebar({ playlistName, trackCount, totalClock, c
       <section className="playlist-library-lists" aria-labelledby={headingId}>
         <h2 id={headingId}>播放列表</h2>
         <div className="playlist-library-list-scroll">
-          {trackCount > 0 ? (
-            <Button className="playlist-library-list" variant="ghost" aria-current="page" onClick={onCurrentPlaylist}>
+          {items.length > 0 ? items.map((item) => (
+            <Button key={item.scope} className="playlist-library-list" variant="ghost"
+              aria-current={!library || (!library.isOpen && library.currentScope === item.scope) ? 'page' : undefined}
+              onClick={() => library ? library.onSelect(item.scope) : onCurrentPlaylist()}>
               <span className="playlist-library-list-cover" aria-hidden="true">
-                {coverTrack?.coverThumbnail ? <PlaylistCoverImage className="playlist-library-cover-image" image={coverTrack.coverThumbnail} />
-                  : coverSource ? <img key={coverSource} className="playlist-library-cover-image" src={coverSource} alt="" decoding="async" onError={handleCoverError} />
-                  : <systemIcons.music />}
+                <LibraryCover coverTrack={item.coverTrack} />
               </span>
               <span className="playlist-library-list-copy">
-                <span className="playlist-library-list-name">{playlistName}</span>
-                <span className="playlist-library-list-meta"><systemIcons.music aria-hidden="true" />{trackCount}{totalClock ? ` | ${totalClock}` : ''}</span>
+                <span className="playlist-library-list-name">{item.name}</span>
+                <span className="playlist-library-list-meta"><systemIcons.music aria-hidden="true" />{item.trackCount}{item.totalClock ? ` | ${item.totalClock}` : ''}</span>
               </span>
             </Button>
-          ) : (
+          )) : (
             <Empty className="playlist-library-empty">
               <EmptyHeader>
                 <EmptyTitle>暂无播放列表</EmptyTitle>
@@ -144,4 +137,20 @@ export function PlaylistLibrarySidebar({ playlistName, trackCount, totalClock, c
       </section>
     </motion.aside>
   )
+}
+
+export function LibraryCover({ coverTrack }: { coverTrack?: PlaylistTrackItemViewModel }) {
+  const systemIcons = useSystemIcons()
+  const source = coverTrack?.coverImage ?? coverTrack?.coverImageFallback
+  const handleError = (event: SyntheticEvent<HTMLImageElement>) => {
+    const image = event.currentTarget
+    const fallback = coverTrack?.coverImageFallback
+    if (fallback && image.dataset.fallbackAttempted !== 'true' && image.src !== new URL(fallback, window.location.href).href) {
+      image.dataset.fallbackAttempted = 'true'
+      image.src = fallback
+    } else image.hidden = true
+  }
+  return coverTrack?.coverThumbnail ? <PlaylistCoverImage className="playlist-library-cover-image" image={coverTrack.coverThumbnail} />
+    : source ? <img key={source} className="playlist-library-cover-image" src={source} alt="" decoding="async" onError={handleError} />
+      : <systemIcons.music />
 }

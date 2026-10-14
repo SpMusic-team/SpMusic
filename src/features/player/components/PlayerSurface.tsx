@@ -9,6 +9,7 @@ import { ControlDock, ExternalPlaybackModeControls } from '@/features/player/com
 import { EmptyPlayerState } from '@/features/player/components/EmptyPlayerState'
 import { LyricsPanel } from '@/features/player/components/LyricsPanel'
 import { PlaybackInfoButton } from '@/features/player/components/PlaybackInfoButton'
+import { PlaylistLibraryPanel } from '@/features/player/components/PlaylistLibraryPanel'
 import { PlaylistPanel } from '@/features/player/components/PlaylistPanel'
 import { QueuePanel } from '@/features/player/components/QueuePanel'
 import { ResponsivePlayerLayout } from '@/features/player/components/ResponsivePlayerLayout'
@@ -863,12 +864,12 @@ export function PlayerSurface({
       const insideModal = event.target instanceof Element && event.target.closest('[role="dialog"], [role="alertdialog"]')
       if (modalOpen || insideModal) return
       event.preventDefault()
-      requestPlaylistOpenChange(true)
+      if (!playlistOpen) requestPlaylistOpenChange(true)
       setSearchRequestId(++searchRequestSequenceRef.current)
     }
     window.addEventListener('keydown', handleSearchKeyDown)
     return () => window.removeEventListener('keydown', handleSearchKeyDown)
-  }, [requestPlaylistOpenChange])
+  }, [requestPlaylistOpenChange, playlistOpen])
 
   useEffect(() => {
     if (!playlistOpen) {
@@ -2656,10 +2657,20 @@ export function PlayerSurface({
           </ResponsivePlayerLayout>
 
           <AnimatePresence initial={false}>
-            {playlist.isOpen ? (
+            {playlist.isOpen && playlist.library?.isOpen ? (
+              <PlaylistLibraryPanel
+                key="playlist-management"
+                playlist={playlist}
+                searchRequestId={searchRequestId}
+                librarySidebarOpen={librarySidebarOpen}
+                onLibrarySidebarOpenChange={setCompactSidebarOpen}
+              />
+            ) : null}
+            {playlist.isOpen && !playlist.library?.isOpen ? (
               <OwnedPlaylistPanel
-              key={`${playlist.playlistName ?? 'playlist'}:${playlist.tracks.length}:${playlist.tracks[0]?.id ?? ''}:${playlist.tracks[playlist.tracks.length - 1]?.id ?? ''}`}
+              key={`${playlist.library?.currentScope ?? ''}:${playlist.playlistName ?? 'playlist'}:${playlist.tracks.length}:${playlist.tracks[0]?.id ?? ''}:${playlist.tracks[playlist.tracks.length - 1]?.id ?? ''}`}
               ownerStateRef={playlistWindowOwnersRef}
+              library={playlist.library}
               searchRequestId={searchRequestId}
               librarySidebarOpen={librarySidebarOpen}
               onLibrarySidebarOpenChange={setCompactSidebarOpen}

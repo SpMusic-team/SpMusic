@@ -1,8 +1,9 @@
 import { useCallback, useMemo, useState } from 'react'
 import { DevAudioToolsAvailability, DevAudioToolsSlot } from '@/features/player/components/DevAudioToolsSlot'
 import { PlayerSurface } from '@/features/player/components/PlayerSurface'
-import { useAudioPlayer } from '@/features/player/hooks/useAudioPlayer'
+import { playlistScope, useAudioPlayer } from '@/features/player/hooks/useAudioPlayer'
 import { usePlaylistDuration } from '@/features/player/hooks/usePlaylistDuration'
+import { audioFolderTrackPlaceholder, audioTrackToTrack, playlistDisplayName } from '@/features/player/model/audioTrackModel'
 import { useGlobalShortcuts } from '@/features/shortcuts/hooks/useGlobalShortcuts'
 import type { DevAudioToolsViewModel, PlayerUiViewModel, PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
 
@@ -11,6 +12,23 @@ export function PlayerShell() {
   useGlobalShortcuts(player)
   const [isDevAudioToolsOpen, setIsDevAudioToolsOpen] = useState(false)
   const [isPlaylistOpen, setIsPlaylistOpen] = useState(false)
+  const [isLibraryOpen, setIsLibraryOpen] = useState(true)
+  const [browsedScope, setBrowsedScope] = useState<string | null>(null)
+  const browsedPlaylist = player.sessionPlaylists.find((item) => playlistScope(item) === browsedScope)
+  const isBrowsingActive = !browsedPlaylist || browsedScope === player.activePlaylistScope
+  const openLibrary = () => { setIsPlaylistOpen(true); setIsLibraryOpen(true) }
+  const browsePlaylist = (scope: string) => {
+    setBrowsedScope(scope)
+    setIsLibraryOpen(false)
+    setIsPlaylistOpen(true)
+  }
+  const handlePlaylistOpenChange = useCallback((open: boolean) => {
+    setIsPlaylistOpen(open)
+    if (open) {
+      setIsLibraryOpen(false)
+      if (!browsedPlaylist) setBrowsedScope(player.activePlaylistScope)
+    }
+  }, [browsedPlaylist, player.activePlaylistScope])
   const currentTrackId = player.track?.id ?? null
   const playlistTracks = useMemo<PlaylistTrackItemViewModel[]>(() => player.queueTracks.map((queueTrack) => {
     const metadata = player.playlistTrackMetadata[queueTrack.id]
@@ -29,6 +47,12 @@ export function PlayerShell() {
       audioFormat: currentTrack.audioFormat,
     }
   }), [player.playlistTrackMetadata, player.playlistTrackVisuals, player.queueTracks, player.track])
+  const browsedTracks = useMemo(() => isBrowsingActive ? playlistTracks
+    : (browsedPlaylist?.tracks ?? []).map((item) => audioTrackToTrack(audioFolderTrackPlaceholder(item))),
+  [isBrowsingActive, playlistTracks, browsedPlaylist])
+  const browsedUnavailableIds = useMemo(() => isBrowsingActive ? player.unavailableTrackIds
+    : new Set(browsedPlaylist?.tracks.filter((item) => !item.available).map((item) => item.id)),
+  [isBrowsingActive, player.unavailableTrackIds, browsedPlaylist])
   const singleTrackSource = player.currentAudioTrack?.sourcePath
   const durationSources = useMemo<readonly { sourcePath: string; id?: string; available?: boolean }[]>(() => player.playlistDurationTracks
     ?? (singleTrackSource ? [{ sourcePath: singleTrackSource }] : []), [player.playlistDurationTracks, singleTrackSource])
@@ -113,25 +137,40 @@ export function PlayerShell() {
     },
     playlist: {
       isOpen: isPlaylistOpen,
-      onOpenChange: setIsPlaylistOpen,
+      onOpenChange: handlePlaylistOpenChange,
+      library: {
+        isOpen: isLibraryOpen,
+        items: player.sessionPlaylists.map((item) => ({
+          scope: playlistScope(item), name: playlistDisplayName(item), trackCount: item.tracks.length,
+          coverTrack: playlistScope(item) === player.activePlaylistScope ? playlistTracks[0] : undefined,
+        })),
+        currentScope: browsedScope,
+        onOpen: openLibrary,
+        onSelect: browsePlaylist,
+        onPlay: (scope) => {
+          const item = player.sessionPlaylists.find((entry) => playlistScope(entry) === scope)
+          const track = item?.tracks.find((entry) => entry.available)
+          if (track) void player.selectSessionPlaylistTrack(scope, track.id)
+        },
+      },
       isOpenAudioDisabled: player.audioBusy
         || player.transportBusy
         || player.selectionPending
         || player.timelineInteraction === 'seeking',
       onOpenAudio: player.openAudio,
-      tracks: playlistTracks,
-      unavailableTrackIds: player.unavailableTrackIds,
-      playlistName: player.playlistName,
-      totalDurationSeconds: playlistDuration.totalSeconds,
-      totalDurationStatus: playlistDuration.status,
-      totalDurationDetail: playlistDuration.detail,
+      tracks: browsedTracks,
+      unavailableTrackIds: browsedUnavailableIds,
+      playlistName: browsedPlaylist ? playlistDisplayName(browsedPlaylist) : player.playlistName,
+      totalDurationSeconds: isBrowsingActive ? playlistDuration.totalSeconds : undefined,
+      totalDurationStatus: isBrowsingActive ? playlistDuration.status : 'unknown',
+      totalDurationDetail: isBrowsingActive ? playlistDuration.detail : '播放此列表后统计时长',
       currentTrackId: player.track?.id ?? null,
       shuffleMode: player.shuffleMode,
       onShuffleCycle: player.cycleShuffleMode,
       onTrackSelect: player.audioBusy || player.transportBusy || player.timelineInteraction === 'seeking'
         ? undefined
-        : player.selectQueueTrack,
-      onVisibleTrackIdsChange: player.setVisiblePlaylistTrackIds,
+        : isBrowsingActive ? player.selectQueueTrack : (trackId) => { if (browsedScope) void player.selectSessionPlaylistTrack(browsedScope, trackId) },
+      onVisibleTrackIdsChange: isBrowsingActive ? player.setVisiblePlaylistTrackIds : undefined,
     },
     feedback: {
       value: player.currentFeedback,

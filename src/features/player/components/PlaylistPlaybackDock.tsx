@@ -8,7 +8,7 @@ import { PressFeedbackButton } from '@/features/player/components/PressFeedbackB
 import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { ProgressControl } from '@/features/player/components/ControlDock'
 import { IconButton } from '@/features/player/components/IconButton'
-import { PlaylistCoverImage } from '@/features/player/components/PlaylistCoverImage'
+import { PlaylistPlaybackCoverImage } from '@/features/player/components/PlaylistPlaybackCoverImage'
 import type { PlayerPlaybackViewModel, PlayerTimelineViewModel, PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
 import { usePlaylistControllerSwipe } from '@/features/player/hooks/usePlaylistControllerSwipe'
 import type { Track, TrackArtwork } from '@/features/player/model/playerTypes'
@@ -115,11 +115,13 @@ export function PlaylistPlaybackDock({
 
   const { viewportRef: swipeViewportRef, x: swipeX, highlight: swipeHighlight, preview: swipePreview, active: swipeActive, pageStride: swipePageStride, onClickCapture: onSwipeClickCapture } = usePlaylistControllerSwipe(playback, disabled || commandBusy || controllerHidden || !isPresent)
   function renderTrackRow(track: Track | null, artwork: TrackArtwork | null | undefined, playlistTrack: PlaylistTrackItemViewModel | undefined, neighbor = false) {
-    const imageFallback = artwork?.coverImageFallback ?? track?.coverImageFallback
-    const imageSource = artwork?.coverImage ?? track?.coverImage ?? imageFallback
-    const localArtwork = playlistTrack?.hasLocalArtwork ?? Boolean(artwork?.coverFilePath ?? track?.coverFilePath)
-    const coverThumbnail = playlistTrack?.coverThumbnail
-    const showImageSource = Boolean(imageSource && (!localArtwork || neighbor))
+    const matchingArtwork = artwork?.id === track?.id ? artwork : undefined
+    const matchingPlaylistTrack = playlistTrack?.id === track?.id ? playlistTrack : undefined
+    const imageFallback = matchingArtwork?.coverImageFallback ?? track?.coverImageFallback
+    const imageSource = matchingArtwork?.coverImage ?? track?.coverImage ?? imageFallback
+    const localArtwork = matchingPlaylistTrack?.hasLocalArtwork ?? Boolean(matchingArtwork?.coverFilePath ?? track?.coverFilePath)
+    const coverThumbnail = matchingPlaylistTrack?.coverThumbnail
+    const showImageSource = Boolean(imageSource)
     // Mirrors the playlist card language: a real cover, a still-loading local
     // artwork slot, or no artwork at all.
     const coverState = coverThumbnail || showImageSource
@@ -147,22 +149,13 @@ export function PlaylistPlaybackDock({
             transition={{ layout: layoutTransition }}
             aria-hidden="true"
           >
-            {coverThumbnail ? (
-              <PlaylistCoverImage className="playlist-playback-cover-image" image={coverThumbnail} />
-            ) : showImageSource ? (
-              <img
-                src={imageSource}
-                draggable={false}
-                alt=""
-                onError={(event) => {
-                  const image = event.currentTarget
-                  if (imageFallback && image.dataset.fallbackApplied !== 'true') {
-                    image.dataset.fallbackApplied = 'true'
-                    image.src = imageFallback
-                    return
-                  }
-                  image.hidden = true
-                }}
+            {track && (coverThumbnail || showImageSource) ? (
+              <PlaylistPlaybackCoverImage
+                key={track.id}
+                trackId={track.id}
+                thumbnail={coverThumbnail}
+                source={imageSource}
+                fallbackSource={coverThumbnail ? imageSource ?? imageFallback : imageFallback}
               />
             ) : null}
             {coverState === 'empty' ? (

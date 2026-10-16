@@ -655,6 +655,32 @@ export function PlayerSurface({
   const coverInteractionPhaseRef = useRef<TrackCardInteractionPhase>('idle')
   const suppressCoverClickRef = useRef(false)
   const [trackCardPreviewToken, setTrackCardPreviewToken] = useState<TrackCardPreviewToken | null>(null)
+  const ownedPreviewCleanupRef = useRef({ discard: discardTrackPreview, tokenId: trackCardPreviewToken?.id })
+  useLayoutEffect(() => {
+    ownedPreviewCleanupRef.current = { discard: discardTrackPreview, tokenId: trackCardPreviewToken?.id }
+  }, [discardTrackPreview, trackCardPreviewToken?.id])
+  useLayoutEffect(() => () => {
+    // Only actual unmount ends this owner. Callback refreshes must not cancel
+    // an active gesture. Nulling the ref also invalidates pending prepare
+    // continuations, which discard their own eventual result by its exact id.
+    const gesture = coverDragRef.current
+    coverDragRef.current = null
+    if (gesture) {
+      gesture.released = true
+      gesture.revision += 1
+      if (gesture.captureElement.hasPointerCapture(gesture.pointerId)) {
+        gesture.captureElement.releasePointerCapture(gesture.pointerId)
+      }
+    }
+    const ownedIds = new Set([
+      gesture?.token?.id,
+      gesture?.interruptedRollbackTokenId,
+      ownedPreviewCleanupRef.current.tokenId,
+    ])
+    for (const tokenId of ownedIds) {
+      if (tokenId !== undefined && tokenId !== null) ownedPreviewCleanupRef.current.discard?.(tokenId)
+    }
+  }, [])
   const [trackCardSession, setTrackCardSession] = useState<TrackCardTransitionSession | null>(null)
   const trackCardSessionRef = useRef<TrackCardTransitionSession | null>(null)
   const committedTrackCardPreviewRef = useRef<{
@@ -1122,8 +1148,8 @@ export function PlayerSurface({
         gesture.captureElement.releasePointerCapture(gesture.pointerId)
       }
     }
-    const tokenId = gesture?.token?.id ?? trackCardPreviewToken?.id ?? -1
-    discardTrackPreview?.(tokenId)
+    const tokenId = gesture?.token?.id ?? trackCardPreviewToken?.id
+    if (tokenId !== undefined) discardTrackPreview?.(tokenId)
     finishRetiringTrackCard()
     stopTrackCardAnimation()
     trackCardSettleRef.current = null
@@ -1206,7 +1232,7 @@ export function PlayerSurface({
       gesture.captureElement.releasePointerCapture(gesture.pointerId)
     }
     const cleanup = () => {
-      discardTrackPreview?.(gesture.token?.id ?? -1)
+      if (gesture.token) discardTrackPreview?.(gesture.token.id)
       const waitingRollbackGesture = coverDragRef.current?.interruptedRollbackTokenId === gesture.token?.id
         ? coverDragRef.current : null
       if (waitingRollbackGesture) waitingRollbackGesture.interruptedRollbackTokenId = null
@@ -1616,7 +1642,6 @@ export function PlayerSurface({
       const revision = gesture.revision
       const gestureId = gesture.gestureId
       if (gesture.token) discardTrackPreview?.(gesture.token.id)
-      else if (gesture.direction) discardTrackPreview?.(-1)
       gesture.token = null
       gesture.targetReady = false
       gesture.direction = nextDirection
@@ -2117,7 +2142,10 @@ export function PlayerSurface({
     }
     stopTrackCardAnimation()
     if (outgoing?.phase === 'exiting') completeTrackCardExit(outgoing.id)
-    discardTrackPreview?.(trackCardPreviewToken?.id ?? -1)
+    // This visual session may be automatic and own no preview token. Another
+    // view can already own the shared slot, so never clear it without an id.
+    const previewTokenId = trackCardPreviewToken?.id
+    if (previewTokenId !== undefined) discardTrackPreview?.(previewTokenId)
     publishTrackCardSession(null)
     // The stale render roles must disappear before resetting shared progress.
     // eslint-disable-next-line react-hooks/set-state-in-effect

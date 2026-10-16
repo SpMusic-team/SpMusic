@@ -99,6 +99,7 @@ type PendingTrackSelection = {
 }
 
 type PreparedTrackCardPreview = TrackCardPreviewToken & {
+  hydratedTrack: AudioTrackRef
   playlistEpoch: number
   playlistScope: string
   targetIndex: number
@@ -189,6 +190,15 @@ function releasePlaylistVisuals(visuals: Readonly<Record<string, PlaylistTrackVi
   for (const visual of Object.values(visuals)) {
     if (visual.coverThumbnail) URL.revokeObjectURL(visual.coverThumbnail.src)
   }
+}
+
+function audioTrackMatchesDescriptor(
+  track: AudioTrackRef | undefined,
+  descriptor: AudioFolderTrackRef,
+): track is AudioTrackRef {
+  return track !== undefined
+    && track.id === descriptor.id
+    && normalizeAudioSourcePath(track.sourcePath) === normalizeAudioSourcePath(descriptor.sourcePath)
 }
 
 function hydratedCacheGet(cache: Map<string, AudioTrackRef>, sourcePath: string): AudioTrackRef | undefined {
@@ -1942,6 +1952,7 @@ export function useAudioPlayer() {
     legacyInitialSelection = false,
     targetScope: string | null = playlistScopeRef.current,
     visualNavigation?: { direction: Direction; source: TrackSelectionVisualSource; previewTokenId?: number },
+    preparedPreview?: PreparedTrackCardPreview,
   ) => {
     if (
       transportOperationInProgress()
@@ -1968,10 +1979,23 @@ export function useAudioPlayer() {
       targetScope,
       visualNavigation,
     )
-    const placeholderAudioTrack = hydratedCacheGet(
+    // A prepared preview owns its complete metadata independently of the small
+    // hydration LRU. Visible-card hydration may evict it while the pointer is
+    // held, but committing that preview must not downgrade it to a filename.
+    const preparedAudioTrack = preparedPreview
+      && preparedPreview.id === visualNavigation?.previewTokenId
+      && preparedPreview.playlistEpoch === playlistScopeEpochRef.current
+      && preparedPreview.playlistScope === targetScope
+      && targetScope === playlistScopeRef.current
+      && audioTrackMatchesDescriptor(preparedPreview.hydratedTrack, folderTrack)
+      ? preparedPreview.hydratedTrack : undefined
+    const cachedAudioTrack = preparedAudioTrack ? undefined : hydratedCacheGet(
       hydratedAudioTrackCacheRef.current,
       folderTrack.sourcePath,
-    ) ?? audioFolderTrackPlaceholder(folderTrack)
+    )
+    const placeholderAudioTrack = preparedAudioTrack
+      ?? (audioTrackMatchesDescriptor(cachedAudioTrack, folderTrack) ? cachedAudioTrack : undefined)
+      ?? audioFolderTrackPlaceholder(folderTrack)
     audioTrackRequestIdRef.current += 1
     audioTrackRequestTrackIdRef.current = null
     audioTrackRef.current = placeholderAudioTrack
@@ -2168,24 +2192,26 @@ export function useAudioPlayer() {
         direction,
         track: previewTrack,
         artwork: prefetchArtworkFromTrack(previewTrack),
+        hydratedTrack,
         playlistEpoch,
         playlistScope: scope,
         targetIndex,
       }
     }
     const cachedTrack = hydratedCacheGet(hydratedAudioTrackCacheRef.current, target.sourcePath)
-    if (cachedTrack) {
+    if (audioTrackMatchesDescriptor(cachedTrack, target)) {
       const token = createToken(cachedTrack)
       preparedTrackCardPreviewRef.current = token
       return Promise.resolve(token)
     }
+    if (cachedTrack) hydratedAudioTrackCacheRef.current.delete(target.sourcePath)
     // Never expose filename/tone placeholder metadata as a draggable card.
     return requestHydratedAudioTrack(target.sourcePath, playlistEpoch).then((hydratedTrack) => {
       if (
         trackCardPreviewIdRef.current !== previewId
         || playlistScopeEpochRef.current !== playlistEpoch
         || playlistScopeRef.current !== scope
-        || hydratedTrack.id !== target.id
+        || !audioTrackMatchesDescriptor(hydratedTrack, target)
       ) return null
       const token = createToken(hydratedTrack)
       preparedTrackCardPreviewRef.current = token
@@ -2212,15 +2238,15 @@ export function useAudioPlayer() {
         ?? latestAudioStateRef.current?.currentTrackId
         ?? audioTrackRef.current?.id) === token.originTrackId
       && target?.available
-      && target.id === token.targetTrackId,
+      && target.id === token.targetTrackId
+      && audioTrackMatchesDescriptor(token.hydratedTrack, target),
     )
     preparedTrackCardPreviewRef.current = null
     if (!valid || !playlist || !target
       || transportOperationInProgress()
       || timelineInteractionRef.current === 'seeking') return false
-    const hydratedTarget = hydratedCacheGet(hydratedAudioTrackCacheRef.current, target.sourcePath)
-    const committedTrack = hydratedTarget ? audioTrackToTrack(hydratedTarget) : token.track
-    const committedArtwork = hydratedTarget ? prefetchArtworkFromTrack(committedTrack) : token.artwork
+    const committedTrack = token.track
+    const committedArtwork = token.artwork
     logicalCursorTrackIdRef.current = token.targetTrackId
     desiredAudioTrackIdRef.current = token.targetTrackId
     presentationTrackRef.current = committedTrack
@@ -2240,6 +2266,7 @@ export function useAudioPlayer() {
         source: token.direction < 0 ? 'previous' : 'next',
         previewTokenId: token.id,
       },
+      token,
     )
     return true
   }, [loadFolderAudioTrack, prefetchAdjacentPlaylistTracks])

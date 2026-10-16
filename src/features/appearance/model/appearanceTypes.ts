@@ -111,6 +111,20 @@ export type AppearancePlayer = {
   lyricsOverscrollDistance: number
   activeLyricEmphasis: PlayerActiveLyricEmphasis
   controls: AppearancePlayerControls
+  controllerSwipe: {
+    easing: AppearanceEasing
+    pageGap: number
+    toggleWidth: number
+    toggleHeight: number
+    toggleRadius: number
+    toggleFeedbackOpacity: number
+    holdDelayMs: number
+    highlightInMs: number
+    highlightOutMs: number
+    settleDurationMs: number
+    highlightOpacity: number
+    radius: number
+  }
   trackMetadata: AppearancePlayerTrackMetadata
 }
 
@@ -151,6 +165,13 @@ export type AppearancePreset = {
 }
 
 export type AppearanceCssVars = CSSProperties & {
+  '--playlist-controller-swipe-page-gap': string
+  '--playlist-controller-toggle-width': string
+  '--playlist-controller-toggle-height': string
+  '--playlist-controller-toggle-radius': string
+  '--playlist-controller-toggle-feedback': string
+  '--playlist-controller-swipe-radius': string
+  '--playlist-controller-swipe-highlight': string
   '--prototype-unit': string
   '--app-bg': string
   '--app-surface': string

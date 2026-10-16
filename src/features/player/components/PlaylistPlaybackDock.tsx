@@ -2,12 +2,16 @@ import { DataHistogram24Filled, Grid24Filled } from '@fluentui/react-icons'
 import { Menu, Search } from 'lucide-react'
 import { motion, type MotionValue } from 'motion/react'
 import { useLayoutEffect, useRef, type RefObject } from 'react'
-import { Button } from '@/components/ui/button'
+import { buttonVariants } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
+import { PressFeedbackButton } from '@/features/player/components/PressFeedbackButton'
 import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { ProgressControl } from '@/features/player/components/ControlDock'
 import { IconButton } from '@/features/player/components/IconButton'
 import { PlaylistCoverImage } from '@/features/player/components/PlaylistCoverImage'
 import type { PlayerPlaybackViewModel, PlayerTimelineViewModel, PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
+import { usePlaylistControllerSwipe } from '@/features/player/hooks/usePlaylistControllerSwipe'
+import type { Track, TrackArtwork } from '@/features/player/model/playerTypes'
 import { playerViewTransitionLayoutId } from '@/features/player/model/playerViewTransition'
 
 type PlaylistPlaybackDockProps = {
@@ -19,6 +23,7 @@ type PlaylistPlaybackDockProps = {
   visualIsPlaying: boolean
   playbackTransitionPending: boolean
   playlistTrack?: PlaylistTrackItemViewModel
+  playlistTracks?: readonly PlaylistTrackItemViewModel[]
   onPlayToggle: () => void
   searchOpen: boolean
   onSearchToggle: () => void
@@ -37,6 +42,7 @@ export function PlaylistPlaybackDock({
   visualIsPlaying,
   playbackTransitionPending,
   playlistTrack,
+  playlistTracks,
   onPlayToggle,
   searchOpen,
   onSearchToggle,
@@ -47,24 +53,94 @@ export function PlaylistPlaybackDock({
   const systemIcons = useSystemIcons()
   const appearanceMotion = useAppearanceMotion()
   const track = playback.track
-  const artwork = playback.artwork
-  const imageFallback = artwork?.coverImageFallback ?? track?.coverImageFallback
-  const imageSource = artwork?.coverImage ?? track?.coverImage ?? imageFallback
-  const localArtwork = playlistTrack?.hasLocalArtwork ?? Boolean(artwork?.coverFilePath ?? track?.coverFilePath)
-  const coverThumbnail = playlistTrack?.coverThumbnail
-  // Mirrors the playlist card language: a real cover, a still-loading local
-  // artwork slot, or no artwork at all.
-  const coverState = coverThumbnail || (!localArtwork && imageSource)
-    ? 'ready'
-    : localArtwork ? 'loading' : 'empty'
-  const coverLayoutId = playerViewTransitionLayoutId('cover', track?.id)
-  const copyLayoutId = playerViewTransitionLayoutId('copy', track?.id)
   const disabled = !track
   const commandBusy = playback.isAudioBusy
     || playback.isSelectionPending
     || timeline.interaction === 'seeking'
     || playbackTransitionPending
     || playback.isTransportBusy
+
+  const { viewportRef: swipeViewportRef, x: swipeX, highlight: swipeHighlight, preview: swipePreview, active: swipeActive, pageStride: swipePageStride, onClickCapture: onSwipeClickCapture } = usePlaylistControllerSwipe(playback, disabled || commandBusy || controllerHidden)
+  function renderTrackRow(track: Track | null, artwork: TrackArtwork | null | undefined, playlistTrack: PlaylistTrackItemViewModel | undefined, neighbor = false) {
+    const imageFallback = artwork?.coverImageFallback ?? track?.coverImageFallback
+    const imageSource = artwork?.coverImage ?? track?.coverImage ?? imageFallback
+    const localArtwork = playlistTrack?.hasLocalArtwork ?? Boolean(artwork?.coverFilePath ?? track?.coverFilePath)
+    const coverThumbnail = playlistTrack?.coverThumbnail
+    const showImageSource = Boolean(imageSource && (!localArtwork || neighbor))
+    // Mirrors the playlist card language: a real cover, a still-loading local
+    // artwork slot, or no artwork at all.
+    const coverState = coverThumbnail || showImageSource
+      ? 'ready'
+      : localArtwork ? 'loading' : 'empty'
+    const coverLayoutId = neighbor ? undefined : playerViewTransitionLayoutId('cover', track?.id)
+    const copyLayoutId = neighbor ? undefined : playerViewTransitionLayoutId('copy', track?.id)
+
+    return (
+      <motion.div className="playlist-playback-track" data-cover-state={coverState} data-swipe-plane={neighbor ? 'neighbor' : 'current'} style={{ x: swipeX, left: neighbor ? `${(swipePreview?.direction ?? 1) * swipePageStride}px` : undefined }} aria-hidden={neighbor || undefined} inert={neighbor || undefined}>
+        {!neighbor ? <motion.span className="playlist-controller-swipe-highlight" style={{ opacity: swipeHighlight }} aria-hidden="true" /> : null}
+        <button
+          type="button"
+          className="playlist-playback-track-button"
+          aria-label={track ? `打开播放界面：${track.title}` : '打开播放界面'}
+          onClick={onClose}
+          tabIndex={neighbor ? -1 : undefined}
+          draggable={false}
+        >
+          <motion.span
+            key={coverLayoutId ?? 'unshared-cover'}
+            className="playlist-playback-cover"
+            layoutId={coverLayoutId}
+            transition={{ layout: appearanceMotion.layoutTransition }}
+            aria-hidden="true"
+          >
+            {coverThumbnail ? (
+              <PlaylistCoverImage className="playlist-playback-cover-image" image={coverThumbnail} />
+            ) : showImageSource ? (
+              <img
+                src={imageSource}
+                draggable={false}
+                alt=""
+                onError={(event) => {
+                  const image = event.currentTarget
+                  if (imageFallback && image.dataset.fallbackApplied !== 'true') {
+                    image.dataset.fallbackApplied = 'true'
+                    image.src = imageFallback
+                    return
+                  }
+                  image.hidden = true
+                }}
+              />
+            ) : null}
+            {coverState === 'empty' ? (
+              <span className="playlist-playback-cover-mark">
+                <systemIcons.music />
+              </span>
+            ) : null}
+          </motion.span>
+          <motion.span
+            key={copyLayoutId ?? 'unshared-copy'}
+            className="playlist-playback-copy"
+            layoutId={copyLayoutId}
+            transition={{ layout: appearanceMotion.layoutTransition }}
+          >
+            <strong>{track?.title ?? '未在播放'}</strong>
+            <span>{track ? `${track.artist}/${track.album}` : '选择一首歌曲开始播放'}</span>
+          </motion.span>
+        </button>
+        <PressFeedbackButton
+          key={swipeActive ? 'swiping' : 'resting'}
+          className={cn(buttonVariants({ size: 'icon-lg', variant: 'ghost' }), 'playlist-playback-toggle')}
+          tone="surface-variant"
+          aria-label={visualIsPlaying ? '暂停' : '播放'}
+          aria-pressed={visualIsPlaying}
+          disabled={neighbor || disabled || commandBusy}
+          onClick={onPlayToggle}
+        >
+          {visualIsPlaying ? <systemIcons.pause aria-hidden="true" /> : <systemIcons.play aria-hidden="true" />}
+        </PressFeedbackButton>
+      </motion.div>
+    )
+  }
 
   useLayoutEffect(() => {
     const shell = dockRef.current?.closest<HTMLElement>('.player-shell')
@@ -103,6 +179,7 @@ export function PlaylistPlaybackDock({
       inert={controllerHidden || undefined}
       aria-hidden={controllerHidden || undefined}
       data-playback-command-busy={commandBusy && !disabled ? '' : undefined}
+      data-playback-track-present={track ? '' : undefined}
       variants={appearanceMotion.variants.backdrop}
       initial="initial"
       animate="animate"
@@ -126,64 +203,9 @@ export function PlaylistPlaybackDock({
         className="playlist-playback-content"
         style={{ opacity: appearanceMotion.disabled ? 1 : 0 }}
       >
-      <div className="playlist-playback-track" data-cover-state={coverState}>
-        <button
-          type="button"
-          className="playlist-playback-track-button"
-          aria-label={track ? `打开播放界面：${track.title}` : '打开播放界面'}
-          onClick={onClose}
-        >
-          <motion.span
-            key={coverLayoutId ?? 'unshared-cover'}
-            className="playlist-playback-cover"
-            layoutId={coverLayoutId}
-            transition={{ layout: appearanceMotion.layoutTransition }}
-            aria-hidden="true"
-          >
-            {coverThumbnail ? (
-              <PlaylistCoverImage className="playlist-playback-cover-image" image={coverThumbnail} />
-            ) : !localArtwork && imageSource ? (
-              <img
-                src={imageSource}
-                alt=""
-                onError={(event) => {
-                  const image = event.currentTarget
-                  if (imageFallback && image.dataset.fallbackApplied !== 'true') {
-                    image.dataset.fallbackApplied = 'true'
-                    image.src = imageFallback
-                    return
-                  }
-                  image.hidden = true
-                }}
-              />
-            ) : null}
-            {coverState === 'empty' ? (
-              <span className="playlist-playback-cover-mark">
-                <systemIcons.music />
-              </span>
-            ) : null}
-          </motion.span>
-          <motion.span
-            key={copyLayoutId ?? 'unshared-copy'}
-            className="playlist-playback-copy"
-            layoutId={copyLayoutId}
-            transition={{ layout: appearanceMotion.layoutTransition }}
-          >
-            <strong>{track?.title ?? '未在播放'}</strong>
-            <span>{track ? `${track.artist}/${track.album}` : '选择一首歌曲开始播放'}</span>
-          </motion.span>
-        </button>
-        <Button
-          className="playlist-playback-toggle"
-          size="icon-lg"
-          variant="ghost"
-          aria-label={visualIsPlaying ? '暂停' : '播放'}
-          aria-pressed={visualIsPlaying}
-          disabled={disabled || commandBusy}
-          onClick={onPlayToggle}
-        >
-          {visualIsPlaying ? <systemIcons.pause aria-hidden="true" /> : <systemIcons.play aria-hidden="true" />}
-        </Button>
+      <div ref={swipeViewportRef} className="playlist-controller-swipe-viewport" data-swipe-active={swipeActive ? 'true' : undefined} onClickCapture={onSwipeClickCapture} onDragStart={(event) => event.preventDefault()}>
+        {renderTrackRow(track, playback.artwork, playlistTrack)}
+        {swipePreview ? renderTrackRow(swipePreview.track, swipePreview.artwork, playlistTracks?.find((item) => item.id === swipePreview?.targetTrackId), true) : null}
       </div>
 
       <ProgressControl

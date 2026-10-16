@@ -100,6 +100,7 @@ export const defaultAppearance: AppearancePreset = {
       progress: { trackThickness: 6, thumbSize: 27 },
       visibility: { timeLabels: true, volumePercent: true },
     },
+    controllerSwipe: { pageGap: 16, toggleWidth: 100, toggleHeight: 80, toggleRadius: 40, toggleFeedbackOpacity: 0.2, easing: 'ease-out', holdDelayMs: 90, highlightInMs: 220, highlightOutMs: 180, settleDurationMs: 300, highlightOpacity: 0.2, radius: 40 },
     trackMetadata: {
       titleMaxWidth: 420,
       detailsMaxWidth: 680,

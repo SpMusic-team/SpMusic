@@ -1,7 +1,7 @@
 import type { Transition, Variants } from 'motion/react'
 import type { AppearanceEasing, AppearanceMotion } from './appearanceTypes'
 
-const easingMap: Record<AppearanceEasing, Transition['ease']> = {
+export const appearanceEasingMap: Record<AppearanceEasing, Transition['ease']> = {
   linear: 'linear',
   ease: [0.25, 0.1, 0.25, 1],
   'ease-in': [0.42, 0, 1, 1],
@@ -67,7 +67,7 @@ export function createAppearanceMotionRuntime(
   const prototypeSmartTransition: Transition = {
     type: 'tween',
     duration: 0.3 * durationScale,
-    ease: easingMap['ease-out'],
+    ease: appearanceEasingMap['ease-out'],
   }
 
   return {
@@ -89,7 +89,7 @@ export function createAppearanceMotionRuntime(
       opacity: {
         type: 'tween',
         duration: 0.2 * durationScale,
-        ease: easingMap[motion.easing],
+        ease: appearanceEasingMap[motion.easing],
       },
     },
     variants: {

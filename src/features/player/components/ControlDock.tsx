@@ -344,9 +344,13 @@ export const ProgressControl = memo(function ProgressControl({
         data-visual-clock={timeline.visualClock ? '' : undefined}
         data-timeline-interaction={timeline.interaction}
         data-seeking={timeline.interaction === 'seeking' ? '' : undefined}
+        data-duration-pending={timeline.durationSeconds <= 0 ? '' : undefined}
         disabled={progressDisabled}
         getAriaLabel={() => appCopy.progress.label}
-        max={timeline.durationSeconds}
+        // Base UI's edge alignment divides by (max - min). An unknown
+        // duration must still have a valid internal domain while disabled,
+        // otherwise it hides the thumb and indicator until metadata arrives.
+        max={timeline.durationSeconds > 0 ? timeline.durationSeconds : 1}
         min={0}
         onBlur={handleProgressBlur}
         onKeyUp={handleProgressKeyUp}
@@ -363,7 +367,7 @@ export const ProgressControl = memo(function ProgressControl({
           }
         }}
         step={0.01}
-        value={sliderPosition}
+        value={timeline.durationSeconds > 0 ? sliderPosition : 0}
       />
       {showTimes ? <time className="control-progress-time control-progress-time-end">{formattedDuration}</time> : null}
     </div>

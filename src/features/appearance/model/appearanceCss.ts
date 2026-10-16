@@ -63,6 +63,13 @@ export function createAppearanceCssVars(appearance: AppearancePreset, resolvedCo
   const coverPlaceholderPulse = `color-mix(in srgb, ${colors.accent} 16%, ${colors.accentSoft})`
 
   return {
+    '--playlist-controller-swipe-page-gap': `${appearance.player.controllerSwipe.pageGap}px`,
+    '--playlist-controller-toggle-width': `${appearance.player.controllerSwipe.toggleWidth}px`,
+    '--playlist-controller-toggle-height': `${appearance.player.controllerSwipe.toggleHeight}px`,
+    '--playlist-controller-toggle-radius': `${appearance.player.controllerSwipe.toggleRadius}px`,
+    '--playlist-controller-toggle-feedback': `color-mix(in srgb, ${colors.playerSurfaceVariant} ${appearance.player.controllerSwipe.toggleFeedbackOpacity * 100}%, transparent)`,
+    '--playlist-controller-swipe-radius': `${appearance.player.controllerSwipe.radius}px`,
+    '--playlist-controller-swipe-highlight': colors.playerSurfaceVariant,
     '--prototype-unit': 'min(0.0390625vw, 0.0694444svh)',
     '--app-bg': colors.background,
     '--app-surface': colors.surface,

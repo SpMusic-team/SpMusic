@@ -129,6 +129,7 @@ export function cloneAppearance(appearance: AppearancePreset): AppearancePreset 
         progress: { ...appearance.player.controls.progress },
         visibility: { ...appearance.player.controls.visibility },
       },
+      controllerSwipe: { ...appearance.player.controllerSwipe },
       trackMetadata: { ...appearance.player.trackMetadata },
     },
     icons: { ...appearance.icons },
@@ -356,8 +357,11 @@ function parsePlayer(input: JsonObject, fallback: AppearancePlayer, warnings: st
     'activeLyricEmphasis',
     'controls',
     'trackMetadata',
+    'controllerSwipe',
   ], 'theme.player', warnings)
   const trackMetadataInput = optionalObject(input, 'trackMetadata', 'theme.player.trackMetadata', warnings) ?? {}
+  const swipeInput = optionalObject(input, 'controllerSwipe', 'theme.player.controllerSwipe', warnings) ?? {}
+  reportUnknownKeys(swipeInput, ['pageGap', 'toggleWidth', 'toggleHeight', 'toggleRadius', 'toggleFeedbackOpacity', 'easing', 'holdDelayMs', 'highlightInMs', 'highlightOutMs', 'settleDurationMs', 'highlightOpacity', 'radius'], 'theme.player.controllerSwipe', warnings)
   const controlsInput = optionalObject(input, 'controls', 'theme.player.controls', warnings) ?? {}
   reportUnknownKeys(trackMetadataInput, [
     'titleMaxWidth',
@@ -389,6 +393,20 @@ function parsePlayer(input: JsonObject, fallback: AppearancePlayer, warnings: st
     lyricsOverscrollDistance: boundedNumber(input.lyricsOverscrollDistance, fallback.lyricsOverscrollDistance, 0, 180, 'theme.player.lyricsOverscrollDistance', warnings),
     activeLyricEmphasis: enumValue(input.activeLyricEmphasis, playerActiveLyricEmphases, fallback.activeLyricEmphasis, 'theme.player.activeLyricEmphasis', warnings),
     controls: parsePlayerControls(controlsInput, fallback.controls, warnings),
+    controllerSwipe: {
+      pageGap: boundedNumber(swipeInput.pageGap, fallback.controllerSwipe.pageGap, 0, 120, 'theme.player.controllerSwipe.pageGap', warnings),
+      toggleWidth: boundedNumber(swipeInput.toggleWidth, fallback.controllerSwipe.toggleWidth, 64, 140, 'theme.player.controllerSwipe.toggleWidth', warnings),
+      toggleHeight: boundedNumber(swipeInput.toggleHeight, fallback.controllerSwipe.toggleHeight, 48, 80, 'theme.player.controllerSwipe.toggleHeight', warnings),
+      toggleRadius: boundedNumber(swipeInput.toggleRadius, fallback.controllerSwipe.toggleRadius, 0, 80, 'theme.player.controllerSwipe.toggleRadius', warnings),
+      toggleFeedbackOpacity: boundedNumber(swipeInput.toggleFeedbackOpacity, fallback.controllerSwipe.toggleFeedbackOpacity, 0, 1, 'theme.player.controllerSwipe.toggleFeedbackOpacity', warnings),
+      easing: enumValue(swipeInput.easing, easingValues, fallback.controllerSwipe.easing, 'theme.player.controllerSwipe.easing', warnings),
+      holdDelayMs: boundedNumber(swipeInput.holdDelayMs, fallback.controllerSwipe.holdDelayMs, 0, 1000, 'theme.player.controllerSwipe.holdDelayMs', warnings),
+      highlightInMs: boundedNumber(swipeInput.highlightInMs, fallback.controllerSwipe.highlightInMs, 0, 1500, 'theme.player.controllerSwipe.highlightInMs', warnings),
+      highlightOutMs: boundedNumber(swipeInput.highlightOutMs, fallback.controllerSwipe.highlightOutMs, 0, 1500, 'theme.player.controllerSwipe.highlightOutMs', warnings),
+      settleDurationMs: boundedNumber(swipeInput.settleDurationMs, fallback.controllerSwipe.settleDurationMs, 0, 1500, 'theme.player.controllerSwipe.settleDurationMs', warnings),
+      highlightOpacity: boundedNumber(swipeInput.highlightOpacity, fallback.controllerSwipe.highlightOpacity, 0, 1, 'theme.player.controllerSwipe.highlightOpacity', warnings),
+      radius: boundedNumber(swipeInput.radius, fallback.controllerSwipe.radius, 0, 80, 'theme.player.controllerSwipe.radius', warnings),
+    },
     trackMetadata: {
       titleMaxWidth: boundedNumber(trackMetadataInput.titleMaxWidth, fallback.trackMetadata.titleMaxWidth, 120, 1200, 'theme.player.trackMetadata.titleMaxWidth', warnings),
       detailsMaxWidth: boundedNumber(trackMetadataInput.detailsMaxWidth, fallback.trackMetadata.detailsMaxWidth, 120, 1600, 'theme.player.trackMetadata.detailsMaxWidth', warnings),

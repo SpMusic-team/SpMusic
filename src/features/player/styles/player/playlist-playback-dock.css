@@ -91,7 +91,7 @@
 .playlist-playback-track {
   display: grid;
   height: 80px;
-  grid-template-columns: 64px minmax(0, 1fr) 48px;
+  grid-template-columns: 64px minmax(0, 1fr) var(--playlist-controller-toggle-width);
   align-items: center;
   gap: 24px;
 }
@@ -114,7 +114,42 @@
   cursor: pointer;
 }
 
-.playlist-playback-track-button:hover { background: color-mix(in srgb, var(--player-surface-variant) 45%, transparent); }
+.playlist-controller-swipe-viewport {
+  position: relative;
+  height: 80px;
+  touch-action: pan-y;
+  column-gap: var(--playlist-controller-swipe-page-gap);
+}
+
+/* Clip only while swiping; cover/title shared projections must be able to
+   leave the compact row when opening the full player. */
+.playlist-controller-swipe-viewport[data-swipe-active="true"] {
+  overflow: hidden;
+  user-select: none;
+}
+
+.playlist-controller-swipe-viewport .playlist-playback-track {
+  position: relative;
+  width: 100%;
+  border-radius: var(--playlist-controller-swipe-radius);
+}
+
+.playlist-playback-track[data-swipe-plane="neighbor"] {
+  position: absolute;
+  top: 0;
+  pointer-events: none;
+}
+
+.playlist-controller-swipe-highlight {
+  position: absolute;
+  inset: 0 calc(var(--playlist-dock-inline-padding) * -1);
+  border-radius: var(--playlist-controller-swipe-radius);
+  background: var(--playlist-controller-swipe-highlight);
+  pointer-events: none;
+}
+
+.playlist-playback-track-button,
+.playlist-playback-toggle { position: relative; }
 .playlist-playback-track-button:focus-visible { outline: 3px solid color-mix(in srgb, var(--player-blue) 55%, transparent); outline-offset: 2px; }
 
 .playlist-playback-cover {
@@ -193,6 +228,13 @@
   opacity: 1;
 }
 
+/* Loading a selected track can briefly report duration 0 after the command
+   lock settles. It remains disabled, but keeps the existing track's material;
+   an empty player still receives the normal unavailable treatment. */
+.playlist-playback-dock[data-playback-track-present] .control-progress-slider[data-duration-pending] [data-disabled] {
+  opacity: 1;
+}
+
 /* PlayerShell deliberately disables playlist actions while a transport
    command settles. With an existing track this is an interaction lock, not
    an unavailable action, so keep the hero buttons visually unchanged. */
@@ -202,10 +244,30 @@
 }
 
 .playlist-playback-toggle {
-  width: 48px;
-  height: 48px;
+  --press-feedback-color: var(--playlist-controller-toggle-feedback);
+  width: var(--playlist-controller-toggle-width);
+  height: var(--playlist-controller-toggle-height);
+  border-radius: var(--playlist-controller-toggle-radius);
   padding: 0;
+  background: transparent;
 }
+
+.playlist-playback-toggle::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--playlist-controller-toggle-feedback);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--app-motion-prototype-press) var(--app-motion-easing);
+}
+
+.playlist-playback-toggle:hover,
+.playlist-playback-toggle:active { background: transparent; }
+.playlist-playback-toggle:hover:not(:disabled)::before { opacity: 1; }
+.playlist-controller-swipe-viewport[data-swipe-active="true"] .playlist-playback-toggle::before { opacity: 0; }
+.playlist-playback-toggle .press-feedback-button-ripple { animation-duration: var(--app-motion-prototype-press); }
 
 .playlist-playback-nav-button {
   width: 100%;
@@ -254,7 +316,7 @@
 @media (max-width: 520px) {
   .playlist-hero-actions.playlist-controller-actions { left: 32px; right: 32px; }
   .playlist-playback-dock { --playlist-dock-inline-padding: 16px; }
-  .playlist-playback-track { grid-template-columns: 56px minmax(0, 1fr) 44px; gap: 12px; }
+  .playlist-playback-track { grid-template-columns: 56px minmax(0, 1fr) var(--playlist-controller-toggle-width); gap: 12px; }
   .playlist-playback-track-button { grid-template-columns: 56px minmax(0, 1fr); gap: 12px; }
   .playlist-playback-cover { width: 56px; height: 56px; border-radius: 16px; }
   .playlist-playback-copy strong { font-size: 20px; line-height: 28px; }

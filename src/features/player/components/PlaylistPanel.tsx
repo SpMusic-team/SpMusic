@@ -1119,6 +1119,7 @@ export function PlaylistPanel({
         timeline={timeline}
         visualIsPlaying={visualIsPlaying}
         playbackTransitionPending={playbackTransitionPending}
+        playlistTracks={tracks}
         playlistTrack={tracks.find((track) => track.id === currentTrackId)}
         onPlayToggle={onPlayToggle}
         searchOpen={searchOpen}

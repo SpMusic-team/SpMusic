@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type SyntheticEvent } from 'react'
-import { motion } from 'motion/react'
+import { motion, useIsPresent } from 'motion/react'
 import { CornerLeftUp, Search } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty'
@@ -12,16 +12,18 @@ import { PlaylistCard } from '@/features/player/components/PlaylistCard'
 import { PlaylistCoverImage } from '@/features/player/components/PlaylistCoverImage'
 import { PlaylistPlaybackDock } from '@/features/player/components/PlaylistPlaybackDock'
 import { PlaylistLibrarySidebar } from '@/features/player/components/PlaylistLibrarySidebar'
+import { useCollectionLayout } from '@/features/player/hooks/useCollectionLayout'
 import { usePlaylistOverscroll } from '@/features/player/hooks/usePlaylistOverscroll'
 import { usePlaylistControllerMotion } from '@/features/player/hooks/usePlaylistControllerMotion'
 import type { PlaylistControllerMode } from '@/features/player/model/playlistControllerMode'
 import { appCopy } from '@/features/player/model/playerCopy'
 import { nextShuffleMode, type ShuffleMode } from '@/features/player/model/playbackModes'
 import { formatPlaylistDurationLabel, type PlaylistDurationStatus } from '@/features/player/model/playlistDuration'
-import type { PlayerPlaybackViewModel, PlayerTimelineViewModel, PlaylistLibraryViewModel, PlaylistArtworkDemand, PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
+import type { PlayerPlaybackViewModel, PlayerTimelineViewModel, PlayerPlaylistViewModel, PlaylistLibraryViewModel, PlaylistArtworkDemand, PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
 
 type PlaylistPanelProps = {
   controllerMode?: PlaylistControllerMode
+  entryPosition?: PlayerPlaylistViewModel['entryPosition']
   library?: PlaylistLibraryViewModel
   tracks: PlaylistTrackItemViewModel[]
   unavailableTrackIds?: ReadonlySet<string>
@@ -71,39 +73,11 @@ const PLAYLIST_LAYOUTS: readonly PlaylistLayoutDescriptor[] = [
 
 const DEFAULT_PLAYLIST_LAYOUT_LEVEL = 3
 const PLAYLIST_LAYOUT_STORAGE_KEY = 'spmusic.playlist.layout-level.v1'
-const PLAYLIST_WHEEL_THRESHOLD = 28
-const PLAYLIST_WHEEL_STEP_LOCK_MS = 150
-// Wheel events have no gesture-end signal; silence separates trackpad pinches.
-const PLAYLIST_TRACKPAD_IDLE_MS = 350
-const PLAYLIST_PINCH_MIN_DISTANCE = 24
-const PLAYLIST_PINCH_DISTANCE_RATIO = 0.12
-function readPlaylistLayoutLevel(): number {
-  const defaultLevel = typeof window !== 'undefined' && window.innerWidth > 1024 ? 0 : DEFAULT_PLAYLIST_LAYOUT_LEVEL
-  if (typeof window === 'undefined') return defaultLevel
-  try {
-    const stored = window.localStorage.getItem(PLAYLIST_LAYOUT_STORAGE_KEY)
-    if (stored === null || !/^(0|[1-9]\d*)$/.test(stored)) return defaultLevel
-    const level = Number(stored)
-    return Number.isSafeInteger(level) && level < PLAYLIST_LAYOUTS.length
-      ? level
-      : defaultLevel
-  } catch {
-    return defaultLevel
-  }
+const DETAIL_LAYOUT_SELECTORS = {
+  item: '[data-playlist-track-id]', cover: '.playlist-card-cover', copy: '.playlist-card-copy',
+  getId: (element: HTMLElement) => element.dataset.playlistTrackId,
 }
-
-function persistPlaylistLayoutLevel(level: number): void {
-  try {
-    window.localStorage.setItem(PLAYLIST_LAYOUT_STORAGE_KEY, String(level))
-  } catch {
-    // A blocked or full store must not prevent changing the current view.
-  }
-}
-
-type CardLayoutSnapshot = {
-  cover: DOMRect | null
-  copy: DOMRect
-}
+const defaultPlaylistLevel = () => typeof window !== 'undefined' && window.innerWidth > 1024 ? 0 : DEFAULT_PLAYLIST_LAYOUT_LEVEL
 
 type PlaylistCardRow = {
   start: number
@@ -224,39 +198,9 @@ function indexedPlaylistCandidates(index: PlaylistCardIndex, grid: HTMLElement, 
   return candidates
 }
 
-function snapshotCardLayout(grid: HTMLElement, panel: HTMLElement): Map<string, CardLayoutSnapshot> {
-  const bounds = panel.getBoundingClientRect()
-  const snapshots = new Map<string, CardLayoutSnapshot>()
-  for (const card of grid.querySelectorAll<HTMLElement>('[data-playlist-track-id]')) {
-    const cardBounds = card.getBoundingClientRect()
-    if (cardBounds.bottom < bounds.top - bounds.height * 2 || cardBounds.top > bounds.bottom + bounds.height * 2) continue
-    const trackId = card.dataset.playlistTrackId
-    const copy = card.querySelector<HTMLElement>('.playlist-card-copy')
-    const cover = card.querySelector<HTMLElement>('.playlist-card-cover')
-    if (!trackId || !copy) continue
-    snapshots.set(trackId, {
-      cover: cover && getComputedStyle(cover).display !== 'none' ? cover.getBoundingClientRect() : null,
-      copy: copy.getBoundingClientRect(),
-    })
-  }
-  return snapshots
-}
-
-function animateLayoutPart(element: HTMLElement, from: DOMRect, to: DOMRect, duration: number, easing: string): Animation | null {
-  if (to.width <= 0 || to.height <= 0 || from.width <= 0 || from.height <= 0) return null
-  const x = from.left - to.left
-  const y = from.top - to.top
-  const scaleX = from.width / to.width
-  const scaleY = from.height / to.height
-  if (Math.abs(x) < 0.5 && Math.abs(y) < 0.5 && Math.abs(scaleX - 1) < 0.005 && Math.abs(scaleY - 1) < 0.005) return null
-  return element.animate([
-    { transform: `translate(${x}px, ${y}px) scale(${scaleX}, ${scaleY})`, transformOrigin: 'top left' },
-    { transform: 'none', transformOrigin: 'top left' },
-  ], { duration, easing, fill: 'both' })
-}
-
 export function PlaylistPanel({
   controllerMode = 'movable',
+  entryPosition,
   library,
   tracks,
   unavailableTrackIds,
@@ -283,6 +227,11 @@ export function PlaylistPanel({
 }: PlaylistPanelProps) {
   const systemIcons = useSystemIcons()
   const appearanceMotion = useAppearanceMotion()
+  const isPresent = useIsPresent()
+  // Use a 250ms default, preserving theme scaling and the presence cleanup budget.
+  const returnTransition = { ...appearanceMotion.layoutTransition, duration: Math.min((appearanceMotion.layoutTransition.duration ?? 0) * (5 / 6), 0.65) }
+  const sharedScope = appearanceMotion.disabled ? undefined : library?.currentScope
+  const handledEntryPositionIdRef = useRef<number | undefined>(undefined)
   const [selectMode, setSelectMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(new Set())
   const [filter, setFilter] = useState('')
@@ -295,8 +244,6 @@ export function PlaylistPanel({
     setHandledSearchRequestId(searchRequestId)
     if (searchRequestId > 0) setSearchOpen(true)
   }
-  const [layoutLevel, setLayoutLevel] = useState(readPlaylistLayoutLevel)
-  const [layoutAnnouncement, setLayoutAnnouncement] = useState('')
   // The player owns the bounded thumbnail window across panel opens. Render
   // retained URLs on the first frame, before the new viewport report arrives.
   const [artworkWindowIds, setArtworkWindowIds] = useState<ReadonlySet<string>>(
@@ -317,18 +264,26 @@ export function PlaylistPanel({
   const focusedSearchRequestIdRef = useRef(0)
   const gridRef = useRef<HTMLDivElement | null>(null)
   const initialPositionAppliedRef = useRef(false)
-  const layoutLevelRef = useRef(layoutLevel)
-  const wheelAccumulatedDeltaRef = useRef(0)
-  const wheelLastAtRef = useRef(0)
-  const wheelLockedUntilRef = useRef(0)
-  const pendingLayoutSnapshotRef = useRef<Map<string, CardLayoutSnapshot> | null>(null)
-  const activeLayoutAnimationsRef = useRef<Set<Animation>>(new Set())
   const artworkHoldIdsRef = useRef<ReadonlySet<string> | null>(null)
-  const layoutTransitionGenerationRef = useRef(0)
   const artworkWindowIdsRef = useRef<ReadonlySet<string>>(new Set())
   const artworkWindowKeyRef = useRef('')
   const metadataWindowKeyRef = useRef<string | null>(null)
-  const layout = PLAYLIST_LAYOUTS[layoutLevel] ?? PLAYLIST_LAYOUTS[DEFAULT_PLAYLIST_LAYOUT_LEVEL]
+  const { level: layoutLevel, layout, announcement: layoutAnnouncement } = useCollectionLayout({
+    panelRef, gridRef, layouts: PLAYLIST_LAYOUTS, storageKey: PLAYLIST_LAYOUT_STORAGE_KEY,
+    defaultLevel: defaultPlaylistLevel, selectors: DETAIL_LAYOUT_SELECTORS,
+    announce: (nextLayout) => `歌曲视图已切换为${nextLayout.label}`,
+    onBeforeTransition: (snapshot, grid) => {
+      artworkHoldIdsRef.current = snapshot ? new Set(
+        [...grid.querySelectorAll<HTMLElement>('[data-playlist-track-id]')].flatMap((card) => {
+          const trackId = card.dataset.playlistTrackId
+          const image = card.querySelector<HTMLImageElement>('.playlist-card-cover-image')
+          return trackId && snapshot.get(trackId)?.cover && image?.complete && image.naturalWidth > 0
+            && image.src.startsWith('blob:') ? [trackId] : []
+        }),
+      ) : null
+    },
+    onSettled: () => { artworkHoldIdsRef.current = null; setArtworkWindowRevision((previous) => previous + 1) },
+  })
 
   const unavailable = useMemo(
     () => unavailableTrackIds ?? new Set<string>(),
@@ -374,63 +329,6 @@ export function PlaylistPanel({
   // The player owns the bounded artwork window. Closing this temporary view
   // must not revoke its covers; playlist replacement/player disposal do that.
 
-  const stopLayoutAnimations = useCallback(() => {
-    for (const animation of activeLayoutAnimationsRef.current) animation.cancel()
-    activeLayoutAnimationsRef.current.clear()
-  }, [])
-
-  useLayoutEffect(() => {
-    const snapshots = pendingLayoutSnapshotRef.current
-    pendingLayoutSnapshotRef.current = null
-    const grid = gridRef.current
-    if (!snapshots || !grid || appearanceMotion.disabled) return
-    const duration = Number(appearanceMotion.layoutTransition.duration ?? 0) * 1000
-    if (duration <= 0) return
-    const ease = appearanceMotion.layoutTransition.ease
-    const easing = Array.isArray(ease) && ease.length === 4
-      ? `cubic-bezier(${ease.join(', ')})`
-      : typeof ease === 'string' ? ease : 'ease-out'
-    const generation = layoutTransitionGenerationRef.current
-    const animations: Animation[] = []
-    const parts: { element: HTMLElement; from: DOMRect; to: DOMRect }[] = []
-    // Read every destination before starting any animation. animate() installs
-    // a transform immediately (fill: 'both'); interleaving it with the next
-    // geometry read forces synchronous style updates for each cover/copy.
-    for (const card of grid.querySelectorAll<HTMLElement>('[data-playlist-track-id]')) {
-      const snapshot = snapshots.get(card.dataset.playlistTrackId ?? '')
-      if (!snapshot) continue
-      for (const [selector, from] of [
-        ['.playlist-card-cover', snapshot.cover],
-        ['.playlist-card-copy', snapshot.copy],
-      ] as const) {
-        if (!from) continue
-        const element = card.querySelector<HTMLElement>(selector)
-        if (!element || getComputedStyle(element).display === 'none') continue
-        parts.push({ element, from, to: element.getBoundingClientRect() })
-      }
-    }
-    for (const { element, from, to } of parts) {
-      const animation = animateLayoutPart(element, from, to, duration, easing)
-      if (!animation) continue
-      animations.push(animation)
-      activeLayoutAnimationsRef.current.add(animation)
-      animation.onfinish = () => {
-        activeLayoutAnimationsRef.current.delete(animation)
-        animation.cancel()
-      }
-    }
-    void Promise.allSettled(animations.map((animation) => animation.finished)).then(() => {
-      if (generation !== layoutTransitionGenerationRef.current) return
-      artworkHoldIdsRef.current = null
-      setArtworkWindowRevision((previous) => previous + 1)
-    })
-  }, [layoutLevel, appearanceMotion])
-
-  useEffect(() => () => {
-    layoutTransitionGenerationRef.current += 1
-    stopLayoutAnimations()
-  }, [stopLayoutAnimations])
-
   const handleActivate = useCallback((trackId: string) => {
     onTrackSelect?.(trackId)
   }, [onTrackSelect])
@@ -467,10 +365,21 @@ export function PlaylistPanel({
   }, [onTrackSelect, tracks, unavailable])
 
   useLayoutEffect(() => {
-    if (initialPositionAppliedRef.current || !currentTrackId) return
     const panel = panelRef.current
+    if (!panel) return
+    if (entryPosition && handledEntryPositionIdRef.current !== entryPosition.requestId) {
+      handledEntryPositionIdRef.current = entryPosition.requestId
+      initialPositionAppliedRef.current = false
+      if (entryPosition.target === 'top') {
+        panel.scrollTo({ top: 0, behavior: 'instant' })
+        rebaseController({ reveal: true })
+        initialPositionAppliedRef.current = true
+        return
+      }
+    }
+    if (initialPositionAppliedRef.current || !currentTrackId) return
     const grid = gridRef.current
-    if (!panel || !grid) return
+    if (!grid) return
     const currentCard = [...grid.querySelectorAll<HTMLElement>('[data-playlist-track-id]')]
       .find((card) => card.dataset.playlistTrackId === currentTrackId)
     if (!currentCard) return
@@ -479,7 +388,7 @@ export function PlaylistPanel({
     panel.scrollTop += cardRect.top - panelRect.top - (panel.clientHeight - cardRect.height) / 2
     rebaseController({ reveal: true })
     initialPositionAppliedRef.current = true
-  }, [currentTrackId, filteredTrackIdsKey, rebaseController])
+  }, [currentTrackId, filteredTrackIdsKey, entryPosition, rebaseController])
 
   useLayoutEffect(() => {
     if (!searchOpen || searchRequestId <= 0 || focusedSearchRequestIdRef.current === searchRequestId) return
@@ -693,182 +602,6 @@ export function PlaylistPanel({
     }
   }, [filteredTrackIdsKey, layout.level, layout.showArtwork, onVisibleTrackIdsChange, artworkWindowRevision, clearArtworkWindow])
 
-  useEffect(() => {
-    const panel = panelRef.current
-    if (!panel) return
-
-    const changeLayout = (direction: -1 | 1, now: number) => {
-      const grid = gridRef.current
-      if (!grid || now < wheelLockedUntilRef.current) return
-      const currentLevel = layoutLevelRef.current
-      const nextLevel = Math.max(0, Math.min(PLAYLIST_LAYOUTS.length - 1, currentLevel + direction))
-      if (nextLevel === currentLevel) return
-      const nextLayout = PLAYLIST_LAYOUTS[nextLevel]
-      if (!nextLayout) return
-      // Capture the current painted position, including an interrupted in-flight
-      // animation, before changing the grid. The same cover/image DOM nodes then
-      // animate from these pixels to their new layout in useLayoutEffect.
-      const snapshot = appearanceMotion.disabled ? null : snapshotCardLayout(grid, panel)
-      pendingLayoutSnapshotRef.current = snapshot
-      artworkHoldIdsRef.current = snapshot ? new Set(
-        [...grid.querySelectorAll<HTMLElement>('[data-playlist-track-id]')].flatMap((card) => {
-          const trackId = card.dataset.playlistTrackId
-          const image = card.querySelector<HTMLImageElement>('.playlist-card-cover-image')
-          return trackId && snapshot.get(trackId)?.cover && image?.complete && image.naturalWidth > 0
-            && image.src.startsWith('blob:') ? [trackId] : []
-        }),
-      ) : null
-      layoutTransitionGenerationRef.current += 1
-      stopLayoutAnimations()
-      wheelLockedUntilRef.current = now + PLAYLIST_WHEEL_STEP_LOCK_MS
-      layoutLevelRef.current = nextLevel
-      setLayoutLevel(nextLevel)
-      persistPlaylistLayoutLevel(nextLevel)
-      setLayoutAnnouncement(`歌曲视图已切换为${nextLayout.label}`)
-    }
-
-    const pressedControlKeys = new Set<string>()
-    let wheelInput: 'control' | 'trackpad' | null = null
-    let trackpadLastAt = -Infinity
-    let trackpadConsumed = false
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Control') pressedControlKeys.add(event.code || event.key)
-    }
-    const handleKeyUp = (event: KeyboardEvent) => {
-      if (event.key === 'Control') pressedControlKeys.delete(event.code || event.key)
-    }
-    const handleWheel = (event: WheelEvent) => {
-      const grid = gridRef.current
-      if (!grid || !(event.target instanceof Node) || !grid.contains(event.target) || !event.ctrlKey) return
-      event.preventDefault()
-      const now = performance.now()
-      // Chromium emits ctrlKey wheel for a trackpad pinch without pressing Ctrl.
-      const nextInput = pressedControlKeys.size > 0 ? 'control' : 'trackpad'
-      if (wheelInput !== nextInput) wheelAccumulatedDeltaRef.current = 0
-      wheelInput = nextInput
-      if (nextInput === 'trackpad') {
-        if (now - trackpadLastAt > PLAYLIST_TRACKPAD_IDLE_MS) {
-          trackpadConsumed = false
-          wheelAccumulatedDeltaRef.current = 0
-        }
-        // Refresh even after consumption or during the layout step lock. A long
-        // stream remains one gesture regardless of its duration or direction.
-        trackpadLastAt = now
-        if (trackpadConsumed) return
-      }
-      if (now < wheelLockedUntilRef.current) return
-      const multiplier = event.deltaMode === WheelEvent.DOM_DELTA_LINE
-        ? 16
-        : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? panel.clientHeight : 1
-      const delta = event.deltaY * multiplier
-      if (
-        now - wheelLastAtRef.current > 250
-        || Math.sign(delta) !== Math.sign(wheelAccumulatedDeltaRef.current)
-      ) wheelAccumulatedDeltaRef.current = 0
-      wheelLastAtRef.current = now
-      wheelAccumulatedDeltaRef.current += delta
-      if (Math.abs(wheelAccumulatedDeltaRef.current) < PLAYLIST_WHEEL_THRESHOLD) return
-
-      const direction = wheelAccumulatedDeltaRef.current < 0 ? -1 : 1
-      wheelAccumulatedDeltaRef.current = 0
-      if (nextInput === 'trackpad') trackpadConsumed = true
-      changeLayout(direction, now)
-    }
-
-    let pinch: { identifiers: readonly number[]; distance: number } | null = null
-    let touchBlocked = false
-    const touchDistance = (first: Touch, second: Touch) => Math.hypot(
-      second.clientX - first.clientX, second.clientY - first.clientY,
-    )
-    const insidePanel = (touch: Touch) => {
-      const bounds = panel.getBoundingClientRect()
-      return touch.clientX >= bounds.left && touch.clientX <= bounds.right
-        && touch.clientY >= bounds.top && touch.clientY <= bounds.bottom
-    }
-    const handleTouchStart = (event: TouchEvent) => {
-      if (event.touches.length > 2) {
-        pinch = null
-        touchBlocked = true
-        return
-      }
-      const grid = gridRef.current
-      if (touchBlocked || event.touches.length !== 2 || !grid) return
-      const [first, second] = Array.from(event.touches)
-      if (![first!, second!].every((touch) => touch.target instanceof Node
-        && grid.contains(touch.target) && insidePanel(touch))) return
-      // Reserve only the two-finger gesture; one-finger scrolling stays native.
-      if (event.cancelable) event.preventDefault()
-      pinch = { identifiers: [first!.identifier, second!.identifier], distance: touchDistance(first!, second!) }
-      wheelAccumulatedDeltaRef.current = 0
-    }
-    const handleTouchMove = (event: TouchEvent) => {
-      if (touchBlocked) {
-        if (event.touches.length === 2 && event.cancelable) event.preventDefault()
-        return
-      }
-      if (!pinch) return
-      const touches = Array.from(event.touches)
-      if (touches.length !== 2 || !touches.every((touch) => pinch!.identifiers.includes(touch.identifier)
-        && insidePanel(touch))) {
-        pinch = null
-        touchBlocked = true
-        return
-      }
-      if (event.cancelable) event.preventDefault()
-      const distance = touchDistance(touches[0]!, touches[1]!)
-      const delta = distance - pinch.distance
-      const threshold = Math.max(PLAYLIST_PINCH_MIN_DISTANCE, pinch.distance * PLAYLIST_PINCH_DISTANCE_RATIO)
-      const now = performance.now()
-      if (Math.abs(delta) < threshold || now < wheelLockedUntilRef.current) return
-      // Translation leaves the separation unchanged; spreading matches Ctrl+wheel up.
-      changeLayout(delta > 0 ? -1 : 1, now)
-      // Consume this gesture even at a layout boundary. Only lifting every
-      // touch unlocks it, so continuing or replacing one finger cannot repeat.
-      pinch = null
-      touchBlocked = true
-    }
-    const handleTouchEnd = (event: TouchEvent) => {
-      pinch = null
-      if (event.touches.length === 0) touchBlocked = false
-    }
-    const handleTouchCancel = (event: TouchEvent) => {
-      pinch = null
-      touchBlocked = event.touches.length > 0
-    }
-    const handleBlur = () => {
-      pressedControlKeys.clear()
-      wheelInput = null
-      trackpadLastAt = -Infinity
-      trackpadConsumed = false
-      wheelAccumulatedDeltaRef.current = 0
-      wheelLastAtRef.current = 0
-      pinch = null
-      touchBlocked = false
-    }
-
-    window.addEventListener('keydown', handleKeyDown, true)
-    window.addEventListener('keyup', handleKeyUp, true)
-    window.addEventListener('blur', handleBlur)
-    panel.addEventListener('wheel', handleWheel, { passive: false })
-    panel.addEventListener('touchstart', handleTouchStart, { passive: false })
-    panel.addEventListener('touchmove', handleTouchMove, { passive: false })
-    panel.addEventListener('touchend', handleTouchEnd)
-    panel.addEventListener('touchcancel', handleTouchCancel)
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown, true)
-      window.removeEventListener('keyup', handleKeyUp, true)
-      window.removeEventListener('blur', handleBlur)
-      panel.removeEventListener('wheel', handleWheel)
-      panel.removeEventListener('touchstart', handleTouchStart)
-      panel.removeEventListener('touchmove', handleTouchMove)
-      panel.removeEventListener('touchend', handleTouchEnd)
-      panel.removeEventListener('touchcancel', handleTouchCancel)
-      pinch = null
-      pendingLayoutSnapshotRef.current = null
-      stopLayoutAnimations()
-    }
-  }, [appearanceMotion, stopLayoutAnimations])
-
   const playableTrackId = tracks.find((track) => !unavailable.has(track.id))?.id
 
   const handleShuffle = useCallback(() => {
@@ -919,6 +652,8 @@ export function PlaylistPanel({
       <motion.div
         ref={compact ? controllerActionsRef : heroActionsRef}
         className={compact ? "playlist-hero-actions playlist-controller-actions" : "playlist-hero-actions"}
+        layout={compact ? undefined : 'position'}
+        layoutId={!compact && sharedScope ? `playlist-library-actions:${sharedScope}` : undefined}
         role="group"
         aria-label="播放列表操作"
         aria-hidden={compact && !controllerActionsVisible ? true : undefined}
@@ -927,7 +662,7 @@ export function PlaylistPanel({
         variants={compact ? appearanceMotion.variants.controllerActions : undefined}
         initial={compact ? 'hidden' : false}
         animate={compact ? controllerActionsVisible ? 'visible' : 'hidden' : undefined}
-        transition={compact ? appearanceMotion.layoutTransition : undefined}
+        transition={compact ? appearanceMotion.layoutTransition : { layout: returnTransition }}
         style={compact ? { y: controllerMotion.offsetY } : undefined}
       >
         {compact ? (
@@ -1005,7 +740,7 @@ export function PlaylistPanel({
         >
           <DialogTitle className="sr-only">媒体库</DialogTitle>
           <PlaylistLibrarySidebar
-            library={library ? { ...library, onOpen: () => { onLibrarySidebarOpenChange?.(false); library.onOpen() }, onSelect: (scope) => { onLibrarySidebarOpenChange?.(false); library.onSelect(scope) } } : undefined}
+            library={library ? { ...library, onSelectCategory: (categoryId) => { onLibrarySidebarOpenChange?.(false); library.onSelectCategory?.(categoryId) }, onOpen: () => { onLibrarySidebarOpenChange?.(false); library.onOpen() }, onSelect: (scope) => { onLibrarySidebarOpenChange?.(false); library.onSelect(scope) } } : undefined}
             overlay
             playlistName={playlistName ?? appCopy.playlistPage.title}
             trackCount={tracks.length}
@@ -1020,19 +755,25 @@ export function PlaylistPanel({
         className="playlist-panel"
         data-select-mode={selectMode ? 'true' : undefined}
         variants={appearanceMotion.variants.backdrop}
-        transition={appearanceMotion.layoutTransition}
+        transition={returnTransition}
         initial="initial"
         animate="animate"
         exit="exit"
+        inert={!isPresent || undefined}
+        aria-hidden={!isPresent || undefined}
         aria-label={appCopy.playlistPage.title}
         tabIndex={-1}
       >
       <header className="playlist-hero">
-        {firstTrack?.coverThumbnail ? (
-          <PlaylistCoverImage className="playlist-hero-image" image={firstTrack.coverThumbnail} />
-        ) : firstTrackCoverSource ? (
-          <img className="playlist-hero-image" src={firstTrackCoverSource} alt="" aria-hidden="true" decoding="async" onError={handleHeroCoverError} />
-        ) : null}
+        <motion.div className="playlist-hero-artwork" aria-hidden="true"
+          layoutId={sharedScope ? `playlist-library-cover:${sharedScope}` : undefined}
+          transition={{ layout: returnTransition }}>
+          {firstTrack?.coverThumbnail ? (
+            <PlaylistCoverImage className="playlist-hero-image" image={firstTrack.coverThumbnail} />
+          ) : firstTrackCoverSource ? (
+            <img className="playlist-hero-image" src={firstTrackCoverSource} alt="" aria-hidden="true" decoding="async" onError={handleHeroCoverError} />
+          ) : null}
+        </motion.div>
         <Button
           type="button"
           className="playlist-hero-category"
@@ -1049,7 +790,10 @@ export function PlaylistPanel({
           <systemIcons.close />
         </button>
         <div className="playlist-hero-copy">
-          <h1 className="playlist-hero-title">{playlistName ?? appCopy.playlistPage.title}</h1>
+          <motion.h1 className="playlist-hero-title"
+            layout="position"
+            layoutId={sharedScope ? `playlist-library-name:${sharedScope}` : undefined}
+            transition={{ layout: returnTransition }}>{playlistName ?? appCopy.playlistPage.title}</motion.h1>
           <p className="playlist-hero-meta">
             <systemIcons.music aria-hidden="true" />
             <span className="playlist-hero-count" aria-label={appCopy.playlistPage.count(tracks.length)}>{tracks.length}</span>

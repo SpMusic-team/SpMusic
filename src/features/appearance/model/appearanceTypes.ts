@@ -14,6 +14,26 @@ export type PlayerBackgroundEffect = 'cover-ambient' | 'theme-gradient' | 'solid
 export type PlayerActiveLyricEmphasis = 'bold' | 'scale' | 'accent' | 'combined'
 
 export type AppearanceColors = {
+  libraryIcon: string
+  librarySongs: string
+  libraryFolder: string
+  libraryFolders: string
+  libraryAlbum: string
+  libraryArtist: string
+  libraryAlbumArtist: string
+  libraryGenre: string
+  libraryYear: string
+  libraryComposer: string
+  libraryPlaylists: string
+  libraryStreams: string
+  libraryQueue: string
+  libraryBookmarks: string
+  libraryMostPlayed: string
+  libraryHighestRated: string
+  libraryLowestRated: string
+  libraryRecentPlayed: string
+  libraryRecentAdded: string
+  libraryLongTracks: string
   background: string
   surface: string
   surfaceMuted: string
@@ -172,6 +192,26 @@ export type AppearanceCssVars = CSSProperties & {
   '--playlist-controller-toggle-feedback': string
   '--playlist-controller-swipe-radius': string
   '--playlist-controller-swipe-highlight': string
+  '--library-icon': string
+  '--playlist-category-songs': string
+  '--playlist-category-folder': string
+  '--playlist-category-folders': string
+  '--playlist-category-album': string
+  '--playlist-category-artist': string
+  '--playlist-category-album-artist': string
+  '--playlist-category-genre': string
+  '--playlist-category-year': string
+  '--playlist-category-composer': string
+  '--playlist-category-playlists': string
+  '--playlist-category-streams': string
+  '--playlist-category-queue': string
+  '--playlist-category-bookmarks': string
+  '--playlist-category-most-played': string
+  '--playlist-category-highest-rated': string
+  '--playlist-category-lowest-rated': string
+  '--playlist-category-recent-played': string
+  '--playlist-category-recent-added': string
+  '--playlist-category-long-tracks': string
   '--prototype-unit': string
   '--app-bg': string
   '--app-surface': string

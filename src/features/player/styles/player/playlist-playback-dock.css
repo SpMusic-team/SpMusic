@@ -88,6 +88,11 @@
   opacity: 1 !important;
 }
 
+/* Retain outgoing geometry for shared layout, but only one dock owns pixels. */
+.playlist-playback-dock[data-dock-superseded] {
+  visibility: hidden !important;
+}
+
 .playlist-playback-track {
   display: grid;
   height: 80px;

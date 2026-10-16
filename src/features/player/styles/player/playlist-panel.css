@@ -42,14 +42,22 @@
   height: clamp(320px, calc(320px + (100vw - 640px) * 0.5), 460px);
   min-height: 320px;
   margin: 0 auto;
-  overflow: hidden;
+  overflow: visible;
   border-radius: 30px;
+  color: var(--player-ink);
+}
+
+/* Only the cover projects between pages; controls keep their own proportions. */
+.playlist-hero-artwork {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
   /* The hero always sits on the placeholder surface, cover or not, so a hero
      cover dissolves in over the same material the cards use instead of the
      image fading up out of an empty page-coloured block. */
   background: var(--cover-placeholder-surface);
   box-shadow: 0 6px 3px rgb(23 33 43 / 26%);
-  color: var(--player-ink);
 }
 
 .playlist-hero-image {
@@ -88,7 +96,7 @@
   .playlist-hero-image { transition: none; }
 }
 
-.playlist-hero::after {
+.playlist-hero-artwork::after {
   position: absolute;
   inset: 0;
   content: '';

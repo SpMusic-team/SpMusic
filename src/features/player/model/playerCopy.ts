@@ -52,6 +52,12 @@ export const appCopy = {
     description: '管理播放器界面入口和外观。',
     on: '开启',
     off: '关闭',
+    startupPage: {
+      title: '启动页面',
+      description: '下次打开应用时生效。',
+      player: '播放界面',
+      mediaLibrary: '媒体库',
+    },
     theme: {
       title: '主题管理',
       description: '打开主题工作室，管理内置和用户主题。',

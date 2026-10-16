@@ -70,6 +70,7 @@ export type AppearanceThemeParseResult =
 type JsonObject = Record<string, unknown>
 
 const colorKeys = [
+  'libraryIcon', 'librarySongs', 'libraryFolder', 'libraryFolders', 'libraryAlbum', 'libraryArtist', 'libraryAlbumArtist', 'libraryGenre', 'libraryYear', 'libraryComposer', 'libraryPlaylists', 'libraryStreams', 'libraryQueue', 'libraryBookmarks', 'libraryMostPlayed', 'libraryHighestRated', 'libraryLowestRated', 'libraryRecentPlayed', 'libraryRecentAdded', 'libraryLongTracks',
   'background', 'surface', 'surfaceMuted', 'text', 'textMuted', 'textStrong', 'border',
   'accent', 'accentSoft', 'accentContrast', 'playerBlue', 'playerBlueSoft', 'playerBlueInk',
   'playerInk', 'playerMuted', 'playerLyrics', 'playerOverlay', 'playerDock',

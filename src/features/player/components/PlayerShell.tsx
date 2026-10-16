@@ -1,3 +1,4 @@
+import type { MediaLibraryCategoryId, MediaLibraryRoute } from '@/features/player/model/mediaLibraryCategories'
 import { useCallback, useMemo, useState } from 'react'
 import { DevAudioToolsAvailability, DevAudioToolsSlot } from '@/features/player/components/DevAudioToolsSlot'
 import { PlayerSurface } from '@/features/player/components/PlayerSurface'
@@ -7,26 +8,32 @@ import { audioFolderTrackPlaceholder, audioTrackToTrack, playlistDisplayName } f
 import { formatPlaylistDurationLabel } from '@/features/player/model/playlistDuration'
 import { useGlobalShortcuts } from '@/features/shortcuts/hooks/useGlobalShortcuts'
 import type { DevAudioToolsViewModel, PlayerUiViewModel, PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
+import { readStartupPage } from '@/features/player/model/startupPageStorage'
 
 export function PlayerShell() {
   const player = useAudioPlayer()
   useGlobalShortcuts(player)
   const [isDevAudioToolsOpen, setIsDevAudioToolsOpen] = useState(false)
-  const [isPlaylistOpen, setIsPlaylistOpen] = useState(false)
-  const [isLibraryOpen, setIsLibraryOpen] = useState(true)
+  const [isPlaylistOpen, setIsPlaylistOpen] = useState(() => readStartupPage() === 'media-library')
+  const [libraryRoute, setLibraryRoute] = useState<MediaLibraryRoute>({ view: 'overview' })
   const [browsedScope, setBrowsedScope] = useState<string | null>(null)
+  const [playlistEntryPosition, setPlaylistEntryPosition] = useState<NonNullable<PlayerUiViewModel['playlist']['entryPosition']>>({ requestId: 0, target: 'current-track' })
   const browsedPlaylist = player.sessionPlaylists.find((item) => playlistScope(item) === browsedScope)
   const isBrowsingActive = !browsedPlaylist || browsedScope === player.activePlaylistScope
-  const openLibrary = () => { setIsPlaylistOpen(true); setIsLibraryOpen(true) }
+  const selectLibraryCategory = (categoryId: MediaLibraryCategoryId) => { setIsPlaylistOpen(true); setLibraryRoute({ view: 'category', categoryId }) }
+  const openLibrary = () => selectLibraryCategory('playlists')
+  const openLibraryOverview = () => { setIsPlaylistOpen(true); setLibraryRoute({ view: 'overview' }) }
   const browsePlaylist = (scope: string) => {
+    setPlaylistEntryPosition((previous) => ({ requestId: previous.requestId + 1, target: 'top' }))
     setBrowsedScope(scope)
-    setIsLibraryOpen(false)
+    setLibraryRoute({ view: 'tracks' })
     setIsPlaylistOpen(true)
   }
   const handlePlaylistOpenChange = useCallback((open: boolean) => {
     setIsPlaylistOpen(open)
     if (open) {
-      setIsLibraryOpen(false)
+      setPlaylistEntryPosition((previous) => ({ requestId: previous.requestId + 1, target: 'current-track' }))
+      setLibraryRoute({ view: 'tracks' })
       if (!browsedPlaylist) setBrowsedScope(player.activePlaylistScope)
     }
   }, [browsedPlaylist, player.activePlaylistScope])
@@ -142,12 +149,17 @@ export function PlayerShell() {
         : player.selectQueueTrack,
     },
     playlist: {
+      entryPosition: playlistEntryPosition,
+      playbackDockTrack: playlistTracks.find((item) => item.id === currentTrackId),
       isOpen: isPlaylistOpen,
       onOpenChange: handlePlaylistOpenChange,
       library: {
-        isOpen: isLibraryOpen,
+        isOpen: libraryRoute.view !== 'tracks',
+        route: libraryRoute,
+        onOpenOverview: openLibraryOverview,
+        onSelectCategory: selectLibraryCategory,
         items: player.sessionPlaylists.map((item) => ({
-          scope: playlistScope(item), name: playlistDisplayName(item), trackCount: item.tracks.length,
+          scope: playlistScope(item), name: playlistDisplayName(item), trackCount: item.tracks.length, sourceKind: item.sourceKind,
           coverTrack: playlistScope(item) === player.activePlaylistScope ? playlistTracks[0] : undefined,
           totalClock: formatPlaylistDurationLabel(
             playlistDurations.get(playlistScope(item))!,
@@ -155,6 +167,7 @@ export function PlayerShell() {
           ),
         })),
         currentScope: browsedScope,
+        activeScope: player.activePlaylistScope,
         onOpen: openLibrary,
         onSelect: browsePlaylist,
         onPlay: (scope) => {

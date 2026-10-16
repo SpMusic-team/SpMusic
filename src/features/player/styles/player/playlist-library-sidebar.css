@@ -127,7 +127,7 @@
   .playlist-library-list:focus-visible { outline: 3px solid var(--player-blue); outline-offset: -3px; }
 
 @media (width > 1024px) {
-  .window-bar[data-playlist-open='true'] { left: 320px; width: calc(100% - 320px); }
+  .player-shell:not([data-library-overview='true']) .window-bar[data-playlist-open='true'] { left: 320px; width: calc(100% - 320px); }
 }
 @media (width <= 1024px) {
   .playlist-library-sidebar:not([data-overlay='true']) { display: none; }

@@ -9,7 +9,9 @@ import { ControlDock, ExternalPlaybackModeControls } from '@/features/player/com
 import { EmptyPlayerState } from '@/features/player/components/EmptyPlayerState'
 import { LyricsPanel } from '@/features/player/components/LyricsPanel'
 import { PlaybackInfoButton } from '@/features/player/components/PlaybackInfoButton'
+import { MediaLibraryPanel } from '@/features/player/components/MediaLibraryPanel'
 import { PlaylistLibraryPanel } from '@/features/player/components/PlaylistLibraryPanel'
+import { LibraryChromeTransitionContext, useLibraryChromeTransition } from '@/features/player/hooks/useLibraryChromeTransition'
 import { PlaylistPanel } from '@/features/player/components/PlaylistPanel'
 import { QueuePanel } from '@/features/player/components/QueuePanel'
 import { ResponsivePlayerLayout } from '@/features/player/components/ResponsivePlayerLayout'
@@ -598,6 +600,12 @@ export function PlayerSurface({
   devAudioTools,
 }: PlayerSurfaceProps) {
   const { playback, timeline, volume, queue, playlist, feedback } = viewModel
+  const chromeTransition = useLibraryChromeTransition(
+    playlist.isOpen
+      ? playlist.library?.route?.view === 'overview' ? 'overview' : playlist.library?.route?.view === 'category' ? `category:${playlist.library.route.categoryId}` : `tracks:${playlist.library?.currentScope ?? ''}`
+      : null,
+    !playlist.isOpen,
+  )
   const { track } = playback
   const prepareTrackPreview = playback.onPrepareTrackPreview
   const commitTrackPreview = playback.onCommitTrackPreview
@@ -2458,6 +2466,7 @@ export function PlayerSurface({
     <TooltipProvider>
       <main
         className="player-shell"
+        data-library-overview={playlist.isOpen && playlist.library?.route?.view === 'overview' || undefined}
         data-content-state={contentState}
         data-playlist-transport-only-busy={playlistTransportOnlyBusy ? '' : undefined}
         data-window-fullscreen={nativeWindowState.fullscreen}
@@ -2493,6 +2502,7 @@ export function PlayerSurface({
         )) : null}
         {devAudioTools?.content}
 
+        <LibraryChromeTransitionContext.Provider value={chromeTransition}>
         <LayoutGroup id="playlist-player-view-transition">
           <ResponsivePlayerLayout
             nativeWindowState={nativeWindowState}
@@ -2505,7 +2515,7 @@ export function PlayerSurface({
                 debugToolsOpen={devAudioTools?.isOpen ?? false}
                 onDebugToolsOpenChange={devAudioTools?.onOpenChange}
                 playlistOpen={playlist.isOpen}
-                compactPlaylist={compactPlaylist}
+                compactPlaylist={compactPlaylist && playlist.library?.route?.view !== 'overview'}
                 librarySidebarOpen={librarySidebarOpen}
                 onOpenLibrarySidebar={() => setCompactSidebarOpen(true)}
                 onTogglePlaylist={() => requestPlaylistOpenChange(!playlist.isOpen)}
@@ -2665,10 +2675,17 @@ export function PlayerSurface({
           </ResponsivePlayerLayout>
 
           <AnimatePresence initial={false}>
-            {playlist.isOpen && playlist.library?.isOpen ? (
+            {playlist.isOpen && playlist.library?.route?.view === 'overview' ? <MediaLibraryPanel playlist={playlist} onOpenPlayer={() => requestPlaylistOpenChange(false)} /> : null}
+            {playlist.isOpen && playlist.library?.isOpen && playlist.library.route?.view !== 'overview' ? (
               <PlaylistLibraryPanel
-                key="playlist-management"
+                key={playlist.library?.route?.view === 'category' ? playlist.library.route.categoryId : 'playlist-management'}
                 playlist={playlist}
+                playback={playback}
+                timeline={timeline}
+                visualIsPlaying={visualPlaybackState === 'playing'}
+                playbackTransitionPending={playbackTransitionPending}
+                onPlayToggle={handlePlayToggle}
+                onOpenPlayer={() => requestPlaylistOpenChange(false)}
                 searchRequestId={searchRequestId}
                 librarySidebarOpen={librarySidebarOpen}
                 onLibrarySidebarOpenChange={setCompactSidebarOpen}
@@ -2679,6 +2696,7 @@ export function PlayerSurface({
               controllerMode={controllerMode}
               key={`${playlist.library?.currentScope ?? ''}:${playlist.playlistName ?? 'playlist'}:${playlist.tracks.length}:${playlist.tracks[0]?.id ?? ''}:${playlist.tracks[playlist.tracks.length - 1]?.id ?? ''}`}
               ownerStateRef={playlistWindowOwnersRef}
+              entryPosition={playlist.entryPosition}
               library={playlist.library}
               searchRequestId={searchRequestId}
               librarySidebarOpen={librarySidebarOpen}
@@ -2706,6 +2724,7 @@ export function PlayerSurface({
             ) : null}
           </AnimatePresence>
         </LayoutGroup>
+        </LibraryChromeTransitionContext.Provider>
       </main>
     </TooltipProvider>
   )

@@ -1,3 +1,4 @@
+import type { MediaLibraryCategoryId, MediaLibraryRoute } from '@/features/player/model/mediaLibraryCategories'
 import type { RepeatMode, ShuffleMode } from '@/features/player/model/playbackModes'
 import type { PlaylistDurationStatus } from '@/features/player/model/playlistDuration'
 import type { Track, TrackArtwork, TrackArtworkPrefetchCandidate, TrackFeedback, TrackSummary } from '@/features/player/model/playerTypes'
@@ -128,19 +129,26 @@ export type PlaylistLibraryItem = {
   trackCount: number
   coverTrack?: PlaylistTrackItemViewModel
   totalClock?: string | null
+  sourceKind?: 'folder' | 'm3u8'
 }
 
 export type PlaylistLibraryViewModel = {
+  route?: MediaLibraryRoute
+  onOpenOverview?: () => void
+  onSelectCategory?: (categoryId: MediaLibraryCategoryId) => void
   isOpen: boolean
   items: readonly PlaylistLibraryItem[]
   currentScope?: string | null
+  activeScope?: string | null
   onOpen: () => void
   onSelect: (scope: string) => void
   onPlay: (scope: string) => void
 }
 
 export type PlayerPlaylistViewModel = {
+  entryPosition?: Readonly<{ requestId: number; target: 'top' | 'current-track' }>
   library?: PlaylistLibraryViewModel
+  playbackDockTrack?: PlaylistTrackItemViewModel
   isOpen: boolean
   onOpenChange: (isOpen: boolean) => void
   isOpenAudioDisabled?: boolean

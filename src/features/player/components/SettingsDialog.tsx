@@ -9,12 +9,13 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Field, FieldContent, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field'
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { IconButton } from '@/features/player/components/IconButton'
 import { appCopy } from '@/features/player/model/playerCopy'
 import type { PlaylistControllerMode } from '@/features/player/model/playlistControllerMode'
+import { persistStartupPage, readStartupPage, type StartupPage } from '@/features/player/model/startupPageStorage'
 import { GlobalShortcutSettings } from '@/features/shortcuts/components/GlobalShortcutSettings'
 
 const ThemeManager = lazy(() => import('@/features/appearance/components/ThemeManager').then((module) => ({
@@ -45,6 +46,11 @@ export function SettingsDialog({
   const settingsCopy = appCopy.settings
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [themeManagerOpen, setThemeManagerOpen] = useState(false)
+  const [startupPage, setStartupPage] = useState<StartupPage>(readStartupPage)
+  const startupPageItems = [
+    { value: 'player', label: settingsCopy.startupPage.player },
+    { value: 'media-library', label: settingsCopy.startupPage.mediaLibrary },
+  ]
 
   return (
     <Dialog open={settingsOpen} onOpenChange={(open) => {
@@ -89,6 +95,32 @@ export function SettingsDialog({
                 <SelectGroup>
                   <SelectItem value="movable">{settingsCopy.controller.movable}</SelectItem>
                   <SelectItem value="fixed">{settingsCopy.controller.fixed}</SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          </Field>
+          <Field className="player-settings-row" orientation="horizontal">
+            <FieldContent>
+              <FieldLabel htmlFor="startup-page">{settingsCopy.startupPage.title}</FieldLabel>
+              <FieldDescription id="startup-page-description">{settingsCopy.startupPage.description}</FieldDescription>
+            </FieldContent>
+            <Select
+              items={startupPageItems}
+              value={startupPage}
+              onValueChange={(value) => {
+                if (value !== 'player' && value !== 'media-library') return
+                setStartupPage(value)
+                persistStartupPage(value)
+              }}
+            >
+              <SelectTrigger id="startup-page" aria-describedby="startup-page-description">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  {startupPageItems.map((item) => (
+                    <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>
+                  ))}
                 </SelectGroup>
               </SelectContent>
             </Select>

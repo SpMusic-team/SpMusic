@@ -1,7 +1,8 @@
 .playlist-management { position: absolute; inset: 40px 0 0; z-index: 30; background: var(--player-dock); color: var(--player-ink); }
 .playlist-management > .playlist-library-sidebar { top: -40px; }
-.playlist-management .playlist-library-sidebar { padding-bottom: 24px; }
-.playlist-management-content { position: absolute; inset: 0 0 0 320px; padding-bottom: 24px; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--app-border) transparent; }
+.playlist-management .playlist-library-sidebar { padding-bottom: 248px; }
+.playlist-management .playlist-library-dialog .playlist-library-sidebar { padding-bottom: 24px; }
+.playlist-management-content { position: absolute; inset: 0 0 0 320px; padding-bottom: 248px; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--app-border) transparent; }
 .playlist-management-parent { display: flex; height: 72px; align-items: center; padding: 8px 24px; }
 .playlist-management-parent button { height: 60px; padding: 4px 6px; gap: 4px; border: 2px solid var(--player-blue); border-radius: var(--app-radius-pill); background: transparent; color: var(--player-blue); font-size: 32px; font-weight: 400; line-height: 40px; }
 .playlist-management-heading { display: flex; align-items: center; gap: 36px; padding: 40px 24px 43px; }
@@ -23,7 +24,7 @@
 .playlist-management-card-button[aria-pressed='true'] { background: var(--player-surface-variant); }
 .playlist-management-empty { margin: 48px 24px; color: var(--player-muted); }
 .playlist-management button:focus-visible { outline: 3px solid var(--player-blue); outline-offset: -3px; }
-.playlist-management button:hover:not(:disabled) { background: var(--player-surface-variant); color: var(--player-ink); }
+.playlist-management-content button:hover:not(:disabled) { background: var(--player-surface-variant); color: var(--player-ink); }
 @media (width <= 1024px) {
   .playlist-management-content { left: 0; }
   .playlist-management-heading { gap: 24px; padding: 24px; }
@@ -41,4 +42,45 @@
   .playlist-management-actions { gap: 8px; }
   .playlist-management-actions button { padding-inline: 10px; font-size: 18px; }
   .playlist-management-grid { gap: 16px; padding-inline: 16px; }
+}
+/* Collection layouts share the detail page's gesture and FLIP controller. */
+.playlist-management-grid {
+  --management-cover-width: 240px;
+  --management-cover-height: 165px;
+  --management-card-width: 270px;
+  --management-card-inline-padding: 15px;
+  --management-title-size: 32px;
+  --management-title-height: 40px;
+  gap: var(--management-row-gap, 20px) var(--management-column-gap, 28px);
+  overflow-anchor: none;
+}
+.playlist-management-grid .playlist-management-card { width: var(--management-card-width); min-width: 0; }
+.playlist-management-grid .playlist-management-card-button { padding: 15px var(--management-card-inline-padding); }
+.playlist-management-grid .playlist-management-cover { width: var(--management-cover-width); height: var(--management-cover-height); flex: 0 0 auto; }
+.playlist-management-copy { display: flex; min-width: 0; flex-direction: column; align-items: stretch; }
+.playlist-management-grid .playlist-management-name { font-size: var(--management-title-size); line-height: var(--management-title-height); }
+.playlist-management-meta { display: flex; min-width: 0; align-items: center; gap: 16px; color: var(--player-blue); font-size: var(--management-meta-size, 24px); line-height: var(--management-meta-height, 32px); font-weight: 400; white-space: nowrap; }
+.playlist-management-meta img { flex: 0 0 auto; }
+.playlist-management-meta > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.playlist-management-grid[data-layout-flow='tile'] .playlist-management-meta { display: none; }
+.playlist-management-grid[data-layout-flow='row'],
+.playlist-management-grid[data-layout-flow='text'] { display: grid; grid-template-columns: minmax(0, 1fr); row-gap: 20px; }
+.playlist-management-grid:not([data-layout-flow='tile']) .playlist-management-card { width: 100%; }
+.playlist-management-grid[data-layout-flow='row'] .playlist-management-card-button { flex-direction: row; align-items: center; gap: 48px; padding: 15px; }
+.playlist-management-grid[data-layout-flow='row'] .playlist-management-copy { flex: 1; gap: var(--management-copy-gap); }
+.playlist-management-grid[data-layout-flow='text'] .playlist-management-card-button { padding: 15px; }
+.playlist-management-grid[data-layout-flow='text'] .playlist-management-copy { flex-direction: row; align-items: center; justify-content: space-between; gap: 24px; width: 100%; }
+.playlist-management-grid[data-layout-flow='text'] .playlist-management-name { flex: 1; }
+.playlist-management-grid[data-layout-artwork='false'] .playlist-management-cover { display: none; }
+.playlist-management-grid[data-layout-level='5'] { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 28px; }
+/* Selection remains visible when the artwork slot is hidden. */
+.playlist-management-grid[data-layout-artwork='false'] .playlist-management-card-button[aria-pressed='true'] { outline: 2px solid var(--player-blue); outline-offset: -2px; }
+@media (width <= 900px) {
+  .playlist-management-grid[data-layout-level='5'] { grid-template-columns: minmax(0, 1fr); }
+}
+@media (width <= 540px) {
+  .playlist-management-grid[data-layout-flow='row'] .playlist-management-card-button { gap: 24px; }
+  .playlist-management-grid[data-layout-flow='row'] .playlist-management-cover { width: min(var(--management-cover-width), 35vw); height: auto; aspect-ratio: 240 / 165; }
+  .playlist-management-grid[data-layout-level='3'] .playlist-management-cover { aspect-ratio: 155 / 107; }
+  .playlist-management-grid[data-layout-flow='text'] .playlist-management-copy { gap: 12px; }
 }

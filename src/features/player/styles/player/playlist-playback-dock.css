@@ -1,5 +1,58 @@
 .playlist-panel {
-  padding-bottom: 248px;
+  padding-bottom: 296px;
+}
+
+/* Share the hero's theme treatment and actions, with a compact row
+   aligned to the dock's content edge. Keep it outside the scrolling panel. */
+.playlist-hero-actions.playlist-controller-actions {
+  position: fixed;
+  left: 40px;
+  right: 40px;
+  bottom: 236px;
+  z-index: 31;
+  width: auto;
+  max-width: none;
+  margin: 0;
+  justify-content: flex-end;
+}
+
+.playlist-controller-actions[data-actions-visible="false"] {
+  pointer-events: none;
+}
+
+.playlist-playback-dock[data-controller-hidden="true"] {
+  pointer-events: none;
+}
+
+.playlist-controller-actions > .playlist-hero-icon,
+.playlist-controller-actions > .playlist-select-toggle {
+  box-sizing: border-box;
+  height: 36px;
+  min-height: 36px;
+  padding: 0;
+  transition: none;
+  transform: none;
+  translate: none;
+}
+
+.playlist-controller-actions > .playlist-hero-icon {
+  width: 36px;
+}
+
+.playlist-controller-actions > .playlist-hero-icon svg,
+.playlist-controller-actions > .playlist-hero-icon [data-slot="icon"] {
+  width: 24px;
+  height: 24px;
+}
+
+.playlist-controller-actions > .playlist-select-toggle {
+  padding-inline: 12px;
+  font-size: 18px;
+  line-height: 24px;
+}
+
+.playlist-controller-actions > :last-child {
+  margin-left: 0;
 }
 
 .playlist-playback-dock {
@@ -199,9 +252,14 @@
 .playlist-playback-nav-button .press-feedback-button-ripple { animation-duration: 200ms; }
 
 @media (max-width: 520px) {
+  .playlist-hero-actions.playlist-controller-actions { left: 32px; right: 32px; }
   .playlist-playback-dock { --playlist-dock-inline-padding: 16px; }
   .playlist-playback-track { grid-template-columns: 56px minmax(0, 1fr) 44px; gap: 12px; }
   .playlist-playback-track-button { grid-template-columns: 56px minmax(0, 1fr); gap: 12px; }
   .playlist-playback-cover { width: 56px; height: 56px; border-radius: 16px; }
   .playlist-playback-copy strong { font-size: 20px; line-height: 28px; }
+}
+
+@media (max-width: 348px) {
+  .playlist-hero-actions.playlist-controller-actions { left: 16px; right: 16px; }
 }

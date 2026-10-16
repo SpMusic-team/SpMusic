@@ -2,6 +2,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useEffect, useState, type PointerEvent } from 'react'
 import { useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { appCopy } from '@/features/player/model/playerCopy'
+import type { PlaylistControllerMode } from '@/features/player/model/playlistControllerMode'
 import { IconButton } from './IconButton'
 import { SettingsDialog } from './SettingsDialog'
 
@@ -13,6 +14,8 @@ export type WindowLayoutState = {
 }
 
 type WindowBarProps = {
+  controllerMode?: PlaylistControllerMode
+  onControllerModeChange?: (mode: PlaylistControllerMode) => void
   onWindowStateChange: (state: WindowLayoutState) => void
   debugToolsEnabled?: boolean
   debugToolsOpen?: boolean
@@ -30,6 +33,8 @@ function getTauriWindow(): TauriWindow | null {
 }
 
 export function WindowBar({
+  controllerMode = 'movable',
+  onControllerModeChange,
   onWindowStateChange,
   debugToolsEnabled = false,
   debugToolsOpen = false,
@@ -150,6 +155,8 @@ export function WindowBar({
       <h1 id="app-title" className="sr-only">{appCopy.appTitle}</h1>
       <div className="window-actions" onDoubleClick={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
         <SettingsDialog
+          controllerMode={controllerMode}
+          onControllerModeChange={onControllerModeChange}
           debugToolsEnabled={debugToolsEnabled}
           debugToolsOpen={debugToolsOpen}
           onDebugToolsOpenChange={onDebugToolsOpenChange}

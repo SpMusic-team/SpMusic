@@ -17,6 +17,7 @@ import { TrackMeta } from '@/features/player/components/TrackMeta'
 import { WindowBar, type WindowLayoutState } from '@/features/player/components/WindowBar'
 import { ArtworkCanvas } from '@/features/player/components/ArtworkCanvas'
 import { appCopy } from '@/features/player/model/playerCopy'
+import { readPlaylistControllerMode, persistPlaylistControllerMode, type PlaylistControllerMode } from '@/features/player/model/playlistControllerMode'
 import { isShortcutCaptureSuspended } from '@/features/shortcuts/services/globalShortcutCommands'
 import type { TrackFeedback } from '@/features/player/model/playerTypes'
 import {
@@ -833,6 +834,11 @@ export function PlayerSurface({
   }, [playlistOpen])
   const [compactPlaylist, setCompactPlaylist] = useState(() => window.matchMedia('(width <= 1024px)').matches)
   const [searchRequestId, setSearchRequestId] = useState(0)
+  const [controllerMode, setControllerMode] = useState(readPlaylistControllerMode)
+  const handleControllerModeChange = useCallback((mode: PlaylistControllerMode) => {
+    setControllerMode(mode)
+    persistPlaylistControllerMode(mode)
+  }, [])
   const searchRequestSequenceRef = useRef(0)
   const [compactSidebarOpen, setCompactSidebarOpen] = useState(false)
   const [sidebarPlaylistOpen, setSidebarPlaylistOpen] = useState(playlist.isOpen)
@@ -2492,6 +2498,8 @@ export function PlayerSurface({
             nativeWindowState={nativeWindowState}
             windowBar={(
               <WindowBar
+                controllerMode={controllerMode}
+                onControllerModeChange={handleControllerModeChange}
                 onWindowStateChange={setNativeWindowState}
                 debugToolsEnabled={devAudioTools !== undefined}
                 debugToolsOpen={devAudioTools?.isOpen ?? false}
@@ -2668,6 +2676,7 @@ export function PlayerSurface({
             ) : null}
             {playlist.isOpen && !playlist.library?.isOpen ? (
               <OwnedPlaylistPanel
+              controllerMode={controllerMode}
               key={`${playlist.library?.currentScope ?? ''}:${playlist.playlistName ?? 'playlist'}:${playlist.tracks.length}:${playlist.tracks[0]?.id ?? ''}:${playlist.tracks[playlist.tracks.length - 1]?.id ?? ''}`}
               ownerStateRef={playlistWindowOwnersRef}
               library={playlist.library}

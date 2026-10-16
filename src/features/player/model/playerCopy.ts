@@ -42,6 +42,12 @@ export const appCopy = {
     close: '关闭',
   },
   settings: {
+    controller: {
+      title: '播放控制器',
+      description: '选择列表中的控制器是否跟随滚动收起。',
+      movable: '可移动',
+      fixed: '固定',
+    },
     title: '设置',
     description: '管理播放器界面入口和外观。',
     on: '开启',

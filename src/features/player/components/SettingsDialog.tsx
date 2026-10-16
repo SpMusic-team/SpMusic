@@ -9,10 +9,12 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Field, FieldContent, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { IconButton } from '@/features/player/components/IconButton'
 import { appCopy } from '@/features/player/model/playerCopy'
+import type { PlaylistControllerMode } from '@/features/player/model/playlistControllerMode'
 import { GlobalShortcutSettings } from '@/features/shortcuts/components/GlobalShortcutSettings'
 
 const ThemeManager = lazy(() => import('@/features/appearance/components/ThemeManager').then((module) => ({
@@ -26,12 +28,16 @@ const DevAudioSettingsField = import.meta.env.DEV
   : null
 
 type SettingsDialogProps = {
+  controllerMode?: PlaylistControllerMode
+  onControllerModeChange?: (mode: PlaylistControllerMode) => void
   debugToolsEnabled?: boolean
   debugToolsOpen?: boolean
   onDebugToolsOpenChange?: (open: boolean) => void
 }
 
 export function SettingsDialog({
+  controllerMode = 'movable',
+  onControllerModeChange,
   debugToolsEnabled = false,
   debugToolsOpen = false,
   onDebugToolsOpenChange,
@@ -62,6 +68,31 @@ export function SettingsDialog({
         </DialogHeader>
 
         <FieldGroup className="player-settings-group">
+          <Field className="player-settings-row" orientation="horizontal">
+            <FieldContent>
+              <FieldLabel htmlFor="playlist-controller-mode">{settingsCopy.controller.title}</FieldLabel>
+              <FieldDescription>{settingsCopy.controller.description}</FieldDescription>
+            </FieldContent>
+            <Select
+              items={[
+                { label: settingsCopy.controller.movable, value: 'movable' },
+                { label: settingsCopy.controller.fixed, value: 'fixed' },
+              ]}
+              value={controllerMode}
+              disabled={!onControllerModeChange}
+              onValueChange={(value) => {
+                if (value === 'fixed' || value === 'movable') onControllerModeChange?.(value)
+              }}
+            >
+              <SelectTrigger id="playlist-controller-mode"><SelectValue /></SelectTrigger>
+              <SelectContent alignItemWithTrigger={false}>
+                <SelectGroup>
+                  <SelectItem value="movable">{settingsCopy.controller.movable}</SelectItem>
+                  <SelectItem value="fixed">{settingsCopy.controller.fixed}</SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          </Field>
           {DevAudioSettingsField && debugToolsEnabled ? (
             <Suspense fallback={null}>
               <DevAudioSettingsField

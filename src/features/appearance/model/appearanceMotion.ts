@@ -26,6 +26,7 @@ export type AppearanceMotionRuntime = {
     track: Variants
     panel: Variants
     glyph: Variants
+    controllerActions: Variants
   }
 }
 
@@ -52,6 +53,7 @@ export function createAppearanceMotionRuntime(
         track: { initial: { opacity: 1 }, animate: { opacity: 1 }, exit: { opacity: 1 } },
         panel: { initial: { opacity: 1 }, animate: { opacity: 1 }, exit: { opacity: 1 } },
         glyph: { initial: { opacity: 1 }, animate: { opacity: 1 }, exit: { opacity: 1 } },
+        controllerActions: { hidden: { opacity: 0, x: 0 }, visible: { opacity: 1, x: 0 } },
       },
     }
   }
@@ -91,6 +93,10 @@ export function createAppearanceMotionRuntime(
       },
     },
     variants: {
+      controllerActions: {
+        hidden: { opacity: 0, x: expressive ? 64 : 48 },
+        visible: { opacity: 1, x: 0 },
+      },
       backdrop: {
         initial: { opacity: 0 },
         animate: { opacity: 1 },

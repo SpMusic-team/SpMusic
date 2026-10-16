@@ -13,12 +13,15 @@ import { PlaylistCoverImage } from '@/features/player/components/PlaylistCoverIm
 import { PlaylistPlaybackDock } from '@/features/player/components/PlaylistPlaybackDock'
 import { PlaylistLibrarySidebar } from '@/features/player/components/PlaylistLibrarySidebar'
 import { usePlaylistOverscroll } from '@/features/player/hooks/usePlaylistOverscroll'
+import { usePlaylistControllerMotion } from '@/features/player/hooks/usePlaylistControllerMotion'
+import type { PlaylistControllerMode } from '@/features/player/model/playlistControllerMode'
 import { appCopy } from '@/features/player/model/playerCopy'
 import { nextShuffleMode, type ShuffleMode } from '@/features/player/model/playbackModes'
 import { formatPlaylistDurationLabel, type PlaylistDurationStatus } from '@/features/player/model/playlistDuration'
 import type { PlayerPlaybackViewModel, PlayerTimelineViewModel, PlaylistLibraryViewModel, PlaylistArtworkDemand, PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
 
 type PlaylistPanelProps = {
+  controllerMode?: PlaylistControllerMode
   library?: PlaylistLibraryViewModel
   tracks: PlaylistTrackItemViewModel[]
   unavailableTrackIds?: ReadonlySet<string>
@@ -253,6 +256,7 @@ function animateLayoutPart(element: HTMLElement, from: DOMRect, to: DOMRect, dur
 }
 
 export function PlaylistPanel({
+  controllerMode = 'movable',
   library,
   tracks,
   unavailableTrackIds,
@@ -306,6 +310,10 @@ export function PlaylistPanel({
   // outside the decode window. A mute flat tile is the lesser artifact until the
   // visual pipeline can say "this one is gone".
   const panelRef = useRef<HTMLElement | null>(null)
+  const playbackDockRef = useRef<HTMLElement | null>(null)
+  const heroActionsRef = useRef<HTMLDivElement | null>(null)
+  const controllerActionsRef = useRef<HTMLDivElement | null>(null)
+  const [controllerActionsVisible, setControllerActionsVisible] = useState(false)
   const focusedSearchRequestIdRef = useRef(0)
   const gridRef = useRef<HTMLDivElement | null>(null)
   const initialPositionAppliedRef = useRef(false)
@@ -344,6 +352,16 @@ export function PlaylistPanel({
     [filteredTracks],
   )
   usePlaylistOverscroll(panelRef, appearanceMotion.disabled, `${playlistName}:${layoutLevel}:${filteredTrackIdsKey}:${searchOpen}:${selectMode}`)
+  const controllerMotion = usePlaylistControllerMotion(
+    panelRef,
+    playbackDockRef,
+    controllerMode,
+    timeline.interaction === 'seeking' || timeline.interaction === 'previewing',
+    `${playlistName}:${layoutLevel}:${filteredTrackIdsKey}:${searchOpen}:${selectMode}`,
+    controllerActionsVisible,
+    appearanceMotion.layoutTransition,
+  )
+  const rebaseController = controllerMotion.rebase
 
   const clearArtworkWindow = useCallback(() => {
     if (artworkWindowIdsRef.current.size === 0) return
@@ -459,8 +477,9 @@ export function PlaylistPanel({
     const panelRect = panel.getBoundingClientRect()
     const cardRect = currentCard.getBoundingClientRect()
     panel.scrollTop += cardRect.top - panelRect.top - (panel.clientHeight - cardRect.height) / 2
+    rebaseController({ reveal: true })
     initialPositionAppliedRef.current = true
-  }, [currentTrackId, filteredTrackIdsKey])
+  }, [currentTrackId, filteredTrackIdsKey, rebaseController])
 
   useLayoutEffect(() => {
     if (!searchOpen || searchRequestId <= 0 || focusedSearchRequestIdRef.current === searchRequestId) return
@@ -473,7 +492,60 @@ export function PlaylistPanel({
     initialPositionAppliedRef.current = true
     panel.scrollTo({ top: 0, behavior: 'instant' })
     input.focus({ preventScroll: true })
-  }, [searchOpen, searchRequestId])
+    rebaseController({ reveal: true })
+  }, [searchOpen, searchRequestId, rebaseController])
+
+  useLayoutEffect(() => {
+    rebaseController({ reveal: true })
+  }, [playlistName, rebaseController])
+
+  useLayoutEffect(() => {
+    rebaseController()
+  }, [layoutLevel, filteredTrackIdsKey, searchOpen, selectMode, rebaseController])
+
+  useLayoutEffect(() => {
+    const panel = panelRef.current
+    const heroActions = heroActionsRef.current
+    if (!panel || !heroActions) return
+    let disposed = false
+
+    const measureVisibility = () => {
+      if (disposed) return
+      const heroRect = heroActions.getBoundingClientRect()
+      const panelRect = panel.getBoundingClientRect()
+      // A row below the viewport (for example in a short window) must not
+      // summon its duplicate. Only a fully scrolled-past upper edge does.
+      const visible = heroRect.height > 0 && heroRect.bottom <= Math.max(0, panelRect.top)
+      if (!visible) {
+        const compact = controllerActionsRef.current
+        const focused = document.activeElement
+        if (compact && focused instanceof HTMLElement && compact.contains(focused)) {
+          const buttons = [...compact.querySelectorAll('button')]
+          const index = buttons.indexOf(focused as HTMLButtonElement)
+          const target = index > 0 ? heroActions.querySelectorAll('button')[index - 1] : null
+          if (target && !target.disabled) target.focus({ preventScroll: true })
+          else panel.focus({ preventScroll: true })
+        }
+      }
+      setControllerActionsVisible((previous) => previous === visible ? previous : visible)
+    }
+
+    // Run after the current-song/search positioning layout effects above so
+    // reopening a scrolled playlist starts in the correct state before paint.
+    measureVisibility()
+    const observer = new IntersectionObserver(measureVisibility, { root: panel, threshold: 0 })
+    observer.observe(heroActions)
+    const resizeObserver = new ResizeObserver(measureVisibility)
+    resizeObserver.observe(panel)
+    resizeObserver.observe(heroActions)
+    window.addEventListener('resize', measureVisibility)
+    return () => {
+      disposed = true
+      observer.disconnect()
+      resizeObserver.disconnect()
+      window.removeEventListener('resize', measureVisibility)
+    }
+  }, [currentTrackId, filteredTrackIdsKey, searchOpen, layoutLevel])
 
   useEffect(() => {
     const panel = panelRef.current
@@ -842,6 +914,70 @@ export function PlaylistPanel({
   )), [filteredTracks, currentTrackId, unavailable, onTrackSelect, selectMode, selectedIds,
     artworkWindowIds, showExtendedMetadata, handleActivate, handleToggleSelect])
 
+  function renderPlaylistActions(compact = false) {
+    return (
+      <motion.div
+        ref={compact ? controllerActionsRef : heroActionsRef}
+        className={compact ? "playlist-hero-actions playlist-controller-actions" : "playlist-hero-actions"}
+        role="group"
+        aria-label="播放列表操作"
+        aria-hidden={compact && !controllerActionsVisible ? true : undefined}
+        inert={compact && !controllerActionsVisible ? true : undefined}
+        data-actions-visible={compact ? String(controllerActionsVisible) : undefined}
+        variants={compact ? appearanceMotion.variants.controllerActions : undefined}
+        initial={compact ? 'hidden' : false}
+        animate={compact ? controllerActionsVisible ? 'visible' : 'hidden' : undefined}
+        transition={compact ? appearanceMotion.layoutTransition : undefined}
+        style={compact ? { y: controllerMotion.offsetY } : undefined}
+      >
+        {compact ? (
+          <IconButton
+            className="playlist-hero-icon playlist-controller-back-button"
+            icon={CornerLeftUp}
+            label="返回"
+            onClick={library?.onOpen ?? (() => panelRef.current?.focus({ preventScroll: true }))}
+          />
+        ) : null}
+        <IconButton
+          className="playlist-hero-icon playlist-hero-shuffle-button"
+          icon={shufflePresentation.icon}
+          label={shufflePresentation.label}
+          selected={shufflePresentation.pressed}
+          onClick={handleShuffle}
+        />
+        <IconButton
+          className="playlist-hero-icon playlist-hero-play-button"
+          icon={systemIcons.play}
+          label={appCopy.playlistPage.play}
+          disabled={!playableTrackId || !onTrackSelect}
+          pressFeedback={!compact}
+          pressFeedbackTone="surface-variant"
+          onClick={handlePlay}
+        />
+        <Button
+          className="playlist-search-button playlist-hero-icon"
+          aria-label={appCopy.playlistPage.search}
+          aria-pressed={searchOpen}
+          data-selected={searchOpen ? 'true' : undefined}
+          size="icon"
+          variant="ghost"
+          onClick={handleSearchToggle}
+        >
+          <Search aria-hidden="true" />
+        </Button>
+        <Button
+          className="playlist-select-toggle"
+          aria-pressed={selectMode}
+          data-selected={selectMode ? 'true' : undefined}
+          onClick={handleSelectModeToggle}
+        >
+          {selectMode ? appCopy.playlistPage.done : appCopy.playlistPage.select}
+        </Button>
+        <IconButton className="playlist-hero-icon playlist-hero-more-button" icon={systemIcons.more} label={appCopy.playlistPage.more} disabled={isOpenAudioDisabled || !onOpenAudio} onClick={handleMore} />
+      </motion.div>
+    )
+  }
+
   return (
     <>
       <PlaylistLibrarySidebar
@@ -920,44 +1056,7 @@ export function PlaylistPanel({
             <span className="playlist-hero-meta-sep" aria-hidden="true">|</span>
             <span className="playlist-hero-total" aria-live="polite" title={totalDurationDetail}>{totalClock}</span>
           </p>
-          <div className="playlist-hero-actions">
-            <IconButton
-              className="playlist-hero-icon playlist-hero-shuffle-button"
-              icon={shufflePresentation.icon}
-              label={shufflePresentation.label}
-              selected={shufflePresentation.pressed}
-              onClick={handleShuffle}
-            />
-            <IconButton
-              className="playlist-hero-icon playlist-hero-play-button"
-              icon={systemIcons.play}
-              label={appCopy.playlistPage.play}
-              disabled={!playableTrackId || !onTrackSelect}
-              pressFeedback
-              pressFeedbackTone="surface-variant"
-              onClick={handlePlay}
-            />
-            <Button
-              className="playlist-search-button playlist-hero-icon"
-              aria-label={appCopy.playlistPage.search}
-              aria-pressed={searchOpen}
-              data-selected={searchOpen ? 'true' : undefined}
-              size="icon"
-              variant="ghost"
-              onClick={handleSearchToggle}
-            >
-              <Search aria-hidden="true" />
-            </Button>
-            <Button
-              className="playlist-select-toggle"
-              aria-pressed={selectMode}
-              data-selected={selectMode ? 'true' : undefined}
-              onClick={handleSelectModeToggle}
-            >
-              {selectMode ? appCopy.playlistPage.done : appCopy.playlistPage.select}
-            </Button>
-            <IconButton className="playlist-hero-icon playlist-hero-more-button" icon={systemIcons.more} label={appCopy.playlistPage.more} disabled={isOpenAudioDisabled || !onOpenAudio} onClick={handleMore} />
-          </div>
+          {renderPlaylistActions()}
         </div>
       </header>
 
@@ -1011,7 +1110,11 @@ export function PlaylistPanel({
         </Empty>
       )}
       </motion.section>
+      {renderPlaylistActions(true)}
       <PlaylistPlaybackDock
+        controllerRef={playbackDockRef}
+        controllerOffsetY={controllerMotion.offsetY}
+        controllerHidden={controllerMotion.hidden}
         playback={playback}
         timeline={timeline}
         visualIsPlaying={visualIsPlaying}

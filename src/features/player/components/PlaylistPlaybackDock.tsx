@@ -1,7 +1,7 @@
 import { DataHistogram24Filled, Grid24Filled } from '@fluentui/react-icons'
 import { Menu, Search } from 'lucide-react'
-import { motion } from 'motion/react'
-import { useLayoutEffect, useRef } from 'react'
+import { motion, type MotionValue } from 'motion/react'
+import { useLayoutEffect, useRef, type RefObject } from 'react'
 import { Button } from '@/components/ui/button'
 import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { ProgressControl } from '@/features/player/components/ControlDock'
@@ -11,6 +11,9 @@ import type { PlayerPlaybackViewModel, PlayerTimelineViewModel, PlaylistTrackIte
 import { playerViewTransitionLayoutId } from '@/features/player/model/playerViewTransition'
 
 type PlaylistPlaybackDockProps = {
+  controllerRef?: RefObject<HTMLElement | null>
+  controllerOffsetY?: MotionValue<number>
+  controllerHidden?: boolean
   playback: PlayerPlaybackViewModel
   timeline: PlayerTimelineViewModel
   visualIsPlaying: boolean
@@ -26,6 +29,9 @@ type PlaylistPlaybackDockProps = {
 const controllerBackgroundOwners = new WeakMap<HTMLElement, number>()
 
 export function PlaylistPlaybackDock({
+  controllerRef,
+  controllerOffsetY,
+  controllerHidden = false,
   playback,
   timeline,
   visualIsPlaying,
@@ -87,8 +93,15 @@ export function PlaylistPlaybackDock({
 
   return (
     <motion.aside
-      ref={dockRef}
+      ref={(element) => {
+        dockRef.current = element
+        if (controllerRef) controllerRef.current = element
+      }}
       className="playlist-playback-dock"
+      style={{ y: controllerOffsetY }}
+      data-controller-hidden={controllerHidden ? 'true' : undefined}
+      inert={controllerHidden || undefined}
+      aria-hidden={controllerHidden || undefined}
       data-playback-command-busy={commandBusy && !disabled ? '' : undefined}
       variants={appearanceMotion.variants.backdrop}
       initial="initial"
@@ -182,7 +195,9 @@ export function PlaylistPlaybackDock({
         showTimes={false}
       />
 
-      <nav className="playlist-playback-nav" aria-label="播放列表快捷操作">
+      {/* Reset only the shortcut tooltips at the offscreen boundary. Keep the
+          transport, progress interaction, and shared artwork nodes mounted. */}
+      <nav key={controllerHidden ? 'hidden' : 'visible'} className="playlist-playback-nav" aria-label="播放列表快捷操作">
         <IconButton
           className="playlist-playback-nav-button is-active"
           icon={Grid24Filled}

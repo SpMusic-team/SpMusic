@@ -2,8 +2,9 @@ import { useCallback, useMemo, useState } from 'react'
 import { DevAudioToolsAvailability, DevAudioToolsSlot } from '@/features/player/components/DevAudioToolsSlot'
 import { PlayerSurface } from '@/features/player/components/PlayerSurface'
 import { playlistScope, useAudioPlayer } from '@/features/player/hooks/useAudioPlayer'
-import { usePlaylistDuration } from '@/features/player/hooks/usePlaylistDuration'
+import { usePlaylistLibraryDurations } from '@/features/player/hooks/usePlaylistDuration'
 import { audioFolderTrackPlaceholder, audioTrackToTrack, playlistDisplayName } from '@/features/player/model/audioTrackModel'
+import { formatPlaylistDurationLabel } from '@/features/player/model/playlistDuration'
 import { useGlobalShortcuts } from '@/features/shortcuts/hooks/useGlobalShortcuts'
 import type { DevAudioToolsViewModel, PlayerUiViewModel, PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
 
@@ -71,7 +72,12 @@ export function PlayerShell() {
       && !durationSources.some((source) => source.sourcePath === singleTrackSource && source.available === false)) known.set(singleTrackSource, currentDurationMs)
     return known
   }, [durationSources, playlistTracks, singleTrackSource, currentDurationMs])
-  const playlistDuration = usePlaylistDuration(durationSources, player.playlistDurationScope, knownDurations)
+  const libraryDurationSources = useMemo(() => player.sessionPlaylists.map((item) => ({
+    scope: playlistScope(item), sources: item.tracks,
+  })), [player.sessionPlaylists])
+  const playlistDurations = usePlaylistLibraryDurations(durationSources, player.playlistDurationScope, libraryDurationSources, knownDurations)
+  const playlistDuration = playlistDurations.get(player.playlistDurationScope)!
+  const browsedDuration = browsedPlaylist ? playlistDurations.get(playlistScope(browsedPlaylist))! : playlistDuration
   const toggleTrackFeedback = player.toggleTrackFeedback
   const handleFeedbackToggle = useCallback((feedback: Parameters<typeof toggleTrackFeedback>[1]) => {
     if (currentTrackId) toggleTrackFeedback(currentTrackId, feedback)
@@ -143,6 +149,10 @@ export function PlayerShell() {
         items: player.sessionPlaylists.map((item) => ({
           scope: playlistScope(item), name: playlistDisplayName(item), trackCount: item.tracks.length,
           coverTrack: playlistScope(item) === player.activePlaylistScope ? playlistTracks[0] : undefined,
+          totalClock: formatPlaylistDurationLabel(
+            playlistDurations.get(playlistScope(item))!,
+            item.tracks.length,
+          ),
         })),
         currentScope: browsedScope,
         onOpen: openLibrary,
@@ -161,9 +171,9 @@ export function PlayerShell() {
       tracks: browsedTracks,
       unavailableTrackIds: browsedUnavailableIds,
       playlistName: browsedPlaylist ? playlistDisplayName(browsedPlaylist) : player.playlistName,
-      totalDurationSeconds: isBrowsingActive ? playlistDuration.totalSeconds : undefined,
-      totalDurationStatus: isBrowsingActive ? playlistDuration.status : 'unknown',
-      totalDurationDetail: isBrowsingActive ? playlistDuration.detail : '播放此列表后统计时长',
+      totalDurationSeconds: browsedDuration.totalSeconds,
+      totalDurationStatus: browsedDuration.status,
+      totalDurationDetail: browsedDuration.detail,
       currentTrackId: player.track?.id ?? null,
       shuffleMode: player.shuffleMode,
       onShuffleCycle: player.cycleShuffleMode,

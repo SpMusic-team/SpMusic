@@ -21,6 +21,12 @@ if (process.env.SPMUSIC_STATS_BASELINE === '1') {
   baselineHook = require('typescript').transpileModule(original, { compilerOptions: { target: 99, module: 99 } }).outputText
     .replace(/import \{([^}]+)\} from ['"]react['"];/, (_line, names) => `import baselineReact from '${dependency('react.js')}';const {${names}}=baselineReact;`)
     .replace(/from ['"]@\/([^'"]+)['"]/g, (_line, path) => `from '/src/${path}.ts'`)
+  // Let the current shell consume the old single-scope hook without changing
+  // the historical behavior being measured by this optional baseline run.
+  baselineHook += `\nexport function usePlaylistLibraryDurations(sources,scope,lists,known){
+    const active=usePlaylistDuration(sources,scope,known);
+    return new Map([[scope,active],...lists.filter(item=>item.scope!==scope).map(item=>[item.scope,{status:'unknown'}])]);
+  }\n`
 }
 const service = (await (await fetch(origin + '/src/features/player/services/audioCommands.ts')).text())
   .replace(/import \{ convertFileSrc, invoke \} from [^;]+;/, 'const invoke=(...args)=>window.backendInvoke(...args);const convertFileSrc=path=>path;')
@@ -39,7 +45,7 @@ const fixture = `
 import React from '${dependency('react.js')}';
 import ReactDOM from '${dependency('react-dom_client.js')}';
 import {PlayerShell} from '/src/features/player/components/PlayerShell.tsx';
-import {usePlaylistDuration} from '${hookPath}';
+import {usePlaylistDuration,usePlaylistLibraryDurations} from '${hookPath}';
 window.calls=[];window.commits=[];window.pending=[];window.active=0;window.maxActive=0;
 window.config={scope:'a',count:33,gate:false,probeMs:1000,itemFailure:null,invokeFailure:false,protocolFailure:false};
 let state={phase:'idle',generation:null,currentTrackId:null,positionMs:0,durationMs:null,volume:.5,error:null,transportTransition:null,transportSettledRequestId:null},generation=0;
@@ -82,7 +88,19 @@ function HookFixture(){
  return React.createElement('output',null,JSON.stringify(result));
 }
 const root=ReactDOM.createRoot(document.getElementById('root'));window.unmountFixture=()=>root.unmount();
-root.render(React.createElement(new URLSearchParams(location.search).get('kind')==='hook'?HookFixture:PlayerShell));
+function LibraryHookFixture(){
+ const [lists,setLists]=React.useState([]),[scope,setScope]=React.useState('a'),[known,setKnown]=React.useState(new Map());
+ const empty=React.useMemo(()=>[],[]);
+ const sources=lists.find(item=>item.scope===scope)?.sources??empty;
+ const results=usePlaylistLibraryDurations(sources,scope,lists,known);
+ window.libraryResults=Object.fromEntries(results);
+ window.updateLibrary=(next,nextScope='a')=>{setLists(next);setScope(nextScope)};
+ window.chooseLibraryScope=setScope;window.updateKnown=entries=>setKnown(new Map(entries));
+ React.useLayoutEffect(()=>{window.commits.push(window.libraryResults)});
+ return React.createElement('output',null,JSON.stringify(window.libraryResults));
+}
+const kind=new URLSearchParams(location.search).get('kind');
+root.render(React.createElement(kind==='hook'?HookFixture:kind==='library'?LibraryHookFixture:PlayerShell));
 `
 const html = (await (await fetch(origin)).text()).replace(/src="\/src\/[^\"]+"/, 'src="/__statistics_fixture.js"')
 const browser = await chromium.launch({ headless: true, channel: 'msedge' })
@@ -99,7 +117,7 @@ async function open(kind = 'shell') {
   await page.route('**/__statistics_fixture.js', route => route.fulfill({contentType:'text/javascript',body:fixture}))
   await page.route('**/__statistics_test?*', route => route.fulfill({contentType:'text/html',body:html}))
   await page.goto(origin + '/__statistics_test?kind=' + kind)
-  await page.waitForFunction(kind => kind==='hook'?Boolean(window.updateHook):Boolean(window.viewModel),kind)
+  await page.waitForFunction(kind => kind==='hook'?Boolean(window.updateHook):kind==='library'?Boolean(window.updateLibrary):Boolean(window.viewModel),kind)
   return {page,errors}
 }
 const probeCount = page => page.evaluate(() => window.calls.filter(c=>c.command==='audio_probe_playlist_durations').length)
@@ -155,6 +173,68 @@ try {
   await warm.close()
 
   if (!baselineHook) {
+    const {page:library,errors:libraryErrors}=await open('library')
+    await library.evaluate(()=>window.updateLibrary([
+      {scope:'a',sources:[{sourcePath:'a-1'},{sourcePath:'a-2'},{sourcePath:'a-1'}]},
+      {scope:'b',sources:[{sourcePath:'b-1'},{sourcePath:'missing',available:false}]},
+    ]))
+    await library.waitForFunction(()=>window.libraryResults.a?.totalSeconds===3&&window.libraryResults.b?.totalSeconds===1)
+    const libraryCalls=await library.evaluate(()=>window.calls.filter(c=>c.command==='audio_probe_playlist_durations').map(c=>c.input.paths))
+    assert.deepEqual(libraryCalls,[['a-1','a-2'],['b-1']],'active scans once before inactive; duplicate probe paths deduplicated')
+    await library.evaluate(()=>window.chooseLibraryScope('b'))
+    await library.waitForFunction(()=>window.libraryResults.b?.status==='ready')
+    assert.equal(await probeCount(library),2,'changing active scope reuses per-list cache')
+    await library.evaluate(()=>{window.config.gate=true;window.config.probeMs=2000;window.commits=[];
+      window.updateLibrary([{scope:'b',sources:[{sourcePath:'b-1'},{sourcePath:'missing',available:false}]}],'b')})
+    await library.waitForFunction(()=>window.pending.length===1)
+    assert.equal(await library.evaluate(()=>window.libraryResults.b.totalSeconds),1,'same ordered sources keep total during refresh')
+    await release(library)
+    await library.waitForFunction(()=>window.libraryResults.b.totalSeconds===2)
+    await library.evaluate(()=>{window.config.gate=true;window.updateLibrary([
+      {scope:'b',sources:Array.from({length:33},(_,i)=>({sourcePath:'old-'+i}))},
+      {scope:'a',sources:[{sourcePath:'queued-old'}]},
+    ],'b')})
+    await library.waitForFunction(()=>window.pending.length===1)
+    assert.equal(await library.evaluate(()=>window.libraryResults.b.status),'loading','changed key invalidates old total')
+    await library.evaluate(()=>window.updateLibrary([{scope:'c',sources:[{sourcePath:'new'}]}],'c'))
+    await release(library)
+    await library.waitForFunction(()=>window.libraryResults.c?.totalSeconds===2)
+    const replacementCalls=await library.evaluate(()=>window.calls.filter(c=>c.command==='audio_probe_playlist_durations').map(c=>c.input.paths))
+    assert.deepEqual(replacementCalls.slice(-2).map(paths=>paths[0]),['old-0','new'],'obsolete remaining batches and queued list canceled')
+    assert.equal(await library.evaluate(()=>window.maxActive),1)
+    assert.deepEqual(await library.evaluate(()=>Object.keys(window.libraryResults)),['c'],'removed scopes leave result map')
+    await library.evaluate(()=>{window.config.gate=true;window.updateLibrary([{scope:'d',sources:[{sourcePath:'disposed'}]}],'d')})
+    await library.waitForFunction(()=>window.pending.length===1)
+    await library.evaluate(()=>window.unmountFixture())
+    const libraryCommitCount=await library.evaluate(()=>window.commits.length)
+    await release(library)
+    await library.waitForFunction(()=>window.active===0)
+    assert.equal(await library.evaluate(()=>window.commits.length),libraryCommitCount,'unmounted multi-list hook publishes no late result')
+    assert.deepEqual(libraryErrors,[])
+    report.push({case:'multiple scopes, cached switching, refresh, cancellation and disposal',initialBatches:libraryCalls,maxActive:1})
+    await library.close()
+
+    const {page:metadata,errors:metadataErrors}=await open('library')
+    await metadata.evaluate(()=>{window.config.itemFailure='a';window.updateLibrary([
+      {scope:'a',sources:[{sourcePath:'a'}]}, {scope:'b',sources:[{sourcePath:'b'}]},
+    ])})
+    await metadata.waitForFunction(()=>window.libraryResults.a?.status==='unknown'&&window.libraryResults.b?.status==='ready')
+    await metadata.evaluate(()=>window.updateKnown([['a',2000]]))
+    await metadata.waitForFunction(()=>window.libraryResults.a.totalSeconds===2)
+    await metadata.evaluate(()=>{window.updateKnown([]);window.chooseLibraryScope('b')})
+    await metadata.waitForFunction(()=>window.libraryResults.a.totalSeconds===2)
+    assert.equal(await probeCount(metadata),2,'late truthful metadata stays with inactive list without another native scan')
+    await metadata.evaluate(()=>{window.config.gate=true;window.updateLibrary([
+      {scope:'a',sources:[{sourcePath:'new-a'}]}, {scope:'b',sources:[{sourcePath:'b'}]},
+    ],'b')})
+    await metadata.waitForFunction(()=>window.pending.length===1)
+    assert.equal(await metadata.evaluate(()=>window.libraryResults.a.status),'loading','changed paths never reuse previous metadata total')
+    await release(metadata)
+    await metadata.waitForFunction(()=>window.libraryResults.a.totalSeconds===1)
+    assert.deepEqual(metadataErrors,[])
+    report.push({case:'late metadata retained per scope; changed source invalidates recovered total',recoveredInactiveTotal:2})
+    await metadata.close()
+
     const {page:changes,errors:changeErrors}=await open('hook')
     await update(changes,entries)
     await waitReady(changes,2)

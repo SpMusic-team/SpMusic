@@ -10,6 +10,7 @@ export function usePlaylistControllerMotion(
   layoutKey: string,
   heroPassed: boolean,
   transition: Transition,
+  enabled = true,
 ) {
   const offsetY = useMotionValue(0)
   const [hidden, setHidden] = useState(false)
@@ -61,7 +62,7 @@ export function usePlaylistControllerMotion(
   useLayoutEffect(() => {
     const panel = panelRef.current
     const dock = dockRef.current
-    if (!panel || !dock) return
+    if (!enabled || !panel || !dock) return
     let pressedPointer: number | null = null
     let keyboardFocus = false
     let disposed = false
@@ -181,7 +182,7 @@ export function usePlaylistControllerMotion(
       window.removeEventListener('pointercancel', pointerUp, true)
       window.removeEventListener('blur', blur)
     }
-  }, [dockRef, mode, offsetY, panelRef, readTop, rebase, stop])
+  }, [dockRef, enabled, mode, offsetY, panelRef, readTop, rebase, stop])
 
   useLayoutEffect(() => {
     heroPassedRef.current = heroPassed

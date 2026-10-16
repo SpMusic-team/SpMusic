@@ -36,11 +36,11 @@ export function PlaylistLibrarySidebar({ playlistName, trackCount, totalClock, c
       inert={!overlay && !isPresent || undefined}
       aria-hidden={!overlay && !isPresent || undefined}
       aria-label="媒体库"
-      variants={appearanceMotion.variants.backdrop}
-      transition={{ ...appearanceMotion.layoutTransition, duration: atomicOverview ? 0 : Math.min((appearanceMotion.layoutTransition.duration ?? 0) * (5 / 6), 0.65) }}
-      initial={overlay || stationaryHandoff ? false : 'initial'}
+      variants={atomicOverview ? appearanceMotion.libraryNavigation.sidebar : appearanceMotion.variants.backdrop}
+      transition={atomicOverview ? appearanceMotion.libraryNavigation.transition : { ...appearanceMotion.layoutTransition, duration: Math.min((appearanceMotion.layoutTransition.duration ?? 0) * (5 / 6), 0.65) }}
+      initial={overlay || !atomicOverview && stationaryHandoff ? false : 'initial'}
       animate="animate"
-      exit={stationaryHandoff ? 'animate' : 'exit'}
+      exit={atomicOverview ? 'exit' : stationaryHandoff ? 'animate' : 'exit'}
     >
       <div className="playlist-library-brand">
         <img className="playlist-library-logo" src={logo} alt="" />

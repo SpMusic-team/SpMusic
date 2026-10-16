@@ -312,7 +312,7 @@ try {
   await page.evaluate(async()=>{
     document.querySelector('.playlist-hero-category').click()
     for(let frame=0;frame<5;frame++)await new Promise(requestAnimationFrame)
-    document.querySelector('.playlist-management .playlist-playback-nav button[aria-label="打开播放界面"]').click()
+    document.querySelector('.playlist-playback-dock:not([aria-hidden="true"]) .playlist-playback-nav button[aria-label="打开播放界面"]').click()
   })
   await page.waitForFunction(()=>document.querySelector('.player-stage')&&!document.querySelector('.playlist-management'))
   const released=await page.evaluate(()=>({retainedDetailCount:document.querySelectorAll('.playlist-panel').length,

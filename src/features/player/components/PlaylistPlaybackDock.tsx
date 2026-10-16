@@ -100,9 +100,8 @@ export function PlaylistPlaybackDock({
   // only the visible owner rejoins it for the real return to the player.
   // Projection keys below change with this membership: Motion registers
   // layoutId on mount, so changing the prop alone cannot rejoin the stack.
-  const sharedPlayerLayout = !chromeTransition.handoff && !chromeTransition.overviewBoundary && !chromeTransition.overviewVisible
-    && (!chromeTransition.playerVisible || ownsDock)
-  const keepStationaryContent = (chromeTransition.handoff || chromeTransition.overviewBoundary) && !chromeTransition.playerVisible
+  const sharedPlayerLayout = !chromeTransition.playerVisible || ownsDock
+  const keepStationaryContent = !chromeTransition.playerVisible
   const systemIcons = useSystemIcons()
   const appearanceMotion = useAppearanceMotion()
   const layoutTransition = { ...appearanceMotion.layoutTransition, duration: Math.min((appearanceMotion.layoutTransition.duration ?? 0) * (5 / 6), 0.65) }
@@ -220,15 +219,13 @@ export function PlaylistPlaybackDock({
     const shell = dock?.closest<HTMLElement>('.player-shell')
     const owners = shell ? controllerBackgroundOwners.get(shell) : undefined
     if (!dock || !shell || !owners) return
-    owners.members.set(dock, isPresent && !chromeTransition.overviewVisible)
-    if (chromeTransition.overviewVisible) {
-      if (owners.owner === dock) owners.owner = [...owners.members].findLast(([, present]) => present)?.[0] ?? null
-    } else if (isPresent) owners.owner = dock
+    owners.members.set(dock, isPresent)
+    if (isPresent) owners.owner = dock
     // Without a successor this is the return to the player: retain the outgoing
     // shared surface until its real presence cleanup, including its original fade.
     else if (owners.owner === dock) owners.owner = [...owners.members].findLast(([, present]) => present)?.[0] ?? dock
     publishDockOwner(shell, owners)
-  }, [chromeTransition.overviewVisible, isPresent])
+  }, [isPresent])
 
   useLayoutEffect(() => {
     // AnimatePresence initial=false can begin directly at opacity 1 without an
@@ -252,10 +249,9 @@ export function PlaylistPlaybackDock({
       data-playback-command-busy={commandBusy && !disabled ? '' : undefined}
       data-playback-track-present={track ? '' : undefined}
       variants={appearanceMotion.variants.backdrop}
-      initial={chromeTransition.overviewBoundary ? false : 'initial'}
+      initial="initial"
       animate="animate"
-      exit={chromeTransition.overviewBoundary ? 'animate' : 'exit'}
-      transition={chromeTransition.overviewBoundary ? { duration: 0 } : undefined}
+      exit="exit"
       onUpdate={(latest) => {
         if (contentRef.current && typeof latest.opacity === 'number') {
           contentRef.current.style.opacity = keepStationaryContent || readHandoff() ? '1' : String(latest.opacity)

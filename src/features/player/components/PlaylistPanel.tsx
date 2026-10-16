@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type SyntheticEvent } from 'react'
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type SyntheticEvent } from 'react'
 import { motion, useIsPresent } from 'motion/react'
 import { CornerLeftUp, Search } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -15,6 +15,7 @@ import { PlaylistLibrarySidebar } from '@/features/player/components/PlaylistLib
 import { useCollectionLayout } from '@/features/player/hooks/useCollectionLayout'
 import { usePlaylistOverscroll } from '@/features/player/hooks/usePlaylistOverscroll'
 import { usePlaylistControllerMotion } from '@/features/player/hooks/usePlaylistControllerMotion'
+import { LibraryDockContext, useLibraryDockBinding } from '@/features/player/hooks/useLibraryDockBinding'
 import type { PlaylistControllerMode } from '@/features/player/model/playlistControllerMode'
 import { appCopy } from '@/features/player/model/playerCopy'
 import { nextShuffleMode, type ShuffleMode } from '@/features/player/model/playbackModes'
@@ -257,7 +258,10 @@ export function PlaylistPanel({
   // outside the decode window. A mute flat tile is the lesser artifact until the
   // visual pipeline can say "this one is gone".
   const panelRef = useRef<HTMLElement | null>(null)
-  const playbackDockRef = useRef<HTMLElement | null>(null)
+  const localPlaybackDockRef = useRef<HTMLElement | null>(null)
+  const dockContext = useContext(LibraryDockContext)
+  const playbackDockRef = dockContext?.dockRef ?? localPlaybackDockRef
+  const dockRouteKey = `tracks:${library?.currentScope ?? ''}`
   const heroActionsRef = useRef<HTMLDivElement | null>(null)
   const controllerActionsRef = useRef<HTMLDivElement | null>(null)
   const [controllerActionsVisible, setControllerActionsVisible] = useState(false)
@@ -315,6 +319,7 @@ export function PlaylistPanel({
     `${playlistName}:${layoutLevel}:${filteredTrackIdsKey}:${searchOpen}:${selectMode}`,
     controllerActionsVisible,
     appearanceMotion.layoutTransition,
+    isPresent && (!dockContext || dockContext.activeRouteKey === dockRouteKey),
   )
   const rebaseController = controllerMotion.rebase
 
@@ -357,6 +362,10 @@ export function PlaylistPanel({
       return !previous
     })
   }, [])
+  useLibraryDockBinding(dockRouteKey, {
+    searchOpen, onSearchToggle: handleSearchToggle,
+    controllerOffsetY: controllerMotion.offsetY, controllerHidden: controllerMotion.hidden,
+  })
 
   const handlePlay = useCallback(() => {
     const target = tracks.find((track) => !unavailable.has(track.id))?.id
@@ -855,7 +864,7 @@ export function PlaylistPanel({
       )}
       </motion.section>
       {renderPlaylistActions(true)}
-      <PlaylistPlaybackDock
+      {!dockContext ? <PlaylistPlaybackDock
         controllerRef={playbackDockRef}
         controllerOffsetY={controllerMotion.offsetY}
         controllerHidden={controllerMotion.hidden}
@@ -869,7 +878,7 @@ export function PlaylistPanel({
         searchOpen={searchOpen}
         onSearchToggle={handleSearchToggle}
         onClose={onClose}
-      />
+      /> : null}
     </>
   )
 }

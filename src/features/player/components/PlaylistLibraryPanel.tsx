@@ -1,7 +1,9 @@
 import { mediaLibraryCategories } from '@/features/player/model/mediaLibraryCategories'
-import { useContext, useEffect, useRef, useState } from 'react'
+import { useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { LibraryChromeTransitionContext } from '@/features/player/hooks/useLibraryChromeTransition'
-import { motion, useIsPresent } from 'motion/react'
+import { motion, useAnimationControls, useIsPresent } from 'motion/react'
+import { useLibraryDockBinding } from '@/features/player/hooks/useLibraryDockBinding'
+import { readLibraryLayoutRect } from '@/features/player/model/libraryNavigationGeometry'
 import { useCollectionLayout } from '@/features/player/hooks/useCollectionLayout'
 import { PLAYLIST_MANAGEMENT_LAYOUTS, PLAYLIST_MANAGEMENT_LAYOUT_STORAGE_KEY, defaultPlaylistManagementLevel } from '@/features/player/model/playlistManagementLayouts'
 import { useAppearanceMotion } from '@/features/appearance/hooks/useAppearance'
@@ -11,7 +13,6 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/u
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { LibraryCover, PlaylistLibrarySidebar } from '@/features/player/components/PlaylistLibrarySidebar'
-import { PlaylistPlaybackDock } from '@/features/player/components/PlaylistPlaybackDock'
 import type { PlayerPlaybackViewModel, PlayerPlaylistViewModel, PlayerTimelineViewModel } from '@/features/player/model/playerUiViewModel'
 import musicLarge from '@/assets/playlist-library/e5527.svg'
 import musicSmall from '@/assets/playlist-library/de6be.svg'
@@ -25,6 +26,7 @@ const MANAGEMENT_LAYOUT_SELECTORS = {
   item: '[data-playlist-scope]', cover: '.playlist-management-cover', copy: '.playlist-management-copy',
   getId: (element: HTMLElement) => element.dataset.playlistScope,
 }
+const MotionEmpty = motion.create(Empty)
 
 type Props = {
   playlist: PlayerPlaylistViewModel
@@ -39,21 +41,11 @@ type Props = {
   onOpenPlayer: () => void
 }
 
-export function PlaylistLibraryPanel({ playlist, librarySidebarOpen, onLibrarySidebarOpenChange, searchRequestId = 0, playback, timeline, visualIsPlaying, playbackTransitionPending, onPlayToggle, onOpenPlayer }: Props) {
+export function PlaylistLibraryPanel({ playlist, librarySidebarOpen, onLibrarySidebarOpenChange, searchRequestId = 0 }: Props) {
   const appearanceMotion = useAppearanceMotion()
   const isPresent = useIsPresent()
   const chromeTransition = useContext(LibraryChromeTransitionContext)
-  const [retiredToOverview, setRetiredToOverview] = useState(false)
-  const retiringToOverview = !isPresent && chromeTransition.overviewVisible
-  if (isPresent && retiredToOverview) setRetiredToOverview(false)
-  else if (retiringToOverview && !retiredToOverview) setRetiredToOverview(true)
-  // Overview is a complete, opaque page. Retire this page atomically instead
-  // of leaving its opaque background above overview while its children fade.
-  const hiddenForOverview = !isPresent && (retiredToOverview || retiringToOverview)
-  const pageChromeTransition = hiddenForOverview
-    ? { ...chromeTransition, overviewBoundary: true, overviewVisible: true, playerVisible: false }
-    : chromeTransition
-  const atomicOverview = pageChromeTransition.overviewBoundary
+  const atomicOverview = chromeTransition.overviewBoundary
   // Use a 250ms default, preserving theme scaling and the presence cleanup budget.
   const returnTransition = { ...appearanceMotion.layoutTransition, duration: Math.min((appearanceMotion.layoutTransition.duration ?? 0) * (5 / 6), 0.65) }
   const library = playlist.library!
@@ -61,7 +53,6 @@ export function PlaylistLibraryPanel({ playlist, librarySidebarOpen, onLibrarySi
   const category = mediaLibraryCategories.find((item) => item.id === categoryId)!
   const hasDataSource = categoryId === 'playlists' || categoryId === 'folder'
   const categoryItems = categoryId === 'playlists' ? library.items : categoryId === 'folder' ? library.items.filter((item) => item.sourceKind === 'folder') : []
-  const activePlaylist = library.items.find((item) => item.scope === library.activeScope)
   const [query, setQuery] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
   const [dismissedSearchRequestId, setDismissedSearchRequestId] = useState(0)
@@ -70,6 +61,31 @@ export function PlaylistLibraryPanel({ playlist, librarySidebarOpen, onLibrarySi
   const searchRef = useRef<HTMLInputElement>(null)
   const panelRef = useRef<HTMLElement | null>(null)
   const gridRef = useRef<HTMLDivElement | null>(null)
+  const headingRef = useRef<HTMLElement | null>(null)
+  const toolbarControls = useAnimationControls()
+  const navigationMotion = appearanceMotion.libraryNavigation
+  useLayoutEffect(() => {
+    const heading = headingRef.current
+    if (!heading || !chromeTransition.geometry) return
+    const measure = () => chromeTransition.geometry!.current.items.set(`heading:${categoryId}`, readLibraryLayoutRect(heading))
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(heading)
+    window.addEventListener('resize', measure)
+    return () => { observer.disconnect(); window.removeEventListener('resize', measure) }
+  }, [categoryId, chromeTransition.geometry, isPresent])
+  useLayoutEffect(() => {
+    if (atomicOverview && isPresent) {
+      toolbarControls.set('initial')
+      void toolbarControls.start('animate')
+    } else if (isPresent) toolbarControls.set('animate')
+  }, [atomicOverview, isPresent, navigationMotion, toolbarControls])
+  const toolbarOffset = () => {
+    if (appearanceMotion.disabled) return { x: 0, y: 0 }
+    const source = chromeTransition.geometry?.current.items.get(categoryId)
+    const target = chromeTransition.geometry?.current.items.get(`heading:${categoryId}`)
+    return source && target ? { x: source.x - target.x, y: source.y - target.y } : { x: 0, y: 0 }
+  }
   const { layout, announcement } = useCollectionLayout({
     panelRef, gridRef, layouts: PLAYLIST_MANAGEMENT_LAYOUTS,
     storageKey: PLAYLIST_MANAGEMENT_LAYOUT_STORAGE_KEY,
@@ -114,8 +130,8 @@ export function PlaylistLibraryPanel({ playlist, librarySidebarOpen, onLibrarySi
       queueMicrotask(() => searchRef.current?.focus())
     }
   }
-  return <LibraryChromeTransitionContext.Provider value={pageChromeTransition}><motion.div className="playlist-management" data-select-mode={selectMode || undefined}
-    style={{ visibility: hiddenForOverview ? 'hidden' : undefined }}
+  useLibraryDockBinding(`category:${categoryId}`, { searchOpen: showSearch, onSearchToggle: hasDataSource ? toggleSearch : undefined })
+  return <motion.div className="playlist-management" data-select-mode={selectMode || undefined}
     inert={!isPresent || undefined} aria-hidden={!isPresent || undefined}>
     <PlaylistLibrarySidebar {...sidebarProps} />
     <Dialog open={librarySidebarOpen} onOpenChange={onLibrarySidebarOpenChange}>
@@ -127,14 +143,19 @@ export function PlaylistLibraryPanel({ playlist, librarySidebarOpen, onLibrarySi
     <motion.section ref={panelRef} className="playlist-management-content" aria-label={`${category.label}管理`}
       variants={appearanceMotion.variants.backdrop} transition={atomicOverview ? { duration: 0 } : returnTransition}
       initial={atomicOverview ? false : 'initial'} animate="animate" exit={atomicOverview ? 'animate' : 'exit'}>
-      <div className="playlist-management-parent">
+      <motion.div className="playlist-management-parent" variants={navigationMotion.chrome}
+        initial={atomicOverview ? 'initial' : false} animate="animate" exit={atomicOverview ? 'exit' : 'animate'} transition={navigationMotion.transition}>
         <Button variant="outline" onClick={library.onOpenOverview} aria-label="返回媒体库"><img src={parentIcon} alt="" />媒体库</Button>
-      </div>
-      <header className="playlist-management-heading">
-        <span className="playlist-management-category" aria-hidden="true" style={{ background: `var(--playlist-category-${categoryId})` }}><span className="media-library-category-glyph" style={{ width: category.glyphWidth, height: category.glyphHeight, maskImage: `url("${category.overviewIcon}")`, WebkitMaskImage: `url("${category.overviewIcon}")` }} /></span>
-        <h2>{category.label}</h2>
+      </motion.div>
+      <header ref={headingRef} className="playlist-management-heading">
+        <motion.span className="playlist-management-category" aria-hidden="true" style={{ background: `var(--playlist-category-${categoryId})` }}
+          layoutId={appearanceMotion.disabled ? undefined : `library-category-icon:${categoryId}`} layoutCrossfade={false}
+          transition={{ layout: navigationMotion.transition }}><span className="media-library-category-glyph" style={{ width: category.glyphWidth, height: category.glyphHeight, maskImage: `url("${category.overviewIcon}")`, WebkitMaskImage: `url("${category.overviewIcon}")` }} /></motion.span>
+        <motion.h2 layoutId={appearanceMotion.disabled ? undefined : `library-category-label:${categoryId}`} layoutCrossfade={false}
+          transition={{ layout: navigationMotion.transition }}>{category.label}</motion.h2>
       </header>
-      <div className="playlist-management-toolbar">
+      <motion.div className="playlist-management-toolbar" custom={toolbarOffset} variants={navigationMotion.toolbar}
+        initial={false} animate={toolbarControls} exit={atomicOverview ? 'exit' : 'animate'} transition={navigationMotion.transition}>
         {hasDataSource ? <motion.div className="playlist-management-actions"
           layout="position"
           layoutId={!appearanceMotion.disabled && library.currentScope ? `playlist-library-actions:${library.currentScope}` : undefined}
@@ -156,13 +177,16 @@ export function PlaylistLibraryPanel({ playlist, librarySidebarOpen, onLibrarySi
             <DropdownMenuItem disabled={!visible.length} onClick={() => { setSelectMode(true); setSelected(new Set(visible.map((item) => item.scope))) }}>选择全部可见列表</DropdownMenuItem>
           </DropdownMenuGroup></DropdownMenuContent>
         </DropdownMenu>
-      </div>
-      {showSearch ? <div className="playlist-management-search"><Input ref={searchRef} type="search" aria-label={`搜索${category.label}名称`} placeholder={`搜索${category.label}`} value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape') { setQuery(''); setSearchOpen(false); setDismissedSearchRequestId(searchRequestId) } }} /></div> : null}
+      </motion.div>
+      {showSearch ? <motion.div className="playlist-management-search" variants={navigationMotion.chrome}
+        initial={atomicOverview ? 'initial' : false} animate="animate" exit={atomicOverview ? 'exit' : 'animate'} transition={navigationMotion.transition}><Input ref={searchRef} type="search" aria-label={`搜索${category.label}名称`} placeholder={`搜索${category.label}`} value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape') { setQuery(''); setSearchOpen(false); setDismissedSearchRequestId(searchRequestId) } }} /></motion.div> : null}
       <span className="sr-only" role="status" aria-live="polite">{announcement}</span>
       {visible.length ? <div ref={gridRef} className="playlist-management-grid"
         data-layout-level={layout.level} data-layout-flow={layout.flow} data-layout-artwork={layout.showArtwork}
         aria-label={layout.label} style={{ ...layout.style, touchAction: 'pan-y' }}>
-        {visible.map((item) => <div key={item.scope} className="playlist-management-card">
+        {visible.map((item) => <motion.div key={item.scope} className="playlist-management-card"
+          variants={navigationMotion.cover} style={{ transformOrigin: 'left top' }}
+          initial={atomicOverview ? 'initial' : false} animate="animate" exit={atomicOverview ? 'exit' : 'animate'} transition={navigationMotion.transition}>
             <Button variant="ghost" className="playlist-management-card-button" data-playlist-scope={item.scope}
               aria-label={selectMode ? `选择 ${item.name}` : `打开${category.label} ${item.name}`}
               aria-pressed={selectMode ? selected.has(item.scope) : undefined} onClick={() => activate(item.scope)}>
@@ -179,22 +203,8 @@ export function PlaylistLibraryPanel({ playlist, librarySidebarOpen, onLibrarySi
               <span className="playlist-management-meta"><img src={layout.level === 2 ? musicLarge : musicSmall} alt="" aria-hidden="true" /><span>{item.trackCount}{item.totalClock ? ` | ${item.totalClock}` : ''}</span></span>
               </span>
             </Button>
-        </div>)}
-      </div> : <Empty className="playlist-management-empty"><EmptyHeader><EmptyTitle>{!hasDataSource ? `${category.label}尚未接入数据` : categoryItems.length ? `没有匹配的${category.label}` : `暂无${category.label}`}</EmptyTitle><EmptyDescription>{!hasDataSource ? `此分类的数据管理能力尚未接入。可返回媒体库，或在播放列表中浏览本次会话已导入的列表。` : categoryItems.length ? '尝试其他名称，或清空搜索。' : categoryId === 'folder' ? '导入本地音频文件夹后，可在这里浏览。本次会话中的 M3U8 列表显示在播放列表分类。' : '导入本地音频文件夹或 M3U8 列表后，在这里选择要浏览的播放列表。列表保留在本次会话中。'}</EmptyDescription></EmptyHeader><Button disabled={playlist.isOpenAudioDisabled} onClick={!hasDataSource ? library.onOpen : categoryItems.length ? () => setQuery('') : playlist.onOpenAudio}>{!hasDataSource ? '打开播放列表' : categoryItems.length ? '清空搜索' : '导入音频或播放列表'}</Button></Empty>}
+        </motion.div>)}
+      </div> : <MotionEmpty className="playlist-management-empty" variants={navigationMotion.chrome} initial={atomicOverview ? 'initial' : false} animate="animate" exit={atomicOverview ? 'exit' : 'animate'} transition={navigationMotion.transition}><EmptyHeader><EmptyTitle>{!hasDataSource ? `${category.label}尚未接入数据` : categoryItems.length ? `没有匹配的${category.label}` : `暂无${category.label}`}</EmptyTitle><EmptyDescription>{!hasDataSource ? `此分类的数据管理能力尚未接入。可返回媒体库，或在播放列表中浏览本次会话已导入的列表。` : categoryItems.length ? '尝试其他名称，或清空搜索。' : categoryId === 'folder' ? '导入本地音频文件夹后，可在这里浏览。本次会话中的 M3U8 列表显示在播放列表分类。' : '导入本地音频文件夹或 M3U8 列表后，在这里选择要浏览的播放列表。列表保留在本次会话中。'}</EmptyDescription></EmptyHeader><Button disabled={playlist.isOpenAudioDisabled} onClick={!hasDataSource ? library.onOpen : categoryItems.length ? () => setQuery('') : playlist.onOpenAudio}>{!hasDataSource ? '打开播放列表' : categoryItems.length ? '清空搜索' : '导入音频或播放列表'}</Button></MotionEmpty>}
     </motion.section>
-    <PlaylistPlaybackDock
-      playback={playback}
-      playlistTrack={playlist.playbackDockTrack}
-      timeline={timeline}
-      visualIsPlaying={visualIsPlaying}
-      playbackTransitionPending={playbackTransitionPending}
-      onPlayToggle={onPlayToggle}
-      searchOpen={showSearch}
-      onSearchToggle={hasDataSource ? toggleSearch : undefined}
-      onClose={onOpenPlayer}
-      playlistSelected={false}
-      playlistLabel="打开当前播放列表"
-      onOpenPlaylist={activePlaylist ? () => library.onSelect(activePlaylist.scope) : undefined}
-    />
-  </motion.div></LibraryChromeTransitionContext.Provider>
+  </motion.div>
 }

@@ -12,6 +12,8 @@ import { PlaybackInfoButton } from '@/features/player/components/PlaybackInfoBut
 import { MediaLibraryPanel } from '@/features/player/components/MediaLibraryPanel'
 import { PlaylistLibraryPanel } from '@/features/player/components/PlaylistLibraryPanel'
 import { LibraryChromeTransitionContext, useLibraryChromeTransition } from '@/features/player/hooks/useLibraryChromeTransition'
+import { LibraryDockContext, type LibraryDockBinding } from '@/features/player/hooks/useLibraryDockBinding'
+import { PlaylistPlaybackDock } from '@/features/player/components/PlaylistPlaybackDock'
 import { PlaylistPanel } from '@/features/player/components/PlaylistPanel'
 import { QueuePanel } from '@/features/player/components/QueuePanel'
 import { ResponsivePlayerLayout } from '@/features/player/components/ResponsivePlayerLayout'
@@ -600,12 +602,21 @@ export function PlayerSurface({
   devAudioTools,
 }: PlayerSurfaceProps) {
   const { playback, timeline, volume, queue, playlist, feedback } = viewModel
-  const chromeTransition = useLibraryChromeTransition(
-    playlist.isOpen
+  const libraryRouteKey = playlist.isOpen
       ? playlist.library?.route?.view === 'overview' ? 'overview' : playlist.library?.route?.view === 'category' ? `category:${playlist.library.route.categoryId}` : `tracks:${playlist.library?.currentScope ?? ''}`
-      : null,
-    !playlist.isOpen,
-  )
+      : null
+  const chromeTransition = useLibraryChromeTransition(libraryRouteKey, !playlist.isOpen)
+  const libraryDockRef = useRef<HTMLElement | null>(null)
+  const libraryDockToken = useRef(0)
+  const [dockRegistration, setDockRegistration] = useState<{ owner: symbol; token: number; routeKey: string; binding: LibraryDockBinding } | null>(null)
+  const publishDock = useCallback((owner: symbol, routeKey: string, binding: LibraryDockBinding) => {
+    if (routeKey !== libraryRouteKey) return () => undefined
+    const token = ++libraryDockToken.current
+    setDockRegistration({ owner, token, routeKey, binding })
+    return () => setDockRegistration((current) => current?.owner === owner && current.token === token ? null : current)
+  }, [libraryRouteKey])
+  const libraryDockContext = useMemo(() => ({ dockRef: libraryDockRef, activeRouteKey: libraryRouteKey, publish: publishDock }), [libraryRouteKey, publishDock])
+  const dockBinding = dockRegistration?.routeKey === libraryRouteKey ? dockRegistration.binding : undefined
   const { track } = playback
   const prepareTrackPreview = playback.onPrepareTrackPreview
   const commitTrackPreview = playback.onCommitTrackPreview
@@ -2466,6 +2477,7 @@ export function PlayerSurface({
     <TooltipProvider>
       <main
         className="player-shell"
+        data-library-open={playlist.isOpen || undefined}
         data-library-overview={playlist.isOpen && playlist.library?.route?.view === 'overview' || undefined}
         data-content-state={contentState}
         data-playlist-transport-only-busy={playlistTransportOnlyBusy ? '' : undefined}
@@ -2503,6 +2515,7 @@ export function PlayerSurface({
         {devAudioTools?.content}
 
         <LibraryChromeTransitionContext.Provider value={chromeTransition}>
+        <LibraryDockContext.Provider value={libraryDockContext}>
         <LayoutGroup id="playlist-player-view-transition">
           <ResponsivePlayerLayout
             nativeWindowState={nativeWindowState}
@@ -2675,7 +2688,25 @@ export function PlayerSurface({
           </ResponsivePlayerLayout>
 
           <AnimatePresence initial={false}>
-            {playlist.isOpen && playlist.library?.route?.view === 'overview' ? <MediaLibraryPanel playlist={playlist} onOpenPlayer={() => requestPlaylistOpenChange(false)} /> : null}
+            {playlist.isOpen ? <PlaylistPlaybackDock key="library-session-dock"
+              controllerRef={libraryDockRef}
+              controllerOffsetY={dockBinding?.controllerOffsetY}
+              controllerHidden={dockBinding?.controllerHidden}
+              playback={playback} timeline={timeline}
+              playlistTrack={playlist.playbackDockTrack} playlistTracks={playlist.tracks}
+              visualIsPlaying={visualPlaybackState === 'playing'} playbackTransitionPending={playbackTransitionPending}
+              onPlayToggle={handlePlayToggle}
+              searchOpen={dockBinding?.searchOpen ?? false} onSearchToggle={dockBinding?.onSearchToggle}
+              onClose={() => requestPlaylistOpenChange(false)}
+              playlistSelected={playlist.library?.route?.view === 'tracks'}
+              playlistLabel="打开当前播放列表"
+              onOpenPlaylist={playlist.library?.items.some((item) => item.scope === playlist.library?.activeScope)
+                ? () => playlist.library?.onSelect(playlist.library.activeScope!) : undefined}
+            /> : null}
+          </AnimatePresence>
+          <AnimatePresence initial={false}>
+            {playlist.isOpen ? <div key="library-navigation-background" className="library-navigation-background" aria-hidden="true" /> : null}
+            {playlist.isOpen && playlist.library?.route?.view === 'overview' ? <MediaLibraryPanel key="media-library-overview" playlist={playlist} onOpenPlayer={() => requestPlaylistOpenChange(false)} /> : null}
             {playlist.isOpen && playlist.library?.isOpen && playlist.library.route?.view !== 'overview' ? (
               <PlaylistLibraryPanel
                 key={playlist.library?.route?.view === 'category' ? playlist.library.route.categoryId : 'playlist-management'}
@@ -2723,7 +2754,9 @@ export function PlayerSurface({
               />
             ) : null}
           </AnimatePresence>
+
         </LayoutGroup>
+        </LibraryDockContext.Provider>
         </LibraryChromeTransitionContext.Provider>
       </main>
     </TooltipProvider>

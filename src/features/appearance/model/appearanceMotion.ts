@@ -15,6 +15,15 @@ export type AppearanceMotionRuntime = {
   reducedMotion: 'always' | 'never'
   transition: Transition
   layoutTransition: Transition
+  libraryNavigation: {
+    transition: Transition
+    chrome: Variants
+    toolbar: Variants
+    cover: Variants
+    sidebar: Variants
+    expansion: number
+    columnTravel: number
+  }
   layoutZoom: {
     enterScale: {
       zoomIn: number
@@ -42,6 +51,15 @@ export function createAppearanceMotionRuntime(
       reducedMotion: 'always',
       transition: { duration: 0 },
       layoutTransition: { duration: 0 },
+      libraryNavigation: {
+        transition: { duration: 0 },
+        chrome: { initial: { opacity: 1 }, animate: { opacity: 1 }, exit: { opacity: 1 } },
+        toolbar: { initial: { x: 0, y: 0, opacity: 1 }, animate: { x: 0, y: 0, opacity: 1 }, exit: { x: 0, y: 0, opacity: 1 } },
+        cover: { initial: { x: 0, scale: 1, opacity: 1 }, animate: { x: 0, scale: 1, opacity: 1 }, exit: { x: 0, scale: 1, opacity: 1 } },
+        sidebar: { initial: { x: 0, opacity: 1 }, animate: { x: 0, opacity: 1 }, exit: { x: 0, opacity: 1 } },
+        expansion: 0,
+        columnTravel: 0,
+      },
       layoutZoom: {
         enterScale: {
           zoomIn: 1,
@@ -74,6 +92,29 @@ export function createAppearanceMotionRuntime(
     disabled: false,
     reducedMotion: 'never',
     layoutTransition: prototypeSmartTransition,
+    libraryNavigation: {
+      transition: prototypeSmartTransition,
+      expansion: 0.7,
+      columnTravel: 0.55,
+      chrome: {
+        initial: { opacity: 0 }, animate: { opacity: 1 }, exit: { opacity: 0 },
+      },
+      toolbar: {
+        initial: (offset: () => { x: number; y: number }) => ({ ...offset(), opacity: 0 }),
+        animate: { x: 0, y: 0, opacity: 1 },
+        exit: (offset: () => { x: number; y: number }) => ({ ...offset(), opacity: 0 }),
+      },
+      cover: {
+        initial: { x: '60vw', scale: 0.56, opacity: 0 },
+        animate: { x: 0, scale: 1, opacity: 1 },
+        exit: { x: '60vw', scale: 0.56, opacity: 0 },
+      },
+      sidebar: {
+        initial: { x: '-100%', opacity: 0 },
+        animate: { x: '0%', opacity: 1 },
+        exit: { x: '-100%', opacity: 0 },
+      },
+    },
     layoutZoom: {
       enterScale: {
         zoomIn: 0.86,

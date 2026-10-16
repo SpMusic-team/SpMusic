@@ -50,6 +50,12 @@ async function open({mode,far=false,reduced=false}={}){
     localStorage.setItem('spmusic.playlist.layout-level.v1','7')
     if(mode!==undefined)localStorage.setItem(key,mode)
   },{key,mode})
+  if(process.env.SPMUSIC_CONTROLLER_ATTACH_DIAGNOSTIC==='1'){
+    const hook=await(await fetch(origin+'/src/features/player/hooks/usePlaylistControllerMotion.ts')).text()
+    const diagnosticHook=hook.replace(/if \(!enabled \|\| !panel \|\| !dock\) return;?/, 'window.controllerAttachTrace??=[];window.controllerAttachTrace.push({enabled,panel:Boolean(panel),dock:Boolean(dock),time:performance.now()});if (!enabled || !panel || !dock) return;')
+    assert(diagnosticHook!==hook,'diagnostic observes the existing hook attachment boundary')
+    await page.route('**/src/features/player/hooks/usePlaylistControllerMotion.ts*',route=>route.fulfill({contentType:'text/javascript',body:diagnosticHook}))
+  }
   await page.route('**/__controller_motion_fixture.js',r=>r.fulfill({contentType:'text/javascript',body:fixture}))
   await page.route('**/__controller_motion_test*',r=>r.fulfill({contentType:'text/html',body:html}))
   await page.goto(origin+'/__controller_motion_test'+(far?'?far=1':''))
@@ -60,8 +66,8 @@ async function open({mode,far=false,reduced=false}={}){
 async function check(name,run,options){
   if(process.env.SPMUSIC_TEST_FILTER&&!name.includes(process.env.SPMUSIC_TEST_FILTER))return
   const {page,errors}=await open(options)
-  try{await run(page);assert.deepEqual(errors,[]);console.log('PASS',name);passed++}
-  catch(error){await page.screenshot({path:join(screenshots,'failure.png')});console.log('FAIL_STATE',await snapshot(page));throw error}
+  try{await run(page);assert.deepEqual(errors,[]);if(process.env.SPMUSIC_CONTROLLER_ATTACH_DIAGNOSTIC==='1')console.log('ATTACH_TRACE',JSON.stringify(await page.evaluate(()=>window.controllerAttachTrace)));console.log('PASS',name);passed++}
+  catch(error){await page.screenshot({path:join(screenshots,'failure.png')});console.log('FAIL_STATE',await snapshot(page));if(process.env.SPMUSIC_CONTROLLER_ATTACH_DIAGNOSTIC==='1')console.log('ATTACH_TRACE',JSON.stringify(await page.evaluate(()=>window.controllerAttachTrace)));throw error}
   finally{await page.close()}
 }
 const snapshot=page=>page.evaluate(()=>{

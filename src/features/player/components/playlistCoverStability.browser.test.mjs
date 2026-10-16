@@ -62,13 +62,21 @@ async function verifyOverview(page, reducedMotion) {
           const content = root.matches('.media-library-overview') ? root.querySelector('.media-library-grid') : root.querySelector('.playlist-management-heading')
           const background = getComputedStyle(root).backgroundColor
           const backgroundAlpha = background.startsWith('rgba') ? Number(background.match(/[\d.]+/g)?.[3] ?? 1) : background === 'transparent' ? 0 : 1
-          return { className: root.className, rootOpacity: opacity(root), contentOpacity: opacity(content), inert: root.inert, background, backgroundAlpha, children: root.querySelectorAll('button').length }
+          const plane = root.querySelector('.playlist-management-plane') ?? root
+          const matrix = new DOMMatrixReadOnly(getComputedStyle(plane).transform)
+          return { className: root.className, rootOpacity: opacity(root), contentOpacity: opacity(content), planeOpacity: opacity(plane), x: matrix.m41, scale: matrix.a, inert: root.inert, background, backgroundAlpha, children: root.querySelectorAll('button').length }
         })
         // Both route roots occupy the same z-index. The later DOM sibling's
         // opaque route background masks content of earlier siblings.
         let coverage = 0; let transmission = 1
         for (const root of roots.toReversed()) { coverage += root.contentOpacity * transmission; transmission *= 1 - root.rootOpacity * root.backgroundAlpha }
-        samples.push({ time: performance.now() - started, roots, coverage, backdropCoverage: 1 - transmission, docks: document.querySelectorAll('.playlist-playback-dock').length, track: window.viewModel.playback.track?.id })
+        const backdrop = document.querySelector('.library-navigation-background')
+        if (backdrop) transmission *= 1 - opacity(backdrop)
+        const docks = [...document.querySelectorAll('.playlist-playback-dock')].map(dock => {
+          const rect = dock.getBoundingClientRect()
+          return { x: rect.x, y: rect.y, width: rect.width, height: rect.height, opacity: opacity(dock) }
+        })
+        samples.push({ time: performance.now() - started, roots, coverage, backdropCoverage: 1 - transmission, docks: docks.length, dockGeometry: docks, track: window.viewModel.playback.track?.id })
       }
       capture()
       if (direction === 'category') document.querySelector('.media-library-category[data-category-id="playlists"]').click()
@@ -77,7 +85,7 @@ async function verifyOverview(page, reducedMotion) {
       return samples
     }, direction)
     const screenshotPath = join(screenshots, reducedMotion + '-' + direction + '.png')
-    await page.waitForFunction(() => window.overviewTrace?.some(frame => frame.time > 20))
+    await page.waitForFunction(() => window.overviewTrace?.some(frame => frame.time >= 100))
     const png = await page.screenshot({ path: screenshotPath })
     const ink = await page.evaluate(async bytes => {
       const bitmap = await createImageBitmap(new Blob([new Uint8Array(bytes)], { type: 'image/png' }))
@@ -94,11 +102,29 @@ async function verifyOverview(page, reducedMotion) {
     evidence.push(result)
     console.log('OVERVIEW_TRANSITION', JSON.stringify({ reducedMotion, ...result }))
     assert.equal(samples.at(-1).roots.length, 1, 'overview/category switch releases the old route')
+    assert.equal(await page.locator('[data-library-navigation]').count(), 0, 'settled navigation clears all temporary transparent plane markers')
     assert(samples.every(frame => frame.track === 'a-0'), 'overview/category navigation retains current playback')
-    if (direction === 'overview') assert.equal(samples.at(-1).docks, 0, 'overview intentionally has no playback dock')
+    assert.equal(samples.at(-1).docks, 1, 'overview and category both retain the playback dock')
     if (!overviewBaseline) {
       assert(worst.coverage >= .7, 'route content never flashes to an empty opaque surface: ' + JSON.stringify(worst))
       assert(result.minBackdropCoverage >= .999, 'route backdrop never reveals the player during library navigation')
+      const moving = samples.filter(frame => frame.roots.length === 2 && frame.time > 0)
+      if (reducedMotion === 'no-preference') {
+        assert(moving.length >= 3, 'outgoing page remains present through the timed animation')
+        // User video requires independent element paths. Their source geometry
+        // and painted-frame continuity are checked in mediaLibraryNavigation;
+        // a whole-page matrix is not evidence of target motion fidelity.
+        assert(moving.some(frame => frame.time >= 100), 'exit does not snap away before the intermediate frame')
+        const lastMoving = samples.findLastIndex(frame => frame.roots.length > 1 || frame.roots.some(root => Math.abs(root.x) > .5 || Math.abs(root.scale - 1) > .005 || root.planeOpacity < .995))
+        assert(samples[lastMoving + 1]?.time <= 500, 'default animation settles within 500ms')
+        const dockFrames = moving.flatMap(frame => frame.dockGeometry)
+        assert(dockFrames.length >= 3, 'dock stays mounted throughout the page transition')
+        const firstDock = dockFrames[0]
+        assert(dockFrames.every(dock => ['x', 'y', 'width', 'height'].every(key => Math.abs(dock[key] - firstDock[key]) <= 1) && dock.opacity >= .99), 'dock geometry and opacity stay fixed while content moves')
+      } else {
+        const unsettled = samples.slice(3).filter(frame => frame.roots.length !== 1 || frame.roots.some(root => Math.abs(root.x) >= .1 || Math.abs(root.scale - 1) >= .001 || root.planeOpacity !== 1))
+        assert.deepEqual(unsettled, [], 'disabled motion settles within two rendered animation frames')
+      }
     }
   }
   if (!overviewBaseline) {
@@ -109,8 +135,9 @@ async function verifyOverview(page, reducedMotion) {
         for (let frame = 0; frame < 3; frame++) await new Promise(requestAnimationFrame)
       }
     })
-    await page.waitForFunction(() => document.querySelectorAll('.media-library-overview').length === 1 && !document.querySelector('.playlist-management') && !document.querySelector('.playlist-playback-dock'))
+    await page.waitForFunction(() => document.querySelectorAll('.media-library-overview').length === 1 && !document.querySelector('.playlist-management') && document.querySelectorAll('.playlist-playback-dock:not([aria-hidden="true"])').length === 1)
     assert.equal(await page.locator('.media-library-category').count(), 19, 'rapid overview/category reversal restores all overview icons')
+    assert.equal(await page.locator('[data-library-navigation]').count(), 0, 'rapid reversal clears temporary navigation markers')
     assert.equal(await page.evaluate(() => window.viewModel.playback.track?.id), 'a-0', 'rapid overview/category reversal retains playback')
     // Interrupt another route replacement with a real overview menu action.
     await page.evaluate(async () => {
@@ -126,26 +153,38 @@ async function verifyOverview(page, reducedMotion) {
     await page.waitForFunction(() => document.querySelector('.playlist-panel') && !document.querySelector('.playlist-management') && !document.querySelector('.media-library-overview'))
     assert.equal(await page.locator('.playlist-playback-dock:not([aria-hidden="true"])').count(), 1, 'immediate player return/reopen restores one detail dock without retired management nodes')
     await page.evaluate(() => window.viewModel.playlist.library.onOpenOverview())
-    await page.waitForFunction(() => document.querySelector('.media-library-overview') && !document.querySelector('.playlist-panel') && !document.querySelector('.playlist-playback-dock'))
+    await page.waitForFunction(() => document.querySelector('.media-library-overview') && !document.querySelector('.playlist-panel') && document.querySelectorAll('.playlist-playback-dock:not([aria-hidden="true"])').length === 1)
     console.log('PASS overview/category rapid reversal and cleanup', reducedMotion)
   }
   report.push({ overview: reducedMotion, evidence })
 }
 try {
-  for (const reducedMotion of ['no-preference', 'reduce']) {
-    const page = await browser.newPage({ viewport: { width: 2560, height: 1440 }, reducedMotion })
+  for (const reducedMotion of ['no-preference', 'reduce', ...(overviewOnly ? ['off'] : [])]) {
+    const page = await browser.newPage({ viewport: { width: 2560, height: 1440 }, reducedMotion: reducedMotion === 'off' ? 'no-preference' : reducedMotion })
     page.setDefaultTimeout(10000)
     activePage = page
     const errors = []
-    page.on('pageerror', error => errors.push(error.message))
-    await page.addInitScript(() => localStorage.setItem('spmusic.player.startup-page.v1', 'media-library'))
+    page.on('pageerror', error => { errors.push(error.message); console.error('PAGE_ERROR', error.message) })
+    await page.addInitScript(() => {
+      localStorage.setItem('spmusic.player.startup-page.v1', 'media-library')
+      const observer = new MutationObserver(() => {
+        const overview = document.querySelector('.media-library-overview')
+        if (!overview) return
+        const style = getComputedStyle(overview), matrix = new DOMMatrixReadOnly(style.transform)
+        window.initialOverviewMotion = { opacity: Number(style.opacity), x: matrix.m41, scale: matrix.a }
+        observer.disconnect()
+      })
+      observer.observe(document, { childList: true, subtree: true })
+    })
     await page.route('**/src/features/player/services/audioCommands.ts*', route => route.fulfill({ contentType: 'text/javascript', body: service }))
     await page.route('**/src/features/player/components/PlayerSurface.tsx*', route => route.fulfill({ contentType: 'text/javascript', body: surface }))
     await page.route('**/__stability_surface.js', route => route.fulfill({ contentType: 'text/javascript', body: realSurface }))
-    await page.route('**/__stability_fixture.js', route => route.fulfill({ contentType: 'text/javascript', body: fixture }))
+    const pageFixture = reducedMotion === 'off' ? fixture.replace('root.render(', `const {defaultAppearance}=await import('/src/features/appearance/model/defaultAppearance.ts');const {saveAppearanceStorage}=await import('/src/features/appearance/model/appearanceStorage.ts');const theme={...defaultAppearance,id:'motion-off-test',name:'Motion off test',motion:{...defaultAppearance.motion,level:'off'}};saveAppearanceStorage({currentThemeId:theme.id,colorSchemePreference:'light',userThemes:[theme]});root.render(`) : fixture
+    await page.route('**/__stability_fixture.js', route => route.fulfill({ contentType: 'text/javascript', body: pageFixture }))
     await page.route('**/__stability_test', route => route.fulfill({ contentType: 'text/html', body: html }))
     await page.goto(origin + '/__stability_test')
     await page.waitForFunction(() => Boolean(window.viewModel))
+    if (!overviewBaseline) assert.deepEqual(await page.evaluate(() => window.initialOverviewMotion), { opacity: 1, x: 0, scale: 1 }, 'initial media library appears fully visible without an entry animation')
     await page.evaluate(() => window.viewModel.playback.onOpenAudio())
     await page.waitForFunction(() => window.viewModel.playback.track?.id === 'a-0' && !window.viewModel.playback.isSelectionPending)
     if (overviewOnly || !baseline) {
@@ -226,7 +265,7 @@ try {
         console.log('PASS ordinary player return shared geometry and cleanup')
       }
       await page.evaluate(() => window.viewModel.playlist.library.onOpen())
-      await page.locator('.playlist-management:not([inert]) .playlist-playback-nav button[aria-label="打开播放界面"]').click({ force: true })
+      await page.locator('.playlist-playback-dock:not([aria-hidden="true"]) .playlist-playback-nav button[aria-label="打开播放界面"]').click({ force: true })
       await page.locator('.player-stage').waitFor()
       await page.locator('.window-bar button[aria-label="播放列表"]').click({ force: true })
       await page.locator('.playlist-panel:not([inert])').waitFor()

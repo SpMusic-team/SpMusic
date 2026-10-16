@@ -1,5 +1,6 @@
-.playlist-management { position: absolute; inset: 40px 0 0; z-index: 30; background: var(--player-dock); color: var(--player-ink); }
+.playlist-management { position: absolute; inset: 40px 0 0; z-index: 30; background: transparent; color: var(--player-ink); pointer-events: none; }
 .playlist-management > .playlist-library-sidebar { top: -40px; }
+.playlist-management > * { pointer-events: auto; }
 .playlist-management .playlist-library-sidebar { padding-bottom: 248px; }
 .playlist-management .playlist-library-dialog .playlist-library-sidebar { padding-bottom: 24px; }
 .playlist-management-content { position: absolute; inset: 0 0 0 320px; padding-bottom: 248px; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--app-border) transparent; }

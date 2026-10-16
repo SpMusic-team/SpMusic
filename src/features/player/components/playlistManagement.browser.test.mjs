@@ -329,7 +329,7 @@ try {
   })
   assert.equal(docks.filter(dock=>!dock.inert&&!dock.hidden).length,1,'animated detail/management handoff exposes one interactive dock')
   assert(docks.every(dock=>dock.inert===dock.hidden),'exiting docks agree on keyboard and accessibility exclusion')
-  await moving.page.locator('.playlist-management .playlist-playback-nav').getByRole('button',{name:'打开播放界面',exact:true}).click()
+  await moving.page.locator('.playlist-playback-dock:not([aria-hidden="true"]) .playlist-playback-nav').getByRole('button',{name:'打开播放界面',exact:true}).click()
   await moving.page.waitForFunction(()=>!document.querySelector('.playlist-management')&&!document.querySelector('.playlist-panel')&&!document.querySelector('.player-shell').hasAttribute('data-controller-background-present'))
   assert.deepEqual(moving.errors,[])
   report.push('normal motion: one interactive dock during handoff; exiting dock inert/aria-hidden; shared dock background owner released on player entry')

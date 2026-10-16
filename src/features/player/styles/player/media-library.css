@@ -1,4 +1,8 @@
-.media-library-overview { position: absolute; inset: 40px 0 0; z-index: 30; overflow: auto; background: var(--player-dock); color: var(--app-text-strong); scrollbar-width: thin; scrollbar-color: var(--app-border) transparent; }
+.media-library-overview { position: absolute; inset: 40px 0 0; z-index: 30; padding-bottom: 248px; overflow: auto; background: transparent; color: var(--app-text-strong); scrollbar-width: thin; scrollbar-color: var(--app-border) transparent; }
+.player-shell[data-library-open] { overflow: clip; }
+.player-shell[data-library-open] .window-bar { z-index: 32; }
+.library-navigation-background { position: absolute; inset: 0; z-index: 29; background: var(--player-dock); pointer-events: none; }
+.media-library-category[data-navigation-anchor] { position: relative; z-index: 1; }
 .media-library-heading { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 36px 48px 24px 8px; }
 .media-library-brand { display: flex; align-items: center; gap: 24px; padding: 16px 0 24px 31px; }
 .media-library-brand img { width: 104px; height: 104px; flex-shrink: 0; transform: scaleY(-1); border-radius: var(--app-radius-pill); box-shadow: 0 4px 4px color-mix(in srgb, var(--player-ink) 25%, transparent); }
@@ -6,7 +10,8 @@
 .media-library-more { width: 84px; height: 84px; flex-shrink: 0; padding: 0; border: 2px solid var(--player-blue); border-radius: var(--app-radius-pill); background: transparent; color: var(--player-blue); }
 .media-library-more > span { display: block; width: 48px; height: 48px; background: currentColor; mask-position: center; mask-size: contain; mask-repeat: no-repeat; }
 .media-library-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 600px), 1fr)); align-content: start; align-items: start; justify-content: start; row-gap: 80px; max-width: 2560px; margin: 0; padding: 0 36px 36px; }
-.media-library-category { display: flex; min-width: 0; height: auto; border: 0; justify-content: start; gap: 36px; padding: 16px; border-radius: var(--app-radius-lg); color: inherit; white-space: normal; text-align: left; }
+/* Motion owns geometry and opacity; Button's transition-all must not retween them. */
+.media-library-category { display: flex; min-width: 0; height: auto; border: 0; justify-content: start; gap: 36px; padding: 16px; border-radius: var(--app-radius-lg); color: inherit; white-space: normal; text-align: left; transition-property: background-color, color, border-color, box-shadow; }
 .media-library-category-disc { display: grid; width: 84px; height: 84px; flex-shrink: 0; place-items: center; border-radius: var(--app-radius-pill); background: var(--media-library-category-color); box-shadow: 0 4px 4px color-mix(in srgb, var(--player-ink) 25%, transparent); }
 .media-library-category-glyph { display: block; flex-shrink: 0; background: var(--library-icon); mask-position: center; mask-size: contain; mask-repeat: no-repeat; }
 .media-library-category-label { font-size: calc(36px * var(--app-font-scale)); font-weight: 400; line-height: 44px; overflow-wrap: anywhere; }

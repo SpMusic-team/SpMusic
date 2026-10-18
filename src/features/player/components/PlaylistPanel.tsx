@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
-import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
+import { useAppearance, useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { getShuffleModePresentation, showPlaybackModeToast } from '@/features/player/components/playbackModePresentation'
 import { IconButton } from '@/features/player/components/IconButton'
 import { PlaylistCard } from '@/features/player/components/PlaylistCard'
@@ -13,6 +13,7 @@ import { PlaylistCoverImage } from '@/features/player/components/PlaylistCoverIm
 import { PlaylistPlaybackDock } from '@/features/player/components/PlaylistPlaybackDock'
 import { PlaylistLibrarySidebar } from '@/features/player/components/PlaylistLibrarySidebar'
 import { useCollectionLayout } from '@/features/player/hooks/useCollectionLayout'
+import { usePlaylistContentWindow } from '@/features/player/hooks/usePlaylistContentWindow'
 import { usePlaylistOverscroll } from '@/features/player/hooks/usePlaylistOverscroll'
 import { usePlaylistControllerMotion } from '@/features/player/hooks/usePlaylistControllerMotion'
 import { LibraryDockContext, useLibraryDockBinding } from '@/features/player/hooks/useLibraryDockBinding'
@@ -79,6 +80,15 @@ const DETAIL_LAYOUT_SELECTORS = {
   getId: (element: HTMLElement) => element.dataset.playlistTrackId,
 }
 const defaultPlaylistLevel = () => typeof window !== 'undefined' && window.innerWidth > 1024 ? 0 : DEFAULT_PLAYLIST_LAYOUT_LEVEL
+
+// Intrinsic line-count shapes cover both tile and extended metadata layouts.
+function playlistCardContentShape(track: PlaylistTrackItemViewModel): number {
+  const clock = Number.isFinite(track.durationSeconds) && (track.durationSeconds ?? 0) > 0
+  const bitDepth = track.audioFormat?.bitDepth
+  const format = clock || Boolean(track.fileExtension) || (Number.isFinite(bitDepth) && (bitDepth ?? 0) >= 24)
+  return Number(Boolean(track.title)) | (Number(Boolean(track.artist)) << 1)
+    | (Number(Boolean(track.artist || track.album)) << 2) | (Number(format) << 3)
+}
 
 type PlaylistCardRow = {
   start: number
@@ -227,6 +237,7 @@ export function PlaylistPanel({
   searchRequestId = 0,
 }: PlaylistPanelProps) {
   const systemIcons = useSystemIcons()
+  const { appearance } = useAppearance()
   const appearanceMotion = useAppearanceMotion()
   const isPresent = useIsPresent()
   // Use a 250ms default, preserving theme scaling and the presence cleanup budget.
@@ -272,11 +283,43 @@ export function PlaylistPanel({
   const artworkWindowIdsRef = useRef<ReadonlySet<string>>(new Set())
   const artworkWindowKeyRef = useRef('')
   const metadataWindowKeyRef = useRef<string | null>(null)
+  const [failedCoverSources, setFailedCoverSources] = useState<ReadonlyMap<string, string>>(() => new Map())
+  const handleCoverFailed = useCallback((trackId: string, source: string) => {
+    setFailedCoverSources(previous => previous.get(trackId) === source ? previous : new Map(previous).set(trackId, source))
+  }, [])
+  const query = filter.trim().toLowerCase()
+  const filteredTracks = useMemo(() => {
+    if (!query) return tracks
+    return tracks.filter((track) => track.title.toLowerCase().includes(query)
+      || track.artist.toLowerCase().includes(query) || track.album.toLowerCase().includes(query))
+  }, [query, tracks])
+  const filteredTrackIdsKey = useMemo(() => filteredTracks.map(track => track.id).join('\u0000'), [filteredTracks])
+  const contentShapes = useMemo(() => new Map(filteredTracks.map(track => [track.id, playlistCardContentShape(track)])), [filteredTracks])
+  const contentRepresentatives = useMemo(() => {
+    const shapes = new Set<number>()
+    return new Set([...contentShapes].flatMap(([id, shape]) => {
+      if (shapes.has(shape)) return []
+      shapes.add(shape)
+      return [id]
+    }))
+  }, [contentShapes])
+  const hasCustomLayout = (appearance.metadata.tier !== 'standard' && Boolean(appearance.advanced.customCss.trim()))
+    || (appearance.metadata.tier === 'experimental' && Boolean(appearance.experimental.layoutCss.trim()))
+  const contentWindowEnabled = filteredTracks.length > 64 && !hasCustomLayout
+  const contentWindow = usePlaylistContentWindow({
+    panelRef, gridRef, enabled: contentWindowEnabled, active: isPresent,
+    representatives: contentRepresentatives, theme: appearance,
+    shapeKey: [...new Set(contentShapes.values())].sort((left, right) => left - right).join(','),
+    trackIdsKey: filteredTrackIdsKey,
+    entryTrackId: entryPosition?.target === 'current-track' ? currentTrackId : null,
+  })
+  const refreshContentWindow = contentWindow.refresh
   const { level: layoutLevel, layout, announcement: layoutAnnouncement } = useCollectionLayout({
     panelRef, gridRef, layouts: PLAYLIST_LAYOUTS, storageKey: PLAYLIST_LAYOUT_STORAGE_KEY,
     defaultLevel: defaultPlaylistLevel, selectors: DETAIL_LAYOUT_SELECTORS,
     announce: (nextLayout) => `歌曲视图已切换为${nextLayout.label}`,
     onBeforeTransition: (snapshot, grid) => {
+      contentWindow.hold(snapshot?.keys() ?? [])
       artworkHoldIdsRef.current = snapshot ? new Set(
         [...grid.querySelectorAll<HTMLElement>('[data-playlist-track-id]')].flatMap((card) => {
           const trackId = card.dataset.playlistTrackId
@@ -286,7 +329,7 @@ export function PlaylistPanel({
         }),
       ) : null
     },
-    onSettled: () => { artworkHoldIdsRef.current = null; setArtworkWindowRevision((previous) => previous + 1) },
+    onSettled: () => { contentWindow.release(); artworkHoldIdsRef.current = null; setArtworkWindowRevision((previous) => previous + 1) },
   })
 
   const unavailable = useMemo(
@@ -297,19 +340,6 @@ export function PlaylistPanel({
     status: totalDurationStatus, totalSeconds: totalDurationSeconds,
   }, tracks.length)
 
-  const query = filter.trim().toLowerCase()
-  const filteredTracks = useMemo(() => {
-    if (!query) return tracks
-    return tracks.filter((track) => (
-      track.title.toLowerCase().includes(query)
-      || track.artist.toLowerCase().includes(query)
-      || track.album.toLowerCase().includes(query)
-    ))
-  }, [query, tracks])
-  const filteredTrackIdsKey = useMemo(
-    () => filteredTracks.map((track) => track.id).join('\u0000'),
-    [filteredTracks],
-  )
   usePlaylistOverscroll(panelRef, appearanceMotion.disabled, `${playlistName}:${layoutLevel}:${filteredTrackIdsKey}:${searchOpen}:${selectMode}`)
   const controllerMotion = usePlaylistControllerMotion(
     panelRef,
@@ -382,6 +412,7 @@ export function PlaylistPanel({
       if (entryPosition.target === 'top') {
         panel.scrollTo({ top: 0, behavior: 'instant' })
         rebaseController({ reveal: true })
+        refreshContentWindow()
         initialPositionAppliedRef.current = true
         return
       }
@@ -396,8 +427,9 @@ export function PlaylistPanel({
     const cardRect = currentCard.getBoundingClientRect()
     panel.scrollTop += cardRect.top - panelRect.top - (panel.clientHeight - cardRect.height) / 2
     rebaseController({ reveal: true })
+    refreshContentWindow()
     initialPositionAppliedRef.current = true
-  }, [currentTrackId, filteredTrackIdsKey, entryPosition, rebaseController])
+  }, [currentTrackId, filteredTrackIdsKey, entryPosition, rebaseController, refreshContentWindow])
 
   useLayoutEffect(() => {
     if (!searchOpen || searchRequestId <= 0 || focusedSearchRequestIdRef.current === searchRequestId) return
@@ -411,7 +443,8 @@ export function PlaylistPanel({
     panel.scrollTo({ top: 0, behavior: 'instant' })
     input.focus({ preventScroll: true })
     rebaseController({ reveal: true })
-  }, [searchOpen, searchRequestId, rebaseController])
+    refreshContentWindow()
+  }, [searchOpen, searchRequestId, rebaseController, refreshContentWindow])
 
   useLayoutEffect(() => {
     rebaseController({ reveal: true })
@@ -650,11 +683,17 @@ export function PlaylistPanel({
       selected={selectedIds.has(track.id)}
       artworkVisible={artworkWindowIds.has(track.id)}
       showExtendedMetadata={showExtendedMetadata}
+      contentVisible={!contentWindowEnabled || contentRepresentatives.has(track.id) || contentWindow.ids.has(track.id)}
+      contentRepresentative={contentRepresentatives.has(track.id)}
+      contentShape={contentShapes.get(track.id)!}
+      coverFailed={failedCoverSources.get(track.id) === `${track.coverImage ?? track.coverImageFallback}\0${track.coverImageFallback ?? ''}`}
+      onCoverFailed={handleCoverFailed}
       onActivate={handleActivate}
       onToggleSelect={handleToggleSelect}
     />
   )), [filteredTracks, currentTrackId, unavailable, onTrackSelect, selectMode, selectedIds,
-    artworkWindowIds, showExtendedMetadata, handleActivate, handleToggleSelect])
+    artworkWindowIds, showExtendedMetadata, handleActivate, handleToggleSelect, contentWindowEnabled,
+    contentRepresentatives, contentWindow.ids, contentShapes, failedCoverSources, handleCoverFailed])
 
   function renderPlaylistActions(compact = false) {
     return (
@@ -776,6 +815,7 @@ export function PlaylistPanel({
       <header className="playlist-hero">
         <motion.div className="playlist-hero-artwork" aria-hidden="true"
           layoutId={sharedScope ? `playlist-library-cover:${sharedScope}` : undefined}
+          layoutCrossfade={false}
           transition={{ layout: returnTransition }}>
           {firstTrack?.coverThumbnail ? (
             <PlaylistCoverImage className="playlist-hero-image" image={firstTrack.coverThumbnail} />
@@ -845,6 +885,7 @@ export function PlaylistPanel({
           <div
             ref={gridRef}
             className="playlist-grid"
+            data-content-window={contentWindowEnabled ? 'bounded' : 'full'}
             data-layout-level={layout.level}
             data-layout-flow={layout.flow}
             data-layout-columns={layout.columns}

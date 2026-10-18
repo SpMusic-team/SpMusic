@@ -111,10 +111,12 @@ async function settled(page, target) {
     const element = document.querySelector(target)
     return element && !document.querySelector(other) && getComputedStyle(element).opacity === '1'
   }, target)
-  // Wait for shared geometry to stop changing, independent of duration settings.
+  // Setup waits use elapsed time: a fixed frame budget shrinks on high-refresh
+  // displays. transition() retains its separate 450/725ms acceptance deadlines.
   await page.evaluate(async target => {
     let previous = '', stable = 0
-    for (let frame = 0; frame < 180 && stable < 5; frame++) {
+    const deadline = performance.now() + 10000
+    while (performance.now() < deadline && stable < 5) {
       await new Promise(requestAnimationFrame)
       const element = document.querySelector(target === '.playlist-panel' ? '.playlist-hero-artwork' : '.playlist-management-cover')
       const rect = element?.getBoundingClientRect()

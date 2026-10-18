@@ -65,6 +65,10 @@ export function PlaylistLibraryPanel({ playlist, librarySidebarOpen, onLibrarySi
   const toolbarControls = useAnimationControls()
   const navigationMotion = appearanceMotion.libraryNavigation
   useLayoutEffect(() => {
+    // Retain the last active heading geometry during departure. Reentry
+    // measures and subscribes again instead of letting the outgoing page
+    // continue publishing geometry while its successor enters.
+    if (!isPresent) return
     const heading = headingRef.current
     if (!heading || !chromeTransition.geometry) return
     const measure = () => chromeTransition.geometry!.current.items.set(`heading:${categoryId}`, readLibraryLayoutRect(heading))
@@ -193,6 +197,7 @@ export function PlaylistLibraryPanel({ playlist, librarySidebarOpen, onLibrarySi
               <motion.span className="playlist-management-cover" aria-hidden="true"
                 layoutDependency={item.scope}
                 layoutId={appearanceMotion.disabled ? undefined : `playlist-library-cover:${item.scope}`}
+                layoutCrossfade={false}
                 transition={{ layout: returnTransition }}><LibraryCover coverTrack={item.coverTrack} />{selectMode ? <span className="playlist-management-check">{selected.has(item.scope) ? '✓' : ''}</span> : null}</motion.span>
               <span className="playlist-management-copy">
               <motion.span className="playlist-management-name" title={item.name}

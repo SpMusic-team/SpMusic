@@ -1,4 +1,4 @@
-import { memo, useMemo, useState, type CSSProperties, type SyntheticEvent } from 'react'
+import { memo, type CSSProperties, type SyntheticEvent } from 'react'
 import { useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { PlaylistCoverImage } from '@/features/player/components/PlaylistCoverImage'
 import { appCopy } from '@/features/player/model/playerCopy'
@@ -14,6 +14,11 @@ type PlaylistCardProps = {
   selected: boolean
   artworkVisible: boolean
   showExtendedMetadata: boolean
+  contentVisible: boolean
+  contentRepresentative: boolean
+  contentShape: number
+  coverFailed: boolean
+  onCoverFailed: (trackId: string, source: string) => void
   onActivate: (trackId: string) => void
   onToggleSelect: (trackId: string) => void
 }
@@ -24,6 +29,10 @@ type PlaylistCardCoverState = 'ready' | 'loading' | 'empty' | 'idle' | 'error'
 
 const COVER_STAGGER_STEP_MS = 120
 const COVER_STAGGER_PHASES = 7
+const cardStyles = Array.from({ length: 16 }, (_, shape) => Array.from({ length: COVER_STAGGER_PHASES }, (_, phase) => ({
+  '--cover-placeholder-stagger': `${phase * COVER_STAGGER_STEP_MS}ms`,
+  '--playlist-card-slot-min-height': `var(--playlist-content-height-${shape}, 0px)`,
+}) as CSSProperties))
 
 function formatTrackClock(durationSeconds?: number): string | null {
   if (durationSeconds == null || !Number.isFinite(durationSeconds) || durationSeconds <= 0) return null
@@ -41,23 +50,20 @@ export const PlaylistCard = memo(function PlaylistCard({
   selected,
   artworkVisible,
   showExtendedMetadata,
+  contentVisible,
+  contentRepresentative,
+  contentShape,
+  coverFailed,
+  onCoverFailed,
   onActivate,
   onToggleSelect,
 }: PlaylistCardProps) {
-  const systemIcons = useSystemIcons()
-  const [coverFailed, setCoverFailed] = useState(false)
   const handleClick = () => {
     if (selectMode) onToggleSelect(track.id)
     else onActivate(track.id)
   }
   const title = track.title
   const label = unavailable ? `${title} · ${appCopy.playlistPage.moreUnavailable}` : title
-  const artistAlbum = showExtendedMetadata && track.album && track.album !== track.artist
-    ? `${track.artist} - ${track.album}`
-    : track.artist
-  const clock = formatTrackClock(track.durationSeconds)
-  const bitDepth = track.audioFormat?.bitDepth
-  const coverSource = track.coverImage ?? track.coverImageFallback
   // `hasLocalArtwork` is only written once metadata hydration lands, so an
   // undefined value means "not known yet" rather than "no artwork". Treating it
   // as missing flashed the note glyph on every card during fast scrolling and
@@ -79,32 +85,6 @@ export const PlaylistCard = memo(function PlaylistCard({
           ? 'loading'
           : track.hasLocalArtwork === false ? 'empty' : 'idle'
     : 'idle'
-  const coverMarkVisible = coverState === 'empty' || coverState === 'error'
-  // Stable identity: a fresh object literal on every render defeats the memo()
-  // above. The other half of that story is upstream, where PlayerShell builds a
-  // new track object per hydrated entry, so this only removes one of the two
-  // causes.
-  const staggerMs = (Math.abs(index) % COVER_STAGGER_PHASES) * COVER_STAGGER_STEP_MS
-  const coverStaggerStyle = useMemo(
-    () => ({ '--cover-placeholder-stagger': `${staggerMs}ms` }) as CSSProperties,
-    [staggerMs],
-  )
-  const formatParts = showExtendedMetadata ? [clock, track.fileExtension?.toLowerCase()]
-    .filter((part): part is string => Boolean(part))
-    : []
-  if (showExtendedMetadata && bitDepth != null && Number.isFinite(bitDepth) && bitDepth >= 24) {
-    formatParts.push(`${bitDepth}bit`)
-  }
-
-  const handleCoverError = (event: SyntheticEvent<HTMLImageElement>) => {
-    const image = event.currentTarget
-    if (track.coverImageFallback && image.src !== track.coverImageFallback) {
-      image.src = track.coverImageFallback
-      return
-    }
-    image.hidden = true
-    setCoverFailed(true)
-  }
 
   return (
     <button
@@ -112,7 +92,10 @@ export const PlaylistCard = memo(function PlaylistCard({
       className="playlist-card"
       data-playlist-track-id={track.id}
       data-cover-state={coverState}
-      style={coverStaggerStyle}
+      data-content-visible={contentVisible ? 'true' : 'false'}
+      data-content-representative={contentRepresentative ? 'true' : undefined}
+      data-content-shape={contentShape}
+      style={cardStyles[contentShape]![Math.abs(index) % COVER_STAGGER_PHASES]}
       data-current={current ? 'true' : undefined}
       data-unavailable={unavailable ? 'true' : undefined}
       data-selected={selected ? 'true' : undefined}
@@ -124,16 +107,43 @@ export const PlaylistCard = memo(function PlaylistCard({
       aria-label={label}
       onClick={handleClick}
     >
+      {contentVisible ? <PlaylistCardContent track={track} artworkVisible={artworkVisible}
+        selectMode={selectMode} unavailable={unavailable} showExtendedMetadata={showExtendedMetadata}
+        coverState={coverState} coverFailed={coverFailed} onCoverFailed={onCoverFailed} /> : null}
+    </button>
+  )
+})
+
+function PlaylistCardContent({ track, artworkVisible, selectMode, unavailable, showExtendedMetadata, coverState, coverFailed, onCoverFailed }: Pick<PlaylistCardProps, 'track' | 'artworkVisible' | 'selectMode' | 'unavailable' | 'showExtendedMetadata' | 'coverFailed' | 'onCoverFailed'> & { coverState: PlaylistCardCoverState }) {
+  const systemIcons = useSystemIcons()
+  const coverSource = track.coverImage ?? track.coverImageFallback
+  const coverMarkVisible = coverState === 'empty' || coverState === 'error'
+  const artistAlbum = showExtendedMetadata && track.album && track.album !== track.artist ? `${track.artist} - ${track.album}` : track.artist
+  const bitDepth = track.audioFormat?.bitDepth
+  const formatParts = showExtendedMetadata ? [formatTrackClock(track.durationSeconds), track.fileExtension?.toLowerCase()].filter((part): part is string => Boolean(part)) : []
+  if (showExtendedMetadata && bitDepth != null && Number.isFinite(bitDepth) && bitDepth >= 24) formatParts.push(`${bitDepth}bit`)
+  const handleCoverError = (event: SyntheticEvent<HTMLImageElement>) => {
+    const image = event.currentTarget
+    const fallback = track.coverImageFallback
+    if (fallback && image.dataset.fallbackAttempted !== 'true' && image.src !== new URL(fallback, window.location.href).href) {
+      image.dataset.fallbackAttempted = 'true'
+      image.src = fallback
+    } else {
+      image.hidden = true
+      if (coverSource) onCoverFailed(track.id, `${coverSource}\0${fallback ?? ''}`)
+    }
+  }
+  return <>
       <span className="playlist-card-cover" aria-hidden="true">
         {track.coverThumbnail ? (
           <PlaylistCoverImage className="playlist-card-cover-image" image={track.coverThumbnail} />
-        ) : artworkVisible && track.hasLocalArtwork === false && coverSource ? (
+        ) : !coverFailed && artworkVisible && track.hasLocalArtwork === false && coverSource ? (
           // This eager <img> has no thumbnail pipeline and therefore no load
           // signal, so it opts out of the cross-dissolve: without its own class
           // it would inherit the dissolve's opacity 0 and never appear. It is
           // gated on a *known* "no local artwork" so an unhydrated track cannot
           // fail here and latch the card into the error state.
-          <img className="playlist-card-cover-image playlist-card-cover-image-eager" src={coverSource} alt="" onError={handleCoverError} />
+          <img key={`${coverSource}\0${track.coverImageFallback ?? ''}`} className="playlist-card-cover-image playlist-card-cover-image-eager" src={coverSource} alt="" onError={handleCoverError} />
         ) : null}
         {coverMarkVisible ? (
           <span className="playlist-card-cover-mark">
@@ -158,6 +168,5 @@ export const PlaylistCard = memo(function PlaylistCard({
           </span>
         ) : null}
       </span>
-    </button>
-  )
-})
+  </>
+}

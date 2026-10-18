@@ -76,6 +76,8 @@ test('real card keeps its owned cover when only the viewport/layout flag changes
   const props = {
     track: { id: 'track', title: '歌曲', artist: '艺术家', album: '专辑', coverThumbnail },
     current: false, unavailable: false, canActivate: true, selectMode: false, selected: false,
+    contentVisible: true, contentRepresentative: true, contentShape: 7,
+    coverFailed: false, onCoverFailed: () => {},
     showExtendedMetadata: false, onActivate: () => {}, onToggleSelect: () => {},
   }
   for (const artworkVisible of [true, false, true]) {
@@ -83,5 +85,31 @@ test('real card keeps its owned cover when only the viewport/layout flag changes
     assert.match(markup, /src="blob:retained-card"/)
     assert.match(markup, /data-cover-state="ready"/)
     assert.match(markup, /data-loaded="true"/)
+  }
+})
+
+test('real card evicts content without forgetting the owned decoded resource', () => {
+  const Card = loadComponent('PlaylistCard')
+  const coverThumbnail = { src: 'blob:content-window-retained', width: 128, height: 128, encodedBytes: 65536 }
+  markPlaylistCoverDecoded(coverThumbnail)
+  const props = {
+    track: { id: 'retained-window-track', title: '窗口歌曲', artist: '艺术家', album: '专辑', coverThumbnail },
+    current: false, unavailable: false, canActivate: true, selectMode: false, selected: false,
+    artworkVisible: true, showExtendedMetadata: false, contentRepresentative: false, contentShape: 7,
+    coverFailed: false, onCoverFailed: () => {}, onActivate: () => {}, onToggleSelect: () => {},
+  }
+  for (const contentVisible of [true, false, true]) {
+    const markup = renderToStaticMarkup(createElement(Card, { ...props, contentVisible }))
+    assert.match(markup, /data-playlist-track-id="retained-window-track"/)
+    assert.match(markup, /aria-label="窗口歌曲"/)
+    assert.match(markup, /data-cover-state="ready"/)
+    assert.equal(isPlaylistCoverDecoded(coverThumbnail), true)
+    if (contentVisible) {
+      assert.match(markup, /src="blob:content-window-retained"/)
+      assert.match(markup, /data-loaded="true"/)
+      assert.match(markup, /playlist-card-copy/)
+    } else {
+      assert.doesNotMatch(markup, /<img|playlist-card-copy/)
+    }
   }
 })

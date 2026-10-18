@@ -383,6 +383,12 @@
 
 .playlist-card[data-unavailable="true"] { opacity: 0.5; }
 
+/* Empty offscreen roots retain measured intrinsic height. Grid can still
+   stretch them to their row's maximum, just as it stretches a complete card. */
+.playlist-grid[data-content-window="bounded"] .playlist-card[data-content-visible="false"] {
+  min-height: var(--playlist-card-slot-min-height, 0px);
+}
+
 .playlist-card-cover {
   position: relative;
   width: var(--playlist-cover-size, 135px);

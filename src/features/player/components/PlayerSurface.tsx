@@ -31,7 +31,7 @@ import {
 } from '@/features/player/hooks/useArtworkVisualResource'
 import type { PlayerPlaybackViewModel, PlayerUiViewModel, TrackCardPreviewToken } from '@/features/player/model/playerUiViewModel'
 import { getTrackCardOpacity, getTrackCardPose, trackCardTransform, type TrackCardPose, type TrackCardRole } from '@/features/player/model/trackCardTransition'
-import { createTrackCardMotionTail } from '@/features/player/model/trackCardMotionTail'
+import { createTrackCardMotionTail, createTrackCardOvershootReturn } from '@/features/player/model/trackCardMotionTail'
 import {
   integrateTrackCardPointer,
   trackCardDirection,
@@ -416,6 +416,7 @@ type TrackCardSettleContext = {
   target: 0 | 1
   durationSeconds: number
   overshootPx?: number
+  overshootCoverWidth?: number
   watchdogBudgetMs?: number
   onComplete: () => void
 }
@@ -592,7 +593,6 @@ const TRACK_CARD_COMMIT_PROGRESS = 0.28
 const TRACK_CARD_COMMIT_VELOCITY = 650
 const TRACK_CARD_OVERSHOOT_VELOCITY = 1100
 const TRACK_CARD_RELEASE_FRESH_MS = 70
-const TRACK_CARD_OVERSHOOT_SECONDS = 0.09
 const TRACK_CARD_OVERSHOOT_WIDTH = 0.07
 const TRACK_CARD_SETTLE_DEADLINE_MS = 800
 const TRACK_CARD_CAPTURE_IDLE_DEADLINE_MS = 2000
@@ -605,12 +605,18 @@ export function PlayerSurface({
   const { playback, timeline, volume, queue, playlist, feedback } = viewModel
   const { appearance } = useAppearance()
   const appearanceMotion = useAppearanceMotion()
-  const trackCardSettleDeadlineMs = Math.max(
-    TRACK_CARD_SETTLE_DEADLINE_MS,
-    appearanceMotion.trackCardCommitDurationSeconds * 1000
-      + TRACK_CARD_OVERSHOOT_SECONDS * 1000 * appearance.motion.durationScale + 100,
-    TRACK_CARD_CANCEL_SECONDS * 1000 * appearance.motion.durationScale + 100,
-  )
+  const trackCardSettleDeadlineMs = useMemo(() => {
+    const returnDuration = createTrackCardOvershootReturn(
+      TRACK_CARD_OVERSHOOT_WIDTH, 1,
+      appearanceMotion.trackCardCommitDurationSeconds * appearance.motion.durationScale,
+      appearanceMotion.trackCardCommitEase,
+    ).durationSeconds
+    return Math.max(
+      TRACK_CARD_SETTLE_DEADLINE_MS,
+      (appearanceMotion.trackCardCommitDurationSeconds + returnDuration) * 1000 + 100,
+      TRACK_CARD_CANCEL_SECONDS * 1000 * appearance.motion.durationScale + 100,
+    )
+  }, [appearance.motion.durationScale, appearanceMotion.trackCardCommitDurationSeconds, appearanceMotion.trackCardCommitEase])
   const libraryRouteKey = playlist.isOpen
       ? playlist.library?.route?.view === 'overview' ? 'overview' : playlist.library?.route?.view === 'category' ? `category:${playlist.library.route.categoryId}` : `tracks:${playlist.library?.currentScope ?? ''}`
       : null
@@ -1061,14 +1067,42 @@ export function PlayerSurface({
     onComplete: () => void,
     overshootPx = 0,
     commitEase: Easing = appearanceMotion.trackCardCommitEase,
+    overshootCoverWidth = 0,
+    returnDurationScale = 1,
   ) => {
     stopTrackCardAnimation(false)
     const runId = trackCardRunIdRef.current
-    const overshootReturnSeconds = TRACK_CARD_OVERSHOOT_SECONDS * appearance.motion.durationScale
+    const returnBaseSeconds = appearanceMotion.trackCardCommitDurationSeconds * appearance.motion.durationScale * returnDurationScale
+    const returnEase = appearanceMotion.trackCardCommitEase
+    const returnOvershoot = (onReturnComplete: () => void) => {
+      if (trackCardReducedMotion) {
+        trackCardOvershootAnimationRef.current = null
+        trackCardOvershootX.set(0)
+        if (trackCardRunIdRef.current === runId) onReturnComplete()
+        return
+      }
+      const tail = createTrackCardOvershootReturn(
+        trackCardOvershootX.get(), overshootCoverWidth, returnBaseSeconds, returnEase,
+      )
+      if (tail.durationSeconds <= 0) {
+        trackCardOvershootAnimationRef.current = null
+        trackCardOvershootX.set(0)
+        if (trackCardRunIdRef.current === runId) onReturnComplete()
+        return
+      }
+      trackCardOvershootAnimationRef.current = animate(trackCardOvershootX, 0, {
+        duration: tail.durationSeconds,
+        ease: tail.ease,
+        onComplete: () => {
+          if (trackCardRunIdRef.current !== runId) return
+          trackCardOvershootAnimationRef.current = null
+          onReturnComplete()
+        },
+      })
+    }
     if (durationSeconds <= 0) {
       trackCardProgress.set(target)
-      trackCardOvershootX.set(0)
-      if (trackCardRunIdRef.current === runId) onComplete()
+      returnOvershoot(onComplete)
       return
     }
     let progressComplete = false
@@ -1081,16 +1115,10 @@ export function PlayerSurface({
       })
     } else if (trackCardOvershootX.get() !== 0) {
       // An interrupted fast settle keeps its painted x until the pointer
-      // handoff is known. Ease that residual translation away on rollback.
-      trackCardOvershootAnimationRef.current = animate(trackCardOvershootX, 0, {
-        duration: Math.min(durationSeconds, overshootReturnSeconds),
-        ease: 'easeOut',
-        onComplete: () => {
-          if (trackCardRunIdRef.current !== runId) return
-          trackCardOvershootAnimationRef.current = null
-          residualOvershootComplete = true
-          if (progressComplete) onComplete()
-        },
+      // handoff is known. Finish its theme tail alongside the new progress.
+      returnOvershoot(() => {
+        residualOvershootComplete = true
+        if (progressComplete) onComplete()
       })
     }
     const controls = animate(trackCardProgress, target, {
@@ -1107,19 +1135,11 @@ export function PlayerSurface({
           return
         }
         trackCardOvershootAnimationRef.current?.stop()
-        trackCardOvershootAnimationRef.current = animate(trackCardOvershootX, 0, {
-          duration: overshootReturnSeconds,
-          ease: 'easeOut',
-          onComplete: () => {
-            if (trackCardRunIdRef.current !== runId) return
-            trackCardOvershootAnimationRef.current = null
-            onComplete()
-          },
-        })
+        returnOvershoot(onComplete)
       },
     })
     trackCardAnimationRef.current = controls
-  }, [appearance.motion.durationScale, appearanceMotion.trackCardCommitEase, stopTrackCardAnimation, trackCardOvershootX, trackCardProgress])
+  }, [appearance.motion.durationScale, appearanceMotion.trackCardCommitDurationSeconds, appearanceMotion.trackCardCommitEase, stopTrackCardAnimation, trackCardOvershootX, trackCardProgress, trackCardReducedMotion])
 
   const runTrackCardSettle = useCallback((context: TrackCardSettleContext) => {
     trackCardSettleRef.current = context
@@ -1134,13 +1154,21 @@ export function PlayerSurface({
     const tail = context.target === 1 && !trackCardReducedMotion && !context.session.outgoingReturnToCenter
       ? createTrackCardMotionTail(trackCardProgress.get(), context.durationSeconds, appearanceMotion.trackCardCommitEase)
       : { durationSeconds: legacyDurationSeconds, ease: appearanceMotion.trackCardCommitEase }
-    const durationSeconds = tail.durationSeconds
+    const dragDurationScale = context.session.kind === 'drag' && !trackCardReducedMotion
+      ? appearanceMotion.trackDragDurationScale : 1
+    const durationSeconds = tail.durationSeconds * dragDurationScale
+    const overshootPx = context.target === 1 ? context.overshootPx ?? 0 : 0
+    const overshootCoverWidth = context.overshootCoverWidth ?? trackCardCoverGeometry?.width ?? 0
+    const returnDurationSeconds = trackCardReducedMotion ? 0 : createTrackCardOvershootReturn(
+      overshootPx || trackCardOvershootX.get(), overshootCoverWidth,
+      appearanceMotion.trackCardCommitDurationSeconds * appearance.motion.durationScale * dragDurationScale,
+      appearanceMotion.trackCardCommitEase,
+    ).durationSeconds
     // Retain the budget of the animation actually started. A theme change can
     // shorten the current configuration while this older settle is still live.
-    context.watchdogBudgetMs = durationSeconds * 1000
-      + (context.target === 1 && context.overshootPx
-        ? TRACK_CARD_OVERSHOOT_SECONDS * 1000 * appearance.motion.durationScale : 0)
-      + 100
+    context.watchdogBudgetMs = (overshootPx !== 0 && durationSeconds > 0
+      ? durationSeconds + returnDurationSeconds
+      : Math.max(durationSeconds, returnDurationSeconds)) * 1000 + 100
     animateTrackCardProgress(
       context.target,
       durationSeconds,
@@ -1151,10 +1179,12 @@ export function PlayerSurface({
           ? 'dragging' : 'idle'
         context.onComplete()
       },
-      context.target === 1 ? context.overshootPx : 0,
+      overshootPx,
       tail.ease,
+      overshootCoverWidth,
+      dragDurationScale,
     )
-  }, [animateTrackCardProgress, appearance.motion.durationScale, appearanceMotion.trackCardCommitEase, trackCardProgress, trackCardReducedMotion])
+  }, [animateTrackCardProgress, appearance.motion.durationScale, appearanceMotion.trackCardCommitDurationSeconds, appearanceMotion.trackCardCommitEase, appearanceMotion.trackDragDurationScale, trackCardCoverGeometry?.width, trackCardOvershootX, trackCardProgress, trackCardReducedMotion])
 
   const hardResetTrackCardInteraction = useCallback(() => {
     clearCoverPress()
@@ -1355,6 +1385,7 @@ export function PlayerSurface({
       overshootPx: !trackCardReducedMotion && -releaseVelocityX * gesture.direction >= TRACK_CARD_OVERSHOOT_VELOCITY
         ? -gesture.direction * gesture.coverWidth * TRACK_CARD_OVERSHOOT_WIDTH
         : 0,
+      overshootCoverWidth: gesture.coverWidth,
       onComplete: () => {
         // Keep the completed pose until React has committed removal of the
         // exiting layer. The stale-session effect clears the session and
@@ -1651,7 +1682,7 @@ export function PlayerSurface({
                 ease: appearanceMotion.trackCardCommitEase,
               }
           retiringTrackCardAnimationRef.current = animate(retiringTrackCardProgress, 1, {
-            duration: tail.durationSeconds,
+            duration: tail.durationSeconds * (trackCardReducedMotion ? 1 : appearanceMotion.trackDragDurationScale),
             ease: tail.ease,
             onComplete: () => {
               if (retiringTrackCardSessionRef.current === retiringSession) finishRetiringTrackCard()
@@ -1735,7 +1766,7 @@ export function PlayerSurface({
     if (activeSession?.kind === 'drag') {
       trackCardProgress.set(gesture.progress)
     }
-  }, [appearanceMotion.trackCardCommitDurationSeconds, appearanceMotion.trackCardCommitEase, canResumeInterruptedSettle, discardTrackPreview, finishRetiringTrackCard, prepareTrackPreview, publishTrackCardSession, retiringTrackCardProgress, startCoverDrag, stopTrackCardAnimation, trackCardCoverGeometry, trackCardOvershootX, trackCardProgress, trackCardReducedMotion])
+  }, [appearanceMotion.trackCardCommitDurationSeconds, appearanceMotion.trackCardCommitEase, appearanceMotion.trackDragDurationScale, canResumeInterruptedSettle, discardTrackPreview, finishRetiringTrackCard, prepareTrackPreview, publishTrackCardSession, retiringTrackCardProgress, startCoverDrag, stopTrackCardAnimation, trackCardCoverGeometry, trackCardOvershootX, trackCardProgress, trackCardReducedMotion])
 
   const handleCoverPointerUp = useCallback((event: CoverPointerSample) => {
     const activeDrag = coverDragRef.current

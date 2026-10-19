@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { easingDefinitionToFunction, type Easing } from 'motion'
-import { createTrackCardMotionTail } from './trackCardMotionTail.ts'
+import { createTrackCardMotionTail, createTrackCardOvershootReturn } from './trackCardMotionTail.ts'
 
 type Bezier = readonly [number, number, number, number]
 const curves: ReadonlyArray<{ name: string; ease: Easing; bezier: Bezier }> = [
@@ -90,4 +90,47 @@ test('function easing input has the same tail as the corresponding tuple', () =>
   const callable = createTrackCardMotionTail(.7, .5, easingDefinitionToFunction(ease))
   assert.equal(tuple.durationSeconds, callable.durationSeconds)
   assert.equal(easingDefinitionToFunction(tuple.ease)(.5), easingDefinitionToFunction(callable.ease)(.5))
+})
+
+for (const curve of curves) {
+  test(`${curve.name}: overshoot returns use the distance remaining on the full timeline`, () => {
+    for (const fraction of [.01, .03, .07]) for (const direction of [-1, 1]) {
+      const start = 1 - fraction
+      const startTime = timeAtProgress(start, curve.bezier)
+      for (const duration of [.5, .6, 1.5, 1.8]) {
+        const result = createTrackCardOvershootReturn(direction * fraction * 400, 400, duration, curve.ease)
+        assert(Math.abs(result.durationSeconds - duration * (1 - startTime)) < .001)
+        const ease = easingDefinitionToFunction(result.ease)
+        let previous = 0
+        for (const time of [0, .1, .25, .5, .75, .9, 1]) {
+          const value = ease(time)
+          const expected = progressAtTime(startTime + (1 - startTime) * time, curve.bezier)
+          assert(Number.isFinite(value) && value >= previous && value <= 1)
+          assert(Math.abs(start + fraction * value - expected) < .001)
+          previous = value
+        }
+      }
+    }
+  })
+}
+
+test('zero overshoot completes immediately and invalid cover width has a deterministic fallback', () => {
+  const curve: Easing = [.4, 0, .2, 1]
+  for (const width of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+    assert.equal(createTrackCardOvershootReturn(0, width, .5, curve).durationSeconds, 0)
+    const fallback = createTrackCardOvershootReturn(12, width, .5, curve)
+    const expected = createTrackCardOvershootReturn(.07 * 400, 400, .5, curve)
+    assert.equal(fallback.durationSeconds, expected.durationSeconds)
+    const custom = createTrackCardOvershootReturn(12, width, .5, curve, .03)
+    assert.equal(custom.durationSeconds, createTrackCardOvershootReturn(.03 * 400, 400, .5, curve).durationSeconds)
+  }
+})
+
+test('offset sign and physical width do not change normalized return; full duration scales once', () => {
+  const curve: Easing = [.4, 0, .2, 1]
+  const normal = createTrackCardOvershootReturn(28, 400, .5, curve)
+  const larger = createTrackCardOvershootReturn(-56, 800, .5, curve)
+  const scale3 = createTrackCardOvershootReturn(28, 400, 1.5, curve)
+  assert.equal(normal.durationSeconds, larger.durationSeconds)
+  assert(Math.abs(scale3.durationSeconds - normal.durationSeconds * 3) < 1e-12)
 })

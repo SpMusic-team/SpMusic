@@ -18,6 +18,7 @@ export type AppearanceMotionRuntime = {
   layoutTransition: Transition
   trackCardCommitEase: Easing
   trackCardCommitDurationSeconds: number
+  trackDragDurationScale: number
   libraryNavigation: {
     transition: Transition
     chrome: Variants
@@ -57,6 +58,7 @@ export function createAppearanceMotionRuntime(
       layoutTransition: { duration: 0 },
       trackCardCommitEase: appearanceEasingMap[motion.trackSwitchEasing],
       trackCardCommitDurationSeconds: motion.trackSwitchDurationMs / 1000,
+      trackDragDurationScale: motion.trackDragDurationScale,
       libraryNavigation: {
         transition: { duration: 0 },
         chrome: { initial: { opacity: 1 }, animate: { opacity: 1 }, exit: { opacity: 1 } },
@@ -107,6 +109,7 @@ export function createAppearanceMotionRuntime(
     layoutTransition: prototypeSmartTransition,
     trackCardCommitEase: appearanceEasingMap[motion.trackSwitchEasing],
     trackCardCommitDurationSeconds: motion.trackSwitchDurationMs / 1000,
+    trackDragDurationScale: motion.trackDragDurationScale,
     libraryNavigation: {
       transition: prototypeSmartTransition,
       expansion: 0.7,

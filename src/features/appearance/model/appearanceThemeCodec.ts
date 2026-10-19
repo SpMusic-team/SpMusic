@@ -586,7 +586,7 @@ export function deserializeAppearanceTheme(source: string, fallback: AppearanceP
   reportUnknownKeys(theme, themeKeys, 'theme', warnings)
 
   const motionInput = section(theme, 'motion', warnings)
-  reportUnknownKeys(motionInput, ['level', 'durationScale', 'easing', 'trackSwitchEasing', 'trackSwitchDurationMs'], 'theme.motion', warnings)
+  reportUnknownKeys(motionInput, ['level', 'durationScale', 'easing', 'trackSwitchEasing', 'trackSwitchDurationMs', 'trackDragDurationScale'], 'theme.motion', warnings)
   const iconInput = section(theme, 'icons', warnings)
   reportUnknownKeys(iconInput, ['provider'], 'theme.icons', warnings)
   const advancedInput = section(theme, 'advanced', warnings)
@@ -611,6 +611,7 @@ export function deserializeAppearanceTheme(source: string, fallback: AppearanceP
       easing: enumValue(motionInput.easing, easingValues, fallback.motion.easing, 'theme.motion.easing', warnings),
       trackSwitchEasing: enumValue(motionInput.trackSwitchEasing, easingValues, fallback.motion.trackSwitchEasing, 'theme.motion.trackSwitchEasing', warnings),
       trackSwitchDurationMs: boundedNumber(motionInput.trackSwitchDurationMs, fallback.motion.trackSwitchDurationMs, 80, 600, 'theme.motion.trackSwitchDurationMs', warnings),
+      trackDragDurationScale: boundedNumber(motionInput.trackDragDurationScale, fallback.motion.trackDragDurationScale, 0.25, 1, 'theme.motion.trackDragDurationScale', warnings),
     },
     typography: parseTypography(section(theme, 'typography', warnings), fallback.typography, warnings),
     components: parseComponents(section(theme, 'components', warnings), fallback.components, warnings),

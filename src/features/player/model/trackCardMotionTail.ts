@@ -37,3 +37,21 @@ export function createTrackCardMotionTail(
     },
   }
 }
+
+export function createTrackCardOvershootReturn(
+  offsetPx: number,
+  coverWidth: number,
+  fullDurationSeconds: number,
+  ease: Easing,
+  fallbackFraction = 0.07,
+): TrackCardMotionTail {
+  if (offsetPx === 0) return { durationSeconds: 0, ease }
+  const fallback = Number.isFinite(fallbackFraction) && fallbackFraction > 0
+    ? Math.min(1, fallbackFraction) : 0.07
+  // A missing measurement must retain a bounded return, not treat a pixel
+  // offset as a whole-cover distance or snap a nonzero offset to the centre.
+  const fraction = Number.isFinite(coverWidth) && coverWidth > 0 && Number.isFinite(offsetPx)
+    ? Math.min(1, Math.abs(offsetPx) / coverWidth)
+    : fallback
+  return createTrackCardMotionTail(1 - fraction, fullDurationSeconds, ease)
+}

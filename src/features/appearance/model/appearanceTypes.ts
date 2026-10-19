@@ -74,6 +74,7 @@ export type AppearanceMotion = {
   easing: AppearanceEasing
   trackSwitchEasing: AppearanceEasing
   trackSwitchDurationMs: number
+  trackDragDurationScale: number
 }
 
 export type AppearanceTypography = {

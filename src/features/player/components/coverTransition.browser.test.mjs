@@ -37,7 +37,37 @@ function compile(input, delay) {
   const retiringTrackCardProgress = useMotionValue(0)`)
   source = source.replace('const retiringTrackCardProgress = useMotionValue(0)', `const retiringTrackCardProgress = useMotionValue(0)
   useLayoutEffect(() => retiringTrackCardProgress.on('change', value => window.coverEvents.push({type:'retiring-progress',value,animationTime:retiringTrackCardAnimationRef.current?.time,time:performance.now()})), [retiringTrackCardProgress])`)
+  source = source.replace('const trackCardOvershootX = useMotionValue(0)', `const trackCardOvershootX = useMotionValue(0)
+  useLayoutEffect(() => trackCardOvershootX.on('change', value => window.coverEvents.push({type:'overshoot',value,run:window.coverOvershootRun,animationTime:window.coverOvershootController?.time,time:performance.now()})), [trackCardOvershootX])`)
+  source = source.replace('const animateTrackCardProgress = useCallback', `const coverRecordOvershoot = (value, target, options) => {
+    const run = (window.coverOvershootRun || 0) + 1
+    window.coverOvershootRun = run
+    window.coverEvents.push({type:'overshoot-start',run,from:value.get(),target,durationSeconds:options.duration,width:window.coverLastGestureWidth ?? trackCardCoverGeometry?.width,time:performance.now()})
+    const controls = animate(value, target, {...options,onComplete:()=>{window.coverEvents.push({type:'overshoot-complete',run,time:performance.now()});options.onComplete?.()}})
+    window.coverOvershootController = controls
+    return controls
+  }
+  const animateTrackCardProgress = useCallback`)
+  source = source.replaceAll('animate(trackCardOvershootX,', 'coverRecordOvershoot(trackCardOvershootX,')
+  source = source.replace('const hardResetTrackCardInteraction = useCallback', `window.coverReadMotion = () => ({progress:trackCardProgress.get(),offset:trackCardOvershootX.get()})
+  window.coverResumeDragContext = () => {
+    stopTrackCardAnimation(false)
+    const context = trackCardSettleRef.current
+    const saved = {progress:trackCardProgress.get(),seconds:context.durationSeconds,kind:context.session.kind}
+    runTrackCardSettle(context)
+    return {...saved,resumedSeconds:context.durationSeconds}
+  }
+  window.coverSaveResidual = () => {stopTrackCardAnimation(false);window.coverSavedSession=trackCardSessionRef.current;window.coverSavedOffset=trackCardOvershootX.get()}
+  window.coverRunResidual = (restoreSaved = false) => {
+    stopTrackCardAnimation(false)
+    if(restoreSaved)trackCardOvershootX.set(window.coverSavedOffset)
+    const session = trackCardSessionRef.current ?? window.coverSavedSession
+    window.coverEvents.push({type:'residual-handoff',progress:trackCardProgress.get(),offset:trackCardOvershootX.get(),time:performance.now()})
+    runTrackCardSettle({session,target:1,durationSeconds:0,overshootCoverWidth:window.coverLastGestureWidth,onComplete:()=>{window.coverEvents.push({type:'residual-complete',offset:trackCardOvershootX.get(),time:performance.now()});completeTrackCardExit(session.outgoingLayerId)}})
+  }
+  const hardResetTrackCardInteraction = useCallback`)
   source = source.replace('trackCardSessionRef.current = session', `window.coverEvents.push({type:'session',session,time:performance.now()}); trackCardSessionRef.current = session`)
+  source = source.replace('const commitCoverDrag = useCallback((gesture: CoverDragGesture, releaseVelocityX: number) => {', `const commitCoverDrag = useCallback((gesture: CoverDragGesture, releaseVelocityX: number) => {window.coverLastGestureWidth=gesture.coverWidth;window.coverEvents.push({type:'fling-release',velocity:releaseVelocityX,progress:gesture.progress,direction:gesture.direction,width:gesture.coverWidth,time:performance.now()});`)
   source = source.replace('const controls = animate(trackCardProgress, target, {', `window.coverEvents.push({type:'animation-start',from:trackCardProgress.get(),target,durationSeconds,overshootPx,time:performance.now()}); const controls = animate(trackCardProgress, target, {`)
   source = source.replace('retiringTrackCardAnimationRef.current = animate(retiringTrackCardProgress, 1, {', `window.coverEvents.push({type:'retiring-start',from:retiringTrackCardProgress.get(),time:performance.now()}); retiringTrackCardAnimationRef.current = animate(retiringTrackCardProgress, 1, {`)
   source = source.replace(/(const controls = animate\(trackCardProgress, target, \{[\s\S]*?onComplete: \(\) => \{)/, `$1\n        if (window.coverConfig.dropCompletion) {window.coverEvents.push({type:'dropped-completion',time:performance.now()});return}`)
@@ -109,7 +139,7 @@ function Fixture(){
  const viewModel={playback,timeline:{positionSeconds:0,durationSeconds:180,interaction:'following',onPreviewStart:noop,onPreview:noop,onCommit:noop,onCancelPreview:noop},volume:{valuePercent:50,isBusy:false,isDisabled:false,onChange:noop},queue:{tracks,isOpen:false,onToggle:noop},playlist:{isOpen:false,onOpenChange:noop,tracks,shuffleMode:'none',onShuffleCycle:noop},feedback:{onToggle:noop}};
  return React.createElement(AppearanceProvider,null,React.createElement(ThemeBridge),state.mounted&&React.createElement(PlayerSurface,{viewModel}));
 }
-function ThemeBridge(){const context=useAppearance();window.coverThemeSnapshot={motion:context.appearance.motion,commitEase:context.motion.trackCardCommitEase,commitSeconds:context.motion.trackCardCommitDurationSeconds};window.coverSetMotion=patch=>context.previewAppearance({...context.appearance,motion:{...context.appearance.motion,...patch}});return null}
+function ThemeBridge(){const context=useAppearance();window.coverThemeSnapshot={motion:context.appearance.motion,commitEase:context.motion.trackCardCommitEase,commitSeconds:context.motion.trackCardCommitDurationSeconds,disabled:context.motion.disabled};window.coverSetMotion=patch=>context.previewAppearance({...context.appearance,motion:{...context.appearance.motion,...patch}});return null}
 function assertToken(p,id){if(!p||p.id!==id)throw Error('invalid preview token')}
 ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(Fixture));
 `
@@ -128,6 +158,14 @@ async function open(source, dpr, refresh, reducedMotion = 'no-preference', hookS
   await page.goto(origin + '/__cover_test')
   await page.waitForSelector('.track-card-plane[data-track-card-phase="active"] .cover-frame')
   await page.waitForTimeout(400)
+  // Older calibration modes describe their original drag timing. Keep that
+  // reference explicit; the speed mode must exercise the real new default.
+  const referenceTiming = process.env.SPMUSIC_COVER_MOTION_ONLY || process.env.SPMUSIC_COVER_CLICK_ONLY
+    || process.env.SPMUSIC_COVER_DRAG_ONLY || process.env.SPMUSIC_COVER_OVERSHOOT_ONLY
+  if (referenceTiming && !process.env.SPMUSIC_COVER_SPEED_ONLY) {
+    await page.evaluate(() => window.coverSetMotion({ trackDragDurationScale: 1 }))
+    await page.waitForTimeout(80)
+  }
   await page.evaluate(refresh => { window.coverConfig.refresh = refresh; window.coverEvents = [] }, refresh)
   return { page, errors }
 }
@@ -531,7 +569,7 @@ function bezierParameter(value, first, second) {
 }
 const switchProgressAtTime = time => bezierCoordinate(bezierParameter(Math.min(1, Math.max(0, time)), .4, .2), 0, 1)
 const switchTimeAtProgress = progress => bezierCoordinate(bezierParameter(progress, 0, 1), .4, .2)
-function dragTiming(events, tail) {
+function dragTiming(events, tail, fullDurationMs = 500) {
   const start = events.find(e => e.type === 'animation-start' && e.target === 1)
   assert(start, 'release starts a committed settle')
   const release = events.find(e => e.type === 'release-marker')
@@ -541,13 +579,13 @@ function dragTiming(events, tail) {
   const completion = samples.find(e => e.value >= .999)
   assert(completion, 'committed release reaches the final pose')
   const startTime = switchTimeAtProgress(start.from)
-  const expectedMs = tail ? 500 * (1 - startTime) : 500 * Math.max(.15, 1 - start.from)
+  const expectedMs = tail ? fullDurationMs * (1 - startTime) : fullDurationMs * Math.max(.15, 1 - start.from)
   assert(Math.abs(start.durationSeconds * 1000 - expectedMs) < .5, 'settle duration follows its respective baseline or tail timeline')
   let maxError = 0, worst = null, previous = start.from
   for (const sample of samples.filter(s => s.time <= completion.time)) {
     if (tail) assert(Number.isFinite(sample.animationTime), 'sample captures the real Motion controller clock')
     const elapsed = sample.animationTime * 1000
-    const expected = tail ? switchProgressAtTime(startTime + elapsed / 500)
+    const expected = tail ? switchProgressAtTime(startTime + elapsed / fullDurationMs)
       : start.from + (1 - start.from) * switchProgressAtTime(elapsed / expectedMs)
     if (Math.abs(sample.value - expected) > maxError) {
       maxError = Math.abs(sample.value - expected)
@@ -655,8 +693,298 @@ async function dragInteractionRegression() {
   console.log('PASS interrupted button / retiring card uses its remaining curve tail')
   await regress()
 }
+async function fling(page, direction = 1, fraction = .6) {
+  const box = await page.locator('.track-card-plane[data-track-card-phase="active"] .cover-frame').first().boundingBox()
+  assert(box, 'fast pointer input has a real cover')
+  const x = box.x + box.width * (direction > 0 ? .96 : .04), y = box.y + box.height * .35
+  await page.mouse.move(x, y)
+  await page.mouse.down()
+  await page.mouse.move(x - direction * 18, y, { steps: 2 })
+  await page.waitForSelector('.track-card-plane[data-track-card-phase="preview"]')
+  await page.waitForTimeout(120)
+  await page.mouse.move(x - direction * 26, y)
+  // One fresh physical move followed immediately by pointerup retains velocity;
+  // the normal drag helper deliberately waits 90ms and cannot cover this path.
+  // Queue these ordered CDP input commands in the same client turn: waiting
+  // for a separate roundtrip can exhaust the product's 70ms freshness window.
+  const move = page.mouse.move(x - direction * box.width * fraction, y)
+  const release = page.mouse.up()
+  await Promise.all([move, release])
+}
+function overshootTiming(events, before = false, fullSeconds = .5, scale = 1) {
+  const commit = events.find(e => e.type === 'animation-start' && e.overshootPx !== 0)
+  assert(commit, 'real pointer velocity actually triggers overshoot: ' + JSON.stringify(events.filter(e => e.type === 'fling-release')))
+  const outward = events.find(e => e.type === 'overshoot-start' && e.target !== 0)
+  assert(outward, 'fast release runs the outward offset animation')
+  assert(Math.abs(Math.abs(outward.target) / outward.width - .07) < .00001, 'overshoot amplitude remains seven percent of captured cover width: ' + JSON.stringify(outward))
+  const start = events.find(e => e.type === 'overshoot-start' && e.target === 0 && e.from !== 0)
+  assert(start, 'the painted nonzero offset enters a return animation')
+  const complete = events.find(e => e.type === 'overshoot-complete' && e.run === start.run)
+  assert(complete, 'return completes through its own Motion callback')
+  const fraction = Math.abs(start.from) / start.width
+  const t0 = switchTimeAtProgress(1 - fraction)
+  const expectedMs = before ? 90 * scale : fullSeconds * 1000 * (1 - t0)
+  assert(Math.abs(start.durationSeconds * 1000 - expectedMs) < 1, 'return uses the expected old or theme-tail duration')
+  const samples = events.filter(e => e.type === 'overshoot' && e.run === start.run && e.time >= start.time && e.time <= complete.time)
+  assert(samples.length >= 5, 'return has independently sampled moving frames')
+  let previous = Math.abs(start.from), maxError = 0
+  for (const sample of samples) {
+    assert(Number.isFinite(sample.animationTime), 'return samples use its real Motion controller clock')
+    assert(Math.abs(sample.value) <= previous + .00001 && sample.value * start.from >= -.00001, 'offset continuously approaches zero without reversal')
+    if (!before) {
+      const expected = Math.sign(start.from) * start.width * (1 - switchProgressAtTime(t0 + sample.animationTime / fullSeconds))
+      maxError = Math.max(maxError, Math.abs(sample.value - expected) / start.width)
+    }
+    previous = Math.abs(sample.value)
+  }
+  assert(maxError < .002, 'offset return follows the independently calculated theme tail')
+  assert.equal(samples.at(-1).value, 0)
+  return { offsetPx: start.from, width: start.width, durationMs: start.durationSeconds * 1000,
+    wallMs: complete.time - start.time, maxError, samples: samples.length }
+}
+// SPMUSIC_COVER_OVERSHOOT_ONLY=single first verifies one physical fling;
+// value 1 compares the saved before component in both directions.
+async function overshootRegression() {
+  if (process.env.SPMUSIC_COVER_OVERSHOOT_ONLY === 'interaction') return overshootInteractions()
+  if (process.env.SPMUSIC_COVER_OVERSHOOT_ONLY === 'lifecycle') {
+    const test = await open(compile(currentText, 0), 2, false)
+    return overshootLifecycle(test.page, test.errors)
+  }
+  const single = process.env.SPMUSIC_COVER_OVERSHOOT_ONLY === 'single'
+  const results = []
+  for (const label of single ? ['after'] : ['before', 'after']) for (const direction of single ? [1] : [1, -1]) {
+    const { page, errors } = await open(compile(label === 'before' ? motionBaselineText : currentText, 0), 2, false)
+    await page.evaluate(() => window.coverSelect(2))
+    await assertRest(page, 2, 800)
+    await page.evaluate(() => { window.coverEvents = [] })
+    await fling(page, direction)
+    await assertRest(page, 2 + direction)
+    const events = await page.evaluate(() => window.coverEvents)
+    const timing = overshootTiming(events, label === 'before')
+    results.push({ label, direction, ...timing })
+    console.log('OVERSHOOT', JSON.stringify(results.at(-1)))
+    assert.deepEqual(errors, [])
+    await page.close()
+  }
+  const outputDir = process.env.SPMUSIC_COVER_MOTION_OUTPUT_DIR
+  if (outputDir) {
+    mkdirSync(outputDir, { recursive: true })
+    writeFileSync(resolve(outputDir, 'overshoot-timing.json'), JSON.stringify(results, null, 2) + '\n')
+  }
+  if (!single) await overshootInteractions()
+}
+async function overshootInteractions() {
+  const { page, errors } = await open(compile(currentText, 0), 2, false)
+  await page.evaluate(() => window.coverSelect(2))
+  await assertRest(page, 2, 800)
+  await page.evaluate(() => { window.coverEvents = [] })
+  await page.getByRole('button', { name: '下一首', exact: true }).click()
+  await assertRest(page, 3, 800)
+  const button = motionTiming(await page.evaluate(() => window.coverEvents))
+  assert.equal(button.declaredDurationMs, 500)
+  assert(Math.abs(button.half - .775) < .055, 'button keeps its original calibrated 500ms curve')
+  await page.evaluate(() => window.coverSelect(2))
+  await assertRest(page, 2, 800)
+  await page.evaluate(() => { window.coverEvents = [] })
+  await fling(page)
+  await page.waitForFunction(() => window.coverEvents.some(e => e.type === 'overshoot-start' && e.target === 0))
+  await page.evaluate(() => window.coverRunResidual())
+  await assertRest(page, 3)
+  const residual = await page.evaluate(() => window.coverEvents)
+  const handoff = residual.find(e => e.type === 'residual-handoff')
+  assert.equal(handoff.progress, 1, 'saved real fling is already at the final progress')
+  assert(Math.abs(handoff.offset) > 0, 'saved real fling still has a painted residual offset')
+  const resumed = residual.find(e => e.type === 'overshoot-start' && e.target === 0 && e.time >= handoff.time)
+  assert(resumed && resumed.from === handoff.offset, 'zero-duration progress resumes the exact saved offset: ' + JSON.stringify({ handoff, resumed, returns: residual.filter(e => e.type === 'overshoot-start') }))
+  const completed = residual.filter(e => e.type === 'residual-complete')
+  assert.equal(completed.length, 1)
+  assert.equal(completed[0].offset, 0)
+  assert(completed[0].time - resumed.time > resumed.durationSeconds * 1000 - 25, 'progress completion waits for the nonzero offset return')
+  overshootTiming(residual.filter(e => e.type !== 'overshoot-start' || e.target !== 0 || e.time >= handoff.time))
+  console.log('PASS real saved offset / p=1 zero-duration join remains continuous and completes once')
+  await page.evaluate(() => window.coverSelect(2))
+  await assertRest(page, 2, 800)
+  await page.evaluate(() => window.coverSetMotion({ trackSwitchDurationMs: 600, durationScale: 3 }))
+  await page.waitForTimeout(80)
+  await page.evaluate(() => { window.coverEvents = [] })
+  await fling(page, 1, .22)
+  await page.evaluate(() => window.coverSetMotion({ trackSwitchDurationMs: 80, durationScale: 1, trackSwitchEasing: 'linear' }))
+  await page.setViewportSize({ width: 1200, height: 900 })
+  await assertRest(page, 3, 1600)
+  const scaled = await page.evaluate(() => window.coverEvents)
+  const timing = overshootTiming(scaled, false, 1.8)
+  const start = scaled.find(e => e.type === 'animation-start' && e.overshootPx !== 0)
+  const returnStart = scaled.find(e => e.type === 'overshoot-start' && e.target === 0)
+  const end = scaled.find(e => e.type === 'overshoot-complete' && e.run === returnStart.run)
+  assert(end.time - start.time > start.durationSeconds * 1000 + timing.durationMs - 30, 'theme changes cannot shorten the captured serial watchdog budget')
+  console.log('PASS scale3 / 600ms return retains captured theme, width and completion budget', JSON.stringify(timing))
+  await overshootLifecycle(page, errors)
+}
+async function overshootLifecycle(page, errors) {
+  await page.setViewportSize({ width: 1400, height: 900 })
+  await page.evaluate(() => window.coverSetMotion({ trackSwitchDurationMs: 500, durationScale: 1, trackSwitchEasing: 'cubic-bezier(.4, 0, .2, 1)' }))
+  await page.waitForTimeout(80)
+  await page.evaluate(() => window.coverSelect(2))
+  await assertRest(page, 2, 800)
+  await page.evaluate(() => { window.coverEvents = [] })
+  await fling(page)
+  await page.waitForFunction(() => window.coverEvents.some(e => e.type === 'overshoot-start' && e.target === 0))
+  await page.evaluate(() => { window.coverSaveResidual(); window.coverSetMotion({ level: 'off' }) })
+  await page.waitForFunction(() => window.coverThemeSnapshot.disabled)
+  // Switching off normally clears the live visual session. Restore only the
+  // offset/session saved from that real fling to cover the new-run guard;
+  // this is controlled branch coverage, not a claimed natural reproduction.
+  await page.evaluate(() => window.coverRunResidual(true))
+  await assertRest(page, 3)
+  const disabled = await page.evaluate(() => window.coverEvents)
+  const disabledHandoff = disabled.find(e => e.type === 'residual-handoff')
+  assert(disabledHandoff.offset !== 0, 'off-mode test starts with a real saved residual')
+  assert(!disabled.some(e => e.type === 'overshoot-start' && e.time >= disabledHandoff.time), 'a new off-mode run does not start a long return')
+  assert.equal(disabled.find(e => e.type === 'residual-complete')?.offset, 0)
+  console.log('PASS disabled motion clears a saved residual on the new run')
+  await page.evaluate(() => window.coverSetMotion({ level: 'subtle' }))
+  await page.waitForFunction(() => !window.coverThemeSnapshot.disabled)
+  await page.evaluate(() => window.coverSelect(2))
+  await assertRest(page, 2, 800)
+  await page.evaluate(() => { window.coverEvents = [] })
+  await fling(page)
+  await page.waitForFunction(() => window.coverEvents.some(e => e.type === 'overshoot-start' && e.target === 0))
+  const unmount = await page.evaluate(() => {
+    const run = window.coverEvents.find(e => e.type === 'overshoot-start' && e.target === 0).run
+    window.coverUpdate({ mounted: false })
+    return { run, time: performance.now() }
+  })
+  await page.waitForTimeout(500)
+  assert.equal(await page.locator('.track-card-plane').count(), 0)
+  assert(!await page.evaluate(({ run, time }) => window.coverEvents.some(e => e.type === 'overshoot-complete' && e.run === run && e.time > time), unmount), 'unmount stops the real return callback')
+  console.log('PASS unmount cancels a real overshoot return')
+  assert.deepEqual(errors, [])
+  await page.close()
+  const reduced = await open(compile(currentText, 0), 2, false, 'reduce')
+  await reduced.page.evaluate(() => window.coverSelect(2))
+  await assertRest(reduced.page, 2)
+  await reduced.page.evaluate(() => { window.coverEvents = [] })
+  await fling(reduced.page)
+  await assertRest(reduced.page, 3)
+  const reducedEvents = await reduced.page.evaluate(() => window.coverEvents)
+  assert(reducedEvents.some(e => e.type === 'fling-release' && Math.abs(e.velocity) >= 1100))
+  assert(!reducedEvents.some(e => e.type === 'overshoot-start' && e.target !== 0), 'a real reduced-motion fling never creates overshoot')
+  assert.deepEqual(reduced.errors, [])
+  await reduced.page.close()
+  console.log('PASS reduced motion fast pointer input has no overshoot')
+  await regress()
+}
+async function speedRegression() {
+  const dragScale = .95
+  const baseDurationMs = 500 * dragScale
+  const { page, errors } = await open(compile(currentText, 0), 2, false)
+  assert.equal(await page.evaluate(() => window.coverThemeSnapshot.motion.trackDragDurationScale), dragScale, 'speed mode loads the real default without a reference override')
+  const codec = await page.evaluate(async dragScale => {
+    const codec = await import('/src/features/appearance/model/appearanceThemeCodec.ts')
+    const { defaultAppearance } = await import('/src/features/appearance/model/defaultAppearance.ts')
+    const document = codec.createAppearanceThemeDocument(defaultAppearance)
+    const values = [undefined, .25, .8, dragScale, 1, .24, 1.01, '1', null].map(input => {
+      const candidate = structuredClone(document)
+      if (input === undefined) delete candidate.theme.motion.trackDragDurationScale
+      else candidate.theme.motion.trackDragDurationScale = input
+      const parsed = codec.deserializeAppearanceTheme(JSON.stringify(candidate))
+      const roundtrip = codec.deserializeAppearanceTheme(codec.serializeAppearanceTheme(parsed.appearance))
+      return { input, value: parsed.appearance.motion.trackDragDurationScale, roundtrip: roundtrip.appearance.motion.trackDragDurationScale }
+    })
+    delete document.theme.motion.trackDragDurationScale
+    const custom = structuredClone(defaultAppearance)
+    custom.motion.trackDragDurationScale = 1
+    return { values, custom: codec.deserializeAppearanceTheme(JSON.stringify(document), custom).appearance.motion.trackDragDurationScale }
+  }, dragScale)
+  for (const result of codec.values) {
+    const expected = typeof result.input === 'number' && result.input >= .25 && result.input <= 1 ? result.input : dragScale
+    assert.equal(result.value, expected)
+    assert.equal(result.roundtrip, expected)
+  }
+  assert.equal(codec.custom, 1)
+  await page.evaluate(() => window.coverSelect(2))
+  await assertRest(page, 2, 800)
+  await page.evaluate(() => { window.coverEvents = [] })
+  await page.getByRole('button', { name: '下一首', exact: true }).click()
+  await assertRest(page, 3, 800)
+  const button = motionTiming(await page.evaluate(() => window.coverEvents))
+  assert.equal(button.declaredDurationMs, 500)
+  assert(Math.abs(button.half - .775) < .055)
+  await page.evaluate(() => window.coverSelect(2))
+  await assertRest(page, 2, 800)
+  await page.evaluate(() => { window.coverEvents = [] })
+  await drag(page, 1, .7 * .55, false)
+  await page.evaluate(() => window.coverEvents.push({ type: 'release-marker', value: window.coverEvents.filter(e => e.type === 'progress').at(-1).value, time: performance.now() }))
+  await page.mouse.up()
+  await assertRest(page, 3, 800)
+  const committed = dragTiming(await page.evaluate(() => window.coverEvents), true, baseDurationMs)
+  await page.evaluate(() => { window.coverEvents = [] })
+  await fling(page, -1)
+  await assertRest(page, 2)
+  const returned = overshootTiming(await page.evaluate(() => window.coverEvents), false, baseDurationMs / 1000)
+  await page.evaluate(() => { window.coverEvents = [] })
+  await drag(page, 1, .1 * .55)
+  await assertRest(page, 2)
+  const cancel = await page.evaluate(() => window.coverEvents.find(e => e.type === 'animation-start' && e.target === 0))
+  assert(Math.abs(cancel.durationSeconds - .38 * dragScale) < .00001)
+  await page.evaluate(() => { window.coverEvents = [] })
+  await drag(page, 1, .35 * .55)
+  const resumed = await page.evaluate(() => window.coverResumeDragContext())
+  await assertRest(page, 3)
+  assert.equal(resumed.kind, 'drag')
+  assert.equal(resumed.seconds, .5)
+  assert.equal(resumed.resumedSeconds, .5, 'resuming keeps the original context base duration')
+  const resumedStart = await page.evaluate(() => window.coverEvents.filter(e => e.type === 'animation-start' && e.target === 1).at(-1))
+  assert(Math.abs(resumedStart.durationSeconds * 1000 - baseDurationMs * (1 - switchTimeAtProgress(resumed.progress))) < .5, 'resuming applies the drag multiplier once')
+  await page.evaluate(() => window.coverSelect(2))
+  await assertRest(page, 2, 800)
+  await page.evaluate(() => { window.coverEvents = []; window.coverSelect(3) })
+  await page.waitForTimeout(70)
+  const region = await page.locator('.cover-input-region').boundingBox()
+  assert(region)
+  const x = region.x + region.width * .8, y = region.y + region.height * .35
+  await page.mouse.move(x, y)
+  await page.mouse.down()
+  await page.mouse.move(x - 18, y, { steps: 2 })
+  await page.waitForSelector('.track-card-plane[data-track-card-phase="preview"]')
+  await page.mouse.move(x - region.width * .1 * .55, y, { steps: 8 })
+  await page.waitForTimeout(550)
+  await page.mouse.up()
+  await assertRest(page, 3)
+  const recentered = await page.evaluate(() => window.coverEvents)
+  const recenter = recentered.find(e => e.type === 'session' && e.session?.outgoingReturnToCenter)
+  assert(recenter, 'the real interrupted gesture exercises recenter')
+  assert(recentered.some(e => e.type === 'animation-start' && e.time >= recenter.time && Math.abs(e.durationSeconds - .19 * dragScale) < .00001))
+  const retiringStart = recentered.find(e => e.type === 'retiring-start')
+  const retiringEnd = recentered.findLast(e => e.type === 'retiring-progress' && e.value >= .999)
+  assert(retiringStart && retiringEnd)
+  assert(Math.abs(retiringEnd.animationTime * 1000 - baseDurationMs * (1 - switchTimeAtProgress(retiringStart.from))) < 15, 'retiring also uses the single drag multiplier')
+  assert.deepEqual(errors, [])
+  await page.close()
+  const reduced = await open(compile(currentText, 0), 2, false, 'reduce')
+  await reduced.page.evaluate(() => { window.coverEvents = []; window.coverSelect(2) })
+  await assertRest(reduced.page, 2)
+  assert.equal(await reduced.page.evaluate(() => window.coverEvents.find(e => e.type === 'animation-start' && e.target === 1).durationSeconds), .08)
+  await reduced.page.evaluate(() => { window.coverEvents = [] })
+  await drag(reduced.page, 1, .7 * .55)
+  await assertRest(reduced.page, 3)
+  const reducedCommit = await reduced.page.evaluate(() => window.coverEvents.find(e => e.type === 'animation-start' && e.target === 1))
+  assert(Math.abs(reducedCommit.durationSeconds - .08 * Math.max(.15, 1 - reducedCommit.from)) < .00001, 'reduced drag keeps the original 80ms base without the new multiplier')
+  assert.deepEqual(reduced.errors, [])
+  await reduced.page.close()
+  const report = { dragScale, baseDurationMs, buttonMs: button.declaredDurationMs, committed, returned, cancelMs: cancel.durationSeconds * 1000, recenterMs: 190 * dragScale, resumed, reducedDragMs: reducedCommit.durationSeconds * 1000, codec }
+  console.log('DRAG_SPEED', JSON.stringify(report))
+  const outputDir = process.env.SPMUSIC_COVER_MOTION_OUTPUT_DIR
+  if (outputDir) { mkdirSync(outputDir, { recursive: true }); writeFileSync(resolve(outputDir, 'drag-speed.json'), JSON.stringify(report, null, 2) + '\n') }
+}
 try {
-  if (process.env.SPMUSIC_COVER_DRAG_ONLY) {
+  if (process.env.SPMUSIC_COVER_SPEED_ONLY) {
+    await speedRegression()
+    console.log('COVER_DRAG_SPEED_PASS')
+  } else if (process.env.SPMUSIC_COVER_OVERSHOOT_ONLY) {
+    await overshootRegression()
+    console.log('COVER_OVERSHOOT_PASS')
+  } else if (process.env.SPMUSIC_COVER_DRAG_ONLY) {
     if (process.env.SPMUSIC_COVER_DRAG_ONLY === 'interaction') await dragInteractionRegression()
     else await dragRegression()
     console.log('COVER_DRAG_TAIL_PASS')

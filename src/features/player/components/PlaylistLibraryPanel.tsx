@@ -1,5 +1,5 @@
 import { mediaLibraryCategories } from '@/features/player/model/mediaLibraryCategories'
-import { useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { LibraryChromeTransitionContext } from '@/features/player/hooks/useLibraryChromeTransition'
 import { motion, useAnimationControls, useIsPresent } from 'motion/react'
 import { useLibraryDockBinding } from '@/features/player/hooks/useLibraryDockBinding'
@@ -46,13 +46,25 @@ export function PlaylistLibraryPanel({ playlist, librarySidebarOpen, onLibrarySi
   const isPresent = useIsPresent()
   const chromeTransition = useContext(LibraryChromeTransitionContext)
   const atomicOverview = chromeTransition.overviewBoundary
+  const [entrySession, setEntrySession] = useState({ isPresent, offscreen: chromeTransition.offscreenReturn,
+    sharedReady: !chromeTransition.offscreenReturn || appearanceMotion.disabled })
+  const currentEntry = entrySession.isPresent === isPresent ? entrySession : {
+    isPresent, offscreen: isPresent ? chromeTransition.offscreenReturn : entrySession.offscreen,
+    sharedReady: isPresent ? !chromeTransition.offscreenReturn || appearanceMotion.disabled : entrySession.sharedReady,
+  }
+  if (currentEntry !== entrySession) setEntrySession(currentEntry)
+  const offscreenEntry = currentEntry.offscreen
+  const entryPending = offscreenEntry && !currentEntry.sharedReady
+  const sharedProjection = !appearanceMotion.disabled && !entryPending
+  const projectionKey = sharedProjection ? 'shared' : 'local'
+  const entryControls = useAnimationControls()
   // Use a 250ms default, preserving theme scaling and the presence cleanup budget.
   const returnTransition = { ...appearanceMotion.layoutTransition, duration: Math.min((appearanceMotion.layoutTransition.duration ?? 0) * (5 / 6), 0.65) }
   const library = playlist.library!
   const categoryId = library.route?.view === 'category' ? library.route.categoryId : 'playlists'
   const category = mediaLibraryCategories.find((item) => item.id === categoryId)!
   const hasDataSource = categoryId === 'playlists' || categoryId === 'folder'
-  const categoryItems = categoryId === 'playlists' ? library.items : categoryId === 'folder' ? library.items.filter((item) => item.sourceKind === 'folder') : []
+  const categoryItems = useMemo(() => categoryId === 'playlists' ? library.items : categoryId === 'folder' ? library.items.filter((item) => item.sourceKind === 'folder') : [], [categoryId, library.items])
   const [query, setQuery] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
   const [dismissedSearchRequestId, setDismissedSearchRequestId] = useState(0)
@@ -83,7 +95,23 @@ export function PlaylistLibraryPanel({ playlist, librarySidebarOpen, onLibrarySi
       toolbarControls.set('initial')
       void toolbarControls.start('animate')
     } else if (isPresent) toolbarControls.set('animate')
+    return () => toolbarControls.stop()
   }, [atomicOverview, isPresent, navigationMotion, toolbarControls])
+  useLayoutEffect(() => {
+    if (!isPresent) return
+    let cancelled = false
+    const enableSharedProjection = () => {
+      if (!cancelled) setEntrySession((previous) => previous.sharedReady ? previous : { ...previous, sharedReady: true })
+    }
+    if (entryPending && !appearanceMotion.disabled) {
+      entryControls.set('initial')
+      void entryControls.start('animate').then(enableSharedProjection)
+    } else {
+      entryControls.set('animate')
+      if (entryPending) enableSharedProjection()
+    }
+    return () => { cancelled = true; entryControls.stop() }
+  }, [entryPending, appearanceMotion.disabled, isPresent, navigationMotion, entryControls])
   const toolbarOffset = () => {
     if (appearanceMotion.disabled) return { x: 0, y: 0 }
     const source = chromeTransition.geometry?.current.items.get(categoryId)
@@ -145,24 +173,25 @@ export function PlaylistLibraryPanel({ playlist, librarySidebarOpen, onLibrarySi
       </DialogContent>
     </Dialog>
     <motion.section ref={panelRef} className="playlist-management-content" aria-label={`${category.label}管理`}
-      variants={appearanceMotion.variants.backdrop} transition={atomicOverview ? { duration: 0 } : returnTransition}
-      initial={atomicOverview ? false : 'initial'} animate="animate" exit={atomicOverview ? 'animate' : 'exit'}>
+      variants={offscreenEntry ? navigationMotion.detailReturn.incoming : appearanceMotion.variants.backdrop}
+      transition={offscreenEntry ? navigationMotion.transition : atomicOverview ? { duration: 0 } : returnTransition}
+      initial={atomicOverview ? false : 'initial'} animate={offscreenEntry ? entryControls : 'animate'} exit={atomicOverview ? 'animate' : 'exit'}>
       <motion.div className="playlist-management-parent" variants={navigationMotion.chrome}
         initial={atomicOverview ? 'initial' : false} animate="animate" exit={atomicOverview ? 'exit' : 'animate'} transition={navigationMotion.transition}>
         <Button variant="outline" onClick={library.onOpenOverview} aria-label="返回媒体库"><img src={parentIcon} alt="" />媒体库</Button>
       </motion.div>
       <header ref={headingRef} className="playlist-management-heading">
-        <motion.span className="playlist-management-category" aria-hidden="true" style={{ background: `var(--playlist-category-${categoryId})` }}
-          layoutId={appearanceMotion.disabled ? undefined : `library-category-icon:${categoryId}`} layoutCrossfade={false}
+        <motion.span key={`category-icon:${projectionKey}`} className="playlist-management-category" aria-hidden="true" style={{ background: `var(--playlist-category-${categoryId})` }}
+          layoutId={sharedProjection ? `library-category-icon:${categoryId}` : undefined} layoutCrossfade={false}
           transition={{ layout: navigationMotion.transition }}><span className="media-library-category-glyph" style={{ width: category.glyphWidth, height: category.glyphHeight, maskImage: `url("${category.overviewIcon}")`, WebkitMaskImage: `url("${category.overviewIcon}")` }} /></motion.span>
-        <motion.h2 layoutId={appearanceMotion.disabled ? undefined : `library-category-label:${categoryId}`} layoutCrossfade={false}
+        <motion.h2 key={`category-label:${projectionKey}`} layoutId={sharedProjection ? `library-category-label:${categoryId}` : undefined} layoutCrossfade={false}
           transition={{ layout: navigationMotion.transition }}>{category.label}</motion.h2>
       </header>
       <motion.div className="playlist-management-toolbar" custom={toolbarOffset} variants={navigationMotion.toolbar}
         initial={false} animate={toolbarControls} exit={atomicOverview ? 'exit' : 'animate'} transition={navigationMotion.transition}>
-        {hasDataSource ? <motion.div className="playlist-management-actions"
-          layout="position"
-          layoutId={!appearanceMotion.disabled && library.currentScope ? `playlist-library-actions:${library.currentScope}` : undefined}
+        {hasDataSource ? <motion.div key={`actions:${projectionKey}`} className="playlist-management-actions"
+          layout={sharedProjection ? 'position' : undefined}
+          layoutId={sharedProjection && library.currentScope ? `playlist-library-actions:${library.currentScope}` : undefined}
           transition={{ layout: returnTransition }}>
           <Button variant="outline" aria-label={`随机播放${category.label}`} disabled={!playTarget || playlist.isOpenAudioDisabled} onClick={() => {
             const candidates = selectMode ? selectedItems : visible
@@ -194,16 +223,16 @@ export function PlaylistLibraryPanel({ playlist, librarySidebarOpen, onLibrarySi
             <Button variant="ghost" className="playlist-management-card-button" data-playlist-scope={item.scope}
               aria-label={selectMode ? `选择 ${item.name}` : `打开${category.label} ${item.name}`}
               aria-pressed={selectMode ? selected.has(item.scope) : undefined} onClick={() => activate(item.scope)}>
-              <motion.span className="playlist-management-cover" aria-hidden="true"
+              <motion.span key={`cover:${projectionKey}`} className="playlist-management-cover" aria-hidden="true"
                 layoutDependency={item.scope}
-                layoutId={appearanceMotion.disabled ? undefined : `playlist-library-cover:${item.scope}`}
+                layoutId={sharedProjection ? `playlist-library-cover:${item.scope}` : undefined}
                 layoutCrossfade={false}
                 transition={{ layout: returnTransition }}><LibraryCover coverTrack={item.coverTrack} />{selectMode ? <span className="playlist-management-check">{selected.has(item.scope) ? '✓' : ''}</span> : null}</motion.span>
               <span className="playlist-management-copy">
-              <motion.span className="playlist-management-name" title={item.name}
+              <motion.span key={`name:${projectionKey}`} className="playlist-management-name" title={item.name}
                 layoutDependency={item.scope}
-                layout="position"
-                layoutId={appearanceMotion.disabled ? undefined : `playlist-library-name:${item.scope}`}
+                layout={sharedProjection ? 'position' : undefined}
+                layoutId={sharedProjection ? `playlist-library-name:${item.scope}` : undefined}
                 transition={{ layout: returnTransition }}>{item.name}</motion.span>
               <span className="playlist-management-meta"><img src={layout.level === 2 ? musicLarge : musicSmall} alt="" aria-hidden="true" /><span>{item.trackCount}{item.totalClock ? ` | ${item.totalClock}` : ''}</span></span>
               </span>

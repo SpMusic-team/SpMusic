@@ -6,20 +6,42 @@ import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
+import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 
 const require = createRequire(import.meta.url)
 const { chromium } = require(process.env.SPMUSIC_PLAYWRIGHT || 'playwright')
 const origin = process.env.SPMUSIC_TEST_ORIGIN || 'http://127.0.0.1:5173'
 const entry = await (await fetch(origin + '/src/main.tsx')).text()
+const committedModules = new Map()
+let componentImports = ''
+if (process.env.SPMUSIC_MANAGEMENT_COMMITTED_BASELINE === '1') for(const name of ['PlaylistPanel','PlaylistLibraryPanel']) componentImports += await (await fetch(origin+'/src/features/player/components/'+name+'.tsx')).text()
 const dependency = name => {
-  const match = entry.match(new RegExp('"(/node_modules/\\.vite/deps/' + name.replaceAll('.', '\\.') + '[^"\\n]*)"'))
+  const match = (entry+componentImports).match(new RegExp('"(/[^"\\n]*/deps/' + name.replaceAll('.', '\\.') + '[^"\\n]*)"'))
   assert(match, 'resolve Vite dependency ' + name)
   return match[1]
 }
+if (process.env.SPMUSIC_MANAGEMENT_COMMITTED_BASELINE === '1') {
+ const ts = require('typescript'), ref = process.env.SPMUSIC_BASELINE_REF || '96ae40a2a2193e74912049f200feb6f5fb5d461d'
+ for(const name of ['PlaylistPanel','PlaylistLibraryPanel']) {
+  const original = execFileSync('git',['show',ref+':src/features/player/components/'+name+'.tsx'],{encoding:'utf8'})
+  let compiled = ts.transpileModule(original,{compilerOptions:{target:99,module:99,jsx:5}}).outputText
+  compiled = compiled.replace(/import \{([^}]+)\} from ["']react["'];/,(_line,names)=>`import baselineReact from '${dependency('react.js')}'; const {${names}}=baselineReact;`)
+  compiled = compiled.replace(/import \{([^}]+)\} from ["']react\/jsx-dev-runtime["'];/,(_line,names)=>`import baselineJsx from '${dependency('react_jsx-dev-runtime.js')}'; const {${names.replaceAll(' as ',': ')}}=baselineJsx;`)
+  compiled = compiled.replace(/from ["']([^"']+)["']/g,(match,id)=>{
+   if(id.startsWith('/node_modules/')||id.startsWith('/@fs/'))return match
+   if(id.startsWith('@/')) {
+    const path='/src/'+id.slice(2),current=componentImports.match(new RegExp('["\u0027]('+path+'[^"\u0027]*)["\u0027]'))
+    assert(current,'baseline import '+id);return 'from '+JSON.stringify(current[1])
+   }
+   return 'from '+JSON.stringify(dependency(id.replaceAll('/','_')+'.js'))
+  })
+  committedModules.set(name,compiled)
+ }
+}
 const service = (await (await fetch(origin + '/src/features/player/services/audioCommands.ts')).text())
   .replace(/import \{ convertFileSrc, invoke \} from [^;]+;/, 'const invoke=(...args)=>window.backendInvoke(...args);const convertFileSrc=path=>path;')
-  .replace(/import \{ listen \} from [^;]+;/, 'const listen=async(name,callback)=>{(window.listeners??={})[name]=callback;return ()=>delete window.listeners[name];};')
+  .replace(/import \{ listen \} from [^;]+;/, 'const listen=async(name,callback)=>{(window.listeners??={})[name]=callback;return ()=>{if(window.listeners[name]===callback)delete window.listeners[name]};};')
 assert(service.includes('window.backendInvoke'), 'retain real audio command parser')
 const realSurface = await (await fetch(origin + '/src/features/player/components/PlayerSurface.tsx')).text()
 const surface = `
@@ -71,7 +93,7 @@ window.backendInvoke=async(command,args)=>{
 window.emitPosition=positionMs=>{state={...state,positionMs};window.listeners?.audio_state_changed?.({payload:{...state}})};
 const root=ReactDOM.createRoot(document.getElementById('root'));window.unmountFixture=()=>root.unmount();
 function HookFixture(){window.playerApi=useAudioPlayer();return React.createElement('output',null,window.playerApi.track?.id??'empty')}
-root.render(React.createElement(AppearanceProvider,null,React.createElement(new URLSearchParams(location.search).get('kind')==='hook'?HookFixture:PlayerShell)));
+root.render(React.createElement(React.StrictMode,null,React.createElement(AppearanceProvider,null,React.createElement(new URLSearchParams(location.search).get('kind')==='hook'?HookFixture:PlayerShell))));
 `
 const html = (await (await fetch(origin)).text()).replace(/src="\/src\/[^\"]+"/, 'src="/__management_fixture.js"')
 const browser = await chromium.launch({ headless:true, channel:'msedge' })
@@ -95,6 +117,7 @@ async function open(width=2560,height=1440,kind='shell',reducedMotion='reduce') 
     assert(old.includes('(appearanceMotion.layoutTransition.duration ?? 0) * (7 / 3)'),'rebuild pre-fix motion duration')
     await page.route('**/src/features/player/components/'+name+'.tsx*',route=>route.fulfill({contentType:'text/javascript',body:old}))
   }
+  for(const [name,body] of committedModules)await page.route('**/src/features/player/components/'+name+'.tsx*',route=>route.fulfill({contentType:'text/javascript',body}))
   await page.goto(origin+'/__management_test?kind='+kind)
   await page.waitForFunction(kind=>Boolean(kind==='hook'?window.playerApi:window.viewModel),kind)
   return {page,errors}
@@ -278,7 +301,7 @@ if(process.env.SPMUSIC_MOTION_TIMING_BASELINE==='1') {
 }
 
 try {
-  for(const [width,height] of [[1280,900],[480,800]]) {
+  for(const [width,height] of (process.env.SPMUSIC_MOTION_FOCUSED==='1'?[[1280,900]]:[[1280,900],[480,800]])) {
   const prefix=width===1280?'':'narrow-'
   const {page,errors}=await open(width,height,'shell','no-preference')
   if(width===1280)await importSource(page,'anchor')
@@ -328,6 +351,7 @@ try {
   await page.close()
   }
 
+  if(process.env.SPMUSIC_MOTION_FOCUSED!=='1'){
   const scaled=await open(1280,900,'shell','no-preference')
   await setDurationScale(scaled.page,3)
   await importSource(scaled.page,'scaled')
@@ -340,7 +364,9 @@ try {
   report.push({themeDurationScale:3,...await transition(scaled.page,'.playlist-management-card-button','grow','scale3-management-to-detail',3)})
   assert.deepEqual(scaled.errors,[])
   await scaled.page.close()
+  }
 
+  if(process.env.SPMUSIC_MOTION_FOCUSED!=='1'){
   const reduced=await open(480,800,'shell','reduce')
   await reduced.page.locator('.media-library-category[data-category-id="playlists"]').click()
   await settled(reduced.page,'.playlist-management')
@@ -358,6 +384,7 @@ try {
   assert.equal(await reduced.page.locator('.playlist-management').count(),0,'reduced reverse motion removes management immediately')
   assert.deepEqual(reduced.errors,[])
   report.push({reducedMotionCompletionMs:reducedDuration,viewport:'480x800',emptyManagement:true})
+  }
   await reduced.page.close()
   console.log(JSON.stringify({browser:browser.version(),report,screenshots:screenshotDirectory}))
 } catch(error) {

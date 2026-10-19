@@ -1,7 +1,7 @@
 import { DataHistogram24Filled, Grid24Filled } from '@fluentui/react-icons'
 import { Menu, Search } from 'lucide-react'
-import { AnimatePresence, motion, useIsPresent, type MotionValue } from 'motion/react'
-import { Fragment, useCallback, useContext, useLayoutEffect, useRef, useSyncExternalStore, type ReactNode, type RefObject } from 'react'
+import { AnimatePresence, animate, motion, useIsPresent, useMotionValue, type MotionValue } from 'motion/react'
+import { Fragment, useCallback, useContext, useLayoutEffect, useMemo, useRef, useSyncExternalStore, type ReactNode, type RefObject } from 'react'
 import { LibraryChromeTransitionContext } from '@/features/player/hooks/useLibraryChromeTransition'
 import { buttonVariants } from '@/components/ui/button'
 import { PressFeedbackButton } from '@/features/player/components/PressFeedbackButton'
@@ -104,7 +104,24 @@ export function PlaylistPlaybackDock({
   const keepStationaryContent = !chromeTransition.playerVisible
   const systemIcons = useSystemIcons()
   const appearanceMotion = useAppearanceMotion()
-  const layoutTransition = { ...appearanceMotion.layoutTransition, duration: Math.min((appearanceMotion.layoutTransition.duration ?? 0) * (5 / 6), 0.65) }
+  const layoutTransition = useMemo(() => ({ ...appearanceMotion.layoutTransition, duration: Math.min((appearanceMotion.layoutTransition.duration ?? 0) * (5 / 6), 0.65) }), [appearanceMotion.layoutTransition])
+  // Keep one visual value when the route releases its controller binding.
+  // Animate this dock-owned bridge, never the retiring page's motion value.
+  const controllerVisualY = useMotionValue(0)
+  useLayoutEffect(() => {
+    if (controllerOffsetY) {
+      controllerVisualY.set(controllerOffsetY.get())
+      return controllerOffsetY.on('change', (value) => controllerVisualY.set(value))
+    }
+    if (appearanceMotion.disabled || !isPresent || chromeTransition.playerVisible) {
+      controllerVisualY.set(0)
+      return
+    }
+    if (controllerVisualY.get() === 0) return
+    const settle = animate(controllerVisualY, 0, layoutTransition)
+    return () => settle.stop()
+  }, [controllerOffsetY, controllerVisualY, appearanceMotion.disabled, isPresent,
+    chromeTransition.playerVisible, layoutTransition])
   const track = playback.track
   const disabled = !track
   const commandBusy = playback.isAudioBusy
@@ -235,7 +252,7 @@ export function PlaylistPlaybackDock({
         if (controllerRef) controllerRef.current = element
       }}
       className="playlist-playback-dock"
-      style={{ y: controllerOffsetY }}
+      style={{ y: controllerVisualY }}
       data-controller-hidden={controllerHidden ? 'true' : undefined}
       inert={controllerHidden || !isPresent || undefined}
       aria-hidden={controllerHidden || !isPresent || undefined}

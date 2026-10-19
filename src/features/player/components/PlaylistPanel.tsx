@@ -1,5 +1,5 @@
 import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type SyntheticEvent } from 'react'
-import { motion, useIsPresent } from 'motion/react'
+import { motion, useAnimationControls, usePresence } from 'motion/react'
 import { CornerLeftUp, Search } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty'
@@ -17,6 +17,8 @@ import { usePlaylistContentWindow } from '@/features/player/hooks/usePlaylistCon
 import { usePlaylistOverscroll } from '@/features/player/hooks/usePlaylistOverscroll'
 import { usePlaylistControllerMotion } from '@/features/player/hooks/usePlaylistControllerMotion'
 import { LibraryDockContext, useLibraryDockBinding } from '@/features/player/hooks/useLibraryDockBinding'
+import { LibraryChromeTransitionContext } from '@/features/player/hooks/useLibraryChromeTransition'
+import { readLibraryLayoutRect } from '@/features/player/model/libraryNavigationGeometry'
 import type { PlaylistControllerMode } from '@/features/player/model/playlistControllerMode'
 import { appCopy } from '@/features/player/model/playerCopy'
 import { nextShuffleMode, type ShuffleMode } from '@/features/player/model/playbackModes'
@@ -239,10 +241,18 @@ export function PlaylistPanel({
   const systemIcons = useSystemIcons()
   const { appearance } = useAppearance()
   const appearanceMotion = useAppearanceMotion()
-  const isPresent = useIsPresent()
+  // Motion registers shared nodes at mount. Mode-specific keys below unmount
+  // those nodes while their layoutId still identifies the old projection stack.
+  const [heroOffscreen, setHeroOffscreen] = useState(false)
+  const [isPresent, safeToRemove] = usePresence()
+  const safeToRemoveRef = useRef(safeToRemove)
+  useLayoutEffect(() => { safeToRemoveRef.current = safeToRemove }, [safeToRemove])
+  const sectionControls = useAnimationControls()
+  const chromeTransition = useContext(LibraryChromeTransitionContext)
+  const publishDetailVisibility = chromeTransition.publishDetailVisibility
   // Use a 250ms default, preserving theme scaling and the presence cleanup budget.
-  const returnTransition = { ...appearanceMotion.layoutTransition, duration: Math.min((appearanceMotion.layoutTransition.duration ?? 0) * (5 / 6), 0.65) }
-  const sharedScope = appearanceMotion.disabled ? undefined : library?.currentScope
+  const returnTransition = useMemo(() => ({ ...appearanceMotion.layoutTransition, duration: Math.min((appearanceMotion.layoutTransition.duration ?? 0) * (5 / 6), 0.65) }), [appearanceMotion.layoutTransition])
+  const sharedScope = appearanceMotion.disabled || heroOffscreen ? undefined : library?.currentScope
   const handledEntryPositionIdRef = useRef<number | undefined>(undefined)
   const [selectMode, setSelectMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(new Set())
@@ -269,6 +279,7 @@ export function PlaylistPanel({
   // outside the decode window. A mute flat tile is the lesser artifact until the
   // visual pipeline can say "this one is gone".
   const panelRef = useRef<HTMLElement | null>(null)
+  const heroArtworkRef = useRef<HTMLDivElement | null>(null)
   const localPlaybackDockRef = useRef<HTMLElement | null>(null)
   const dockContext = useContext(LibraryDockContext)
   const playbackDockRef = dockContext?.dockRef ?? localPlaybackDockRef
@@ -404,6 +415,32 @@ export function PlaylistPanel({
   }, [onTrackSelect, tracks, unavailable])
 
   useLayoutEffect(() => {
+    let cancelled = false
+    const resting = { opacity: 1, x: 0, y: 0, scale: 1 }
+    if (isPresent) {
+      void sectionControls.start(resting, returnTransition)
+    } else if (appearanceMotion.disabled) {
+      sectionControls.set(resting)
+      safeToRemoveRef.current?.()
+    } else {
+      const leave = () => {
+        if (cancelled) return
+        const pose = { opacity: 0, x: 0, y: 0, scale: 1 }
+        void sectionControls.start(chromeTransition.offscreenReturn ? 'exit' : pose,
+          chromeTransition.offscreenReturn ? appearanceMotion.libraryNavigation.transition : returnTransition).then(() => {
+          if (!cancelled) safeToRemoveRef.current?.()
+        })
+      }
+      leave()
+    }
+    return () => {
+      cancelled = true
+      sectionControls.stop()
+    }
+  }, [isPresent, appearanceMotion.disabled, appearanceMotion.libraryNavigation.transition,
+    chromeTransition.offscreenReturn, returnTransition, sectionControls])
+
+  useLayoutEffect(() => {
     const panel = panelRef.current
     if (!panel) return
     if (entryPosition && handledEntryPositionIdRef.current !== entryPosition.requestId) {
@@ -457,13 +494,17 @@ export function PlaylistPanel({
   useLayoutEffect(() => {
     const panel = panelRef.current
     const heroActions = heroActionsRef.current
-    if (!panel || !heroActions) return
+    const heroArtwork = heroArtworkRef.current
+    if (!panel || !heroActions || !heroArtwork || !isPresent) return
     let disposed = false
 
     const measureVisibility = () => {
       if (disposed) return
       const heroRect = heroActions.getBoundingClientRect()
       const panelRect = panel.getBoundingClientRect()
+      const offscreen = heroArtwork.getBoundingClientRect().bottom <= Math.max(0, panelRect.top + panel.clientTop)
+      setHeroOffscreen(offscreen)
+      publishDetailVisibility?.(dockRouteKey, offscreen)
       // A row below the viewport (for example in a short window) must not
       // summon its duplicate. Only a fully scrolled-past upper edge does.
       const visible = heroRect.height > 0 && heroRect.bottom <= Math.max(0, panelRect.top)
@@ -486,6 +527,7 @@ export function PlaylistPanel({
     measureVisibility()
     const observer = new IntersectionObserver(measureVisibility, { root: panel, threshold: 0 })
     observer.observe(heroActions)
+    observer.observe(heroArtwork)
     const resizeObserver = new ResizeObserver(measureVisibility)
     resizeObserver.observe(panel)
     resizeObserver.observe(heroActions)
@@ -496,7 +538,8 @@ export function PlaylistPanel({
       resizeObserver.disconnect()
       window.removeEventListener('resize', measureVisibility)
     }
-  }, [currentTrackId, filteredTrackIdsKey, searchOpen, layoutLevel])
+  }, [currentTrackId, filteredTrackIdsKey, searchOpen, layoutLevel, isPresent, heroOffscreen,
+    publishDetailVisibility, dockRouteKey])
 
   useEffect(() => {
     const panel = panelRef.current
@@ -696,21 +739,34 @@ export function PlaylistPanel({
     contentRepresentatives, contentWindow.ids, contentShapes, failedCoverSources, handleCoverFailed])
 
   function renderPlaylistActions(compact = false) {
+    const returning = compact && !isPresent && chromeTransition.offscreenReturn && controllerActionsVisible
+    const returnGeometry = () => {
+      const panel = panelRef.current
+      const actions = controllerActionsRef.current
+      if (!panel || !actions) return { width: 0, originX: 0, originY: 0 }
+      const source = readLibraryLayoutRect(panel)
+      const controls = readLibraryLayoutRect(actions)
+      return { width: source.width, originX: source.x + source.width / 2 - controls.x,
+        originY: source.y + source.height / 2 - controls.y - controllerMotion.offsetY.get() }
+    }
     return (
       <motion.div
+        key={compact ? 'controller-actions' : heroOffscreen ? 'hero-actions-local' : 'hero-actions-shared'}
         ref={compact ? controllerActionsRef : heroActionsRef}
         className={compact ? "playlist-hero-actions playlist-controller-actions" : "playlist-hero-actions"}
-        layout={compact ? undefined : 'position'}
+        layout={compact || heroOffscreen ? undefined : 'position'}
         layoutId={!compact && sharedScope ? `playlist-library-actions:${sharedScope}` : undefined}
         role="group"
         aria-label="播放列表操作"
-        aria-hidden={compact && !controllerActionsVisible ? true : undefined}
-        inert={compact && !controllerActionsVisible ? true : undefined}
-        data-actions-visible={compact ? String(controllerActionsVisible) : undefined}
-        variants={compact ? appearanceMotion.variants.controllerActions : undefined}
+        aria-hidden={compact && (!controllerActionsVisible || !isPresent) ? true : undefined}
+        inert={compact && (!controllerActionsVisible || !isPresent) ? true : undefined}
+        data-actions-visible={compact ? String(controllerActionsVisible && isPresent) : undefined}
+        custom={compact ? returnGeometry : undefined}
+        variants={compact ? { ...appearanceMotion.variants.controllerActions,
+          ...appearanceMotion.libraryNavigation.detailReturn.controllerOutgoing } : undefined}
         initial={compact ? 'hidden' : false}
-        animate={compact ? controllerActionsVisible ? 'visible' : 'hidden' : undefined}
-        transition={compact ? appearanceMotion.layoutTransition : { layout: returnTransition }}
+        animate={compact ? returning ? 'exit' : controllerActionsVisible && isPresent ? 'visible' : 'hidden' : undefined}
+        transition={compact ? returning ? appearanceMotion.libraryNavigation.transition : appearanceMotion.layoutTransition : { layout: returnTransition }}
         style={compact ? { y: controllerMotion.offsetY } : undefined}
       >
         {compact ? (
@@ -802,18 +858,18 @@ export function PlaylistPanel({
         ref={panelRef}
         className="playlist-panel"
         data-select-mode={selectMode ? 'true' : undefined}
-        variants={appearanceMotion.variants.backdrop}
+        variants={chromeTransition.offscreenReturn ? appearanceMotion.libraryNavigation.detailReturn.outgoing : appearanceMotion.variants.backdrop}
         transition={returnTransition}
         initial="initial"
-        animate="animate"
-        exit="exit"
+        animate={sectionControls}
+        style={{ zIndex: !isPresent && chromeTransition.offscreenReturn ? 31 : undefined }}
         inert={!isPresent || undefined}
         aria-hidden={!isPresent || undefined}
         aria-label={appCopy.playlistPage.title}
         tabIndex={-1}
       >
       <header className="playlist-hero">
-        <motion.div className="playlist-hero-artwork" aria-hidden="true"
+        <motion.div key={heroOffscreen ? 'hero-artwork-local' : 'hero-artwork-shared'} ref={heroArtworkRef} className="playlist-hero-artwork" aria-hidden="true"
           layoutId={sharedScope ? `playlist-library-cover:${sharedScope}` : undefined}
           layoutCrossfade={false}
           transition={{ layout: returnTransition }}>
@@ -840,7 +896,8 @@ export function PlaylistPanel({
         </button>
         <div className="playlist-hero-copy">
           <motion.h1 className="playlist-hero-title"
-            layout="position"
+            key={heroOffscreen ? 'hero-title-local' : 'hero-title-shared'}
+            layout={heroOffscreen ? undefined : 'position'}
             layoutId={sharedScope ? `playlist-library-name:${sharedScope}` : undefined}
             transition={{ layout: returnTransition }}>{playlistName ?? appCopy.playlistPage.title}</motion.h1>
           <p className="playlist-hero-meta">

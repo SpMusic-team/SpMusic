@@ -20,6 +20,7 @@ export type AppearanceMotionRuntime = {
     chrome: Variants
     toolbar: Variants
     cover: Variants
+    detailReturn: { incoming: Variants; outgoing: Variants; controllerOutgoing: Variants }
     sidebar: Variants
     expansion: number
     columnTravel: number
@@ -56,6 +57,11 @@ export function createAppearanceMotionRuntime(
         chrome: { initial: { opacity: 1 }, animate: { opacity: 1 }, exit: { opacity: 1 } },
         toolbar: { initial: { x: 0, y: 0, opacity: 1 }, animate: { x: 0, y: 0, opacity: 1 }, exit: { x: 0, y: 0, opacity: 1 } },
         cover: { initial: { x: 0, scale: 1, opacity: 1 }, animate: { x: 0, scale: 1, opacity: 1 }, exit: { x: 0, scale: 1, opacity: 1 } },
+        detailReturn: {
+          incoming: { initial: { x: 0, y: 0, scale: 1, opacity: 1 }, animate: { x: 0, y: 0, scale: 1, opacity: 1 }, exit: { x: 0, y: 0, scale: 1, opacity: 1 } },
+          outgoing: { initial: { x: 0, y: 0, scale: 1, opacity: 1 }, animate: { x: 0, y: 0, scale: 1, opacity: 1 }, exit: { x: 0, y: 0, scale: 1, opacity: 1 } },
+          controllerOutgoing: { exit: { x: 0, scale: 1, opacity: 1 } },
+        },
         sidebar: { initial: { x: 0, opacity: 1 }, animate: { x: 0, opacity: 1 }, exit: { x: 0, opacity: 1 } },
         expansion: 0,
         columnTravel: 0,
@@ -71,7 +77,7 @@ export function createAppearanceMotionRuntime(
         track: { initial: { opacity: 1 }, animate: { opacity: 1 }, exit: { opacity: 1 } },
         panel: { initial: { opacity: 1 }, animate: { opacity: 1 }, exit: { opacity: 1 } },
         glyph: { initial: { opacity: 1 }, animate: { opacity: 1 }, exit: { opacity: 1 } },
-        controllerActions: { hidden: { opacity: 0, x: 0 }, visible: { opacity: 1, x: 0 } },
+        controllerActions: { hidden: { opacity: 0, x: 0, scale: 1 }, visible: { opacity: 1, x: 0, scale: 1 } },
       },
     }
   }
@@ -82,6 +88,8 @@ export function createAppearanceMotionRuntime(
   const panelDistance = expressive ? 22 : 14
   const trackScale = expressive ? 0.975 : 0.988
   const glyphScale = expressive ? 0.78 : 0.88
+  const detailReturnTravel = 0.5
+  const detailReturnScale = 0.5
   const prototypeSmartTransition: Transition = {
     type: 'tween',
     duration: 0.3 * durationScale,
@@ -114,6 +122,25 @@ export function createAppearanceMotionRuntime(
         animate: { x: '0%', opacity: 1 },
         exit: { x: '-100%', opacity: 0 },
       },
+      detailReturn: {
+        incoming: {
+          initial: { x: '-75%', y: 0, scale: 1.5, opacity: 0, transformOrigin: 'left top' },
+          animate: { x: 0, y: 0, scale: 1, opacity: 1, transformOrigin: 'left top' },
+          exit: { x: 0, y: 0, scale: 1, opacity: 0, transformOrigin: 'left top' },
+        },
+        outgoing: {
+          initial: { x: 0, y: 0, scale: 1, opacity: 1, transformOrigin: 'center center' },
+          animate: { x: 0, y: 0, scale: 1, opacity: 1, transformOrigin: 'center center' },
+          exit: { x: `${detailReturnTravel * 100}%`, y: 0, scale: detailReturnScale, opacity: 0, transformOrigin: 'center center' },
+        },
+        controllerOutgoing: {
+          exit: (measure: () => { width: number; originX: number; originY: number }) => {
+            const geometry = measure()
+            return { x: geometry.width * detailReturnTravel, scale: detailReturnScale, opacity: 0,
+              transformOrigin: `${geometry.originX}px ${geometry.originY}px` }
+          },
+        },
+      },
     },
     layoutZoom: {
       enterScale: {
@@ -135,8 +162,8 @@ export function createAppearanceMotionRuntime(
     },
     variants: {
       controllerActions: {
-        hidden: { opacity: 0, x: expressive ? 64 : 48 },
-        visible: { opacity: 1, x: 0 },
+        hidden: { opacity: 0, x: expressive ? 64 : 48, scale: 1 },
+        visible: { opacity: 1, x: 0, scale: 1 },
       },
       backdrop: {
         initial: { opacity: 0 },

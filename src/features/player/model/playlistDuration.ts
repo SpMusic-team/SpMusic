@@ -1,3 +1,13 @@
+/**
+ * Upper bound of one `audio_probe_playlist_durations` batch. This is the single
+ * source of the value for the whole frontend: `services/audioCommands` re-exports
+ * it and validates against it. It MUST stay identical to the Rust constant
+ * `MAX_DURATION_BATCH_PATHS` in `src-tauri/src/audio/playlist_duration.rs`; both
+ * sides change in the same commit (see `docs/architecture/playlist-duration-cache.md`,
+ * ruling 7 / risk R7).
+ */
+export const AUDIO_PLAYLIST_DURATION_BATCH_LIMIT = 256
+
 export type PlaylistDurationStatus = 'loading' | 'ready' | 'unknown' | 'error'
 export type PlaylistDurationResult = {
   status: PlaylistDurationStatus
@@ -102,9 +112,9 @@ export function createPlaylistDurationScanner(probe: PlaylistDurationProbe) {
       }
       const result: PlaylistDurationScanResult = { durationsByPath, itemFailures }
       const paths = [...new Set(entries.filter((entry) => entry.available !== false).map((entry) => entry.sourcePath))].filter((path) => !durationsByPath.has(path))
-      for (let index = 0; index < paths.length; index += 16) {
+      for (let index = 0; index < paths.length; index += AUDIO_PLAYLIST_DURATION_BATCH_LIMIT) {
         if (!isCurrent()) return null
-        const batch = paths.slice(index, index + 16)
+        const batch = paths.slice(index, index + AUDIO_PLAYLIST_DURATION_BATCH_LIMIT)
         let results: PlaylistDurationProbeItem[]
         try {
           results = await probe(batch)

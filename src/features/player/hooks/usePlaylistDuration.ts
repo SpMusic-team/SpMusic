@@ -8,6 +8,10 @@ type LibraryDurationSource = { scope: string; sources: readonly DurationSource[]
 type CompletedDuration = { sourceKey: string; sources: readonly DurationSource[]; result: PlaylistDurationScanResult }
 const noKnownDurations: ReadonlyMap<string, number> = new Map()
 
+function knownForScope(knownDurationsByScope: ReadonlyMap<string, ReadonlyMap<string, number>>, scope: string): ReadonlyMap<string, number> {
+  return knownDurationsByScope.get(scope) ?? noKnownDurations
+}
+
 function mergeKnownDurations(sources: readonly DurationSource[], result: PlaylistDurationScanResult, known: ReadonlyMap<string, number>): PlaylistDurationScanResult {
   const durations = new Map(result.durationsByPath)
   let changed = false
@@ -22,19 +26,24 @@ function mergeKnownDurations(sources: readonly DurationSource[], result: Playlis
 }
 
 // One session owner prepares every list, including lists outside the current
-// view. Keep the standalone hook below for consumers that own a single scope.
+// view. Known durations are supplied per scope (never as one global map): the
+// truth behind a known duration is the row data of that particular list, so a
+// path known in one scope must not silently complete another scope. Required
+// shape is `knownDurationsByScope`; there is deliberately no global parameter,
+// so two competing sources can never be active at the same time.
+// `knownDurations` still wins over probe results (see `resolvePlaylistDuration`).
 export function usePlaylistLibraryDurations(
   sources: readonly DurationSource[],
   scope: string,
   librarySources: readonly LibraryDurationSource[],
-  knownDurations: ReadonlyMap<string, number>,
+  knownDurationsByScope: ReadonlyMap<string, ReadonlyMap<string, number>>,
 ): ReadonlyMap<string, PlaylistDurationResult> {
   const tasks = useMemo(() => [{ scope, sources }, ...librarySources.filter((item) => item.scope !== scope)]
     .map((item) => ({ ...item, sourceKey: JSON.stringify(item.sources.map(({ sourcePath, available }) => [sourcePath, available !== false])) })),
   [sources, scope, librarySources])
   const [completed, setCompleted] = useState<ReadonlyMap<string, CompletedDuration>>(new Map())
   const completedRef = useRef(completed)
-  const readKnownDurations = useEffectEvent(() => knownDurations)
+  const readKnownDurationsByScope = useEffectEvent(() => knownDurationsByScope)
   useEffect(() => {
     let current = true
     const scopes = new Set(tasks.map((task) => task.scope))
@@ -51,13 +60,16 @@ export function usePlaylistLibraryDurations(
         if (!current) return
         const cached = completedRef.current.get(task.scope)
         if (cached?.sourceKey === task.sourceKey && cached.sources === task.sources) continue
-        const known = task.scope === scope ? readKnownDurations() : noKnownDurations
+        const known = knownForScope(readKnownDurationsByScope(), task.scope)
         const entries = task.sources.map(({ sourcePath, available }) => ({ sourcePath, available, durationMs: known.get(sourcePath) }))
         const result = await scanDuration(entries, () => current)
         if (!current || !result) return
         const next = new Map(completedRef.current)
-        const prepared = task.scope === scope ? mergeKnownDurations(task.sources, result, readKnownDurations()) : result
-        next.set(task.scope, { sourceKey: task.sourceKey, sources: task.sources, result: prepared })
+        next.set(task.scope, {
+          sourceKey: task.sourceKey,
+          sources: task.sources,
+          result: mergeKnownDurations(task.sources, result, knownForScope(readKnownDurationsByScope(), task.scope)),
+        })
         completedRef.current = next
         setCompleted(next)
       }
@@ -68,25 +80,29 @@ export function usePlaylistLibraryDurations(
   useEffect(() => {
     let current = true
     // Retain truthful late metadata with its source key so it also contributes
-    // when this list becomes inactive. Hydration never starts another scan.
+    // when this list becomes inactive. Every scope merges only its own known
+    // durations, and hydration never starts another scan.
     void Promise.resolve().then(() => {
       if (!current) return
-      const task = tasks.find((item) => item.scope === scope)!
-      const cached = completedRef.current.get(scope)
-      if (cached?.sourceKey !== task.sourceKey) return
-      const result = mergeKnownDurations(task.sources, cached.result, knownDurations)
-      if (result === cached.result) return
-      const next = new Map(completedRef.current)
-      next.set(scope, { ...cached, result })
+      let next: Map<string, CompletedDuration> | null = null
+      for (const task of tasks) {
+        const cached = completedRef.current.get(task.scope)
+        if (!cached || cached.sourceKey !== task.sourceKey) continue
+        const result = mergeKnownDurations(task.sources, cached.result, knownForScope(knownDurationsByScope, task.scope))
+        if (result === cached.result) continue
+        next ??= new Map(completedRef.current)
+        next.set(task.scope, { ...cached, result })
+      }
+      if (!next) return
       completedRef.current = next
       setCompleted(next)
     })
     return () => { current = false }
-  }, [tasks, scope, knownDurations])
+  }, [tasks, knownDurationsByScope])
   return new Map(tasks.map((task) => {
     const cached = completed.get(task.scope)
     const result = cached?.sourceKey === task.sourceKey ? cached.result : undefined
-    return [task.scope, resolvePlaylistDuration(task.sources, task.scope === scope ? knownDurations : noKnownDurations, result, !result)]
+    return [task.scope, resolvePlaylistDuration(task.sources, knownForScope(knownDurationsByScope, task.scope), result, !result)]
   }))
 }
 

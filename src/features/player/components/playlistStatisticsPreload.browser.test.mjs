@@ -46,6 +46,8 @@ import React from '${dependency('react.js')}';
 import ReactDOM from '${dependency('react-dom_client.js')}';
 import {PlayerShell} from '/src/features/player/components/PlayerShell.tsx';
 import {usePlaylistDuration,usePlaylistLibraryDurations} from '${hookPath}';
+import {AUDIO_PLAYLIST_DURATION_BATCH_LIMIT,probeAudioPlaylistDurations} from '/src/features/player/services/audioCommands.ts';
+window.durationBatchLimit=AUDIO_PLAYLIST_DURATION_BATCH_LIMIT;window.probeDurations=probeAudioPlaylistDurations;
 window.calls=[];window.commits=[];window.pending=[];window.active=0;window.maxActive=0;
 window.config={scope:'a',count:33,gate:false,probeMs:1000,itemFailure:null,invokeFailure:false,protocolFailure:false};
 let state={phase:'idle',generation:null,currentTrackId:null,positionMs:0,durationMs:null,volume:.5,error:null,transportTransition:null,transportSettledRequestId:null},generation=0;
@@ -90,13 +92,17 @@ function HookFixture(){
 }
 const root=ReactDOM.createRoot(document.getElementById('root'));window.unmountFixture=()=>root.unmount();
 function LibraryHookFixture(){
- const [lists,setLists]=React.useState([]),[scope,setScope]=React.useState('a'),[known,setKnown]=React.useState(new Map());
+ const [lists,setLists]=React.useState([]),[scope,setScope]=React.useState('a'),[knownByScope,setKnownByScope]=React.useState(()=>new Map());
  const empty=React.useMemo(()=>[],[]);
  const sources=lists.find(item=>item.scope===scope)?.sources??empty;
- const results=usePlaylistLibraryDurations(sources,scope,lists,known);
+ const results=usePlaylistLibraryDurations(sources,scope,lists,knownByScope);
  window.libraryResults=Object.fromEntries(results);
  window.updateLibrary=(next,nextScope='a')=>{setLists(next);setScope(nextScope)};
- window.chooseLibraryScope=setScope;window.updateKnown=entries=>setKnown(new Map(entries));
+ window.chooseLibraryScope=setScope;
+ // Known durations are scope-shaped: the active scope's own rows feed its entry,
+ // and no scope may borrow another scope's known path.
+ window.updateKnown=entries=>setKnownByScope(new Map([[scope,new Map(entries)]]));
+ window.setKnownByScope=record=>setKnownByScope(new Map(Object.entries(record).map(([key,entries])=>[key,new Map(entries)])));
  React.useLayoutEffect(()=>{window.commits.push(window.libraryResults)});
  return React.createElement('output',null,JSON.stringify(window.libraryResults));
 }
@@ -127,14 +133,54 @@ const waitReady = (page,total,kind='hook') => page.waitForFunction(({total,kind}
 const release = page => page.evaluate(()=>{window.config.gate=false;window.pending.splice(0).forEach(resolve=>resolve())})
 const update = (page,entries,scope='a')=>page.evaluate(({entries,scope})=>window.updateHook(entries,scope),{entries,scope})
 try {
+  // Regression: the duration scan used to start only after the first track had
+  // finished loading, because `activatePlaylistScope` (which publishes the
+  // descriptors) runs after `loadPlaylistTrackOrSkip`. That serialized the whole
+  // list's measurement behind one decoder open, so going back to the playlist page
+  // still showed "统计中…". The scan must now start while the first track loads.
+  const {page:parallel,errors:parallelErrors}=await open()
+  await parallel.evaluate(()=>{window.calls=[];window.config.gate=true})
+  await parallel.evaluate(()=>window.viewModel.playlist.onOpenAudio())
+  // The first load is gated; the duration channel must already be working.
+  await parallel.waitForFunction(()=>window.pending.length===1)
+  await parallel.waitForFunction(()=>window.calls.some(c=>c.command==='audio_probe_playlist_durations'))
+  assert.equal(await parallel.evaluate(()=>window.pending.length),1,'the first track load is still pending')
+  const duringLoad=await parallel.evaluate(()=>({
+    durations:window.calls.filter(c=>c.command==='audio_probe_playlist_durations').length,
+    loading:window.viewModel.playlist.totalDurationStatus,
+  }))
+  assert(duringLoad.durations>0,'duration probing starts before the first track finishes loading')
+  assert.equal(duringLoad.loading,'loading','the total is not published yet, but work already started')
+  await release(parallel)
+  await waitReady(parallel,33,'shell')
+  assert.deepEqual(parallelErrors,[])
+  report.push({case:'duration scan starts in parallel with the first track load',batchesDuringLoad:duringLoad.durations})
+  await parallel.close()
+
   const {page,errors}=await open()
   await page.evaluate(()=>window.viewModel.playlist.onOpenAudio())
   await waitReady(page,33,'shell')
   assert.equal(await page.locator('output').count(),0,'statistics finish while playlist is unmounted')
   const initial=await page.evaluate(()=>({count:window.viewModel.playlist.tracks.length,status:window.viewModel.playlist.totalDurationStatus,total:window.viewModel.playlist.totalDurationSeconds,batches:window.calls.filter(c=>c.command==='audio_probe_playlist_durations').map(c=>c.input.paths.length),maxActive:window.maxActive}))
   assert.equal(initial.count,33)
-  assert(initial.batches.every(n=>n<=16))
+  // The batch bound moved from 16 to the shared 256 limit, so a 33-track list is
+  // now a single batch instead of [16,16]. This is the only relaxation allowed
+  // by the contract (AC-14); every other assertion in this file stays as strict
+  // as before. The probed count is 32 or 33 because the loaded current track's
+  // exact duration may already be known when the first batch is built.
+  assert(initial.batches.every(n=>n<=256))
+  assert.equal(initial.batches.length,1,'33 paths fit in one 256-path batch')
+  assert(initial.batches[0]>=32&&initial.batches[0]<=33)
   assert.equal(initial.maxActive,1)
+  const sharedLimit=await page.evaluate(async ()=>{
+    const before=window.calls.filter(c=>c.command==='audio_probe_playlist_durations').length;
+    let rejected=null;
+    try{await window.probeDurations(Array.from({length:window.durationBatchLimit+1},(_,i)=>'over-'+i))}catch(error){rejected=error?.name??String(error)}
+    return {limit:window.durationBatchLimit,rejected,probes:window.calls.filter(c=>c.command==='audio_probe_playlist_durations').length-before};
+  })
+  assert.equal(sharedLimit.limit,256,'shared duration batch limit is 256')
+  assert.equal(sharedLimit.rejected,'PlaylistDurationProtocolError','oversized batch rejected before invoke')
+  assert.equal(sharedLimit.probes,0,'oversized batch never reaches the native command')
   const initialProbes=await probeCount(page)
   await page.evaluate(()=>{window.commits=[];window.viewModel.playlist.onOpenChange(true)})
   await page.waitForFunction(()=>document.querySelector('output')?.textContent==='33 | 0:33')
@@ -235,6 +281,25 @@ try {
     assert.deepEqual(metadataErrors,[])
     report.push({case:'late metadata retained per scope; changed source invalidates recovered total',recoveredInactiveTotal:2})
     await metadata.close()
+
+    const {page:scoped,errors:scopedErrors}=await open('library')
+    await scoped.evaluate(()=>{window.config.itemFailure='a';window.updateLibrary([
+      {scope:'a',sources:[{sourcePath:'a'}]}, {scope:'b',sources:[{sourcePath:'b'}]},
+    ])})
+    await scoped.waitForFunction(()=>window.libraryResults.a?.status==='unknown'&&window.libraryResults.b?.status==='ready')
+    assert.equal(await probeCount(scoped),2)
+    // Known durations are keyed by scope: a known path handed to scope b must not
+    // complete scope a even though the source path is identical.
+    await scoped.evaluate(()=>window.setKnownByScope({b:[['a',999000],['b',5000]]}))
+    await scoped.waitForFunction(()=>window.libraryResults.b.totalSeconds===5)
+    assert.equal(await scoped.evaluate(()=>window.libraryResults.a.status),'unknown','another scope known never completes this scope')
+    // The same path handed to its own scope completes without another probe.
+    await scoped.evaluate(()=>window.setKnownByScope({a:[['a',2000]],b:[]}))
+    await scoped.waitForFunction(()=>window.libraryResults.a.totalSeconds===2)
+    assert.equal(await probeCount(scoped),2,'scope-owned known completes without another native scan')
+    assert.deepEqual(scopedErrors,[])
+    report.push({case:'known durations stay per scope',crossScopeStatus:'unknown',ownScopeTotal:2})
+    await scoped.close()
 
     const {page:changes,errors:changeErrors}=await open('hook')
     await update(changes,entries)

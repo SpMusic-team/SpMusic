@@ -5,6 +5,9 @@ mod cover_pixels;
 mod cue;
 mod device;
 mod duration;
+// Process-local duration cache for the authoritative playlist duration channel.
+// Read and written only by `playlist_duration.rs`; it never persists to disk.
+mod duration_cache;
 mod error;
 mod lyrics_cache;
 mod metadata;

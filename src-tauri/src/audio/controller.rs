@@ -15,6 +15,7 @@ use super::{
         current_output_device_signature, start_audio_device_watcher, AudioDeviceEvent,
         AudioDeviceWatcherHandle,
     },
+    duration_cache::DurationCache,
     error::{audio_error, superseded_error, unavailable_state, AudioCommandError, AudioErrorCode},
     lyrics_cache::LyricsCache,
     playlist::{default_filters, load_folder_playlist, source_filters},
@@ -133,6 +134,10 @@ pub struct AudioController {
     // Shared sidecar-lyrics cache: cloned into the parser worker thread and
     // invalidated after a successful `audio_embed_lyrics`.
     lyrics_cache: Arc<LyricsCache>,
+    // Process-local playlist duration cache. It follows the controller
+    // lifetime, holds no file handles and never writes to disk; the duration
+    // command is its only reader and writer.
+    duration_cache: Arc<DurationCache>,
     load_and_play_queue: Arc<LoadAndPlayQueue>,
     _device_watcher: AudioDeviceWatcherHandle,
 }
@@ -156,6 +161,7 @@ impl AudioController {
         let runtime_cover_cache_dir = cover_cache_dir.clone();
         let lyrics_cache = Arc::new(LyricsCache::new(LyricsCache::MAX_LYRICS_CACHE_ENTRIES));
         let parser_lyrics_cache = Arc::clone(&lyrics_cache);
+        let duration_cache = Arc::new(DurationCache::new());
         let (parser_tx, parser_rx) = mpsc::channel::<TrackParseRequest>();
         let parser_runtime_tx = tx.clone();
         let parser_cover_cache_dir = runtime_cover_cache_dir.clone();
@@ -542,9 +548,18 @@ impl AudioController {
             _parser_tx: Mutex::new(parser_tx),
             cover_cache_dir,
             lyrics_cache,
+            duration_cache,
             load_and_play_queue,
             _device_watcher: device_watcher,
         }
+    }
+
+    /// Shared handle to the process-local playlist duration cache.
+    ///
+    /// The Tauri duration command clones this `Arc`, so the cache lives exactly
+    /// as long as the controller and is dropped with it.
+    pub(crate) fn duration_cache(&self) -> Arc<DurationCache> {
+        Arc::clone(&self.duration_cache)
     }
 
     pub fn open_file(

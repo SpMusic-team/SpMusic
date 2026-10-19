@@ -46,7 +46,7 @@ v0.1 真实播放以单个本地音频资源的最小闭环为核心：前端通
 
 ## 范围
 
-- 定义 v0.1 真实播放 command 契约（21 个已注册 `audio_*` command，含 OPT-0002 新增的 `audio_embed_lyrics`、列表封面窗口相关命令、`audio_probe_playlist_durations` 与 2026-10-19 新增的 `audio_probe_playlist_track_summaries`）。
+- 定义 v0.1 真实播放 command 契约（21 个已注册 `audio_*` command，含 OPT-0002 新增的 `audio_embed_lyrics`、列表封面窗口相关命令、`audio_probe_playlist_durations` 与 2026-10-19 新增的 `audio_probe_playlist_track_summaries`）。`audio_probe_playlist_durations` 每批上限为 256 并带进程内、按文件身份校验的时长缓存，见 [playlist-duration-cache.md](./playlist-duration-cache.md)。
 - 定义同目录临时队列与本地 `.m3u8` 临时队列的 command / DTO、排序、非递归、只读和会话内边界。
 - 定义高频播放状态与低频歌曲详情的传输边界，以及 command response、轮询和 `audio_state_changed` 事件的同步 / 乱序原则。
 - 定义格式兼容性声明维度（扩展名枚举 vs 内容解码验证）。
@@ -56,6 +56,7 @@ v0.1 真实播放以单个本地音频资源的最小闭环为核心：前端通
 
 - 不实现媒体库、递归文件夹扫描、文件监控、数据库或持久化索引。
 - 不实现播放列表标签索引 / 标签缓存 / 后台全库扫描 / mtime 增量索引：`audio_probe_playlist_track_summaries` 是无状态、按需、进程内即时的只读批量读取，不落盘、不建立第二套失效语义。
+- 不做跨进程时长索引：`audio_probe_playlist_durations` 的时长缓存为进程内、随 `AudioController` 生命周期释放；把时长落盘需「歌单持久化」获批后按 [playlist-duration-cache.md](./playlist-duration-cache.md) 的 D2/D3 另行实施。
 - 不实现产品级播放列表、临时队列持久化、跨目录队列管理、播放历史、收藏、网络 HLS 或完整 `m3u8` 导入导出。
 - 不实现网络 / sidecar 歌词获取、逐字歌词、歌词 / 封面 / 标签编辑 UI（sidecar 歌词写回偏差已修复，见「契约一致性与偏差」）。
 - 不实现 CUE 分轨与 M4B 章节的公共 Tauri / 前端契约（仓库中的解析模型仅属后端内部研究）。
@@ -246,6 +247,39 @@ type AudioPlaylistTrackTagSummary = {
 - **不含** `durationMs` / 歌词 / 封面 / 文件大小 / mtime；时长权威仍在 `audio_probe_playlist_durations` 与补水路径。
 - 每批 ≤256 条，超出整批 `INVALID_PATH`；空输入返回 `[]` 且不触碰文件系统；除超限与 worker 失败外逐项错误，不整批失败。
 - 与 `DURATION_GATE` 分离的独立串行门；不投递到 OPT-0001 解析 worker，也不占用音频 runtime 线程。
+
+### `audio_probe_playlist_durations`
+
+用途：批量读取本地音频的可播放时长，是**播放列表时长的唯一权威通道**。完整契约、缓存身份校验、失效规则与持久化边界见 [playlist-duration-cache.md](./playlist-duration-cache.md)。
+
+输入：
+
+```ts
+type AudioProbePlaylistDurationsInput = {
+  paths: string[]
+}
+```
+
+输出（顺序保持，长度恒等于 `paths.length`）：
+
+```ts
+type AudioPlaylistDurationItem = {
+  sourcePath: string                    // 原样回显请求字符串
+  durationMs: number | null             // null = 探测成功但没有可用时长
+  error: AudioCommandError | null       // 与 durationMs 恰好一个非空
+}
+```
+
+约束：
+
+- 每批上限 **256**，超过整批 `INVALID_PATH`；空数组返回 `[]` 且不触碰文件系统。
+- 批内 `min(8, 路径数)` 个工作线程按下标保序写回；批间由独立 `DURATION_GATE` 串行（与 `TRACK_SUMMARY_GATE` 分离）。前端同一时刻保持 1 个在途批次。
+- 每项先查**进程内时长缓存**（键为稳定化路径，身份为 `len` + `modified`）：身份一致即命中，不打开文件；不一致则删除条目并重新探测。取消缓存、不缓存错误、不缓存 0 字节文件；回填前重新校验身份，避免把正在写入的文件固化。
+- 严格只读：不改音频文件、不写任何缓存目录、不打开网络（持久化时长缓存属 LATER，需歌单持久化批准）。
+- 逐项错误；单项 panic 只污染该项（`INTERNAL_ERROR`），其它项不受影响。
+- 每批 tracing 记录 `batch_size` / `unique_paths` / `worker_count` / `cache_hits` / `cache_misses` / `cache_entries` / `elapsed_ms`，用于证明热路径没有重复解码。
+
+必守不变式：任何其它批量通道（含 `audio_probe_playlist_track_summaries`）**不得**返回 `durationMs`；缓存只能由本命令写入与读出，前端 `knownDurations` 仍优先于任何缓存值。
 
 ### `audio_play`
 
@@ -595,6 +629,7 @@ sequenceDiagram
 | 本地 `.m3u8` 临时队列 | 按决策解析本地条目、跳过远程 / HLS 行、缺失条目保留并提示、绝对路径越目录规则与决策一致。 |
 | 元数据低频传输 | `AudioPlaybackState` 与 `audio_state_changed` 保持轻量；路径、歌词、封面、完整标签只经低频 `AudioTrackRef` / `audio_hydrate_track` 传输。`audio_probe_playlist_track_summaries` 是另一条**请求/响应式、按列表 scope 整表单次**的批量通道，只返回展示用标签快照（不含歌词、封面、data URL、时长），不进入 `audio_state_changed`、播放进度轮询或任何事件 payload，也不替代 `audio_hydrate_track` 的完整详情。 |
 | 播放列表标签摘要 | `audio_probe_playlist_track_summaries` 只读标签（`read_cover_art(false)`），不开解码器、不写盘、不读 sidecar `.lrc`；每批 ≤256、逐项错误、顺序与 `sourcePath` 回声保持；前端按 scope 键缓存，过期批次不得写入另一个 scope，失败必须降级为真实回退行而不是永久加载态（详见 [playlist-track-summaries.md](./playlist-track-summaries.md)）。 |
+| 播放列表时长 | 时长唯一权威为 `audio_probe_playlist_durations`（每批 ≤256、≤8 探测线程、`DURATION_GATE` 批间串行）；进程内缓存以 `len + mtime` 校验身份、只缓存探测结果、不缓存错误；任何其它批量通道（含标签摘要）不含 `durationMs`；前端 `knownDurations` 按 scope 提供且优先于缓存值（详见 [playlist-duration-cache.md](./playlist-duration-cache.md)）。 |
 | 状态事件 | `audio_state_changed` payload 为 `AudioPlaybackState`；控制 command 的事件与 response 同源同值，设备变化单独广播，自然结束经 500ms 轮询检测。 |
 | 音量 | `audio_set_volume` 采用 `0.0..=1.0` 归一化区间与 `INVALID_VOLUME` 错误码；`AudioPlaybackState.volume` 反映当前值。 |
 | 格式声明 | 扩展名枚举、内容解码、格式矩阵维度分别表述，不冒充“支持所有常见格式”。 |

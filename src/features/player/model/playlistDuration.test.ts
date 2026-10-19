@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { aggregatePlaylistDuration, createPlaylistDurationScanner, formatPlaylistDurationLabel, resolvePlaylistDuration, type PlaylistDurationProbeItem, type PlaylistDurationScanResult } from './playlistDuration.ts'
+import { AUDIO_PLAYLIST_DURATION_BATCH_LIMIT, aggregatePlaylistDuration, createPlaylistDurationScanner, formatPlaylistDurationLabel, resolvePlaylistDuration, type PlaylistDurationProbeItem, type PlaylistDurationScanResult } from './playlistDuration.ts'
 
 const noMetadata = new Map<string, number>()
 function requireScan(result: PlaylistDurationScanResult | null): PlaylistDurationScanResult {
@@ -16,7 +16,7 @@ test('empty queue is zero; incomplete or invalid duration never becomes a partia
   }
 })
 
-test('probe is bounded to 16, deduplicates paths, and counts every duplicate queue entry', async () => {
+test('probe is bounded by AUDIO_PLAYLIST_DURATION_BATCH_LIMIT, deduplicates paths, and counts every duplicate queue entry', async () => {
   const batches: string[][] = []
   const scan = createPlaylistDurationScanner(async (paths) => {
     batches.push(paths)
@@ -25,9 +25,24 @@ test('probe is bounded to 16, deduplicates paths, and counts every duplicate que
   const sources = Array.from({ length: 34 }, (_, index) => ({ sourcePath: `file-${index}` }))
   const entries = [...sources, sources[0]!, { sourcePath: 'known', durationMs: 5000 }]
   const result = requireScan(await scan(entries, () => true))
-  assert.deepEqual(batches.map((batch) => batch.length), [16, 16, 2])
+  assert.deepEqual(batches.map((batch) => batch.length), [34])
   assert.equal(result.durationsByPath.size, 35)
   assert.deepEqual(resolvePlaylistDuration(entries, noMetadata, result), { status: 'ready', totalSeconds: 40 })
+})
+
+test('600 paths split into 256/256/88 batches that never exceed the shared limit', async () => {
+  assert.equal(AUDIO_PLAYLIST_DURATION_BATCH_LIMIT, 256)
+  const batches: string[][] = []
+  const scan = createPlaylistDurationScanner(async (paths) => {
+    assert.ok(paths.length <= AUDIO_PLAYLIST_DURATION_BATCH_LIMIT, 'batch must respect the shared limit')
+    batches.push(paths)
+    return paths.map((sourcePath) => ({ sourcePath, durationMs: 1000, error: null }))
+  })
+  const entries = Array.from({ length: 600 }, (_, index) => ({ sourcePath: `path-${index}` }))
+  const result = requireScan(await scan(entries, () => true))
+  assert.deepEqual(batches.map((batch) => batch.length), [256, 256, 88])
+  assert.equal(result.durationsByPath.size, 600)
+  assert.deepEqual(resolvePlaylistDuration(entries, noMetadata, result), { status: 'ready', totalSeconds: 600 })
 })
 
 test('可用歌曲的未知时长和读取错误保留证据，不发布不完整数字', async () => {
@@ -179,7 +194,7 @@ test('成功探测A与失败B后来的补水合并为完整3秒，既不重扫�
 
 test('第二批invoke失败保留首批成功；后补水可以恢复完整总和但不能提前给partialsum', async () => {
   let calls = 0
-  const entries = Array.from({ length: 33 }, (_, index) => ({ sourcePath: String(index) }))
+  const entries = Array.from({ length: 257 }, (_, index) => ({ sourcePath: String(index) }))
   const scan = createPlaylistDurationScanner(async (paths) => {
     calls += 1
     if (calls === 2) throw new Error('native command unavailable')
@@ -187,18 +202,18 @@ test('第二批invoke失败保留首批成功；后补水可以恢复完整总�
   })
   const result = requireScan(await scan(entries, () => true))
   assert.equal(calls, 2)
-  assert.equal(result.durationsByPath.size, 16)
+  assert.equal(result.durationsByPath.size, 256)
   assert.equal(result.commandFailure?.kind, 'invoke')
   const unresolved = resolvePlaylistDuration(entries, noMetadata, result)
   assert.equal(unresolved.status, 'error')
   assert.equal(unresolved.totalSeconds, undefined)
-  const later = new Map(entries.slice(16).map((entry) => [entry.sourcePath, 2000]))
-  assert.deepEqual(resolvePlaylistDuration(entries, later, result), { status: 'ready', totalSeconds: 50 })
+  const later = new Map(entries.slice(256).map((entry) => [entry.sourcePath, 2000]))
+  assert.deepEqual(resolvePlaylistDuration(entries, later, result), { status: 'ready', totalSeconds: 258 })
 })
 
 test('协议parser异常与invoke异常区分，成功前批保持原始精度', async () => {
   let calls = 0
-  const entries = Array.from({ length: 17 }, (_, index) => ({ sourcePath: String(index) }))
+  const entries = Array.from({ length: 257 }, (_, index) => ({ sourcePath: String(index) }))
   const scan = createPlaylistDurationScanner(async (paths) => {
     calls += 1
     if (calls === 2) {
@@ -210,9 +225,9 @@ test('协议parser异常与invoke异常区分，成功前批保持原始精度',
   })
   const result = requireScan(await scan(entries, () => true))
   assert.equal(result.commandFailure?.kind, 'protocol')
-  assert.equal(result.durationsByPath.size, 16)
+  assert.equal(result.durationsByPath.size, 256)
   assert.equal(resolvePlaylistDuration(entries, noMetadata, result).status, 'error')
-  assert.deepEqual(resolvePlaylistDuration(entries, new Map([['16', 1000]]), result), { status: 'ready', totalSeconds: 21 })
+  assert.deepEqual(resolvePlaylistDuration(entries, new Map([['256', 1000]]), result), { status: 'ready', totalSeconds: 321 })
 })
 
 test('最新合法补水覆盖探测旧值；非法补水不掩盖探测成功，零时长合法', () => {
@@ -253,7 +268,7 @@ test('m3u8的1797条目数量保留，时长只累计找到的1796首，补齐�
   const entries = Array.from({ length: 1797 }, (_, index) => ({ sourcePath: `track-${index}`, available: index !== 1263 }))
   const probedPaths: string[] = []
   const scan = createPlaylistDurationScanner(async (paths) => {
-    assert.ok(paths.length <= 16)
+    assert.ok(paths.length <= AUDIO_PLAYLIST_DURATION_BATCH_LIMIT)
     probedPaths.push(...paths)
     return paths.map((sourcePath) => ({ sourcePath, durationMs: sourcePath === 'track-0' ? 387467470 : 1000, error: null }))
   })

@@ -11,6 +11,8 @@ import { useGlobalShortcuts } from '@/features/shortcuts/hooks/useGlobalShortcut
 import type { DevAudioToolsViewModel, PlayerUiViewModel, PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
 import { readStartupPage } from '@/features/player/model/startupPageStorage'
 
+const EMPTY_KNOWN_DURATIONS: ReadonlyMap<string, number> = new Map()
+
 export function PlayerShell() {
   const player = useAudioPlayer()
   useGlobalShortcuts(player)
@@ -93,7 +95,12 @@ export function PlayerShell() {
   const durationSources = useMemo<readonly { sourcePath: string; id?: string; available?: boolean }[]>(() => player.playlistDurationTracks
     ?? (singleTrackSource ? [{ sourcePath: singleTrackSource }] : []), [player.playlistDurationTracks, singleTrackSource])
   const currentDurationMs = player.currentAudioTrack?.durationMs
-  const knownDurations = useMemo(() => {
+  const durationScope = player.playlistDurationScope
+  // Known durations of the active scope, derived only from that scope's own row
+  // data (tag summary < hydration metadata < windowed visual) plus the current
+  // track's raw duration. Nothing here is invented: a zero duration stays
+  // unknown because the presentation mapper uses zero for "not hydrated".
+  const activeKnownDurations = useMemo(() => {
     const known = new Map<string, number>()
     const tracksById = new Map(playlistTracks.map((item) => [item.id, item]))
     for (const source of durationSources) {
@@ -107,11 +114,33 @@ export function PlayerShell() {
       && !durationSources.some((source) => source.sourcePath === singleTrackSource && source.available === false)) known.set(singleTrackSource, currentDurationMs)
     return known
   }, [durationSources, playlistTracks, singleTrackSource, currentDurationMs])
+  // Known durations stay per scope and survive a scope switch. While a scope is
+  // active, its rows hydrate exact durations; an inactive scope's tag summary
+  // rows carry no duration by contract (`playlistTrackRowFromSummary` is always
+  // 0), so the only truthful known values it can own are the ones it collected
+  // while it was active. They are renamed with the scope so one scope's row data
+  // can never complete another scope. `react-hooks/refs` forbids reading a ref
+  // during render, so this uses React's documented "adjust state when the input
+  // changes" form, which re-renders before committing.
   const libraryDurationSources = useMemo(() => player.sessionPlaylists.map((item) => ({
     scope: playlistScope(item), sources: item.tracks,
   })), [player.sessionPlaylists])
-  const playlistDurations = usePlaylistLibraryDurations(durationSources, player.playlistDurationScope, libraryDurationSources, knownDurations)
-  const playlistDuration = playlistDurations.get(player.playlistDurationScope)!
+  const [knownScopeState, setKnownScopeState] = useState<Readonly<{
+    scope: string
+    known: ReadonlyMap<string, number>
+    byScope: ReadonlyMap<string, ReadonlyMap<string, number>>
+  }>>({ scope: '\u0000', known: EMPTY_KNOWN_DURATIONS, byScope: new Map() })
+  if (knownScopeState.scope !== durationScope || knownScopeState.known !== activeKnownDurations) {
+    // Keep every live scope (so a switch back reuses what it already learned)
+    // and drop scopes of playlists that left the session.
+    const liveScopes = new Set([durationScope, ...libraryDurationSources.map((item) => item.scope)])
+    const byScope = new Map([...knownScopeState.byScope].filter(([key]) => liveScopes.has(key)))
+    byScope.set(durationScope, activeKnownDurations)
+    setKnownScopeState({ scope: durationScope, known: activeKnownDurations, byScope })
+  }
+  const knownDurationsByScope = knownScopeState.byScope
+  const playlistDurations = usePlaylistLibraryDurations(durationSources, durationScope, libraryDurationSources, knownDurationsByScope)
+  const playlistDuration = playlistDurations.get(durationScope)!
   const browsedDuration = browsedPlaylist ? playlistDurations.get(playlistScope(browsedPlaylist))! : playlistDuration
   const toggleTrackFeedback = player.toggleTrackFeedback
   const handleFeedbackToggle = useCallback((feedback: Parameters<typeof toggleTrackFeedback>[1]) => {

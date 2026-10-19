@@ -1,5 +1,14 @@
 import { convertFileSrc, invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+// Single source of truth for the duration batch bound. It is declared in the
+// duration model (next to the scanner that chunks by it) and re-exported here so
+// every caller keeps importing it from this service. It MUST stay identical to
+// the Rust constant `MAX_DURATION_BATCH_PATHS`
+// (`src-tauri/src/audio/playlist_duration.rs`); both sides change in the same
+// commit (see `docs/architecture/playlist-duration-cache.md`, ruling 7 / risk R7).
+import { AUDIO_PLAYLIST_DURATION_BATCH_LIMIT } from '../model/playlistDuration'
+
+export { AUDIO_PLAYLIST_DURATION_BATCH_LIMIT }
 
 export const AUDIO_STATE_CHANGED_EVENT = 'audio_state_changed'
 export const AUDIO_TRACK_DETAILS_CHANGED_EVENT = 'audio_track_details_changed'
@@ -217,7 +226,9 @@ export async function probeAudioPlaylistTrackSummaries(
 }
 
 export async function probeAudioPlaylistDurations(paths: string[]): Promise<AudioPlaylistDuration[]> {
-  if (paths.length > 16) throw new PlaylistDurationProtocolError('Playlist duration batch exceeds 16 paths')
+  if (paths.length > AUDIO_PLAYLIST_DURATION_BATCH_LIMIT) {
+    throw new PlaylistDurationProtocolError(`Playlist duration batch exceeds ${AUDIO_PLAYLIST_DURATION_BATCH_LIMIT} paths`)
+  }
   const response = await invoke<unknown>('audio_probe_playlist_durations', { input: { paths } })
   if (!Array.isArray(response) || response.length !== paths.length) throw new PlaylistDurationProtocolError('Playlist duration response count is invalid')
   return response.map((value: unknown, index) => {

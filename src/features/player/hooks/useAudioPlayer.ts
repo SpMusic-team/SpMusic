@@ -421,6 +421,10 @@ export function useAudioPlayer() {
   const [detailsPending, setDetailsPending] = useState(false)
   const [contentState, setContentState] = useState<PlayerContentState>('empty')
   const [folderPlaylist, setFolderPlaylist] = useState<AudioFolderPlaylist | null>(null)
+  // Descriptors of a playlist whose first track is still loading. The duration
+  // channel reads this so the whole list is measured in parallel with that load
+  // instead of waiting for the full scope activation.
+  const [pendingDurationPlaylist, setPendingDurationPlaylist] = useState<AudioFolderPlaylist | null>(null)
   const [sessionPlaylists, setSessionPlaylists] = useState<readonly AudioFolderPlaylist[]>([])
   const [playlistTrackVisuals, setPlaylistTrackVisuals] = useState<Readonly<Record<string, PlaylistTrackVisual>>>({})
   const [playlistTrackMetadata, setPlaylistTrackMetadata] = useState<Readonly<Record<string, PlaylistTrackMetadata>>>({})
@@ -895,6 +899,8 @@ export function useAudioPlayer() {
     if (playlistScopeRef.current === nextScope) {
       folderPlaylistRef.current = playlist
       setFolderPlaylist(playlist)
+      // The real activation owns the duration source now.
+      setPendingDurationPlaylist(null)
       return
     }
 
@@ -959,6 +965,8 @@ export function useAudioPlayer() {
     }
     folderPlaylistRef.current = playlist
     setFolderPlaylist(playlist)
+    // The real activation owns the duration source now.
+    setPendingDurationPlaylist(null)
   }, [ensurePlaylistCoverSession, ensurePlaylistSummaries, playlistArtworkGrace])
 
   const clearPresentationTrack = useCallback((nextContentState: Exclude<PlayerContentState, 'track'>) => {
@@ -2510,8 +2518,19 @@ export function useAudioPlayer() {
     // track opens a decoder and reads its metadata, so starting afterwards would
     // leave the list unread exactly while the user is waiting for it.
     ensurePlaylistSummaries(playlistScope(playlist), playlist)
+    // Same reasoning for the duration channel, and it also has to survive the
+    // load: the first probe opens decoders for the whole list, so it must start
+    // before, not after, the first track's own decoder work. Publishing the
+    // descriptors here is what lets `usePlaylistLibraryDurations` begin; the full
+    // scope activation (epoch, queue, artwork) still happens after the load.
+    if (playlistScopeRef.current !== playlistScope(playlist)) {
+      setPendingDurationPlaylist(playlist)
+    }
     const loaded = await loadPlaylistTrackOrSkip(playlist, playlist.selectedIndex, autoplay, 1, false, true, true)
-    if (!loaded) return
+    if (!loaded) {
+      setPendingDurationPlaylist((previous) => (previous === playlist ? null : previous))
+      return
+    }
     activatePlaylistScope(playlist)
     setQueueOpen(true)
     const currentId = latestAudioStateRef.current?.currentTrackId
@@ -3215,11 +3234,15 @@ export function useAudioPlayer() {
     contentState,
     queueTracks,
     unavailableTrackIds,
-    playlistDurationTracks: folderPlaylist?.tracks,
+    // The duration channel must see the list as soon as it is known, not only
+    // after the first track finishes loading.
+    playlistDurationTracks: folderPlaylist?.tracks ?? pendingDurationPlaylist?.tracks,
     sessionPlaylists,
     activePlaylistScope: folderPlaylist ? playlistScope(folderPlaylist) : null,
     selectSessionPlaylistTrack,
-    playlistDurationScope: folderPlaylist ? playlistScope(folderPlaylist) : currentAudioTrack?.sourcePath ?? '',
+    playlistDurationScope: folderPlaylist
+      ? playlistScope(folderPlaylist)
+      : pendingDurationPlaylist ? playlistScope(pendingDurationPlaylist) : currentAudioTrack?.sourcePath ?? '',
     playlistTrackMetadata,
     playlistTrackVisuals,
     playlistTrackSummariesByScope,

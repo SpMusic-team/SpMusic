@@ -39,7 +39,7 @@ Tauri managed state 保存 `AudioController`。`AudioController` 通过 channel 
 - `audio_load_and_play(input: AudioLoadAndPlayInput) -> AudioLoadAndPlayResult`
 - `audio_hydrate_track(input: AudioLoadFileInput) -> AudioTrackRef`
 - `audio_list_folder_tracks(input: AudioFolderPlaylistInput) -> AudioFolderPlaylist`
-- `audio_probe_playlist_durations(input: AudioProbePlaylistDurationsInput) -> AudioPlaylistDurationItem[]`
+- `audio_probe_playlist_durations(input: AudioProbePlaylistDurationsInput) -> AudioPlaylistDurationItem[]`（时长唯一权威通道：每批 ≤256、批内 ≤8 worker、`DURATION_GATE` 批间串行、进程内身份校验缓存，见 `docs/architecture/playlist-duration-cache.md`）
 - `audio_probe_playlist_track_summaries(input: AudioProbePlaylistTrackSummariesInput) -> AudioPlaylistTrackSummaryItem[]`（只读标签批量通道，见 `docs/architecture/playlist-track-summaries.md`）
 - `audio_embed_lyrics(input: AudioEmbedLyricsInput) -> AudioTrackRef`
 - `audio_play(input?: AudioPlayInput) -> AudioPlaybackState`

@@ -129,6 +129,7 @@ fn audio_list_folder_tracks(
 
 #[tauri::command]
 async fn audio_probe_playlist_durations(
+    state: State<'_, AudioController>,
     input: AudioProbePlaylistDurationsInput,
 ) -> Result<Vec<AudioPlaylistDurationItem>, AudioCommandError> {
     tracing::debug!(
@@ -136,7 +137,9 @@ async fn audio_probe_playlist_durations(
         path_count = input.paths.len(),
         "Tauri command invoked",
     );
-    probe_playlist_durations(input).await
+    // The process-local duration cache follows the controller lifetime; cloning
+    // the `Arc` here adds no state and no disk access.
+    probe_playlist_durations(input, state.duration_cache()).await
 }
 
 #[tauri::command]

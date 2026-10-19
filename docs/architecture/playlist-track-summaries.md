@@ -365,7 +365,7 @@ const row = { ...queueTrack, ...summaryRow, ...playlistTrackMetadata[queueTrack.
 | R14 | 慢盘 / 网络盘 | 每项 2 次 `stat`（`exists` + `is_file`）；1791 项在网络盘会显著变慢 | 验收记录本地盘与网络盘两组数据；不因慢盘放弃"整表预读"（用户已明确选择该取舍） |
 | R15 | 加载态吞掉定位与搜索 | 一次性 `entryPosition`（当前曲定位 / 回到顶部）与搜索都依赖行的存在；面板空态文案是「尚未打开音频」 | 加载态不复用 `Empty` 文案、不设置 `initialPositionAppliedRef = true`；行落地后重新执行一次定位；未 ready 时禁用搜索并提示 |
 | R16 | 误以为「歌曲未找到」必须由文本承载 | 现有伪造艺术家里携带了缺失信息 | 缺失信息由 `unavailableTrackIds` + 「暂不可用」徽标 + 播放时 toast 承载；不得为信息量保留占位 |
-| R17 | 为非活动列表算总量时双源并存 | `usePlaylistLibraryDurations` 目前只对活动 scope 传入 `knownDurations`，其余 scope 全量走解码探测 | 本轮不改变；若后续要让摘要参与时长，必须同时把 known 映射 scope 化，避免两套来源并存 |
+| R17 | 为非活动列表算总量时双源并存 | `usePlaylistLibraryDurations` 目前只对活动 scope 传入 `knownDurations`，其余 scope 全量走解码探测 | **已由 [playlist-duration-cache.md](./playlist-duration-cache.md) 处理**：known 映射已 scope 化，且 `resolvePlaylistDuration` 的优先级未变。摘要仍然**不**参与时长（见该文件 R1 的新不变式）。 |
 
 ## 备选方案与取舍
 
@@ -379,7 +379,8 @@ const row = { ...queueTrack, ...summaryRow, ...playlistTrackMetadata[queueTrack.
 ## 演进路径
 
 1. 本轮：只读标签批量通道 + scope 缓存 + 加载态；时长、封面、补水泵全部不动。
-2. 可选下一步（需证据）：DTO 追加 `durationMs`，让摘要预占时长探测的重复工作，并把 `usePlaylistLibraryDurations` 的 known 映射 scope 化；前提是 ASTS/AAC 与 `decode_duration` 的一致性有实测数据。
+2. ~~可选下一步（需证据）：DTO 追加 `durationMs`，让摘要预占时长探测的重复工作，并把 `usePlaylistLibraryDurations` 的 known 映射 scope 化；前提是 ASTS/AAC 与 `decode_duration` 的一致性有实测数据。~~
+   **Superseded（2026-10-19）**：DTO 追加 `durationMs` 已被 [playlist-duration-cache.md](./playlist-duration-cache.md) R1 否决——时长必须保持单一权威（`audio_probe_playlist_durations` + 其内部身份校验缓存），标签通道不得返回时长。其中"known 映射 scope 化"这一半已在该任务中落地。正确的合并方向是反过来：由时长通道在内部复用廉价标签步骤，而不是让标签通道背时长。
 3. 可选（需 PM 批准）：媒体库范围内的持久标签索引，届时摘要命令可成为索引填充的读取原语，但命令契约与只读边界保持不变。
 4. 稳定边界：Rust 侧"只读、不解码、不写盘、逐项错误、有界批量"，前端侧"scope 键缓存 + pass generation 守卫 + 一次性落地"，这两条在后续演进中不得改变。
 

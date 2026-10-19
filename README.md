@@ -215,6 +215,7 @@ v0.1 的目标是“真实本地播放可发布闭环”：在已完成播放器
 - [总体架构](docs/architecture/overall-architecture.md)
 - [真实音频播放架构](docs/architecture/real-audio-playback.md)
 - [播放列表曲目标签摘要契约](docs/architecture/playlist-track-summaries.md)
+- [播放列表时长缓存契约](docs/architecture/playlist-duration-cache.md)
 - [播放器界面 UI 规格](docs/ui/player-shell.md)
 - [前端架构实现说明](docs/implementation/frontend-architecture.md)
 - [真实音频后端实现说明](docs/implementation/real-audio-backend.md)

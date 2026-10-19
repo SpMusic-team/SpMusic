@@ -1,0 +1,1292 @@
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, type RefObject } from 'react'
+import { locateLyricTimeline } from '@/features/player/model/lyricTimeline'
+import type { PlayerTimelineInteraction } from '@/features/player/model/playerUiViewModel'
+import type { DemoLyricLine } from '@/features/player/model/playerTypes'
+
+const FOLLOW_SCROLL_FALLBACK_MS = 240
+const INTERACTIVE_SCROLL_FALLBACK_MS = 160
+const USER_SCROLL_IDLE_MS = 5000
+const WHEEL_GESTURE_IDLE_MS = 150
+const LYRIC_NAVIGATION_TIMEOUT_MS = 15000
+const FOLLOWING_STEP_FAST_DURATION_MULTIPLIER = 1.625
+const FOLLOWING_STEP_EASING = 'cubic-bezier(0, 0, 0.58, 1)'
+const NAVIGATION_NEAR_ANCHOR_PX = 0
+const NAVIGATION_EASING = 'cubic-bezier(0, 0, 0.58, 1)'
+
+type LyricTextPresentation = {
+  element: HTMLElement
+  opacity: number
+  visualFontSize: number
+}
+
+type NavigationCapturedLine = {
+  element: HTMLElement
+  id: string
+  index: number
+  top: number
+  bottom: number
+  textPresentations: LyricTextPresentation[]
+}
+
+type LyricNavigationSession = {
+  requestId: number
+  generation: number
+  scopeKey: string
+  lyrics: readonly DemoLyricLine[]
+  layoutSignature: string
+  targetId: string
+  targetIndex: number
+  listTop: number
+  listBottom: number
+  capturedLines: NavigationCapturedLine[]
+  started: boolean
+}
+
+function prefersReducedMotion() {
+  const motionRoot = document.querySelector('.spmusic-app') ?? document.documentElement
+  return motionRoot.getAttribute('data-motion') === 'off'
+    || window.matchMedia('(prefers-reduced-motion: reduce)').matches
+}
+
+function motionDurationMs(variableName: string, fallbackMs: number) {
+  const motionRoot = document.querySelector('.spmusic-app') ?? document.documentElement
+  const value = window.getComputedStyle(motionRoot).getPropertyValue(variableName).trim()
+  const duration = Number.parseFloat(value)
+  if (!Number.isFinite(duration)) return fallbackMs
+  return value.endsWith('s') && !value.endsWith('ms') ? duration * 1000 : duration
+}
+
+function transformScale(transform: string) {
+  if (!transform || transform === 'none') return 1
+  const matrix = transform.match(/^matrix\(([^)]+)\)$/)
+  if (!matrix) return 1
+  const values = matrix[1].split(',').map(Number)
+  if (values.length < 2 || values.some((value) => !Number.isFinite(value))) return 1
+  return Math.hypot(values[0], values[1])
+}
+
+function captureTextPresentation(element: HTMLElement): LyricTextPresentation {
+  const style = window.getComputedStyle(element)
+  const fontSize = Number.parseFloat(style.fontSize)
+  const opacity = Number.parseFloat(style.opacity)
+  return {
+    element,
+    opacity: Number.isFinite(opacity) ? opacity : 1,
+    visualFontSize: (Number.isFinite(fontSize) ? fontSize : 0) * transformScale(style.transform),
+  }
+}
+
+function captureLyricLines(
+  lyricList: HTMLOListElement,
+  lyrics: readonly DemoLyricLine[],
+) {
+  const capturedLines: NavigationCapturedLine[] = []
+  for (let index = 0; index < lyrics.length; index += 1) {
+    const element = lyricList.children.item(index)
+    const lyric = lyrics[index]
+    if (
+      !(element instanceof HTMLElement)
+      || element.dataset.lyricIndex !== String(index)
+      || element.dataset.lyricId !== lyric.id
+    ) return null
+
+    const rect = element.getBoundingClientRect()
+    const textElements = Array.from(
+      element.querySelectorAll<HTMLElement>('.lyric-original-line, .translation-line'),
+    )
+    capturedLines.push({
+      element,
+      id: lyric.id,
+      index,
+      top: rect.top,
+      bottom: rect.bottom,
+      textPresentations: textElements.map(captureTextPresentation),
+    })
+  }
+  return capturedLines
+}
+
+function standardEaseOut(progress: number) {
+  // Solve cubic-bezier(0, 0, 0.58, 1) for x so the rigid fallback
+  // follows the same curve as the WAAPI navigation motion.
+  let lower = 0
+  let upper = 1
+  for (let iteration = 0; iteration < 12; iteration += 1) {
+    const time = (lower + upper) / 2
+    const inverse = 1 - time
+    const x = 3 * inverse * time * time * 0.58 + time ** 3
+    if (x < progress) lower = time
+    else upper = time
+  }
+  const time = (lower + upper) / 2
+  const inverse = 1 - time
+  return 3 * inverse * time * time + time ** 3
+}
+
+export function useActiveLyricScroll(
+  positionSeconds: number,
+  interaction: PlayerTimelineInteraction,
+  lyrics: readonly DemoLyricLine[],
+  lyricListRef: RefObject<HTMLOListElement | null>,
+  layoutKey: string,
+  scopeKey: string,
+  listReady = true,
+) {
+  const lineCentersRef = useRef<number[]>([])
+  const scrollFrameRef = useRef<number | null>(null)
+  const userScrollTimerRef = useRef<number | null>(null)
+  const navigationRequestIdRef = useRef(0)
+  const navigationGenerationRef = useRef(0)
+  const navigationSessionRef = useRef<LyricNavigationSession | null>(null)
+  const navigationAnimationsRef = useRef<Set<Animation>>(new Set())
+  const navigationStartFrameRef = useRef<number | null>(null)
+  const navigationPositionFrameRef = useRef<number | null>(null)
+  const navigationTimerRef = useRef<number | null>(null)
+  const navigationMeasurementPendingRef = useRef(false)
+  const followingLineAnimationsRef = useRef<Set<Animation>>(new Set())
+  const followingLineAnimationStateTimerRef = useRef<number | null>(null)
+  const preparedFollowingLinesRef = useRef<{
+    targetIndex: number
+    lines: NavigationCapturedLine[]
+  } | null>(null)
+  const userScrollingRef = useRef(false)
+  const userDraggingRef = useRef(false)
+  const suppressDragClickRef = useRef(false)
+  const resetOverscrollRef = useRef<() => void>(() => {})
+  const userScrollWaitForFollowingRef = useRef(false)
+  const activeIndexRef = useRef<number | null>(null)
+  const previousInteractionRef = useRef<PlayerTimelineInteraction>(interaction)
+  const latestInteractionRef = useRef<PlayerTimelineInteraction>(interaction)
+  const latestPositionRef = useRef(positionSeconds)
+  const latestLyricsRef = useRef(lyrics)
+  const latestScopeKeyRef = useRef(scopeKey)
+  const latestNavigationLayoutSignatureRef = useRef('')
+  const measureAndRecenterRef = useRef<() => void>(() => {})
+  const lyricLayoutSignature = useMemo(
+    () => JSON.stringify(lyrics.map((line) => [line.id, line.timeSeconds, line.original, line.translation])),
+    [lyrics],
+  )
+  const navigationLayoutSignature = `${lyricLayoutSignature}:${layoutKey}`
+
+  const cancelScrollFrame = useCallback(() => {
+    if (scrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(scrollFrameRef.current)
+      scrollFrameRef.current = null
+    }
+  }, [])
+
+  const cancelUserScrollTimer = useCallback(() => {
+    if (userScrollTimerRef.current !== null) {
+      window.clearTimeout(userScrollTimerRef.current)
+      userScrollTimerRef.current = null
+    }
+  }, [])
+
+  const finishDeferredMeasurement = useCallback(() => {
+    const lyricList = lyricListRef.current
+    const hadActiveMotion = lyricList?.dataset.followingStep === 'true'
+    const hadPendingMeasurement = navigationMeasurementPendingRef.current
+    if (!hadActiveMotion && !hadPendingMeasurement) return
+    if (lyricList) {
+      delete lyricList.dataset.followingStep
+      lyricList.style.removeProperty('--lyrics-following-step-duration')
+      lyricList.dispatchEvent(new Event('spmusic:lyric-motion-end'))
+    }
+    if (hadPendingMeasurement) {
+      navigationMeasurementPendingRef.current = false
+      measureAndRecenterRef.current()
+    }
+  }, [lyricListRef])
+
+  const cancelLyricNavigation = useCallback((preserveMotionState = false) => {
+    navigationGenerationRef.current += 1
+    navigationSessionRef.current = null
+    if (navigationStartFrameRef.current !== null) {
+      window.cancelAnimationFrame(navigationStartFrameRef.current)
+      navigationStartFrameRef.current = null
+    }
+    if (navigationPositionFrameRef.current !== null) {
+      window.cancelAnimationFrame(navigationPositionFrameRef.current)
+      navigationPositionFrameRef.current = null
+    }
+    if (navigationTimerRef.current !== null) {
+      window.clearTimeout(navigationTimerRef.current)
+      navigationTimerRef.current = null
+    }
+    navigationAnimationsRef.current.forEach((animation) => animation.cancel())
+    navigationAnimationsRef.current.clear()
+    if (!preserveMotionState) finishDeferredMeasurement()
+  }, [finishDeferredMeasurement])
+
+  const isCurrentNavigationSession = useCallback((session: LyricNavigationSession) => {
+    const currentLyrics = latestLyricsRef.current
+    return navigationSessionRef.current === session
+      && navigationRequestIdRef.current === session.requestId
+      && navigationGenerationRef.current === session.generation
+      && latestScopeKeyRef.current === session.scopeKey
+      && latestNavigationLayoutSignatureRef.current === session.layoutSignature
+      && currentLyrics === session.lyrics
+      && currentLyrics[session.targetIndex]?.id === session.targetId
+  }, [])
+
+  const finalizeLyricNavigation = useCallback((session: LyricNavigationSession) => {
+    if (!isCurrentNavigationSession(session)) return false
+    navigationSessionRef.current = null
+    finishDeferredMeasurement()
+    return true
+  }, [finishDeferredMeasurement, isCurrentNavigationSession])
+
+  const clearFollowingLineAnimationState = useCallback(() => {
+    if (followingLineAnimationStateTimerRef.current !== null) {
+      window.clearTimeout(followingLineAnimationStateTimerRef.current)
+      followingLineAnimationStateTimerRef.current = null
+    }
+    preparedFollowingLinesRef.current = null
+    finishDeferredMeasurement()
+  }, [finishDeferredMeasurement])
+
+  const cancelFollowingLineAnimations = useCallback((preservePreparedTransition = false) => {
+    followingLineAnimationsRef.current.forEach((animation) => animation.cancel())
+    followingLineAnimationsRef.current.clear()
+    if (followingLineAnimationStateTimerRef.current !== null) {
+      window.clearTimeout(followingLineAnimationStateTimerRef.current)
+      followingLineAnimationStateTimerRef.current = null
+    }
+    if (!preservePreparedTransition) clearFollowingLineAnimationState()
+  }, [clearFollowingLineAnimationState])
+
+  const prepareFollowingTransitionState = useCallback(() => {
+    const lyricList = lyricListRef.current
+    if (!lyricList || prefersReducedMotion()) return
+
+    const fastDurationMs = motionDurationMs('--app-motion-fast', INTERACTIVE_SCROLL_FALLBACK_MS)
+    const baseDurationMs = motionDurationMs('--app-motion-standard', FOLLOW_SCROLL_FALLBACK_MS)
+      + fastDurationMs * FOLLOWING_STEP_FAST_DURATION_MULTIPLIER
+    if (followingLineAnimationStateTimerRef.current !== null) {
+      window.clearTimeout(followingLineAnimationStateTimerRef.current)
+      followingLineAnimationStateTimerRef.current = null
+    }
+    lyricList.dataset.followingStep = 'true'
+    lyricList.style.setProperty('--lyrics-following-step-duration', `${baseDurationMs}ms`)
+  }, [lyricListRef])
+
+  const prepareFollowingStep = useCallback((targetIndex: number) => {
+    const currentIndex = activeIndexRef.current
+    if (
+      currentIndex === null
+      || latestInteractionRef.current !== 'following'
+      || userScrollingRef.current
+      || navigationSessionRef.current?.targetIndex === targetIndex
+      || targetIndex !== currentIndex + 1
+    ) return
+
+    const lyricList = lyricListRef.current
+    const currentLyrics = latestLyricsRef.current
+    if (!lyricList || lyricList.children.length !== currentLyrics.length) return
+    const capturedLines = captureLyricLines(lyricList, currentLyrics)
+    if (!capturedLines) return
+
+    // Capture the current presentation before cancelling a prior step so rapid
+    // changes continue from the pixels currently on screen.
+    cancelFollowingLineAnimations(true)
+    preparedFollowingLinesRef.current = { targetIndex, lines: capturedLines }
+    prepareFollowingTransitionState()
+  }, [cancelFollowingLineAnimations, lyricListRef, prepareFollowingTransitionState])
+
+  const targetScrollTop = useCallback((currentIndex: number) => {
+    const lyricList = lyricListRef.current
+    if (!lyricList) return null
+
+    const currentLine = lyricList.children.item(currentIndex)
+    const currentCenter = currentLine instanceof HTMLElement
+      ? currentLine.offsetTop + currentLine.offsetHeight / 2
+      : lineCentersRef.current[currentIndex] ?? 0
+    const maximumScrollTop = Math.max(0, lyricList.scrollHeight - lyricList.clientHeight)
+    return Math.min(
+      Math.max(currentCenter - lyricList.clientHeight / 2, 0),
+      maximumScrollTop,
+    )
+  }, [lyricListRef])
+
+  const startLyricNavigation = useCallback((session: LyricNavigationSession) => {
+    const lyricList = lyricListRef.current
+    if (!lyricList || session.started) return false
+    if (!isCurrentNavigationSession(session)) {
+      if (navigationSessionRef.current === session) cancelLyricNavigation()
+      return false
+    }
+
+    const currentLyrics = latestLyricsRef.current
+    const timeline = locateLyricTimeline(currentLyrics, latestPositionRef.current)
+    if (!timeline || timeline.currentIndex !== session.targetIndex) return false
+    if (currentLyrics[session.targetIndex]?.id !== session.targetId) {
+      cancelLyricNavigation()
+      return false
+    }
+
+    const targetLine = lyricList.children.item(session.targetIndex)
+    if (
+      !(targetLine instanceof HTMLElement)
+      || targetLine.dataset.lyricId !== session.targetId
+      || targetLine.dataset.lyricIndex !== String(session.targetIndex)
+    ) {
+      cancelLyricNavigation()
+      return false
+    }
+
+    session.started = true
+    if (navigationStartFrameRef.current !== null) {
+      window.cancelAnimationFrame(navigationStartFrameRef.current)
+      navigationStartFrameRef.current = null
+    }
+    if (navigationTimerRef.current !== null) {
+      window.clearTimeout(navigationTimerRef.current)
+      navigationTimerRef.current = null
+    }
+    cancelScrollFrame()
+    cancelFollowingLineAnimations(true)
+
+    const finishSessionAfter = (delayMs: number) => {
+      const completionTimer = window.setTimeout(() => {
+        if (isCurrentNavigationSession(session)) finalizeLyricNavigation(session)
+        else if (navigationSessionRef.current === session) cancelLyricNavigation()
+        if (navigationTimerRef.current === completionTimer) navigationTimerRef.current = null
+      }, delayMs)
+      navigationTimerRef.current = completionTimer
+    }
+
+    if (prefersReducedMotion()) {
+      const finalTop = targetScrollTop(session.targetIndex)
+      if (finalTop !== null) lyricList.scrollTop = finalTop
+      finalizeLyricNavigation(session)
+      return true
+    }
+
+    const registerAnimation = (animation: Animation) => {
+      navigationAnimationsRef.current.add(animation)
+      const forgetAnimation = () => navigationAnimationsRef.current.delete(animation)
+      animation.addEventListener('finish', forgetAnimation, { once: true })
+      animation.addEventListener('cancel', forgetAnimation, { once: true })
+    }
+
+    const fastDurationMs = motionDurationMs('--app-motion-fast', INTERACTIVE_SCROLL_FALLBACK_MS)
+    const motionDuration = motionDurationMs('--app-motion-standard', FOLLOW_SCROLL_FALLBACK_MS)
+      + fastDurationMs * FOLLOWING_STEP_FAST_DURATION_MULTIPLIER
+    lyricList.dataset.followingStep = 'true'
+    lyricList.style.setProperty('--lyrics-following-step-duration', `${motionDuration}ms`)
+
+    let textMotionStarted = false
+    const startTextMotion = () => {
+      if (textMotionStarted) return
+      textMotionStarted = true
+      // Real typography has already snapped to its final responsive layout. Only
+      // compositor-friendly text transforms/opacity bridge the visual size change.
+      session.capturedLines.forEach((captured) => {
+        if (!lyricList.contains(captured.element)) return
+        captured.textPresentations.forEach((presentation) => {
+          if (!lyricList.contains(presentation.element)) return
+          const finalStyle = window.getComputedStyle(presentation.element)
+          const finalFontSize = Number.parseFloat(finalStyle.fontSize)
+          const finalOpacity = Number.parseFloat(finalStyle.opacity)
+          const startScale = Number.isFinite(finalFontSize) && finalFontSize > 0
+            ? presentation.visualFontSize / finalFontSize
+            : 1
+          registerAnimation(presentation.element.animate(
+            [
+              { transform: `scale(${startScale})`, opacity: presentation.opacity },
+              {
+                transform: finalStyle.transform === 'none' ? 'scale(1)' : finalStyle.transform,
+                opacity: Number.isFinite(finalOpacity) ? finalOpacity : 1,
+              },
+            ],
+            { duration: motionDuration, easing: NAVIGATION_EASING },
+          ))
+        })
+      })
+    }
+
+    const capturedTarget = session.capturedLines[session.targetIndex]
+    const oldTargetCenter = capturedTarget
+      ? (capturedTarget.top + capturedTarget.bottom) / 2
+      : Number.NaN
+    const oldListCenter = (session.listTop + session.listBottom) / 2
+    if (
+      Number.isFinite(oldTargetCenter)
+      && Math.abs(oldTargetCenter - oldListCenter) <= NAVIGATION_NEAR_ANCHOR_PX
+    ) {
+      startTextMotion()
+      finishSessionAfter(motionDuration)
+      return true
+    }
+
+    // Position starts on the next paint after the visual-state animation is started.
+    const positionFrame = window.requestAnimationFrame(() => {
+      if (navigationPositionFrameRef.current === positionFrame) {
+        navigationPositionFrameRef.current = null
+      }
+      if (!isCurrentNavigationSession(session)) {
+        if (navigationSessionRef.current === session) cancelLyricNavigation()
+        return
+      }
+
+      const finalTop = targetScrollTop(session.targetIndex)
+      const geometryIsValid = finalTop !== null
+        && Number.isFinite(finalTop)
+        && Number.isFinite(session.listTop)
+        && Number.isFinite(session.listBottom)
+        && session.capturedLines.length === currentLyrics.length
+        && session.capturedLines.every((captured, index) => (
+          captured.element === lyricList.children.item(index)
+          && captured.id === currentLyrics[index]?.id
+          && captured.element.dataset.lyricId === captured.id
+          && Number.isFinite(captured.top)
+          && Number.isFinite(captured.bottom)
+        ))
+
+      if (!geometryIsValid || finalTop === null) {
+        const fallbackTop = targetScrollTop(session.targetIndex)
+        if (fallbackTop === null) {
+          cancelLyricNavigation()
+          return
+        }
+        const startTop = lyricList.scrollTop
+        const distance = fallbackTop - startTop
+        const fallbackStartFrame = window.requestAnimationFrame((startTime) => {
+          if (!isCurrentNavigationSession(session)) {
+            if (navigationSessionRef.current === session) cancelLyricNavigation()
+            return
+          }
+          startTextMotion()
+          const animateRigidFallback = (now: number) => {
+            if (!isCurrentNavigationSession(session)) {
+              if (navigationSessionRef.current === session) cancelLyricNavigation()
+              return
+            }
+            const progress = Math.min(Math.max(
+              (now - startTime) / motionDuration,
+              0,
+            ), 1)
+            lyricList.scrollTop = startTop + distance * standardEaseOut(progress)
+            if (progress < 1) {
+              navigationPositionFrameRef.current = window.requestAnimationFrame(animateRigidFallback)
+              return
+            }
+            lyricList.scrollTop = fallbackTop
+            navigationPositionFrameRef.current = null
+            if (isCurrentNavigationSession(session)) finalizeLyricNavigation(session)
+          }
+          animateRigidFallback(startTime)
+        })
+        navigationPositionFrameRef.current = fallbackStartFrame
+        return
+      }
+
+      lyricList.scrollTop = finalTop
+      const finalListRect = lyricList.getBoundingClientRect()
+      startTextMotion()
+      session.capturedLines.forEach((captured) => {
+        const finalRect = captured.element.getBoundingClientRect()
+        const wasVisible = captured.bottom >= session.listTop && captured.top <= session.listBottom
+        const isVisible = finalRect.bottom >= finalListRect.top && finalRect.top <= finalListRect.bottom
+        if (!wasVisible && !isVisible) return
+        const inverseOffset = captured.top - finalRect.top
+        if (Math.abs(inverseOffset) < 0.5) return
+        registerAnimation(captured.element.animate(
+          [
+            { translate: `0 ${inverseOffset}px` },
+            { translate: '0 0' },
+          ],
+          {
+            duration: motionDuration,
+            easing: NAVIGATION_EASING,
+            fill: 'backwards',
+          },
+        ))
+      })
+      finishSessionAfter(motionDuration)
+    })
+    navigationPositionFrameRef.current = positionFrame
+    return true
+  }, [cancelFollowingLineAnimations, cancelLyricNavigation, cancelScrollFrame, finalizeLyricNavigation, isCurrentNavigationSession, lyricListRef, targetScrollTop])
+
+  const navigateToLyric = useCallback((targetIndex: number, commit: () => void) => {
+    resetOverscrollRef.current()
+    if (targetIndex === activeIndexRef.current) {
+      // Selecting the already-active lyric is semantic playback input only. In
+      // particular, preserve a manually scrolled viewport instead of re-centering.
+      cancelLyricNavigation()
+      cancelFollowingLineAnimations()
+      cancelScrollFrame()
+      commit()
+      return
+    }
+
+    cancelUserScrollTimer()
+    userScrollWaitForFollowingRef.current = false
+    userScrollingRef.current = false
+
+    const lyricList = lyricListRef.current
+    const currentLyrics = latestLyricsRef.current
+    const target = currentLyrics[targetIndex]
+    if (!lyricList || !target || lyricList.children.length !== currentLyrics.length) {
+      cancelLyricNavigation()
+      cancelFollowingLineAnimations()
+      cancelScrollFrame()
+      commit()
+      return
+    }
+
+    const listRect = lyricList.getBoundingClientRect()
+    const capturedLines = captureLyricLines(lyricList, currentLyrics)
+    if (!capturedLines) {
+      cancelLyricNavigation()
+      cancelFollowingLineAnimations()
+      cancelScrollFrame()
+      commit()
+      return
+    }
+
+    // Capture the current presentation before cancelling an in-flight request;
+    // a rapid A→B→C click therefore continues from what the user actually saw.
+    cancelLyricNavigation(true)
+    cancelFollowingLineAnimations(true)
+    cancelScrollFrame()
+
+    const session: LyricNavigationSession = {
+      requestId: navigationRequestIdRef.current + 1,
+      generation: navigationGenerationRef.current,
+      scopeKey: latestScopeKeyRef.current,
+      lyrics: currentLyrics,
+      layoutSignature: latestNavigationLayoutSignatureRef.current,
+      targetId: target.id,
+      targetIndex,
+      listTop: listRect.top,
+      listBottom: listRect.bottom,
+      capturedLines,
+      started: false,
+    }
+    navigationRequestIdRef.current = session.requestId
+    navigationSessionRef.current = session
+    const requestTimer = window.setTimeout(() => {
+      if (isCurrentNavigationSession(session)) cancelLyricNavigation()
+      else if (navigationSessionRef.current === session) cancelLyricNavigation()
+    }, LYRIC_NAVIGATION_TIMEOUT_MS)
+    navigationTimerRef.current = requestTimer
+
+    try {
+      commit()
+    } catch (error) {
+      cancelLyricNavigation()
+      throw error
+    }
+    const startFrame = window.requestAnimationFrame(() => {
+      if (navigationStartFrameRef.current === startFrame) navigationStartFrameRef.current = null
+      startLyricNavigation(session)
+    })
+    navigationStartFrameRef.current = startFrame
+  }, [cancelFollowingLineAnimations, cancelLyricNavigation, cancelScrollFrame, cancelUserScrollTimer, isCurrentNavigationSession, lyricListRef, startLyricNavigation])
+
+  const scheduleDirectScroll = useCallback((targetTop: number) => {
+    cancelScrollFrame()
+    scrollFrameRef.current = window.requestAnimationFrame(() => {
+      const lyricList = lyricListRef.current
+      if (lyricList) lyricList.scrollTop = targetTop
+      scrollFrameRef.current = null
+    })
+  }, [cancelScrollFrame, lyricListRef])
+
+  const animateScroll = useCallback((targetTop: number, durationMs: number, maximumTravelPx?: number) => {
+    const lyricList = lyricListRef.current
+    if (!lyricList) return
+
+    cancelScrollFrame()
+    cancelFollowingLineAnimations()
+    if (prefersReducedMotion() || durationMs <= 0) {
+      scheduleDirectScroll(targetTop)
+      return
+    }
+
+    scrollFrameRef.current = window.requestAnimationFrame((startTime) => {
+      const currentList = lyricListRef.current
+      if (!currentList) {
+        scrollFrameRef.current = null
+        return
+      }
+
+      let startTop = currentList.scrollTop
+      let distance = targetTop - startTop
+      if (maximumTravelPx !== undefined && Math.abs(distance) > maximumTravelPx) {
+        startTop = targetTop - Math.sign(distance) * maximumTravelPx
+        currentList.scrollTop = startTop
+        distance = targetTop - startTop
+      }
+
+      if (Math.abs(distance) < 0.5) {
+        currentList.scrollTop = targetTop
+        scrollFrameRef.current = null
+        return
+      }
+
+      const animate = (now: number) => {
+        const animatedList = lyricListRef.current
+        if (!animatedList) {
+          scrollFrameRef.current = null
+          return
+        }
+
+        const progress = Math.min(Math.max((now - startTime) / durationMs, 0), 1)
+        const easeOut = 1 - (1 - progress) ** 3
+        animatedList.scrollTop = startTop + distance * easeOut
+        scrollFrameRef.current = progress < 1
+          ? window.requestAnimationFrame(animate)
+          : null
+      }
+
+      scrollFrameRef.current = window.requestAnimationFrame(animate)
+    })
+  }, [cancelFollowingLineAnimations, cancelScrollFrame, lyricListRef, scheduleDirectScroll])
+
+  const animateFollowingScroll = useCallback((targetTop: number) => {
+    animateScroll(
+      targetTop,
+      motionDurationMs('--app-motion-standard', FOLLOW_SCROLL_FALLBACK_MS),
+    )
+  }, [animateScroll])
+
+  const resumeFollowingAfterUserScroll = useCallback(() => {
+    const finishOrWaitForFollowing = () => {
+      userScrollTimerRef.current = null
+      if (!userScrollingRef.current) return
+
+      if (latestInteractionRef.current !== 'following') {
+        if (userScrollWaitForFollowingRef.current) {
+          userScrollTimerRef.current = window.setTimeout(finishOrWaitForFollowing, 100)
+          return
+        }
+        userScrollingRef.current = false
+        return
+      }
+
+      userScrollWaitForFollowingRef.current = false
+      userScrollingRef.current = false
+
+      resetOverscrollRef.current()
+
+      const currentLyrics = latestLyricsRef.current
+      const timeline = locateLyricTimeline(currentLyrics, latestPositionRef.current)
+      if (!timeline || lineCentersRef.current.length !== currentLyrics.length) return
+
+      const targetTop = targetScrollTop(timeline.currentIndex)
+      if (targetTop !== null) animateFollowingScroll(targetTop)
+      activeIndexRef.current = timeline.currentIndex
+    }
+
+    finishOrWaitForFollowing()
+  }, [animateFollowingScroll, targetScrollTop])
+
+  const animateInteractiveScroll = useCallback((targetTop: number, currentIndex: number) => {
+    const lyricList = lyricListRef.current
+    const currentCenter = lineCentersRef.current[currentIndex]
+    const previousCenter = lineCentersRef.current[currentIndex - 1]
+    const nextCenter = lineCentersRef.current[currentIndex + 1]
+    const adjacentDistance = previousCenter !== undefined
+      ? Math.abs(currentCenter - previousCenter)
+      : nextCenter !== undefined
+        ? Math.abs(nextCenter - currentCenter)
+        : lyricList?.clientHeight ?? 0
+    const maximumTravelPx = lyricList
+      ? Math.max(1, Math.min(adjacentDistance, lyricList.clientHeight * 0.18))
+      : 1
+
+    animateScroll(
+      targetTop,
+      motionDurationMs('--app-motion-fast', INTERACTIVE_SCROLL_FALLBACK_MS),
+      maximumTravelPx,
+    )
+  }, [animateScroll, lyricListRef])
+
+  const animateFollowingStep = useCallback((targetTop: number, currentIndex: number) => {
+    const lyricList = lyricListRef.current
+    if (!lyricList) return
+
+    const preparedMotion = preparedFollowingLinesRef.current?.targetIndex === currentIndex
+      ? preparedFollowingLinesRef.current
+      : null
+    const capturedLines = preparedMotion?.lines
+      ?? captureLyricLines(lyricList, latestLyricsRef.current)
+      ?? []
+    cancelScrollFrame()
+    cancelFollowingLineAnimations(true)
+    preparedFollowingLinesRef.current = null
+    lyricList.scrollTop = targetTop
+    if (prefersReducedMotion()) {
+      clearFollowingLineAnimationState()
+      return
+    }
+
+    const listRect = lyricList.getBoundingClientRect()
+    const fastDurationMs = motionDurationMs('--app-motion-fast', INTERACTIVE_SCROLL_FALLBACK_MS)
+    const baseDurationMs = motionDurationMs('--app-motion-standard', FOLLOW_SCROLL_FALLBACK_MS)
+      + fastDurationMs * FOLLOWING_STEP_FAST_DURATION_MULTIPLIER
+    lyricList.dataset.followingStep = 'true'
+    lyricList.style.setProperty('--lyrics-following-step-duration', `${baseDurationMs}ms`)
+    followingLineAnimationStateTimerRef.current = window.setTimeout(
+      clearFollowingLineAnimationState,
+      baseDurationMs,
+    )
+
+    const registerAnimation = (animation: Animation) => {
+      followingLineAnimationsRef.current.add(animation)
+      const forgetAnimation = () => followingLineAnimationsRef.current.delete(animation)
+      animation.addEventListener('finish', forgetAnimation, { once: true })
+      animation.addEventListener('cancel', forgetAnimation, { once: true })
+    }
+
+    capturedLines.forEach((captured) => {
+      const child = captured.element
+      if (!lyricList.contains(child)) return
+      const lineRect = child.getBoundingClientRect()
+      const wasVisible = captured.bottom >= listRect.top && captured.top <= listRect.bottom
+      const isVisible = lineRect.bottom >= listRect.top && lineRect.top <= listRect.bottom
+      if (!wasVisible && !isVisible) return
+
+      captured.textPresentations.forEach((presentation) => {
+        if (!lyricList.contains(presentation.element)) return
+        const finalStyle = window.getComputedStyle(presentation.element)
+        const finalFontSize = Number.parseFloat(finalStyle.fontSize)
+        const finalOpacity = Number.parseFloat(finalStyle.opacity)
+        const startScale = Number.isFinite(finalFontSize) && finalFontSize > 0
+          ? presentation.visualFontSize / finalFontSize
+          : 1
+        registerAnimation(presentation.element.animate(
+          [
+            { transform: `scale(${startScale})`, opacity: presentation.opacity },
+            {
+              transform: finalStyle.transform === 'none' ? 'scale(1)' : finalStyle.transform,
+              opacity: Number.isFinite(finalOpacity) ? finalOpacity : 1,
+            },
+          ],
+          { duration: baseDurationMs, easing: FOLLOWING_STEP_EASING },
+        ))
+      })
+
+      if (lineRect.bottom < listRect.top || lineRect.top > listRect.bottom) return
+      const inverseOffset = captured.top - lineRect.top
+      if (Math.abs(inverseOffset) < 0.5) return
+      registerAnimation(child.animate(
+        [
+          { translate: `0 ${inverseOffset}px` },
+          { translate: '0 0' },
+        ],
+        { duration: baseDurationMs, easing: FOLLOWING_STEP_EASING, fill: 'backwards' },
+      ))
+    })
+  }, [cancelFollowingLineAnimations, cancelScrollFrame, clearFollowingLineAnimationState, lyricListRef])
+
+  const scheduleMeasurement = useCallback(() => {
+    if (lyricListRef.current?.dataset.followingStep === 'true') {
+      navigationMeasurementPendingRef.current = true
+      return
+    }
+    cancelScrollFrame()
+    cancelLyricNavigation()
+    cancelFollowingLineAnimations()
+    scrollFrameRef.current = window.requestAnimationFrame(() => {
+      scrollFrameRef.current = null
+      measureAndRecenterRef.current()
+    })
+  }, [cancelFollowingLineAnimations, cancelLyricNavigation, cancelScrollFrame, lyricListRef])
+
+  useLayoutEffect(() => {
+    latestPositionRef.current = positionSeconds
+    latestLyricsRef.current = lyrics
+    latestScopeKeyRef.current = scopeKey
+    latestInteractionRef.current = interaction
+    latestNavigationLayoutSignatureRef.current = navigationLayoutSignature
+  }, [interaction, lyrics, navigationLayoutSignature, positionSeconds, scopeKey])
+
+  useLayoutEffect(() => {
+    const lyricList = lyricListRef.current
+    const currentLyrics = latestLyricsRef.current
+    cancelScrollFrame()
+    cancelLyricNavigation()
+    cancelFollowingLineAnimations()
+    activeIndexRef.current = null
+
+    if (!lyricList || !currentLyrics.length) {
+      lineCentersRef.current = []
+      return
+    }
+
+    const measureLineCenters = () => {
+      const measuredLyrics = latestLyricsRef.current
+      const children = lyricList.children
+      if (children.length !== measuredLyrics.length) {
+        lineCentersRef.current = []
+        return
+      }
+      const measuredCenters: number[] = []
+      for (let index = 0; index < measuredLyrics.length; index += 1) {
+        const element = children.item(index)
+        if (
+          !(element instanceof HTMLElement)
+          || element.dataset.lyricIndex !== String(index)
+        ) {
+          lineCentersRef.current = []
+          return
+        }
+        measuredCenters.push(element.offsetTop + element.offsetHeight / 2)
+      }
+      lineCentersRef.current = measuredCenters
+      const timeline = locateLyricTimeline(measuredLyrics, latestPositionRef.current)
+      if (!timeline || lineCentersRef.current.length !== measuredLyrics.length) return
+      if (userScrollingRef.current) return
+
+      const targetTop = targetScrollTop(timeline.currentIndex)
+      if (targetTop !== null && lyricListRef.current) lyricListRef.current.scrollTop = targetTop
+      activeIndexRef.current = timeline.currentIndex
+    }
+
+    measureAndRecenterRef.current = measureLineCenters
+    scheduleMeasurement()
+    let disposed = false
+    const handleExternalLayoutChange = () => {
+      if (!disposed) scheduleMeasurement()
+    }
+    const handleObservedLyricResize = () => {
+      if (disposed) return
+      if (lyricList.dataset.followingStep === 'true' || navigationSessionRef.current) {
+        // Active/inactive typography changes are part of the shared FLIP. Merge
+        // resize notifications and re-measure once after the motion settles.
+        navigationMeasurementPendingRef.current = true
+        return
+      }
+      scheduleMeasurement()
+    }
+    const observer = new ResizeObserver(handleObservedLyricResize)
+    observer.observe(lyricList)
+    const appearanceRoot = document.querySelector('.spmusic-app') ?? document.documentElement
+    const appearanceObserver = new MutationObserver(handleExternalLayoutChange)
+    appearanceObserver.observe(appearanceRoot, {
+      attributes: true,
+      attributeFilter: ['data-theme', 'data-color-scheme', 'data-theme-tier', 'data-motion'],
+    })
+    window.addEventListener('resize', handleExternalLayoutChange)
+    document.fonts?.addEventListener('loadingdone', handleExternalLayoutChange)
+    void document.fonts?.ready.then(handleExternalLayoutChange)
+
+    return () => {
+      disposed = true
+      observer.disconnect()
+      appearanceObserver.disconnect()
+      window.removeEventListener('resize', handleExternalLayoutChange)
+      document.fonts?.removeEventListener('loadingdone', handleExternalLayoutChange)
+      if (measureAndRecenterRef.current === measureLineCenters) measureAndRecenterRef.current = () => {}
+      cancelScrollFrame()
+    }
+  }, [cancelFollowingLineAnimations, cancelLyricNavigation, cancelScrollFrame, listReady, lyricLayoutSignature, lyricListRef, scheduleMeasurement, scopeKey, targetScrollTop])
+
+  useLayoutEffect(() => {
+    scheduleMeasurement()
+  }, [layoutKey, scheduleMeasurement])
+
+  useLayoutEffect(() => {
+    resetOverscrollRef.current()
+  }, [listReady, lyrics, scopeKey])
+
+  useEffect(() => {
+    const lyricList = lyricListRef.current
+    if (!lyricList) return
+
+    // The scrollport itself moves for elastic feedback. Keep input owned by
+    // the fixed viewport so short layouts cannot move out from under the mouse.
+    const inputSurface = lyricList.closest<HTMLElement>('.lyrics-panel') ?? lyricList
+    let drag: { pointerId: number; startY: number; lastY: number; active: boolean } | null = null
+    let overscrollOffset = 0
+    let elasticAnimation: Animation | null = null
+    let animationTarget = 0
+    let returnAfterOutward = false
+    let wheelGestureTimer: number | null = null
+
+    const setOverscroll = (offset: number) => {
+      overscrollOffset = offset
+      if (offset === 0) lyricList.style.removeProperty('--lyrics-overscroll-offset')
+      else lyricList.style.setProperty('--lyrics-overscroll-offset', `${offset}px`)
+      // A return animation has a zero logical target while its presentation
+      // is still displaced. Keep that presentation visible until it finishes.
+      if (offset !== 0 || elasticAnimation) lyricList.dataset.overscrolling = 'true'
+      else delete lyricList.dataset.overscrolling
+    }
+
+    const clearWheelGestureTimer = () => {
+      if (wheelGestureTimer !== null) window.clearTimeout(wheelGestureTimer)
+      wheelGestureTimer = null
+      returnAfterOutward = false
+    }
+
+    const interruptRebound = () => {
+      clearWheelGestureTimer()
+      if (!elasticAnimation) return
+      const translate = window.getComputedStyle(lyricList).translate.split(/\s+/)
+      const visualOffset = Number.parseFloat(translate[1] ?? '0')
+      elasticAnimation.cancel()
+      elasticAnimation = null
+      setOverscroll(Number.isFinite(visualOffset) ? visualOffset : 0)
+    }
+
+    const resetOverscroll = () => {
+      clearWheelGestureTimer()
+      elasticAnimation?.cancel()
+      elasticAnimation = null
+      animationTarget = 0
+      setOverscroll(0)
+    }
+    resetOverscrollRef.current = resetOverscroll
+
+    const animateOverscroll = (target: number, durationVariable: string, fallbackDuration: number): void => {
+      interruptRebound()
+      if (overscrollOffset === target) return
+      const duration = motionDurationMs(durationVariable, fallbackDuration)
+      if (prefersReducedMotion() || duration <= 0) {
+        resetOverscroll()
+        return
+      }
+      const motionRoot = document.querySelector('.spmusic-app') ?? document.documentElement
+      const easing = window.getComputedStyle(motionRoot).getPropertyValue('--app-motion-easing').trim() || 'ease-out'
+      const animation = lyricList.animate(
+        [{ translate: `0 ${overscrollOffset}px` }, { translate: `0 ${target}px` }],
+        { duration, easing },
+      )
+      animationTarget = target
+      elasticAnimation = animation
+      setOverscroll(target)
+      animation.onfinish = () => {
+        if (elasticAnimation !== animation) return
+        elasticAnimation = null
+        setOverscroll(target)
+        // Quiet wheel input requests a return, but must not truncate the
+        // theme's outward animation before its visible target is reached.
+        if (returnAfterOutward && target !== 0 && !drag?.active) returnFromOverscroll()
+      }
+    }
+
+    const returnFromOverscroll = () => {
+      animateOverscroll(0, '--app-motion-standard', FOLLOW_SCROLL_FALLBACK_MS)
+    }
+
+    const finishWheelGesture = () => {
+      wheelGestureTimer = null
+      if (elasticAnimation && animationTarget !== 0) {
+        returnAfterOutward = true
+        return
+      }
+      returnFromOverscroll()
+    }
+
+    const overscrollLimit = () => {
+      if (prefersReducedMotion()) return 0
+      const distance = Number.parseFloat(window.getComputedStyle(lyricList).getPropertyValue('--player-lyrics-overscroll-distance'))
+      return Number.isFinite(distance) ? Math.min(180, Math.max(0, distance)) : 0
+    }
+
+    const scrollWithOverscroll = (scrollDelta: number, source: 'drag' | 'wheel') => {
+      const limit = overscrollLimit()
+      const previousTop = lyricList.scrollTop
+      const maxTop = Math.max(0, lyricList.scrollHeight - lyricList.clientHeight)
+      const isOutward = (previousTop <= 0 && scrollDelta < 0)
+        || (previousTop >= maxTop && scrollDelta > 0)
+      const outwardTarget = -Math.sign(scrollDelta) * limit
+      if (source === 'wheel' && limit > 0 && isOutward && elasticAnimation && animationTarget === outwardTarget) {
+        // Repeated input in the same direction keeps the current outward
+        // animation running; restarting it every tick would prevent settling.
+        clearWheelGestureTimer()
+        return
+      }
+      interruptRebound()
+      if (limit === 0) setOverscroll(0)
+      // Reverse input first releases the elastic displacement, then consumes
+      // any remaining distance in the real scroll range.
+      if (overscrollOffset * scrollDelta > 0) {
+        const released = Math.min(Math.abs(scrollDelta), Math.abs(overscrollOffset))
+        const direction = Math.sign(scrollDelta)
+        setOverscroll(overscrollOffset - direction * released)
+        scrollDelta -= direction * released
+      }
+      const projectedTop = previousTop + scrollDelta
+      const boundedTop = Math.min(maxTop, Math.max(0, projectedTop))
+      lyricList.scrollTop = boundedTop
+      // Browsers may round scrollTop to device pixels. Only an actual boundary
+      // crossing is excess; rounding inside the range must not trigger feedback.
+      const excess = projectedTop - boundedTop
+      if (limit > 0 && Math.abs(excess) > 0.01) {
+        if (source === 'drag') {
+          // Held input must follow the pointer now. A timed outward animation
+          // can otherwise be cancelled by a quick release before it is visible.
+          setOverscroll(Math.min(limit, Math.max(-limit, overscrollOffset - excess)))
+          return
+        }
+        // Like the volume panel, crossing an edge expresses a direction. Its
+        // theme distance is the visible feedback target, not a pressure limit
+        // that small wheel deltas can never reach.
+        animateOverscroll(-Math.sign(excess) * limit, '--app-motion-fast', INTERACTIVE_SCROLL_FALLBACK_MS)
+      }
+    }
+
+    const scheduleUserScrollResume = () => {
+      cancelUserScrollTimer()
+      if (!userScrollingRef.current || drag?.active) return
+      userScrollTimerRef.current = window.setTimeout(resumeFollowingAfterUserScroll, USER_SCROLL_IDLE_MS)
+    }
+
+    const beginManualScroll = () => {
+      const hadLyricNavigation = navigationSessionRef.current !== null
+      cancelLyricNavigation()
+      cancelFollowingLineAnimations()
+      cancelScrollFrame()
+      if (latestInteractionRef.current !== 'following' && !hadLyricNavigation && !userDraggingRef.current) return
+
+      userScrollWaitForFollowingRef.current ||= hadLyricNavigation || userDraggingRef.current
+      userScrollingRef.current = true
+      scheduleUserScrollResume()
+    }
+
+    const handleWheel = (event: WheelEvent) => {
+      if (event.ctrlKey || !Number.isFinite(event.deltaY) || event.deltaY === 0) return
+      const lineHeight = Number.parseFloat(window.getComputedStyle(lyricList).lineHeight) || 16
+      const delta = event.deltaY * (event.deltaMode === WheelEvent.DOM_DELTA_LINE
+        ? lineHeight
+        : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? lyricList.clientHeight : 1)
+      beginManualScroll()
+      const maxTop = Math.max(0, lyricList.scrollHeight - lyricList.clientHeight)
+      const projectedTop = lyricList.scrollTop + delta
+      if (overscrollOffset !== 0 || elasticAnimation || projectedTop < 0 || projectedTop > maxTop) {
+        event.preventDefault()
+        scrollWithOverscroll(delta, 'wheel')
+      }
+      clearWheelGestureTimer()
+      if (!drag?.active && overscrollOffset !== 0) {
+        wheelGestureTimer = window.setTimeout(finishWheelGesture, WHEEL_GESTURE_IDLE_MS)
+      }
+    }
+
+    const finishDrag = () => {
+      const previousDrag = drag
+      if (!previousDrag) return
+      drag = null
+      userDraggingRef.current = false
+      delete lyricList.dataset.dragging
+      if (lyricList.hasPointerCapture(previousDrag.pointerId)) {
+        lyricList.releasePointerCapture(previousDrag.pointerId)
+      }
+      if (previousDrag.active) {
+        returnFromOverscroll()
+        scheduleUserScrollResume()
+      }
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (event.pointerType !== 'mouse' || event.button !== 0 || !event.isPrimary) return
+      finishDrag()
+      suppressDragClickRef.current = false
+      drag = { pointerId: event.pointerId, startY: event.clientY, lastY: event.clientY, active: false }
+    }
+
+    const handlePointerMove = (event: PointerEvent) => {
+      if (!drag || event.pointerId !== drag.pointerId) return
+      if (!(event.buttons & 1)) {
+        finishDrag()
+        return
+      }
+      if (!drag.active) {
+        if (Math.abs(event.clientY - drag.startY) < 5) return
+        drag.active = true
+        userDraggingRef.current = true
+        suppressDragClickRef.current = true
+        lyricList.dataset.dragging = 'true'
+        lyricList.setPointerCapture(event.pointerId)
+        beginManualScroll()
+      }
+      event.preventDefault()
+      scrollWithOverscroll(drag.lastY - event.clientY, 'drag')
+      drag.lastY = event.clientY
+    }
+
+    const handlePointerEnd = (event: PointerEvent) => {
+      if (event.pointerId === drag?.pointerId) finishDrag()
+    }
+
+    const handlePointerLeave = () => {
+      // Active drags retain capture outside the panel; a click candidate does not.
+      if (!drag?.active) finishDrag()
+    }
+
+    const handleClick = (event: MouseEvent) => {
+      if (!suppressDragClickRef.current || event.detail === 0) return
+      event.preventDefault()
+      event.stopPropagation()
+      suppressDragClickRef.current = false
+    }
+
+    const reducedMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)')
+    const handleMotionChange = () => resetOverscroll()
+    const handleBlur = () => {
+      finishDrag()
+      resetOverscroll()
+    }
+    const motionRoot = document.querySelector('.spmusic-app') ?? document.documentElement
+    const motionObserver = new MutationObserver(handleMotionChange)
+    motionObserver.observe(motionRoot, { attributes: true, attributeFilter: ['data-motion', 'style'] })
+    reducedMotionQuery.addEventListener('change', handleMotionChange)
+
+    inputSurface.addEventListener('wheel', handleWheel, { passive: false })
+    inputSurface.addEventListener('pointerdown', handlePointerDown)
+    inputSurface.addEventListener('pointermove', handlePointerMove)
+    inputSurface.addEventListener('pointerleave', handlePointerLeave)
+    lyricList.addEventListener('lostpointercapture', handlePointerEnd)
+    lyricList.addEventListener('click', handleClick, true)
+    window.addEventListener('pointerup', handlePointerEnd)
+    window.addEventListener('pointercancel', handlePointerEnd)
+    window.addEventListener('blur', handleBlur)
+    return () => {
+      motionObserver.disconnect()
+      reducedMotionQuery.removeEventListener('change', handleMotionChange)
+      resetOverscroll()
+      if (resetOverscrollRef.current === resetOverscroll) resetOverscrollRef.current = () => {}
+      inputSurface.removeEventListener('wheel', handleWheel)
+      inputSurface.removeEventListener('pointerdown', handlePointerDown)
+      inputSurface.removeEventListener('pointermove', handlePointerMove)
+      inputSurface.removeEventListener('pointerleave', handlePointerLeave)
+      lyricList.removeEventListener('lostpointercapture', handlePointerEnd)
+      lyricList.removeEventListener('click', handleClick, true)
+      window.removeEventListener('pointerup', handlePointerEnd)
+      window.removeEventListener('pointercancel', handlePointerEnd)
+      window.removeEventListener('blur', handleBlur)
+      const previousDrag = drag
+      drag = null
+      userDraggingRef.current = false
+      // A lyrics/track replacement may reuse this DOM node while the mouse is
+      // still held. Keep the cancelled gesture's click guard until its release
+      // click or the next pointerdown; a new list must not seek on that release.
+      delete lyricList.dataset.dragging
+      if (previousDrag && lyricList.hasPointerCapture(previousDrag.pointerId)) {
+        lyricList.releasePointerCapture(previousDrag.pointerId)
+      }
+      cancelUserScrollTimer()
+      userScrollWaitForFollowingRef.current = false
+      userScrollingRef.current = false
+    }
+  }, [cancelFollowingLineAnimations, cancelLyricNavigation, cancelScrollFrame, cancelUserScrollTimer, listReady, lyrics, lyricListRef, resumeFollowingAfterUserScroll, scopeKey])
+
+  useLayoutEffect(() => {
+    if (interaction === 'previewing') cancelLyricNavigation()
+    if (interaction === 'previewing' || interaction === 'seeking') {
+      const preserveNavigationWheel = interaction === 'seeking'
+        && userScrollWaitForFollowingRef.current
+      if (!preserveNavigationWheel && !userDraggingRef.current) {
+        userScrollWaitForFollowingRef.current = false
+        userScrollingRef.current = false
+        cancelUserScrollTimer()
+      }
+      cancelFollowingLineAnimations()
+    }
+
+    const currentLyrics = latestLyricsRef.current
+    const timeline = locateLyricTimeline(currentLyrics, positionSeconds)
+    if (!timeline) return
+
+    const previousInteraction = previousInteractionRef.current
+    previousInteractionRef.current = interaction
+    let navigationSession = navigationSessionRef.current
+    if (navigationSession && !isCurrentNavigationSession(navigationSession)) {
+      cancelLyricNavigation()
+      navigationSession = null
+    }
+    const navigationReachedExactTarget = navigationSession !== null
+      && timeline.currentIndex === navigationSession.targetIndex
+      && currentLyrics[timeline.currentIndex]?.id === navigationSession.targetId
+    if (navigationSession && interaction === 'seeking' && !navigationReachedExactTarget) {
+      // A seek that does not land in this request's exact lyric interval is an
+      // external interaction; it must not inherit the click navigation session.
+      cancelLyricNavigation()
+      navigationSession = null
+    }
+    if (
+      navigationSession
+      && navigationReachedExactTarget
+      && startLyricNavigation(navigationSession)
+    ) {
+      activeIndexRef.current = timeline.currentIndex
+      return
+    }
+    if (navigationSession?.started) {
+      if (timeline.currentIndex === navigationSession.targetIndex) {
+        activeIndexRef.current = timeline.currentIndex
+        return
+      }
+      cancelLyricNavigation()
+    }
+    // The player's optimistic clock may briefly publish intermediate positions.
+    // Only the exact requested lyric is allowed to consume this navigation.
+    if (navigationSession && !navigationSession.started) return
+    if (lineCentersRef.current.length !== currentLyrics.length) return
+    if (userScrollingRef.current && userScrollWaitForFollowingRef.current) return
+
+    if (interaction === 'previewing' || interaction === 'seeking') {
+      const enteredInteractiveMode = previousInteraction === 'following'
+      if (activeIndexRef.current === timeline.currentIndex) {
+        if (enteredInteractiveMode) cancelScrollFrame()
+        return
+      }
+
+      const targetTop = targetScrollTop(timeline.currentIndex)
+      if (targetTop !== null) animateInteractiveScroll(targetTop, timeline.currentIndex)
+      activeIndexRef.current = timeline.currentIndex
+      return
+    }
+
+    if (userScrollingRef.current) return
+
+    if (previousInteraction !== 'following') {
+      if (activeIndexRef.current === timeline.currentIndex) return
+
+      const targetTop = targetScrollTop(timeline.currentIndex)
+      if (targetTop !== null) animateInteractiveScroll(targetTop, timeline.currentIndex)
+      activeIndexRef.current = timeline.currentIndex
+      return
+    }
+
+    if (activeIndexRef.current === null) {
+      const targetTop = targetScrollTop(timeline.currentIndex)
+      if (targetTop !== null) scheduleDirectScroll(targetTop)
+      activeIndexRef.current = timeline.currentIndex
+      return
+    }
+
+    if (activeIndexRef.current === timeline.currentIndex) return
+
+    const previousActiveIndex = activeIndexRef.current
+    activeIndexRef.current = timeline.currentIndex
+    const targetTop = targetScrollTop(timeline.currentIndex)
+    if (targetTop === null) return
+    const isNaturalFollowingStep = previousInteraction === 'following'
+      && interaction === 'following'
+      && !userScrollingRef.current
+      && navigationSessionRef.current === null
+      && timeline.currentIndex === previousActiveIndex + 1
+    if (isNaturalFollowingStep) {
+      animateFollowingStep(targetTop, timeline.currentIndex)
+      return
+    }
+    animateFollowingScroll(targetTop)
+  }, [animateFollowingScroll, animateFollowingStep, animateInteractiveScroll, cancelFollowingLineAnimations, cancelLyricNavigation, cancelScrollFrame, cancelUserScrollTimer, interaction, isCurrentNavigationSession, lyricLayoutSignature, lyricListRef, positionSeconds, scheduleDirectScroll, startLyricNavigation, targetScrollTop])
+
+  useEffect(() => () => {
+    cancelScrollFrame()
+    cancelUserScrollTimer()
+    userScrollWaitForFollowingRef.current = false
+    cancelLyricNavigation()
+    cancelFollowingLineAnimations()
+  }, [cancelFollowingLineAnimations, cancelLyricNavigation, cancelScrollFrame, cancelUserScrollTimer])
+
+  return { navigateToLyric, prepareFollowingStep }
+}

@@ -10,7 +10,6 @@ import {
   audioFolderTrackPlaceholder,
   audioTrackToPlaylistVisual,
   audioTrackToTrack,
-  fileNameTitle,
   normalizeAudioSourcePath,
   patchTrackDuration,
   playlistDisplayName,
@@ -28,6 +27,16 @@ import {
 import { appCopy } from '@/features/player/model/playerCopy'
 import { createPlaylistArtworkGrace } from '@/features/player/model/playlistArtworkGrace'
 import { decodePlaylistCover } from '@/features/player/model/playlistCoverReadiness'
+import {
+  chunkPlaylistSummaryPaths,
+  pendingPlaylistTrackRow,
+  playlistDescriptorFingerprint,
+  playlistSummaryProbePaths,
+  playlistTrackRowEqual,
+  playlistTrackRowFromSummary,
+  type PlaylistSummaryStatus,
+  type PlaylistTrackRow,
+} from '@/features/player/model/playlistTrackSummary'
 import type {
   PlayerContentState,
   PlayerTimelineInteraction,
@@ -48,6 +57,7 @@ import type {
 } from '@/features/player/model/playerTypes'
 import { createPlayerVisualTimelineClock } from '@/features/player/model/visualTimelineClock'
 import {
+  AUDIO_PLAYLIST_TRACK_SUMMARY_BATCH_LIMIT,
   beginAudioPlaylistCoverWindow,
   getAudioState,
   getAudioOutputInfo,
@@ -64,6 +74,7 @@ import {
   openAudioSource,
   pauseAudio,
   playAudio,
+  probeAudioPlaylistTrackSummaries,
   seekAudio,
   setAudioVolume,
   stopAudio,
@@ -72,6 +83,7 @@ import {
   type AudioFolderPlaylist,
   type AudioFolderTrackRef,
   type AudioPlaybackState,
+  type AudioPlaylistTrackSummaryItem,
   type AudioTransitionPlaybackInput,
   type AudioTrackRef,
   type AudioTrackDetailsChanged,
@@ -233,15 +245,20 @@ function trackSummaryFromTrack(track: Track): TrackSummary {
   }
 }
 
+// Rows before any tag is known. Missing songs are expressed through
+// `unavailableTrackIds`, so the artist/album fields never carry invented text
+// (an empty string means "unknown", never the playlist name).
 function playlistTrackSummaries(playlist: AudioFolderPlaylist): TrackSummary[] {
-  const sourceName = playlistDisplayName(playlist)
-  return playlist.tracks.map((track) => ({
-    id: track.id,
-    title: fileNameTitle(track.fileName),
-    artist: track.available ? sourceName : `${sourceName} · 歌曲未找到`,
-    album: sourceName,
-    category: 'local-audio',
-  }))
+  return playlist.tracks.map((track) => {
+    const { title } = pendingPlaylistTrackRow(track)
+    return {
+      id: track.id,
+      title,
+      artist: '',
+      album: '',
+      category: 'local-audio',
+    }
+  })
 }
 
 function resolveAvailablePlaylistTarget(
@@ -407,6 +424,15 @@ export function useAudioPlayer() {
   const [sessionPlaylists, setSessionPlaylists] = useState<readonly AudioFolderPlaylist[]>([])
   const [playlistTrackVisuals, setPlaylistTrackVisuals] = useState<Readonly<Record<string, PlaylistTrackVisual>>>({})
   const [playlistTrackMetadata, setPlaylistTrackMetadata] = useState<Readonly<Record<string, PlaylistTrackMetadata>>>({})
+  // Read-only tag summaries, keyed by playlist scope. This is a third channel:
+  // it never writes `playlistTrackMetadata` (first-write-wins would truncate the
+  // hydration pump) and never owns playlist identity.
+  const [playlistTrackSummariesByScope, setPlaylistTrackSummariesByScope] = useState<
+    Readonly<Record<string, Readonly<Record<string, PlaylistTrackRow>>>>
+  >({})
+  const [playlistSummaryStatusByScope, setPlaylistSummaryStatusByScope] = useState<
+    Readonly<Record<string, PlaylistSummaryStatus>>
+  >({})
   const [audioError, setAudioError] = useState<AudioCommandError | null>(null)
   const [audioBusy, setAudioBusy] = useState(false)
   const [selectionPending, setSelectionPending] = useState(false)
@@ -492,6 +518,14 @@ export function useAudioPlayer() {
   } | null>(null)
   const playlistScopeRef = useRef<string | null>(null)
   const playlistScopeEpochRef = useRef(0)
+  // Descriptor snapshots per scope, so a pass can be started for a list the user
+  // only browsed and survive an unrelated activation.
+  const sessionPlaylistDescriptorsRef = useRef(new Map<string, AudioFolderPlaylist>())
+  const playlistSummaryRowsRef = useRef<Readonly<Record<string, Readonly<Record<string, PlaylistTrackRow>>>>>({})
+  const playlistSummaryStatusRef = useRef<Readonly<Record<string, PlaylistSummaryStatus>>>({})
+  const playlistSummaryRunRef = useRef(new Map<string, { runId: number; fingerprint: string }>())
+  const playlistSummaryRunIdRef = useRef(0)
+  const playlistSummaryDisposedRef = useRef(false)
   const trackCardPreviewIdRef = useRef(0)
   const preparedTrackCardPreviewRef = useRef<PreparedTrackCardPreview | null>(null)
   // Visual navigation is intentionally ahead of the audio engine during a burst.
@@ -563,6 +597,25 @@ export function useAudioPlayer() {
     playlistVisualSourceRef.current.clear()
     playlistDesiredEdgeRef.current.clear()
   }, [requestPlaylistCoverWindowGeneration, playlistArtworkGrace])
+
+  // Summary caches are owned by scope, so they are only released on disposal.
+  // The mount body resets the guard: a StrictMode remount must not leave every
+  // future tag pass discarded.
+  useEffect(() => {
+    const disposed = playlistSummaryDisposedRef
+    const runs = playlistSummaryRunRef
+    const rows = playlistSummaryRowsRef
+    const statuses = playlistSummaryStatusRef
+    const descriptors = sessionPlaylistDescriptorsRef
+    disposed.current = false
+    return () => {
+      disposed.current = true
+      runs.current.clear()
+      rows.current = {}
+      statuses.current = {}
+      descriptors.current.clear()
+    }
+  }, [])
 
   const currentTrackId = audioState?.currentTrackId ?? null
   const track = presentationTrack
@@ -656,12 +709,168 @@ export function useAudioPlayer() {
     setPresentationTrack(nextTrack)
   }, [])
 
+  const commitPlaylistSummaryStatus = useCallback((scope: string, status: PlaylistSummaryStatus) => {
+    if (playlistSummaryStatusRef.current[scope] === status) return
+    playlistSummaryStatusRef.current = { ...playlistSummaryStatusRef.current, [scope]: status }
+    setPlaylistSummaryStatusByScope(playlistSummaryStatusRef.current)
+  }, [])
+
+  const findPlaylistForScope = useCallback((scope: string): AudioFolderPlaylist | undefined => {
+    const session = sessionPlaylistDescriptorsRef.current.get(scope)
+    if (session) return session
+    const active = folderPlaylistRef.current
+    return active && playlistScope(active) === scope ? active : undefined
+  }, [])
+
+  // Publish one batch of tag rows. Every guard below is load-bearing: a stale
+  // pass must never write another scope, another descriptor set, or a list the
+  // user removed, and a replaced list must not keep rows for vanished songs.
+  const commitPlaylistSummaryRows = useCallback((
+    scope: string,
+    runId: number,
+    fingerprint: string,
+    descriptorPaths: ReadonlyMap<string, string>,
+    rows: Readonly<Record<string, PlaylistTrackRow>>,
+  ) => {
+    if (playlistSummaryDisposedRef.current) return false
+    if (playlistSummaryRunRef.current.get(scope)?.runId !== runId) return false
+    const playlist = findPlaylistForScope(scope)
+    if (!playlist) {
+      playlistSummaryRunRef.current.delete(scope)
+      const nextStatuses = { ...playlistSummaryStatusRef.current }
+      delete nextStatuses[scope]
+      playlistSummaryStatusRef.current = nextStatuses
+      setPlaylistSummaryStatusByScope(nextStatuses)
+      return false
+    }
+    if (playlistDescriptorFingerprint(playlist.tracks) !== fingerprint) return false
+    const currentPaths = new Map(playlist.tracks.map((descriptor) => [descriptor.id, descriptor.sourcePath]))
+    for (const trackId of Object.keys(rows)) {
+      const requestedPath = descriptorPaths.get(trackId)
+      if (requestedPath === undefined || currentPaths.get(trackId) !== requestedPath) return false
+    }
+
+    const scopeRows = { ...(playlistSummaryRowsRef.current[scope] ?? {}) }
+    let changed = false
+    for (const [trackId, row] of Object.entries(rows)) {
+      const existing = scopeRows[trackId]
+      if (existing && playlistTrackRowEqual(existing, row)) continue
+      scopeRows[trackId] = row
+      changed = true
+    }
+    if (!changed) return true
+    playlistSummaryRowsRef.current = { ...playlistSummaryRowsRef.current, [scope]: scopeRows }
+    setPlaylistTrackSummariesByScope(playlistSummaryRowsRef.current)
+    // `queueTracks` is deliberately left untouched: it is the dependency of the
+    // next/previous and prefetch paths, so rewriting it would change identity
+    // and re-trigger navigation work. The queue panel consumes the same merged
+    // rows through the player view model instead.
+    return true
+  }, [findPlaylistForScope])
+
+  const runPlaylistSummaryPass = useCallback(async (
+    scope: string,
+    runId: number,
+    fingerprint: string,
+    descriptors: readonly AudioFolderTrackRef[],
+  ) => {
+    const runIsCurrent = () => !playlistSummaryDisposedRef.current
+      && playlistSummaryRunRef.current.get(scope)?.runId === runId
+    const descriptorsById = new Map(descriptors.map((descriptor) => [descriptor.id, descriptor]))
+    const descriptorPaths = new Map(descriptors.map((descriptor) => [descriptor.id, descriptor.sourcePath]))
+    const { paths, descriptorsByPath } = playlistSummaryProbePaths(descriptors)
+    // Accumulate the entire pass and publish it once. A 1791-track list would
+    // otherwise re-render (and re-measure the whole grid) once per batch.
+    const collected: Record<string, PlaylistTrackRow> = {}
+    const harvest = (batch: readonly string[], items: readonly AudioPlaylistTrackSummaryItem[]) => {
+      for (const [index, item] of items.entries()) {
+        const sourcePath = batch[index]
+        if (sourcePath === undefined || item.sourcePath !== sourcePath) continue
+        for (const trackId of descriptorsByPath.get(sourcePath) ?? []) {
+          const descriptor = descriptorsById.get(trackId)
+          if (descriptor) collected[trackId] = playlistTrackRowFromSummary(descriptor, item.summary)
+        }
+      }
+    }
+    try {
+      for (const batch of chunkPlaylistSummaryPaths(paths, AUDIO_PLAYLIST_TRACK_SUMMARY_BATCH_LIMIT)) {
+        if (!runIsCurrent()) return
+        let items: AudioPlaylistTrackSummaryItem[] | null = null
+        let lastError: unknown = null
+        // One automatic retry only: a missing or failing command must settle into
+        // the file-name fallback instead of retrying on every render.
+        for (let attempt = 0; attempt < 2 && items === null; attempt += 1) {
+          try {
+            items = await probeAudioPlaylistTrackSummaries(batch)
+          } catch (error) {
+            lastError = error
+          }
+        }
+        if (!runIsCurrent()) return
+        if (items === null) {
+          console.warn('Playlist track tag summaries are unavailable; keeping file name rows', {
+            scope,
+            batchSize: batch.length,
+            error: lastError,
+          })
+          // Degraded, not stuck: publish whatever real rows the earlier batches
+          // produced so every row still renders truthful text.
+          if (commitPlaylistSummaryRows(scope, runId, fingerprint, descriptorPaths, collected)) {
+            commitPlaylistSummaryStatus(scope, 'ready')
+          }
+          return
+        }
+        harvest(batch, items)
+      }
+      if (!runIsCurrent()) return
+      if (commitPlaylistSummaryRows(scope, runId, fingerprint, descriptorPaths, collected)) {
+        commitPlaylistSummaryStatus(scope, 'ready')
+      }
+    } catch (error) {
+      console.warn('Playlist track tag summary pass failed', { scope, error })
+      if (runIsCurrent()) commitPlaylistSummaryStatus(scope, 'ready')
+    }
+  }, [commitPlaylistSummaryRows, commitPlaylistSummaryStatus])
+
+  const ensurePlaylistSummaries = useCallback((scope: string, playlistHint?: AudioFolderPlaylist) => {
+    const playlist = playlistHint ?? findPlaylistForScope(scope)
+    if (!playlist) return
+    if (playlist.tracks.length === 0) {
+      commitPlaylistSummaryStatus(scope, 'ready')
+      return
+    }
+    const fingerprint = playlistDescriptorFingerprint(playlist.tracks)
+    const currentRun = playlistSummaryRunRef.current.get(scope)
+    // Idempotent: an in-flight or already committed pass for this exact
+    // descriptor set is reused, a replaced descriptor set is re-fetched once.
+    if (currentRun?.fingerprint === fingerprint) return
+
+    const runId = playlistSummaryRunIdRef.current + 1
+    playlistSummaryRunIdRef.current = runId
+    playlistSummaryRunRef.current.set(scope, { runId, fingerprint })
+    if (currentRun) {
+      const nextRows = { ...playlistSummaryRowsRef.current }
+      delete nextRows[scope]
+      playlistSummaryRowsRef.current = nextRows
+      setPlaylistTrackSummariesByScope(nextRows)
+    }
+    commitPlaylistSummaryStatus(scope, 'loading')
+    void runPlaylistSummaryPass(scope, runId, fingerprint, playlist.tracks)
+  }, [commitPlaylistSummaryStatus, findPlaylistForScope, runPlaylistSummaryPass])
+
   const activatePlaylistScope = useCallback((playlist: AudioFolderPlaylist) => {
     const nextScope = playlistScope(playlist)
     // Store descriptors only; thumbnail object URLs belong to the active scope.
     setSessionPlaylists((previous) => previous.some((item) => playlistScope(item) === nextScope)
       ? previous.map((item) => playlistScope(item) === nextScope ? playlist : item)
       : [...previous, playlist])
+    sessionPlaylistDescriptorsRef.current.set(nextScope, playlist)
+    // Start the read-only tag pass with the list itself, so the table is already
+    // populated when the user looks at it. Cached rows are not cleared here.
+    ensurePlaylistSummaries(nextScope)
+    // The queue keeps neutral rows (filename title, unknown artist/album). The
+    // tag rows reach both panels through the player view model, so `queueTracks`
+    // is never rewritten by the summary pass.
     const nextQueueTracks = playlistTrackSummaries(playlist)
     const currentPresentation = presentationTrackRef.current
     const currentIndex = currentPresentation
@@ -750,7 +959,7 @@ export function useAudioPlayer() {
     }
     folderPlaylistRef.current = playlist
     setFolderPlaylist(playlist)
-  }, [ensurePlaylistCoverSession, playlistArtworkGrace])
+  }, [ensurePlaylistCoverSession, ensurePlaylistSummaries, playlistArtworkGrace])
 
   const clearPresentationTrack = useCallback((nextContentState: Exclude<PlayerContentState, 'track'>) => {
     presentationTrackRef.current = null
@@ -2297,6 +2506,10 @@ export function useAudioPlayer() {
       setSelectionPending(false)
       setAudioBusy(false)
     }
+    // Start the read-only tag pass before the first track load. Loading the first
+    // track opens a decoder and reads its metadata, so starting afterwards would
+    // leave the list unread exactly while the user is waiting for it.
+    ensurePlaylistSummaries(playlistScope(playlist), playlist)
     const loaded = await loadPlaylistTrackOrSkip(playlist, playlist.selectedIndex, autoplay, 1, false, true, true)
     if (!loaded) return
     activatePlaylistScope(playlist)
@@ -2307,6 +2520,7 @@ export function useAudioPlayer() {
     activatePlaylistScope,
     clearPresentationTrack,
     commitAudioError,
+    ensurePlaylistSummaries,
     loadPlaylistTrackOrSkip,
     prefetchAdjacentPlaylistTracks,
     selectionIsCurrent,
@@ -3008,6 +3222,9 @@ export function useAudioPlayer() {
     playlistDurationScope: folderPlaylist ? playlistScope(folderPlaylist) : currentAudioTrack?.sourcePath ?? '',
     playlistTrackMetadata,
     playlistTrackVisuals,
+    playlistTrackSummariesByScope,
+    playlistSummaryStatusByScope,
+    ensurePlaylistSummaries,
     playlistName: folderPlaylist ? playlistDisplayName(folderPlaylist) : undefined,
     currentFeedback: track ? feedbackByTrackId[track.id] : undefined,
     feedbackByTrackId,

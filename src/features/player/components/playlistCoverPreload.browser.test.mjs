@@ -71,6 +71,7 @@ window.backendInvoke=async(command,args)=>{
  if(command==='audio_open_source')return {kind:'playlist',playlist:playlist()};
  if(command==='audio_load_file'){const result=track(input.path);state={...state,phase:'ready',generation:++generation,currentTrackId:result.id,durationMs:result.durationMs};return result}
  if(command==='audio_hydrate_track')return track(input.path);
+ if(command==='audio_probe_playlist_track_summaries')return input.paths.map(sourcePath=>{const parts=sourcePath.replaceAll('\\\\','/').split('/'),i=Number(parts.at(-1).split('.')[0]);return {sourcePath,summary:{title:'Song '+i,artist:'Artist',album:'Album',albumArtist:null,bitDepth:24,sampleRateHz:96000,bitrateKbps:null,codec:'FLAC'},error:null}});
  if(command==='audio_begin_playlist_cover_window')return ++windowGeneration;
  if(command==='audio_load_playlist_cover_pixels'){
   active++;window.maxActive=Math.max(active,window.maxActive);window.trace.push({type:'pixels-start',input,time:performance.now()});

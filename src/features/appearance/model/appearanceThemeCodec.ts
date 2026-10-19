@@ -81,7 +81,7 @@ const colorKeys = [
 ] as const satisfies readonly (keyof AppearanceColors)[]
 const radiusKeys = ['sm', 'md', 'lg', 'pill'] as const satisfies readonly (keyof AppearanceRadii)[]
 const motionLevels = ['off', 'subtle', 'expressive'] as const satisfies readonly MotionLevel[]
-const easingValues = ['linear', 'ease', 'ease-in', 'ease-out', 'ease-in-out', 'cubic-bezier(.65, 0, .35, 1)'] as const satisfies readonly AppearanceEasing[]
+const easingValues = ['linear', 'ease', 'ease-in', 'ease-out', 'ease-in-out', 'cubic-bezier(.65, 0, .35, 1)', 'cubic-bezier(.4, 0, .2, 1)'] as const satisfies readonly AppearanceEasing[]
 const fontFamilies = ['geist', 'system', 'serif', 'monospace'] as const
 const surfaces = ['glass', 'solid', 'flat'] as const
 const buttonVariants = ['soft', 'outline', 'minimal'] as const
@@ -586,7 +586,7 @@ export function deserializeAppearanceTheme(source: string, fallback: AppearanceP
   reportUnknownKeys(theme, themeKeys, 'theme', warnings)
 
   const motionInput = section(theme, 'motion', warnings)
-  reportUnknownKeys(motionInput, ['level', 'durationScale', 'easing'], 'theme.motion', warnings)
+  reportUnknownKeys(motionInput, ['level', 'durationScale', 'easing', 'trackSwitchEasing', 'trackSwitchDurationMs'], 'theme.motion', warnings)
   const iconInput = section(theme, 'icons', warnings)
   reportUnknownKeys(iconInput, ['provider'], 'theme.icons', warnings)
   const advancedInput = section(theme, 'advanced', warnings)
@@ -609,6 +609,8 @@ export function deserializeAppearanceTheme(source: string, fallback: AppearanceP
       level: enumValue(motionInput.level, motionLevels, fallback.motion.level, 'theme.motion.level', warnings),
       durationScale: boundedNumber(motionInput.durationScale, fallback.motion.durationScale, 0.25, 3, 'theme.motion.durationScale', warnings),
       easing: enumValue(motionInput.easing, easingValues, fallback.motion.easing, 'theme.motion.easing', warnings),
+      trackSwitchEasing: enumValue(motionInput.trackSwitchEasing, easingValues, fallback.motion.trackSwitchEasing, 'theme.motion.trackSwitchEasing', warnings),
+      trackSwitchDurationMs: boundedNumber(motionInput.trackSwitchDurationMs, fallback.motion.trackSwitchDurationMs, 80, 600, 'theme.motion.trackSwitchDurationMs', warnings),
     },
     typography: parseTypography(section(theme, 'typography', warnings), fallback.typography, warnings),
     components: parseComponents(section(theme, 'components', warnings), fallback.components, warnings),

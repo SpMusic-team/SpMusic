@@ -436,6 +436,8 @@ src/features/player/services/audioCommands.ts
 
 前端必须分离两类状态：`AudioTrackRef` 保存低频歌曲资源（元数据、歌词、封面），`AudioPlaybackState` 保存高频传输状态（`currentTrackId`、阶段、进度、时长、音量和错误）。播放/暂停、设备事件以及 500ms 进度同步只能消费轻量 `AudioPlaybackState`；仅在打开文件或恢复连接且歌曲详情缺失时获取 `AudioTrackRef`。
 
+播放列表行文本另有一条**请求/响应式的只读批量通道**：`audio_probe_playlist_track_summaries` 在列表激活或被浏览时按 scope 分块（≤256/批）读取整表标签，`useAudioPlayer` 以 `playlistScope` 为键缓存，并按「queue 行 < 标签摘要 < 补水元数据 < 窗口视觉」叠加到行视图。摘要不含歌词、封面、data URL 或时长，不进入 `audio_state_changed`、进度轮询或任何事件 payload，也不写入 `playlistTrackMetadata`（首写优先）或 `queueTracks`（导航依赖身份）。详情见 `docs/architecture/playlist-track-summaries.md`。
+
 播放键在未加载真实音频时会先调用 `audio_open_source`，用户选择音频文件后再调用 `audio_play`；如果用户直接选择 `.m3u8` 文件，前端会按后端返回的只读临时队列加载 `selectedIndex` 指向的首个目标。`.m3u8` 中缺失但扩展名受支持的本地音频会保留在队列中，播放遇到它时显示“歌曲未找到”并继续尝试下一首。已加载真实音频后，播放键在 `audio_play` 与 `audio_pause` 之间切换。真实音频播放中，前端每 500ms 调用 `audio_get_state` 刷新进度；进度条拖动调用 `audio_seek`。左侧波形按钮作为“打开音频”入口，可重新选择一个本地音频文件或 `.m3u8` 文件。v0.1 不再提供选择文件夹入口。
 
 后端检测到输出设备变化时会发送 `audio_state_changed` 事件，payload 为 `AudioPlaybackState`。`PlayerShell` 在挂载时注册监听，收到事件后立即应用后端状态；轮询仍作为播放进度和事件漏收时的兜底同步。

@@ -5,7 +5,7 @@ export type AppearanceThemeId = string
 export type ColorSchemePreference = 'system' | 'light' | 'dark'
 export type ResolvedColorScheme = Exclude<ColorSchemePreference, 'system'>
 export type MotionLevel = 'off' | 'subtle' | 'expressive'
-export type AppearanceEasing = 'linear' | 'ease' | 'ease-in' | 'ease-out' | 'ease-in-out' | 'cubic-bezier(.65, 0, .35, 1)'
+export type AppearanceEasing = 'linear' | 'ease' | 'ease-in' | 'ease-out' | 'ease-in-out' | 'cubic-bezier(.65, 0, .35, 1)' | 'cubic-bezier(.4, 0, .2, 1)'
 export type AppearanceTier = 'standard' | 'advanced' | 'experimental'
 export type SurfaceVariant = 'glass' | 'solid' | 'flat'
 export type ButtonVariant = 'soft' | 'outline' | 'minimal'
@@ -72,6 +72,8 @@ export type AppearanceMotion = {
   level: MotionLevel
   durationScale: number
   easing: AppearanceEasing
+  trackSwitchEasing: AppearanceEasing
+  trackSwitchDurationMs: number
 }
 
 export type AppearanceTypography = {

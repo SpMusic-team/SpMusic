@@ -481,6 +481,100 @@
   }
 }
 
+/* Tag summary loading state. It keeps the hero (real name, count and duration)
+   and replaces only the rows, so no fabricated song text can ever appear. */
+.playlist-loading {
+  display: flex;
+  width: 100%;
+  max-width: none;
+  flex-direction: column;
+  gap: 14px;
+  padding: 0 0 48px;
+  color: var(--player-muted);
+}
+
+.playlist-loading-label {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0;
+  padding: 0 15px;
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.playlist-loading-count {
+  font-size: 13px;
+  font-weight: 400;
+  color: color-mix(in srgb, var(--player-muted) 78%, transparent);
+}
+
+.playlist-loading-grid {
+  display: grid;
+  gap: var(--playlist-grid-gap, 20px);
+}
+
+.playlist-loading[data-layout-columns="1"] .playlist-loading-grid { grid-template-columns: minmax(0, 1fr); }
+.playlist-loading[data-layout-columns="2"] .playlist-loading-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.playlist-loading[data-layout-columns="3"] .playlist-loading-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.playlist-loading[data-layout-columns="4"] .playlist-loading-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+
+.playlist-loading-card {
+  display: grid;
+  min-height: var(--playlist-card-min-height, 165px);
+  grid-template-columns: var(--playlist-cover-size, 135px) minmax(0, 1fr);
+  grid-template-rows: var(--playlist-cover-size, 135px);
+  align-content: center;
+  align-items: center;
+  column-gap: var(--playlist-card-gap, 24px);
+  padding: 15px;
+  border-radius: 30px;
+}
+
+.playlist-loading[data-layout-flow="row"] .playlist-loading-card,
+.playlist-loading[data-layout-flow="text"] .playlist-loading-card {
+  align-items: center;
+  grid-template-rows: auto;
+}
+
+.playlist-loading[data-layout-flow="text"] .playlist-loading-card {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.playlist-loading-cover {
+  width: var(--playlist-cover-size, 135px);
+  height: var(--playlist-cover-size, 135px);
+  grid-row: span 3;
+  border-radius: 20px;
+  background: var(--cover-placeholder-surface);
+}
+
+.playlist-loading-line {
+  height: 14px;
+  margin-bottom: 8px;
+  border-radius: var(--app-radius-pill);
+  background: var(--cover-placeholder-surface);
+}
+
+.playlist-loading-line-short { width: 62%; }
+.playlist-loading-line-shortest { width: 40%; }
+
+.playlist-loading-line,
+.playlist-loading-cover {
+  animation: playlist-loading-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes playlist-loading-pulse {
+  0%,
+  100% { background-color: var(--cover-placeholder-surface); }
+  50% { background-color: var(--cover-placeholder-pulse); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .playlist-loading-line,
+  .playlist-loading-cover { animation: none; }
+}
+
 /* The focused card lifts on the same material in every state: a placeholder
    that only gained the stronger shadow once its cover arrived used to jump. */
 .playlist-card[data-current="true"] .playlist-card-cover {

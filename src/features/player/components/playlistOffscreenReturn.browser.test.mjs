@@ -4,9 +4,12 @@
 // Playwright package with SPMUSIC_PLAYWRIGHT. No project dependency is installed.
 // Real PlayerShell, useAudioPlayer, PlayerSurface and command parsers are used;
 // only the native command/event transport is replaced with deterministic input.
+// SPMUSIC_WHITE_FLASH_ONLY=1 runs overview/player visibility regressions.
+// SPMUSIC_SURFACE_OVERRIDE may point to a saved Vite-transformed PlayerSurface
+// module for exact pre-fix A/B without overwriting production source.
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
@@ -63,7 +66,9 @@ const service = (await (await fetch(origin + '/src/features/player/services/audi
   .replace(/import \{ convertFileSrc, invoke \} from [^;]+;/, 'const invoke=(...args)=>window.backendInvoke(...args);const convertFileSrc=path=>path;')
   .replace(/import \{ listen \} from [^;]+;/, 'const listen=async(name,callback)=>{(window.listeners??={})[name]=callback;return ()=>{if(window.listeners[name]===callback)delete window.listeners[name]};};')
 assert(service.includes('window.backendInvoke'), 'retain real audio command parser')
-const realSurface = await (await fetch(origin + '/src/features/player/components/PlayerSurface.tsx')).text()
+const realSurface = process.env.SPMUSIC_SURFACE_OVERRIDE
+  ? readFileSync(process.env.SPMUSIC_SURFACE_OVERRIDE, 'utf8')
+  : await (await fetch(origin + '/src/features/player/components/PlayerSurface.tsx')).text()
 const surface = `
 import React from '${dependency('react.js')}';
 import {PlayerSurface as RealSurface} from '/__management_real_surface.js';
@@ -99,6 +104,7 @@ window.backendInvoke=async(command,args)=>{
  if(command==='audio_hydrate_track')return track(input.path);
  if(command==='audio_begin_playlist_cover_window')return 1;
  if(command==='audio_probe_playlist_durations')return input.paths.map(sourcePath=>({sourcePath,durationMs:180000,error:null}));
+ if(command==='audio_probe_playlist_track_summaries')return input.paths.map(sourcePath=>{const parts=sourcePath.replaceAll('\\\\','/').split('/'),scope=parts.at(-2),i=Number(parts.at(-1).split('.')[0]);return {sourcePath,summary:{title:'Song '+scope+' '+i,artist:'Artist '+scope,album:'Album '+scope,albumArtist:null,bitDepth:24,sampleRateHz:96000,bitrateKbps:null,codec:'FLAC'},error:null}});
  if(command==='audio_load_playlist_cover_pixels'||command==='audio_load_cover_pixels'){
   const width=80,height=50,bytes=new Uint8Array(40+width*height*4),view=new DataView(bytes.buffer);
   bytes.set([0x53,0x50,0x58,0x52]);view.setUint16(4,1,true);view.setUint16(6,40,true);
@@ -330,6 +336,76 @@ async function checkPartialHero(){
  'partial hero retains visible interpolation on the source or destination projection lead')
  assert.deepEqual(partial.errors,[]);await partial.page.close()
  return {offscreenToPartial:'shared artwork restored'}
+}
+// White-flash regression uses the same real shell and deterministic transport.
+// The contribution estimate includes the opaque navigation background above
+// player-stage; checking stage opacity alone would miss the reported failure.
+if(process.env.SPMUSIC_WHITE_FLASH_ONLY==='1'){
+ const summaries=[]
+ async function captureHandoff(page,label,action){
+  const trace=await page.evaluate(async action=>{
+   const frames=[],start=performance.now()
+   const opacity=e=>{let value=1;for(let p=e;p;p=p.parentElement){const s=getComputedStyle(p);if(s.display==='none'||s.visibility==='hidden')return 0;value*=Number(s.opacity)}return value}
+   const capture=()=>{
+    const background=document.querySelector('.library-navigation-background'),stage=document.querySelector('.player-stage')
+    const backgroundOpacity=background?opacity(background):0,playerOpacity=stage?opacity(stage):0
+    const libraryOpacity=Math.max(0,...[...document.querySelectorAll('.media-library-heading,.media-library-category,.playlist-management-content,.playlist-panel')].map(opacity))
+    frames.push({time:performance.now()-start,backgroundOpacity,playerOpacity,libraryOpacity,contribution:Math.max(libraryOpacity,playerOpacity*(1-backgroundOpacity)),backgrounds:document.querySelectorAll('.library-navigation-background').length,stages:document.querySelectorAll('.player-stage').length})
+   }
+   capture()
+   if(action==='close')document.querySelector('.playlist-playback-track-button').click()
+   if(action==='open')window.viewModel.playlist.library.onOpenOverview()
+   if(action==='reverse'){
+    document.querySelector('.playlist-playback-track-button').click()
+    requestAnimationFrame(()=>requestAnimationFrame(()=>window.viewModel.playlist.library.onOpenOverview()))
+   }
+   while(performance.now()-start<900){await new Promise(requestAnimationFrame);capture()}
+   return frames
+  },action)
+  writeFileSync(join(screenshotDirectory,label+'-trace.json'),JSON.stringify(trace,null,2))
+  assert(trace.every(frame=>frame.backgrounds<=1&&frame.stages<=1),'handoff never duplicates navigation background or player')
+  const blank=trace.filter(f=>f.contribution<.05)
+  const summary={label,frames:trace.length,minContribution:Math.min(...trace.map(f=>f.contribution)),blankFrames:blank.length,firstBlank:blank[0],lastBlank:blank.at(-1),fadingBackdropFrames:trace.filter(f=>f.backgroundOpacity>.01&&f.backgroundOpacity<.99).length,occludedPlayerFrames:trace.filter(f=>f.playerOpacity>.9&&f.backgroundOpacity>.99&&f.libraryOpacity<.05).length}
+  summaries.push(summary)
+  return trace
+ }
+ try{
+  for(const motion of ['no-preference','reduce']){
+   const {page,errors}=await open(1280,900,'shell',motion)
+   await importSource(page,'whiteflash',{count:100})
+   await page.waitForFunction(()=>document.querySelector('.media-library-heading')&&getComputedStyle(document.querySelector('.media-library-heading')).opacity==='1')
+   for(let round=0;round<3;round++){
+    await captureHandoff(page,motion+'-overview-close-'+round,'close')
+    assert.equal(await page.locator('.library-navigation-background').count(),0,'close removes background')
+    assert.equal(await page.locator('.player-stage').count(),1,'close leaves one player')
+    await captureHandoff(page,motion+'-overview-open-'+round,'open')
+    assert.equal(await page.locator('.library-navigation-background').count(),1,'open has one background')
+   }
+   await captureHandoff(page,motion+'-reverse','reverse')
+   assert.equal(await page.locator('.media-library-overview').count(),1,'rapid reverse restores overview')
+   assert.equal(await page.locator('.player-stage').count(),0,'rapid reverse removes departing player')
+   assert.equal(await page.locator('.library-navigation-background').count(),1,'rapid reverse retains one background')
+   await page.locator('.media-library-category[data-category-id="playlists"]').click()
+   await settled(page,'.playlist-management')
+   await page.evaluate(()=>window.originalNavigationBackground=document.querySelector('.library-navigation-background'))
+   await captureHandoff(page,motion+'-category-close','close')
+   await page.evaluate(()=>window.viewModel.playlist.library.onSelectCategory('playlists'))
+   await settled(page,'.playlist-management')
+   await page.evaluate(()=>window.originalNavigationBackground=document.querySelector('.library-navigation-background'))
+   await page.getByRole('button',{name:'打开播放列表 Playlist whiteflash',exact:true}).click()
+   await settled(page,'.playlist-panel')
+   assert(await page.evaluate(()=>window.originalNavigationBackground===document.querySelector('.library-navigation-background')),'internal category/detail navigation retains the same background node')
+   await captureHandoff(page,motion+'-detail-close','close')
+   assert.equal(await page.locator('.library-navigation-background').count(),0,'detail close removes background')
+   assert.deepEqual(errors,[])
+   await page.close()
+  }
+  writeFileSync(join(screenshotDirectory,'white-flash-report.json'),JSON.stringify(summaries,null,2))
+  console.log(JSON.stringify({browser:browser.version(),summaries,screenshots:screenshotDirectory}))
+  assert(summaries.every(s=>s.blankFrames===0),'every sampled handoff keeps visible content: '+JSON.stringify(summaries.filter(s=>s.blankFrames)))
+  console.log('WHITE_FLASH_REGRESSION_PASS')
+ }finally{await browser.close()}
+ process.exit(0)
 }
 if(process.env.SPMUSIC_PARTIAL_ONLY==='1'){
  try{console.log(JSON.stringify(await checkPartialHero()))}finally{await browser.close()}

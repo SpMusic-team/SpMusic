@@ -6,11 +6,13 @@ status: "active"
 owner_agent: "Architecture Agent"
 version_scope: "project"
 created: "2026-09-28"
-updated: "2026-09-28"
+updated: "2026-10-19"
 source_documents:
   - "user request: 当前播放列表歌曲封面加载不完整，先思考方案，不更改代码"
   - "user request: 将完整方案写入文档"
   - "user request: 开干"
+  - "docs/architecture/playlist-track-summaries.md"
+  - "src-tauri/src/audio/playlist_summary.rs"
   - "docs/tasks/sp-022-playlist-scroll-performance-plan.md"
   - "docs/test/sp-022-playlist-performance-baseline.md"
   - "src/features/player/components/PlaylistPanel.tsx"
@@ -42,8 +44,8 @@ source_documents:
 | --- | --- |
 | 完整性 | 稳定视口中有效封面最终应全部显示；无封面、坏图与安全限制需单列。真实 WebView 尚未完成完整性验收。 |
 | 内存 | 前端列表受管资源目标为 96 MiB，优先保留屏内和转场资源；极端可见集合超预算时会告警。账本不等于 Renderer/GPU 总内存，需 Release 实测。 |
-| 吞吐 | 前端元数据和视觉补水分别最多两个活动任务；Rust 列表解码单门串行，播放器封面使用独立解码门。不能通过无限并发掩盖延迟。 |
-| 启动 | 不在打开列表时预解码整库，也不在启动时同步扫描整个衍生缓存。 |
+| 吞吐 | 前端元数据和视觉补水分别最多两个活动任务；Rust 列表解码单门串行，播放器封面使用独立解码门。列表标签摘要是第三条有界通道：每 scope 1 个在途批次、跨 scope 串行、进程内 4 个读线程。不能通过无限并发掩盖延迟。 |
+| 启动 | 不在打开列表时预解码整库（不打开解码器、不解码音频、不生成封面），也不在启动时同步扫描整个衍生缓存；允许在列表激活时批量**只读标签**（`audio_probe_playlist_track_summaries`，每批 ≤256、纯读、不写盘、不读 sidecar 歌词），它不构成解码或封面工作。 |
 | 权限 | 像素命令只读取应用缓存根目录下 `audio/covers` 中经过校验的普通文件；候选缩略图只能写入应用缓存目录，不新增任意文件或网络权限。 |
 | 可维护性 | 组件负责可见几何，前端资源层负责需求和 URL，Rust 负责受限读取、解码与缓存。持久化缓存不能持有 DOM 或播放状态。 |
 
@@ -62,10 +64,11 @@ flowchart LR
 ```
 
 1. [PlaylistPanel.tsx](../../src/features/player/components/PlaylistPanel.tsx) 挂载全部筛选后的卡片，滚动、`ResizeObserver`、窗口尺寸与 DPR 变化时，在动画帧里计算真实可见、附近一屏和转场保留集合；播放栏遮挡会缩小真实可见范围。当前几何计算仍遍历全量挂载卡片。
-2. [useAudioPlayer.ts](../../src/features/player/hooks/useAudioPlayer.ts) 优先处理真实可见、首曲、播放栏和转场保留需求，余量才供预取；根据封面 CSS 尺寸和 DPR 选择 128/256/512px。96 MiB 是应用侧受管预算而非硬性进程上限。元数据补水与封面补水各有有限任务数，过期结果不会写入新列表。
+2. [useAudioPlayer.ts](../../src/features/player/hooks/useAudioPlayer.ts) 优先处理真实可见、首曲、播放栏和转场保留需求，余量才供预取；根据封面 CSS 尺寸和 DPR 选择 128/256/512px。96 MiB 是应用侧受管预算而非硬性进程上限。元数据补水与封面补水各有有限任务数，过期结果不会写入新列表。列表行文本另有独立的只读标签摘要通道（见下方第 6 条），它只以 scope 键缓存、不写补水状态。
 3. [audioCommands.ts](../../src/features/player/services/audioCommands.ts) 的列表输入为 `clientId`、原图 `filePath`、`maxEdge` 和 `windowGeneration`。Rust 仅允许列表档位 128/256/512px；播放器大图命令有独立请求身份和档位。列表会话代次在列表资源会话失效时更新，不随每次普通滚动递增。
 4. [cover_pixels.rs](../../src-tauri/src/audio/cover_pixels.rs) 校验原图在应用缓存 `audio/covers` 内、不是符号链接且是普通文件；限制原图字节、尺寸和解码量。当前每次未被前端驻留资源满足的请求都读取原图、完整解码、按 Lanczos3 缩放，并返回 SPXR v1 RGBA 像素。列表请求共享串行解码门，和播放器大图解码门隔离。
 5. 前端将 RGBA 转成未压缩 BMP Blob URL 给 `<img>`。升级换图时保留旧 URL 及更早回退链，等使用者真正加载新图后才撤销；失败恢复不能把仍在使用的旧图登记为自身的待撤销 URL。Object URL 释放和 WebView 原生图片内存需分别观察。
+6. 列表行文本走**独立的只读标签摘要通道** `audio_probe_playlist_track_summaries`（[playlist_summary.rs](../../src-tauri/src/audio/playlist_summary.rs)），契约见 [playlist-track-summaries.md](./playlist-track-summaries.md)。它每批 ≤256 条、按 scope 分块、只读标签（`read_cover_art(false)`），不打开解码器、不写 `audio/covers`、不读 sidecar `.lrc`、不写 `playlistTrackMetadata`，也不改变上面任何封面通道、预算或代次语义。
 
 当前实现**缩小像素尺寸，但没有把列表响应压成 JPEG/WebP**。SPXR 头部与 RGBA 数据是现行跨端契约；候选性能方案不得悄悄改变它。
 

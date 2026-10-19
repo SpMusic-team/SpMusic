@@ -41,6 +41,9 @@ const QueueTrackRow = memo(function QueueTrackRow({
   setSize,
   onTrackSelect,
 }: QueueTrackRowProps) {
+  // An empty artist means "not known yet". Rendering an empty node would leave a
+  // dangling spacer line and an aria label without content.
+  const artist = item.artist?.trim()
   return (
     <li
       data-current={current}
@@ -57,7 +60,7 @@ const QueueTrackRow = memo(function QueueTrackRow({
       >
         <span>{index + 1}</span>
         <strong>{item.title}</strong>
-        <small>{item.artist}</small>
+        {artist ? <small>{artist}</small> : null}
       </Button>
     </li>
   )

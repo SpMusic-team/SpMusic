@@ -151,5 +151,8 @@ export const appCopy = {
     moreUnavailable: '暂不可用',
     filterPlaceholder: '搜索歌名或歌手',
     close: '返回',
+    loadingMetadata: '正在读取歌单信息',
+    loadingMetadataDescription: '歌曲、歌手与专辑会在读取完成后显示。',
+    loadingProgress: (ready: number, total: number) => `已读取 ${ready} / ${total} 首`,
   },
 } as const

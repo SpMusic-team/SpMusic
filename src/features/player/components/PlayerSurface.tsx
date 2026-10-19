@@ -1,7 +1,7 @@
 import '@/features/player/styles/player.css'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject, type TransitionEvent } from 'react'
 import { flushSync } from 'react-dom'
-import { AnimatePresence, LayoutGroup, animate, motion, useMotionValue, useReducedMotion, type MotionValue } from 'motion/react'
+import { AnimatePresence, LayoutGroup, animate, motion, useMotionValue, useReducedMotion, type Easing, type MotionValue } from 'motion/react'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useAppearance, useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { CoverPanel } from '@/features/player/components/CoverPanel'
@@ -31,6 +31,7 @@ import {
 } from '@/features/player/hooks/useArtworkVisualResource'
 import type { PlayerPlaybackViewModel, PlayerUiViewModel, TrackCardPreviewToken } from '@/features/player/model/playerUiViewModel'
 import { getTrackCardOpacity, getTrackCardPose, trackCardTransform, type TrackCardPose, type TrackCardRole } from '@/features/player/model/trackCardTransition'
+import { createTrackCardMotionTail } from '@/features/player/model/trackCardMotionTail'
 import {
   integrateTrackCardPointer,
   trackCardDirection,
@@ -415,6 +416,7 @@ type TrackCardSettleContext = {
   target: 0 | 1
   durationSeconds: number
   overshootPx?: number
+  watchdogBudgetMs?: number
   onComplete: () => void
 }
 
@@ -580,7 +582,6 @@ type CoverPressGesture = CoverPointerSample & {
   tapEligible: boolean
 }
 
-const TRACK_CARD_DURATION_SECONDS = 0.3
 const TRACK_CARD_CANCEL_SECONDS = 0.38
 const TRACK_CARD_RECENTER_SECONDS = 0.19
 const TRACK_CARD_DRAG_LOCK_PX = 6
@@ -602,6 +603,14 @@ export function PlayerSurface({
   devAudioTools,
 }: PlayerSurfaceProps) {
   const { playback, timeline, volume, queue, playlist, feedback } = viewModel
+  const { appearance } = useAppearance()
+  const appearanceMotion = useAppearanceMotion()
+  const trackCardSettleDeadlineMs = Math.max(
+    TRACK_CARD_SETTLE_DEADLINE_MS,
+    appearanceMotion.trackCardCommitDurationSeconds * 1000
+      + TRACK_CARD_OVERSHOOT_SECONDS * 1000 * appearance.motion.durationScale + 100,
+    TRACK_CARD_CANCEL_SECONDS * 1000 * appearance.motion.durationScale + 100,
+  )
   const libraryRouteKey = playlist.isOpen
       ? playlist.library?.route?.view === 'overview' ? 'overview' : playlist.library?.route?.view === 'category' ? `category:${playlist.library.route.categoryId}` : `tracks:${playlist.library?.currentScope ?? ''}`
       : null
@@ -782,13 +791,13 @@ export function PlayerSurface({
   }, [completeTrackCardExit])
   useEffect(() => {
     if (!retiringTrackCardSession) return
-    const remainingMs = Math.max(0, TRACK_CARD_SETTLE_DEADLINE_MS
+    const remainingMs = Math.max(0, trackCardSettleDeadlineMs
       - (performance.now() - retiringTrackCardStartedAtRef.current))
     const timeoutId = window.setTimeout(() => {
       if (retiringTrackCardSessionRef.current === retiringTrackCardSession) finishRetiringTrackCard()
     }, remainingMs)
     return () => window.clearTimeout(timeoutId)
-  }, [finishRetiringTrackCard, retiringTrackCardSession])
+  }, [finishRetiringTrackCard, retiringTrackCardSession, trackCardSettleDeadlineMs])
   useEffect(() => {
     if (retiringTrackCardSession && !artworkSlots.some((layer) => (
       layer?.id === retiringTrackCardSession.outgoingLayerId && layer.phase === 'exiting'
@@ -859,8 +868,6 @@ export function PlayerSurface({
     return false
   }, [isCommittedTrackCardAwaitingPromotion, selectionMatchesTrackCardSession])
   const contentState = playback.contentState ?? (track ? 'track' : 'empty')
-  const { appearance } = useAppearance()
-  const appearanceMotion = useAppearanceMotion()
   const playlistOpen = playlist.isOpen
   const onPlaylistOpenChange = playlist.onOpenChange
   const playlistWindowOwnersRef = useRef<PlaylistWindowOwners>({ active: null, closing: null })
@@ -1053,6 +1060,7 @@ export function PlayerSurface({
     durationSeconds: number,
     onComplete: () => void,
     overshootPx = 0,
+    commitEase: Easing = appearanceMotion.trackCardCommitEase,
   ) => {
     stopTrackCardAnimation(false)
     const runId = trackCardRunIdRef.current
@@ -1087,10 +1095,9 @@ export function PlayerSurface({
     }
     const controls = animate(trackCardProgress, target, {
       duration: durationSeconds,
-      // A canceled drag returns from its release pose with a visible,
-      // decelerating finish. Completed transitions keep their linear timeline
-      // because card opacity owns exact 10%/90% timing windows.
-      ease: target === 0 ? 'easeOut' : 'linear',
+      // Keep cancellation's decelerating return. Completed switches use the
+      // theme curve for the shared geometry, opacity and ambient progress.
+      ease: target === 0 ? 'easeOut' : commitEase,
       onComplete: () => {
         if (trackCardRunIdRef.current !== runId) return
         if (trackCardAnimationRef.current === controls) trackCardAnimationRef.current = null
@@ -1112,7 +1119,7 @@ export function PlayerSurface({
       },
     })
     trackCardAnimationRef.current = controls
-  }, [appearance.motion.durationScale, stopTrackCardAnimation, trackCardOvershootX, trackCardProgress])
+  }, [appearance.motion.durationScale, appearanceMotion.trackCardCommitEase, stopTrackCardAnimation, trackCardOvershootX, trackCardProgress])
 
   const runTrackCardSettle = useCallback((context: TrackCardSettleContext) => {
     trackCardSettleRef.current = context
@@ -1121,9 +1128,19 @@ export function PlayerSurface({
     // Scaling a sub-threshold rollback by distance reduced it to 29–53 ms.
     // The release pose already encodes the traveled distance; animate that
     // pose all the way home on the cancellation timeline instead.
-    const durationSeconds = context.target === 0
+    const legacyDurationSeconds = context.target === 0
       ? context.durationSeconds * appearance.motion.durationScale
       : context.durationSeconds * Math.max(0.15, distance)
+    const tail = context.target === 1 && !trackCardReducedMotion && !context.session.outgoingReturnToCenter
+      ? createTrackCardMotionTail(trackCardProgress.get(), context.durationSeconds, appearanceMotion.trackCardCommitEase)
+      : { durationSeconds: legacyDurationSeconds, ease: appearanceMotion.trackCardCommitEase }
+    const durationSeconds = tail.durationSeconds
+    // Retain the budget of the animation actually started. A theme change can
+    // shorten the current configuration while this older settle is still live.
+    context.watchdogBudgetMs = durationSeconds * 1000
+      + (context.target === 1 && context.overshootPx
+        ? TRACK_CARD_OVERSHOOT_SECONDS * 1000 * appearance.motion.durationScale : 0)
+      + 100
     animateTrackCardProgress(
       context.target,
       durationSeconds,
@@ -1135,8 +1152,9 @@ export function PlayerSurface({
         context.onComplete()
       },
       context.target === 1 ? context.overshootPx : 0,
+      tail.ease,
     )
-  }, [animateTrackCardProgress, appearance.motion.durationScale, trackCardProgress])
+  }, [animateTrackCardProgress, appearance.motion.durationScale, appearanceMotion.trackCardCommitEase, trackCardProgress, trackCardReducedMotion])
 
   const hardResetTrackCardInteraction = useCallback(() => {
     clearCoverPress()
@@ -1333,7 +1351,7 @@ export function PlayerSurface({
     runTrackCardSettle({
       session: activeSession,
       target: 1,
-      durationSeconds: trackCardReducedMotion ? 0.08 : TRACK_CARD_DURATION_SECONDS,
+      durationSeconds: trackCardReducedMotion ? 0.08 : appearanceMotion.trackCardCommitDurationSeconds,
       overshootPx: !trackCardReducedMotion && -releaseVelocityX * gesture.direction >= TRACK_CARD_OVERSHOOT_VELOCITY
         ? -gesture.direction * gesture.coverWidth * TRACK_CARD_OVERSHOOT_WIDTH
         : 0,
@@ -1345,7 +1363,7 @@ export function PlayerSurface({
         completeTrackCardExit(activeSession.outgoingLayerId)
       },
     })
-  }, [commitTrackPreview, completeTrackCardExit, discardCoverDrag, runTrackCardSettle, trackCardReducedMotion])
+  }, [appearanceMotion.trackCardCommitDurationSeconds, commitTrackPreview, completeTrackCardExit, discardCoverDrag, runTrackCardSettle, trackCardReducedMotion])
 
   const startCoverDrag = useCallback((event: CoverPressGesture) => {
     const coverFrame = (event.target as HTMLElement).closest<HTMLElement>('.cover-frame')
@@ -1626,9 +1644,15 @@ export function PlayerSurface({
         if (oldProgress >= 0.999) {
           finishRetiringTrackCard()
         } else {
+          const tail = !trackCardReducedMotion
+            ? createTrackCardMotionTail(oldProgress, appearanceMotion.trackCardCommitDurationSeconds, appearanceMotion.trackCardCommitEase)
+            : {
+                durationSeconds: appearanceMotion.trackCardCommitDurationSeconds * Math.max(0.15, 1 - oldProgress),
+                ease: appearanceMotion.trackCardCommitEase,
+              }
           retiringTrackCardAnimationRef.current = animate(retiringTrackCardProgress, 1, {
-            duration: TRACK_CARD_DURATION_SECONDS * Math.max(0.15, 1 - oldProgress),
-            ease: 'linear',
+            duration: tail.durationSeconds,
+            ease: tail.ease,
             onComplete: () => {
               if (retiringTrackCardSessionRef.current === retiringSession) finishRetiringTrackCard()
             },
@@ -1711,7 +1735,7 @@ export function PlayerSurface({
     if (activeSession?.kind === 'drag') {
       trackCardProgress.set(gesture.progress)
     }
-  }, [canResumeInterruptedSettle, discardTrackPreview, finishRetiringTrackCard, prepareTrackPreview, publishTrackCardSession, retiringTrackCardProgress, startCoverDrag, stopTrackCardAnimation, trackCardCoverGeometry, trackCardOvershootX, trackCardProgress, trackCardReducedMotion])
+  }, [appearanceMotion.trackCardCommitDurationSeconds, appearanceMotion.trackCardCommitEase, canResumeInterruptedSettle, discardTrackPreview, finishRetiringTrackCard, prepareTrackPreview, publishTrackCardSession, retiringTrackCardProgress, startCoverDrag, stopTrackCardAnimation, trackCardCoverGeometry, trackCardOvershootX, trackCardProgress, trackCardReducedMotion])
 
   const handleCoverPointerUp = useCallback((event: CoverPointerSample) => {
     const activeDrag = coverDragRef.current
@@ -2027,7 +2051,7 @@ export function PlayerSurface({
         runTrackCardSettle({
           session: activeSession,
           target: 1,
-          durationSeconds: trackCardReducedMotion ? 0.08 : TRACK_CARD_DURATION_SECONDS,
+          durationSeconds: trackCardReducedMotion ? 0.08 : appearanceMotion.trackCardCommitDurationSeconds,
           onComplete: () => completeTrackCardExit(outgoing.id),
         })
       }
@@ -2092,11 +2116,12 @@ export function PlayerSurface({
       runTrackCardSettle({
         session,
         target: 1,
-        durationSeconds: trackCardReducedMotion ? 0.08 : TRACK_CARD_DURATION_SECONDS,
+        durationSeconds: trackCardReducedMotion ? 0.08 : appearanceMotion.trackCardCommitDurationSeconds,
         onComplete: () => completeTrackCardExit(outgoing.id),
       })
     })
   }, [
+    appearanceMotion.trackCardCommitDurationSeconds,
     artworkSlots,
     completeTrackCardExit,
     publishTrackCardSession,
@@ -2134,7 +2159,7 @@ export function PlayerSurface({
         runTrackCardSettle({
           session: trackCardSession,
           target: 1,
-          durationSeconds: trackCardReducedMotion ? 0.08 : TRACK_CARD_DURATION_SECONDS,
+          durationSeconds: trackCardReducedMotion ? 0.08 : appearanceMotion.trackCardCommitDurationSeconds,
           onComplete: () => completeTrackCardExit(outgoing.id),
         })
       }
@@ -2153,7 +2178,7 @@ export function PlayerSurface({
     trackCardProgress.set(0)
     trackCardOvershootX.set(0)
     coverInteractionPhaseRef.current = 'idle'
-  }, [artworkSlots, completeTrackCardExit, discardTrackPreview, hasValidTrackCardSessionPair, playback.selectionActivitySequence, playback.selectionVisualIntent, publishTrackCardSession, runTrackCardSettle, selectionMatchesTrackCardSession, stopTrackCardAnimation, track?.id, trackCardOvershootX, trackCardPreviewToken?.id, trackCardProgress, trackCardReducedMotion, trackCardSession])
+  }, [appearanceMotion.trackCardCommitDurationSeconds, artworkSlots, completeTrackCardExit, discardTrackPreview, hasValidTrackCardSessionPair, playback.selectionActivitySequence, playback.selectionVisualIntent, publishTrackCardSession, runTrackCardSettle, selectionMatchesTrackCardSession, stopTrackCardAnimation, track?.id, trackCardOvershootX, trackCardPreviewToken?.id, trackCardProgress, trackCardReducedMotion, trackCardSession])
 
   useEffect(() => {
     const cancel = () => handleCoverPointerCancel()
@@ -2255,7 +2280,8 @@ export function PlayerSurface({
           return
         }
       }
-      if (!session || now - startedAt < TRACK_CARD_SETTLE_DEADLINE_MS) return
+      const activeSettleBudgetMs = trackCardSettleRef.current?.watchdogBudgetMs ?? 0
+      if (!session || now - startedAt < Math.max(trackCardSettleDeadlineMs, activeSettleBudgetMs)) return
       const liveSession = trackCardSessionRef.current
       const currentGesture = coverDragRef.current
       const gestureOwnsMotion = Boolean(currentGesture && !currentGesture.released
@@ -2347,6 +2373,7 @@ export function PlayerSurface({
     renderedIncomingLayerId,
     renderedTrackCardDirection,
     renderedTrackCardKind,
+    trackCardSettleDeadlineMs,
     stopTrackCardAnimation,
     trackCardOvershootX,
     trackCardPreviewToken?.id,
@@ -2733,7 +2760,11 @@ export function PlayerSurface({
             /> : null}
           </AnimatePresence>
           <AnimatePresence initial={false}>
-            {playlist.isOpen ? <div key="library-navigation-background" className="library-navigation-background" aria-hidden="true" /> : null}
+            {/* Presence retains this layer until every library page has exited.
+                Fade its own surface so it cannot cover the entering player. */}
+            {playlist.isOpen ? <motion.div key="library-navigation-background" className="library-navigation-background" aria-hidden="true"
+              variants={appearanceMotion.variants.backdrop} transition={appearanceMotion.layoutTransition}
+              initial="initial" animate="animate" exit="exit" /> : null}
             {playlist.isOpen && playlist.library?.route?.view === 'overview' ? <MediaLibraryPanel key="media-library-overview" playlist={playlist} onOpenPlayer={() => requestPlaylistOpenChange(false)} /> : null}
             {playlist.isOpen && playlist.library?.isOpen && playlist.library.route?.view !== 'overview' ? (
               <PlaylistLibraryPanel
@@ -2763,6 +2794,7 @@ export function PlayerSurface({
               tracks={playlist.tracks}
               unavailableTrackIds={playlist.unavailableTrackIds}
               playlistName={playlist.playlistName}
+              metadataStatus={playlist.metadataStatus}
               currentTrackId={playlist.currentTrackId}
               totalDurationSeconds={playlist.totalDurationSeconds}
               totalDurationStatus={playlist.totalDurationStatus}

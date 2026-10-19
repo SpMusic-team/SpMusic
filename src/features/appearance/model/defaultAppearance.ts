@@ -105,6 +105,8 @@ export const defaultAppearance: AppearancePreset = {
     level: 'subtle',
     durationScale: 1,
     easing: 'cubic-bezier(.65, 0, .35, 1)',
+    trackSwitchEasing: 'cubic-bezier(.4, 0, .2, 1)',
+    trackSwitchDurationMs: 500,
   },
   typography: {
     fontFamily: 'geist',

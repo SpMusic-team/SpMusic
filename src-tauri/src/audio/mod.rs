@@ -10,6 +10,7 @@ mod lyrics_cache;
 mod metadata;
 mod playlist;
 mod playlist_duration;
+mod playlist_summary;
 mod runtime;
 mod source;
 mod symphonia_source;
@@ -31,11 +32,13 @@ pub use cover_pixels::{
 pub(crate) use device::current_output_info;
 pub use error::AudioCommandError;
 pub use playlist_duration::probe_playlist_durations;
+pub use playlist_summary::probe_playlist_track_summaries;
 pub use types::{
     AudioEmbedLyricsInput, AudioFolderPlaylist, AudioFolderPlaylistInput, AudioLoadAndPlayInput,
     AudioLoadAndPlayResult, AudioLoadFileInput, AudioOpenFileInput, AudioOpenSourceResult,
     AudioOutputInfo, AudioPlayInput, AudioPlaybackState, AudioPlaylistDurationItem,
-    AudioProbePlaylistDurationsInput, AudioSeekInput, AudioSetVolumeInput, AudioTrackRef,
+    AudioPlaylistTrackSummaryItem, AudioProbePlaylistDurationsInput,
+    AudioProbePlaylistTrackSummariesInput, AudioSeekInput, AudioSetVolumeInput, AudioTrackRef,
     AudioTransitionPlaybackInput,
 };
 

@@ -1,13 +1,14 @@
-import type { Transition, Variants } from 'motion/react'
+import type { Easing, Transition, Variants } from 'motion/react'
 import type { AppearanceEasing, AppearanceMotion } from './appearanceTypes'
 
-export const appearanceEasingMap: Record<AppearanceEasing, Transition['ease']> = {
+export const appearanceEasingMap: Record<AppearanceEasing, Easing> = {
   linear: 'linear',
   ease: [0.25, 0.1, 0.25, 1],
   'ease-in': [0.42, 0, 1, 1],
   'ease-out': [0, 0, 0.58, 1],
   'ease-in-out': [0.42, 0, 0.58, 1],
   'cubic-bezier(.65, 0, .35, 1)': [0.65, 0, 0.35, 1],
+  'cubic-bezier(.4, 0, .2, 1)': [0.4, 0, 0.2, 1],
 }
 
 export type AppearanceMotionRuntime = {
@@ -15,6 +16,8 @@ export type AppearanceMotionRuntime = {
   reducedMotion: 'always' | 'never'
   transition: Transition
   layoutTransition: Transition
+  trackCardCommitEase: Easing
+  trackCardCommitDurationSeconds: number
   libraryNavigation: {
     transition: Transition
     chrome: Variants
@@ -52,6 +55,8 @@ export function createAppearanceMotionRuntime(
       reducedMotion: 'always',
       transition: { duration: 0 },
       layoutTransition: { duration: 0 },
+      trackCardCommitEase: appearanceEasingMap[motion.trackSwitchEasing],
+      trackCardCommitDurationSeconds: motion.trackSwitchDurationMs / 1000,
       libraryNavigation: {
         transition: { duration: 0 },
         chrome: { initial: { opacity: 1 }, animate: { opacity: 1 }, exit: { opacity: 1 } },
@@ -100,6 +105,8 @@ export function createAppearanceMotionRuntime(
     disabled: false,
     reducedMotion: 'never',
     layoutTransition: prototypeSmartTransition,
+    trackCardCommitEase: appearanceEasingMap[motion.trackSwitchEasing],
+    trackCardCommitDurationSeconds: motion.trackSwitchDurationMs / 1000,
     libraryNavigation: {
       transition: prototypeSmartTransition,
       expansion: 0.7,

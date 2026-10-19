@@ -156,6 +156,13 @@ export type PlayerPlaylistViewModel = {
   tracks: PlaylistTrackItemViewModel[]
   unavailableTrackIds?: ReadonlySet<string>
   playlistName?: string
+  /**
+   * Readiness of the list's real tag text. `loading` means the rows are not
+   * trustworthy yet and the panel must show a loading state instead of
+   * placeholder song text. Missing means ready, so existing callers that build
+   * the view model directly keep their current behaviour.
+   */
+  metadataStatus?: 'loading' | 'ready'
   currentTrackId?: string | null
   totalDurationSeconds?: number
   totalDurationStatus?: PlaylistDurationStatus

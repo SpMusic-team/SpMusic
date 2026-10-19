@@ -120,6 +120,102 @@ class PlaylistDurationProtocolError extends Error {
   }
 }
 
+/**
+ * Read-only tag snapshot of one local audio file. Every field is `null` when the
+ * file carries no such tag or property; the batch channel never reports cover
+ * art, lyrics, sidecar data or a duration (duration stays authoritative on
+ * `probeAudioPlaylistDurations` / the hydration path).
+ */
+export type PlaylistTrackTagSummary = {
+  title: string | null
+  artist: string | null
+  album: string | null
+  albumArtist: string | null
+  bitDepth: number | null
+  sampleRateHz: number | null
+  bitrateKbps: number | null
+  codec: string | null
+}
+
+export type AudioPlaylistTrackSummaryItem = {
+  sourcePath: string
+  summary: PlaylistTrackTagSummary | null
+  error: AudioCommandError | null
+}
+
+/** Upper bound per batch, mirroring the Rust command's own limit. */
+export const AUDIO_PLAYLIST_TRACK_SUMMARY_BATCH_LIMIT = 256
+
+class PlaylistTrackSummaryProtocolError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'PlaylistTrackSummaryProtocolError'
+  }
+}
+
+function nullableSummaryText(value: unknown): string | null {
+  if (value === null || value === undefined) return null
+  if (typeof value === 'string') return value
+  throw new PlaylistTrackSummaryProtocolError('Playlist track summary text field is invalid')
+}
+
+function nullableSummaryNumber(value: unknown): number | null {
+  if (value === null || value === undefined) return null
+  if (typeof value === 'number' && Number.isFinite(value) && value >= 0) return value
+  throw new PlaylistTrackSummaryProtocolError('Playlist track summary numeric field is invalid')
+}
+
+// Unknown extra fields are ignored on purpose: the command may grow additive
+// fields without forcing every playlist into the fallback path.
+function parsePlaylistTrackTagSummary(value: unknown): PlaylistTrackTagSummary {
+  if (!value || typeof value !== 'object') {
+    throw new PlaylistTrackSummaryProtocolError('Playlist track summary response item is invalid')
+  }
+  const summary = value as Partial<PlaylistTrackTagSummary>
+  return {
+    title: nullableSummaryText(summary.title),
+    artist: nullableSummaryText(summary.artist),
+    album: nullableSummaryText(summary.album),
+    albumArtist: nullableSummaryText(summary.albumArtist),
+    bitDepth: nullableSummaryNumber(summary.bitDepth),
+    sampleRateHz: nullableSummaryNumber(summary.sampleRateHz),
+    bitrateKbps: nullableSummaryNumber(summary.bitrateKbps),
+    codec: nullableSummaryText(summary.codec),
+  }
+}
+
+export async function probeAudioPlaylistTrackSummaries(
+  paths: string[],
+): Promise<AudioPlaylistTrackSummaryItem[]> {
+  if (paths.length > AUDIO_PLAYLIST_TRACK_SUMMARY_BATCH_LIMIT) {
+    throw new PlaylistTrackSummaryProtocolError('Playlist track summary batch exceeds 256 paths')
+  }
+  const response = await invoke<unknown>('audio_probe_playlist_track_summaries', { input: { paths } })
+  if (!Array.isArray(response) || response.length !== paths.length) {
+    throw new PlaylistTrackSummaryProtocolError('Playlist track summary response count is invalid')
+  }
+  return response.map((value: unknown, index) => {
+    if (!value || typeof value !== 'object') {
+      throw new PlaylistTrackSummaryProtocolError('Playlist track summary response item is invalid')
+    }
+    const item = value as Partial<AudioPlaylistTrackSummaryItem>
+    if (item.sourcePath !== paths[index]) {
+      throw new PlaylistTrackSummaryProtocolError('Playlist track summary response path echo is invalid')
+    }
+    if (item.error !== null && item.error !== undefined
+      && (!isAudioCommandError(item.error) || typeof item.error.recoverable !== 'boolean')) {
+      throw new PlaylistTrackSummaryProtocolError('Playlist track summary response error is invalid')
+    }
+    return {
+      sourcePath: item.sourcePath,
+      summary: item.summary === null || item.summary === undefined
+        ? null
+        : parsePlaylistTrackTagSummary(item.summary),
+      error: item.error ?? null,
+    }
+  })
+}
+
 export async function probeAudioPlaylistDurations(paths: string[]): Promise<AudioPlaylistDuration[]> {
   if (paths.length > 16) throw new PlaylistDurationProtocolError('Playlist duration batch exceeds 16 paths')
   const response = await invoke<unknown>('audio_probe_playlist_durations', { input: { paths } })

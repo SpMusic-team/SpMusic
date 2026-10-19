@@ -9,13 +9,14 @@ use app_paths::AppPaths;
 use audio::current_output_info;
 use audio::{
     begin_playlist_cover_window, load_cover_pixels, load_playlist_cover_pixels,
-    probe_playlist_durations, shutdown_playlist_cover_cache, AudioBeginPlaylistCoverWindowInput,
-    AudioCommandError, AudioController, AudioEmbedLyricsInput, AudioFolderPlaylist,
-    AudioFolderPlaylistInput, AudioLoadAndPlayInput, AudioLoadAndPlayResult,
+    probe_playlist_durations, probe_playlist_track_summaries, shutdown_playlist_cover_cache,
+    AudioBeginPlaylistCoverWindowInput, AudioCommandError, AudioController, AudioEmbedLyricsInput,
+    AudioFolderPlaylist, AudioFolderPlaylistInput, AudioLoadAndPlayInput, AudioLoadAndPlayResult,
     AudioLoadCoverPixelsInput, AudioLoadFileInput, AudioLoadPlaylistCoverPixelsInput,
     AudioOpenFileInput, AudioOpenSourceResult, AudioOutputInfo, AudioPlayInput, AudioPlaybackState,
-    AudioPlaylistDurationItem, AudioProbePlaylistDurationsInput, AudioSeekInput,
-    AudioSetVolumeInput, AudioTrackRef, AudioTransitionPlaybackInput, CoverPixelsError,
+    AudioPlaylistDurationItem, AudioPlaylistTrackSummaryItem, AudioProbePlaylistDurationsInput,
+    AudioProbePlaylistTrackSummariesInput, AudioSeekInput, AudioSetVolumeInput, AudioTrackRef,
+    AudioTransitionPlaybackInput, CoverPixelsError,
 };
 use global_shortcuts::{
     global_shortcuts_get_settings, global_shortcuts_set_suspended, global_shortcuts_update_settings,
@@ -136,6 +137,34 @@ async fn audio_probe_playlist_durations(
         "Tauri command invoked",
     );
     probe_playlist_durations(input).await
+}
+
+#[tauri::command]
+async fn audio_probe_playlist_track_summaries(
+    input: AudioProbePlaylistTrackSummariesInput,
+) -> Result<Vec<AudioPlaylistTrackSummaryItem>, AudioCommandError> {
+    tracing::info!(
+        command = "audio_probe_playlist_track_summaries",
+        path_count = input.paths.len(),
+        "Tauri command invoked",
+    );
+    let result = probe_playlist_track_summaries(input).await;
+    match &result {
+        Ok(items) => tracing::debug!(
+            command = "audio_probe_playlist_track_summaries",
+            item_count = items.len(),
+            error_count = items.iter().filter(|item| item.error.is_some()).count(),
+            "Tauri command completed",
+        ),
+        Err(error) => tracing::warn!(
+            command = "audio_probe_playlist_track_summaries",
+            error_code = ?error.code,
+            error = %error.message,
+            recoverable = error.recoverable,
+            "Tauri command failed",
+        ),
+    }
+    result
 }
 
 #[tauri::command]
@@ -368,6 +397,7 @@ pub fn run() {
             audio_hydrate_track,
             audio_list_folder_tracks,
             audio_probe_playlist_durations,
+            audio_probe_playlist_track_summaries,
             audio_embed_lyrics,
             audio_play,
             audio_pause,

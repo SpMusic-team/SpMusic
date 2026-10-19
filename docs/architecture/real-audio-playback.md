@@ -6,12 +6,14 @@ status: "active"
 owner_agent: "Architecture Agent"
 version_scope: "v0.1"
 created: "2026-07-24"
-updated: "2026-08-13"
+updated: "2026-10-19"
 source_documents:
   - "docs/decisions/2026-07-24-v0-1-real-audio-scope.md"
   - "docs/decisions/2026-07-27-v0-1-implemented-capabilities-boundary.md"
   - "docs/decisions/2026-07-27-v0-1-local-m3u8-temporary-queue.md"
   - "docs/decisions/2026-08-05-OPT-0001-async-track-parsing.md"
+  - "docs/architecture/playlist-track-summaries.md"
+  - "src-tauri/src/audio/playlist_summary.rs"
   - "docs/changes/optimizations/OPT-0001.md"
   - "docs/changes/optimizations/OPT-0002.md"
   - "docs/architecture/lyrics-cache-and-embed-boundary.md"
@@ -44,7 +46,7 @@ v0.1 真实播放以单个本地音频资源的最小闭环为核心：前端通
 
 ## 范围
 
-- 定义 v0.1 真实播放 command 契约（13 个已注册 command，含 OPT-0002 新增的 `audio_embed_lyrics`）。
+- 定义 v0.1 真实播放 command 契约（21 个已注册 `audio_*` command，含 OPT-0002 新增的 `audio_embed_lyrics`、列表封面窗口相关命令、`audio_probe_playlist_durations` 与 2026-10-19 新增的 `audio_probe_playlist_track_summaries`）。
 - 定义同目录临时队列与本地 `.m3u8` 临时队列的 command / DTO、排序、非递归、只读和会话内边界。
 - 定义高频播放状态与低频歌曲详情的传输边界，以及 command response、轮询和 `audio_state_changed` 事件的同步 / 乱序原则。
 - 定义格式兼容性声明维度（扩展名枚举 vs 内容解码验证）。
@@ -53,6 +55,7 @@ v0.1 真实播放以单个本地音频资源的最小闭环为核心：前端通
 ## 不在范围内
 
 - 不实现媒体库、递归文件夹扫描、文件监控、数据库或持久化索引。
+- 不实现播放列表标签索引 / 标签缓存 / 后台全库扫描 / mtime 增量索引：`audio_probe_playlist_track_summaries` 是无状态、按需、进程内即时的只读批量读取，不落盘、不建立第二套失效语义。
 - 不实现产品级播放列表、临时队列持久化、跨目录队列管理、播放历史、收藏、网络 HLS 或完整 `m3u8` 导入导出。
 - 不实现网络 / sidecar 歌词获取、逐字歌词、歌词 / 封面 / 标签编辑 UI（sidecar 歌词写回偏差已修复，见「契约一致性与偏差」）。
 - 不实现 CUE 分轨与 M4B 章节的公共 Tauri / 前端契约（仓库中的解析模型仅属后端内部研究）。
@@ -63,7 +66,7 @@ v0.1 真实播放以单个本地音频资源的最小闭环为核心：前端通
 
 - 性能：播放链路只维护一个当前音频资源和一个播放运行时；目录枚举在每次选择后执行一次，不建立索引，不递归扫描。
 - 启动速度：应用启动时不初始化媒体库；音频运行时随应用启动创建，但不打开音频设备或读取文件，直到用户选择资源。
-- 内存占用：不缓存整库；封面按会话缓存到应用 cache 目录，`AudioTrackRef` 元数据在前端按需缓存；高频状态 DTO 保持轻量。
+- 内存占用：不缓存整库；封面按会话缓存到应用 cache 目录，`AudioTrackRef` 元数据在前端按需缓存；高频状态 DTO 保持轻量。列表标签摘要按播放列表 scope 缓存展示用文本（约 0.5–0.7 MB / 1800 首），不驻留歌词、封面字节或 data URL。
 - 跨平台一致性：command 契约保持平台无关；v0.1 只验证当前桌面开发环境，其他平台不声明证据。
 - 可测试性：所有核心能力都能通过 command 返回值、状态查询、`audio_state_changed` 事件和人工播放检查验证。
 - 可维护性：错误码稳定，用户可见文案留给前端，不由 Rust 返回中文文案驱动 UI 判断。
@@ -203,6 +206,46 @@ type AudioFolderPlaylistInput = {
 - 选中文件所在目录存在按文件名排序第一个可用的 `.m3u8` 时，优先按该 `.m3u8` 构建队列（发现路径不允许越出目录的外部绝对路径）。
 - 目录中没有受支持音频时返回 `UNSUPPORTED_FORMAT`。
 - 本 command 只描述队列，不加载播放资源。
+
+### `audio_probe_playlist_track_summaries`
+
+用途：为临时队列（播放列表）的**整表**读取展示用标签快照，使列表第一帧就有真实歌名 / 歌手 / 专辑。完整契约、只读边界、线程模型与前端缓存规则见 [playlist-track-summaries.md](./playlist-track-summaries.md)。
+
+输入：
+
+```ts
+type AudioProbePlaylistTrackSummariesInput = {
+  paths: string[]
+}
+```
+
+输出（顺序保持，长度恒等于 `paths.length`）：
+
+```ts
+type AudioPlaylistTrackSummaryItem = {
+  sourcePath: string                    // 原样回显请求字符串
+  summary: AudioPlaylistTrackTagSummary | null
+  error: AudioCommandError | null       // 与 summary 恰好一个非空
+}
+
+type AudioPlaylistTrackTagSummary = {
+  title: string | null
+  artist: string | null
+  album: string | null
+  albumArtist: string | null
+  bitDepth: number | null
+  sampleRateHz: number | null
+  bitrateKbps: number | null
+  codec: string | null                  // 扩展名大写，与 AudioFormatMetadata.codec 一致
+}
+```
+
+约束：
+
+- 只读标签：`lofty` + `read_cover_art(false)`。不打开解码器、不解码音频、不写任何文件（含 `audio/covers`）、不读 sidecar `.lrc`、不做时长探测。
+- **不含** `durationMs` / 歌词 / 封面 / 文件大小 / mtime；时长权威仍在 `audio_probe_playlist_durations` 与补水路径。
+- 每批 ≤256 条，超出整批 `INVALID_PATH`；空输入返回 `[]` 且不触碰文件系统；除超限与 worker 失败外逐项错误，不整批失败。
+- 与 `DURATION_GATE` 分离的独立串行门；不投递到 OPT-0001 解析 worker，也不占用音频 runtime 线程。
 
 ### `audio_play`
 
@@ -550,7 +593,8 @@ sequenceDiagram
 | 单文件播放闭环 | `audio_open_source` / `audio_load_file` / `audio_play` / `audio_pause` / `audio_stop` / `audio_seek` / `audio_get_state` / `audio_get_current_track` 与 DTO、错误码符合本契约。 |
 | 同目录临时队列 | `audio_list_folder_tracks` 非递归、只读、文件名稳定排序、会话内，明确区分媒体库与产品级播放列表。 |
 | 本地 `.m3u8` 临时队列 | 按决策解析本地条目、跳过远程 / HLS 行、缺失条目保留并提示、绝对路径越目录规则与决策一致。 |
-| 元数据低频传输 | `AudioPlaybackState` 与 `audio_state_changed` 保持轻量；路径、歌词、封面、完整标签只经低频 `AudioTrackRef` / `audio_hydrate_track` 传输。 |
+| 元数据低频传输 | `AudioPlaybackState` 与 `audio_state_changed` 保持轻量；路径、歌词、封面、完整标签只经低频 `AudioTrackRef` / `audio_hydrate_track` 传输。`audio_probe_playlist_track_summaries` 是另一条**请求/响应式、按列表 scope 整表单次**的批量通道，只返回展示用标签快照（不含歌词、封面、data URL、时长），不进入 `audio_state_changed`、播放进度轮询或任何事件 payload，也不替代 `audio_hydrate_track` 的完整详情。 |
+| 播放列表标签摘要 | `audio_probe_playlist_track_summaries` 只读标签（`read_cover_art(false)`），不开解码器、不写盘、不读 sidecar `.lrc`；每批 ≤256、逐项错误、顺序与 `sourcePath` 回声保持；前端按 scope 键缓存，过期批次不得写入另一个 scope，失败必须降级为真实回退行而不是永久加载态（详见 [playlist-track-summaries.md](./playlist-track-summaries.md)）。 |
 | 状态事件 | `audio_state_changed` payload 为 `AudioPlaybackState`；控制 command 的事件与 response 同源同值，设备变化单独广播，自然结束经 500ms 轮询检测。 |
 | 音量 | `audio_set_volume` 采用 `0.0..=1.0` 归一化区间与 `INVALID_VOLUME` 错误码；`AudioPlaybackState.volume` 反映当前值。 |
 | 格式声明 | 扩展名枚举、内容解码、格式矩阵维度分别表述，不冒充“支持所有常见格式”。 |

@@ -44,6 +44,7 @@ const motionOptions = [
 ] as const
 const easingOptions = [
   { label: 'SpMusic 平滑', value: 'cubic-bezier(.65, 0, .35, 1)' },
+  { label: '平滑加速与收尾', value: 'cubic-bezier(.4, 0, .2, 1)' },
   { label: '标准', value: 'ease' },
   { label: '线性', value: 'linear' },
   { label: '缓入', value: 'ease-in' },

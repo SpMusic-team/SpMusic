@@ -63,7 +63,9 @@ export const PlaylistCard = memo(function PlaylistCard({
     else onActivate(track.id)
   }
   const title = track.title
-  const label = unavailable ? `${title} · ${appCopy.playlistPage.moreUnavailable}` : title
+  const label = unavailable
+    ? title ? `${title} · ${appCopy.playlistPage.moreUnavailable}` : appCopy.playlistPage.moreUnavailable
+    : title
   // `hasLocalArtwork` is only written once metadata hydration lands, so an
   // undefined value means "not known yet" rather than "no artwork". Treating it
   // as missing flashed the note glyph on every card during fast scrolling and
@@ -118,7 +120,13 @@ function PlaylistCardContent({ track, artworkVisible, selectMode, unavailable, s
   const systemIcons = useSystemIcons()
   const coverSource = track.coverImage ?? track.coverImageFallback
   const coverMarkVisible = coverState === 'empty' || coverState === 'error'
-  const artistAlbum = showExtendedMetadata && track.album && track.album !== track.artist ? `${track.artist} - ${track.album}` : track.artist
+  // Empty text means "unknown", so a missing artist/album must not leave an
+  // empty line behind. `playlistCardContentShape` already counts these bits.
+  const artistText = track.artist?.trim() ?? ''
+  const albumText = track.album?.trim() ?? ''
+  const artistAlbum = showExtendedMetadata && albumText && albumText !== artistText
+    ? artistText ? `${artistText} - ${albumText}` : albumText
+    : artistText
   const bitDepth = track.audioFormat?.bitDepth
   const formatParts = showExtendedMetadata ? [formatTrackClock(track.durationSeconds), track.fileExtension?.toLowerCase()].filter((part): part is string => Boolean(part)) : []
   if (showExtendedMetadata && bitDepth != null && Number.isFinite(bitDepth) && bitDepth >= 24) formatParts.push(`${bitDepth}bit`)
@@ -155,7 +163,7 @@ function PlaylistCardContent({ track, artworkVisible, selectMode, unavailable, s
       </span>
       <span className="playlist-card-copy">
         <span className="playlist-card-title">{track.title}</span>
-        <span className="playlist-card-artist">{artistAlbum}</span>
+        {artistAlbum ? <span className="playlist-card-artist">{artistAlbum}</span> : null}
         {formatParts.length ? (
           <span className="playlist-card-format">
             <systemIcons.music aria-hidden="true" />

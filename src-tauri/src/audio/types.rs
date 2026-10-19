@@ -166,6 +166,48 @@ pub struct AudioPlaylistDurationItem {
     pub error: Option<AudioCommandError>,
 }
 
+/// Input for the read-only playlist tag summary probe. Each batch is bounded so
+/// a playlist import cannot pin the blocking pool with unbounded file I/O.
+#[derive(Debug, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioProbePlaylistTrackSummariesInput {
+    pub paths: Vec<String>,
+}
+
+/// One probe result. `summary` is `Some` whenever the file was readable, even
+/// if it carries no tags at all; `error` is `Some` only when the file could not
+/// be read, so the two fields are never both populated.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioPlaylistTrackSummaryItem {
+    pub source_path: String,
+    pub summary: Option<AudioPlaylistTrackTagSummary>,
+    pub error: Option<AudioCommandError>,
+}
+
+/// Tag-only snapshot of a local audio file. Every field is a JSON `null` when
+/// the file has no such tag or property, never an omitted field.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioPlaylistTrackTagSummary {
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub album_artist: Option<String>,
+    // Deliberately no duration: playback duration stays authoritative on
+    // `audio_probe_playlist_durations` / the hydration path, so a container
+    // header estimate can never flip a published playlist total. See
+    // docs/architecture/playlist-track-summaries.md (risk R1).
+    #[ts(type = "number | null")]
+    pub bit_depth: Option<u8>,
+    #[ts(type = "number | null")]
+    pub sample_rate_hz: Option<u32>,
+    #[ts(type = "number | null")]
+    pub bitrate_kbps: Option<u32>,
+    /// File extension in upper case, matching `AudioFormatMetadata::codec`.
+    pub codec: Option<String>,
+}
+
 #[derive(Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AudioLoadAndPlayInput {

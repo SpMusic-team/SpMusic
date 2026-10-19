@@ -66,6 +66,7 @@ window.backendInvoke=async(command,args)=>{
   return response;
  }
  if(command==='audio_hydrate_track')return track(input.path,true);
+ if(command==='audio_probe_playlist_track_summaries')return input.paths.map(sourcePath=>{const parts=sourcePath.replaceAll('\\\\','/').split('/'),i=Number(parts.at(-1).split('.')[0]);return {sourcePath,summary:{title:'Song '+i,artist:'Artist',album:'Album',albumArtist:null,bitDepth:24,sampleRateHz:96000,bitrateKbps:null,codec:'FLAC'},error:null}});
  if(command==='audio_begin_playlist_cover_window')return 1;
  if(command==='audio_probe_playlist_durations'){
   window.active++;window.maxActive=Math.max(window.maxActive,window.active);

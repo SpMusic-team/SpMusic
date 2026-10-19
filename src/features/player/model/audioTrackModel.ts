@@ -1,6 +1,13 @@
 import { splitLyricTranslation } from '@/features/player/model/lyrics'
+import {
+  coverToneForTrackId,
+  fileExtension,
+  fileNameTitle,
+  nonEmptyText,
+  normalizeAudioSourcePath,
+} from '@/features/player/model/playlistTrackSummary'
 import type { PlaylistTrackVisual } from '@/features/player/model/playerUiViewModel'
-import type { CoverTone, DemoLyricLine, Track } from '@/features/player/model/playerTypes'
+import type { DemoLyricLine, Track } from '@/features/player/model/playerTypes'
 import {
   audioCoverArtFallbackUrl,
   audioCoverArtUrl,
@@ -9,37 +16,12 @@ import {
   type AudioTrackRef,
 } from '@/features/player/services/audioCommands'
 
-function nonEmptyText(value: string | null | undefined): string | undefined {
-  const trimmed = value?.trim()
-  return trimmed || undefined
-}
-
-export function fileNameTitle(fileName: string): string {
-  return fileName.replace(/\.[^.]+$/u, '') || fileName
-}
-
-export function fileExtension(fileName: string): string | undefined {
-  const match = /\.([^.]+)$/u.exec(fileName)
-  return match?.[1]?.toLowerCase()
-}
-
-const COVER_TONES: readonly CoverTone[] = ['lagoon', 'violet', 'rose', 'amber', 'blue']
-
-export function coverToneForTrackId(id: string): CoverTone {
-  let hash = 0
-  for (let index = 0; index < id.length; index += 1) {
-    hash = (hash * 31 + id.charCodeAt(index)) >>> 0
-  }
-  return COVER_TONES[hash % COVER_TONES.length] ?? 'blue'
-}
+// The playlist summary channel and this hydration mapper must agree on every
+// fallback, so the helpers live in one module and are re-exported here.
+export { coverToneForTrackId, fileExtension, fileNameTitle, normalizeAudioSourcePath }
 
 export function playlistDisplayName(playlist: AudioFolderPlaylist): string {
   return playlist.sourceKind === 'm3u8' ? playlist.sourceName : playlist.directoryName
-}
-
-export function normalizeAudioSourcePath(sourcePath: string): string {
-  // Rust canonicalizes DTO paths; the frontend only unifies separators and preserves case/UNC identity.
-  return sourcePath.replaceAll('\\', '/')
 }
 
 export function singleTrackFolderPlaylist(track: AudioTrackRef): AudioFolderPlaylist {

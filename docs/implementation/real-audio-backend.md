@@ -34,13 +34,26 @@ Tauri managed state 保存 `AudioController`。`AudioController` 通过 channel 
 ## 已注册 Tauri command
 
 - `audio_open_file(input?: AudioOpenFileInput) -> AudioTrackRef`
+- `audio_open_source() -> AudioOpenSourceResult`
 - `audio_load_file(input: AudioLoadFileInput) -> AudioTrackRef`
+- `audio_load_and_play(input: AudioLoadAndPlayInput) -> AudioLoadAndPlayResult`
+- `audio_hydrate_track(input: AudioLoadFileInput) -> AudioTrackRef`
+- `audio_list_folder_tracks(input: AudioFolderPlaylistInput) -> AudioFolderPlaylist`
+- `audio_probe_playlist_durations(input: AudioProbePlaylistDurationsInput) -> AudioPlaylistDurationItem[]`
+- `audio_probe_playlist_track_summaries(input: AudioProbePlaylistTrackSummariesInput) -> AudioPlaylistTrackSummaryItem[]`（只读标签批量通道，见 `docs/architecture/playlist-track-summaries.md`）
+- `audio_embed_lyrics(input: AudioEmbedLyricsInput) -> AudioTrackRef`
 - `audio_play(input?: AudioPlayInput) -> AudioPlaybackState`
 - `audio_pause() -> AudioPlaybackState`
+- `audio_transition_playback(input: AudioTransitionPlaybackInput) -> AudioPlaybackState`
 - `audio_stop() -> AudioPlaybackState`
 - `audio_seek(input: AudioSeekInput) -> AudioPlaybackState`
+- `audio_set_volume(input: AudioSetVolumeInput) -> AudioPlaybackState`
 - `audio_get_state() -> AudioPlaybackState`
 - `audio_get_current_track() -> AudioTrackRef | null`
+- `audio_get_output_info() -> AudioOutputInfo | null`
+- `audio_begin_playlist_cover_window() -> u64`
+- `audio_load_cover_pixels(input: AudioLoadCoverPixelsInput) -> ArrayBuffer`
+- `audio_load_playlist_cover_pixels(input: AudioLoadPlaylistCoverPixelsInput) -> ArrayBuffer`
 
 ## 状态事件
 

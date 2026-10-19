@@ -134,6 +134,11 @@ export function PlaylistPlaybackDock({
   function renderTrackRow(track: Track | null, artwork: TrackArtwork | null | undefined, playlistTrack: PlaylistTrackItemViewModel | undefined, neighbor = false) {
     const matchingArtwork = artwork?.id === track?.id ? artwork : undefined
     const matchingPlaylistTrack = playlistTrack?.id === track?.id ? playlistTrack : undefined
+    // Never render a dangling separator: an unknown artist or album is simply
+    // omitted instead of leaving `/` or `-` in the row.
+    const trackMeta = [track?.artist?.trim(), track?.album?.trim()].filter(
+      (part): part is string => Boolean(part),
+    ).join('/')
     const imageFallback = matchingArtwork?.coverImageFallback ?? track?.coverImageFallback
     const imageSource = matchingArtwork?.coverImage ?? track?.coverImage ?? imageFallback
     const localArtwork = matchingPlaylistTrack?.hasLocalArtwork ?? Boolean(matchingArtwork?.coverFilePath ?? track?.coverFilePath)
@@ -189,7 +194,7 @@ export function PlaylistPlaybackDock({
             transition={{ layout: layoutTransition }}
           >
             <strong>{track?.title ?? '未在播放'}</strong>
-            <span>{track ? `${track.artist}/${track.album}` : '选择一首歌曲开始播放'}</span>
+            {track ? (trackMeta ? <span>{trackMeta}</span> : null) : <span>选择一首歌曲开始播放</span>}
           </motion.span></DockProjectionPresence>
         </button>
         <PressFeedbackButton

@@ -32,6 +32,7 @@ type PlaylistPanelProps = {
   tracks: PlaylistTrackItemViewModel[]
   unavailableTrackIds?: ReadonlySet<string>
   playlistName?: string
+  metadataStatus?: PlayerPlaylistViewModel['metadataStatus']
   currentTrackId?: string | null
   totalDurationSeconds?: number
   totalDurationStatus?: PlaylistDurationStatus
@@ -211,6 +212,53 @@ function indexedPlaylistCandidates(index: PlaylistCardIndex, grid: HTMLElement, 
   return candidates
 }
 
+// The list's real tags are not known yet. Show the shape of the list instead of
+// any song text: a fabricated title, artist or album is indistinguishable from a
+// real answer once the summary lands, and the hero already shows the true
+// playlist name, song count and total duration.
+function PlaylistMetadataLoading({
+  layout,
+  trackCount,
+}: {
+  layout: PlaylistLayoutDescriptor
+  trackCount: number
+}) {
+  const placeholderCount = layout.flow === 'tile'
+    ? Math.min(12, Math.max(2, layout.columns * 3))
+    : 8
+  return (
+    <div
+      className="playlist-loading"
+      data-layout-flow={layout.flow}
+      data-layout-columns={layout.columns}
+      style={layout.style}
+      role="status"
+      aria-live="polite"
+      aria-busy="true"
+    >
+      <p className="playlist-loading-label">
+        <span>{appCopy.playlistPage.loadingMetadata}</span>
+        {trackCount > 0 ? (
+          <span className="playlist-loading-count">{appCopy.playlistPage.count(trackCount)}</span>
+        ) : null}
+      </p>
+      <div className="playlist-loading-grid" aria-hidden="true">
+        {Array.from({ length: placeholderCount }, (_, index) => (
+          <div className="playlist-loading-card" key={index}>
+            {layout.showArtwork ? <span className="playlist-loading-cover" /> : null}
+            <span className="playlist-loading-line" />
+            <span className="playlist-loading-line playlist-loading-line-short" />
+            {layout.flow !== 'tile' ? (
+              <span className="playlist-loading-line playlist-loading-line-shortest" />
+            ) : null}
+          </div>
+        ))}
+      </div>
+      <span className="sr-only">{appCopy.playlistPage.loadingMetadataDescription}</span>
+    </div>
+  )
+}
+
 export function PlaylistPanel({
   controllerMode = 'movable',
   entryPosition,
@@ -218,6 +266,7 @@ export function PlaylistPanel({
   tracks,
   unavailableTrackIds,
   playlistName,
+  metadataStatus = 'ready',
   currentTrackId,
   totalDurationSeconds,
   totalDurationStatus,
@@ -294,6 +343,7 @@ export function PlaylistPanel({
   const artworkWindowIdsRef = useRef<ReadonlySet<string>>(new Set())
   const artworkWindowKeyRef = useRef('')
   const metadataWindowKeyRef = useRef<string | null>(null)
+  const loadingWindowKeyRef = useRef<string | null>(null)
   const [failedCoverSources, setFailedCoverSources] = useState<ReadonlyMap<string, string>>(() => new Map())
   const handleCoverFailed = useCallback((trackId: string, source: string) => {
     setFailedCoverSources(previous => previous.get(trackId) === source ? previous : new Map(previous).set(trackId, source))
@@ -305,6 +355,7 @@ export function PlaylistPanel({
       || track.artist.toLowerCase().includes(query) || track.album.toLowerCase().includes(query))
   }, [query, tracks])
   const filteredTrackIdsKey = useMemo(() => filteredTracks.map(track => track.id).join('\u0000'), [filteredTracks])
+  const firstFilteredTrackId = filteredTracks[0]?.id
   const contentShapes = useMemo(() => new Map(filteredTracks.map(track => [track.id, playlistCardContentShape(track)])), [filteredTracks])
   const contentRepresentatives = useMemo(() => {
     const shapes = new Set<number>()
@@ -466,7 +517,7 @@ export function PlaylistPanel({
     rebaseController({ reveal: true })
     refreshContentWindow()
     initialPositionAppliedRef.current = true
-  }, [currentTrackId, filteredTrackIdsKey, entryPosition, rebaseController, refreshContentWindow])
+  }, [currentTrackId, filteredTrackIdsKey, entryPosition, metadataStatus, rebaseController, refreshContentWindow])
 
   useLayoutEffect(() => {
     if (!searchOpen || searchRequestId <= 0 || focusedSearchRequestIdRef.current === searchRequestId) return
@@ -545,6 +596,21 @@ export function PlaylistPanel({
     const panel = panelRef.current
     const grid = gridRef.current
     if (!panel || !onVisibleTrackIdsChange) return
+    // While the tag summary is still loading the grid is not mounted. Publishing
+    // an empty window here would drop the persistent hero/dock leases, so only
+    // the leading row is reported and no stale card window is claimed.
+    if (metadataStatus === 'loading') {
+      const loadingIds = firstFilteredTrackId ? [firstFilteredTrackId] : []
+      const loadingKey = `\u0003loading\u0000${loadingIds.join('\u0000')}\u0000${layout.showArtwork}`
+      if (loadingWindowKeyRef.current === loadingKey) return
+      loadingWindowKeyRef.current = loadingKey
+      // Both reported-window keys are invalidated exactly once, so the grid
+      // republishes its real window as soon as the rows exist.
+      invalidateReportedWindows()
+      onVisibleTrackIdsChange(loadingIds, true, layout.showArtwork)
+      return
+    }
+    loadingWindowKeyRef.current = null
     // Invalidate before even an empty text grid reports metadata-only demand.
     if (!layout.showArtwork) artworkWindowKeyRef.current = ''
     if (!grid) {
@@ -673,6 +739,12 @@ export function PlaylistPanel({
       schedulePublish()
     }
     resolution.addEventListener('change', onResolutionChange)
+    // Hoisted so the loading branch above can reset both reported keys even
+    // though their normal values are produced by card geometry further down.
+    function invalidateReportedWindows() {
+      artworkWindowKeyRef.current = ''
+      metadataWindowKeyRef.current = null
+    }
     return () => {
       disposed = true
       panel.removeEventListener('scroll', schedulePublish)
@@ -685,7 +757,7 @@ export function PlaylistPanel({
       resolution.removeEventListener('change', onResolutionChange)
       if (frameId !== null) cancelAnimationFrame(frameId)
     }
-  }, [filteredTrackIdsKey, layout.level, layout.showArtwork, onVisibleTrackIdsChange, artworkWindowRevision, clearArtworkWindow])
+  }, [filteredTrackIdsKey, firstFilteredTrackId, layout.level, layout.showArtwork, metadataStatus, onVisibleTrackIdsChange, artworkWindowRevision, clearArtworkWindow])
 
   const playableTrackId = tracks.find((track) => !unavailable.has(track.id))?.id
 
@@ -936,7 +1008,9 @@ export function PlaylistPanel({
         </div>
       ) : null}
 
-      {filteredTracks.length ? (
+      {metadataStatus === 'loading' ? (
+        <PlaylistMetadataLoading layout={layout} trackCount={tracks.length} />
+      ) : filteredTracks.length ? (
         <>
           <p className="sr-only" aria-live="polite" aria-atomic="true">{layoutAnnouncement}</p>
           <div

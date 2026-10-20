@@ -6,7 +6,7 @@ import {
   nonEmptyText,
   normalizeAudioSourcePath,
 } from '@/features/player/model/playlistTrackSummary'
-import type { PlaylistTrackVisual } from '@/features/player/model/playerUiViewModel'
+import type { PlaylistTrackMetadata } from '@/features/player/model/playerUiViewModel'
 import type { DemoLyricLine, Track } from '@/features/player/model/playerTypes'
 import {
   audioCoverArtFallbackUrl,
@@ -143,7 +143,7 @@ export function audioTrackToTrack(track: AudioTrackRef): Track {
   }
 }
 
-export function audioTrackToPlaylistVisual(track: AudioTrackRef): PlaylistTrackVisual {
+export function audioTrackToPlaylistVisual(track: AudioTrackRef): PlaylistTrackMetadata {
   const title = nonEmptyText(track.metadata.title) ?? fileNameTitle(track.fileName)
   const artist = nonEmptyText(track.metadata.artist) ?? nonEmptyText(track.metadata.albumArtist) ?? '本地音频'
   const album = nonEmptyText(track.metadata.album) ?? '本地音频'

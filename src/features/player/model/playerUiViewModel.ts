@@ -113,15 +113,18 @@ export type PlaylistTrackItemViewModel = TrackSummary
     coverThumbnail?: PlaylistCoverImage
   }>
 
-export type PlaylistTrackVisual = Pick<
+export type PlaylistTrackMetadata = Pick<
   Track,
   'id' | 'title' | 'artist' | 'album' | 'durationSeconds' | 'fileExtension' | 'coverTone' | 'audioFormat'
 > & Readonly<{
   hasLocalArtwork: boolean
-  coverThumbnail?: PlaylistCoverImage
 }>
 
-export type PlaylistTrackMetadata = Omit<PlaylistTrackVisual, 'coverThumbnail'>
+// Visual completion cannot overwrite text or duration from the metadata lane.
+export type PlaylistTrackVisual = Pick<Track, 'id' | 'coverTone'> & Readonly<{
+  hasLocalArtwork: boolean
+  coverThumbnail?: PlaylistCoverImage
+}>
 
 export type PlaylistLibraryItem = {
   scope: string

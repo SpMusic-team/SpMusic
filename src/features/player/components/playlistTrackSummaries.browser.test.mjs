@@ -56,6 +56,7 @@ window.backendInvoke=async(command,args)=>{
   setTimeout(()=>window.listeners?.audio_track_details_changed?.({payload:{kind:'ready',requestId:input.requestId,generation:response.generation,track:result}}),0);return response;
  }
  if(command==='audio_hydrate_track')return track(input.path);
+ if(command==='audio_probe_playlist_cover'){const result=track(input.path);return {id:result.id,sourcePath:result.sourcePath,coverArt:result.metadata.coverArt}}
  if(command==='audio_begin_playlist_cover_window')return 1;
  if(command==='audio_probe_playlist_durations')return input.paths.map(sourcePath=>({sourcePath,durationMs:180000,error:null}));
  if(command==='audio_probe_playlist_track_summaries'){

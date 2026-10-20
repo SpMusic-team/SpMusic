@@ -81,6 +81,12 @@ export type AudioCoverArt = {
   byteLen: number
 }
 
+export type AudioPlaylistCoverSource = {
+  id: string
+  sourcePath: string
+  coverArt: AudioCoverArt | null
+}
+
 export type AudioLoadCoverPixelsInput = {
   filePath: string
   maxEdge: 1024 | 1536 | 2048 | 3072
@@ -349,6 +355,25 @@ export async function loadAndPlayAudio(input: AudioLoadAndPlayInput): Promise<Au
 
 export async function hydrateAudioTrack(path: string): Promise<AudioTrackRef> {
   return invoke<AudioTrackRef>('audio_hydrate_track', { input: { path } })
+}
+
+export async function probeAudioPlaylistCover(path: string): Promise<AudioPlaylistCoverSource> {
+  const response = await invoke<unknown>('audio_probe_playlist_cover', { input: { path } })
+  if (!response || typeof response !== 'object') throw new Error('Invalid playlist cover source response')
+  const source = response as Partial<AudioPlaylistCoverSource>
+  const cover = source.coverArt
+  if (
+    typeof source.id !== 'string' || !source.id
+    || typeof source.sourcePath !== 'string' || !source.sourcePath
+    || (cover !== null && (
+      !cover || typeof cover !== 'object'
+      || typeof cover.mimeType !== 'string'
+      || !(cover.filePath === null || typeof cover.filePath === 'string')
+      || !(cover.dataUrl === null || typeof cover.dataUrl === 'string')
+      || !Number.isSafeInteger(cover.byteLen) || cover.byteLen <= 0 || cover.byteLen > 16 * 1024 * 1024
+    ))
+  ) throw new Error('Invalid playlist cover source response')
+  return source as AudioPlaylistCoverSource
 }
 
 export async function embedAudioLyrics(input: AudioEmbedLyricsInput): Promise<AudioTrackRef> {

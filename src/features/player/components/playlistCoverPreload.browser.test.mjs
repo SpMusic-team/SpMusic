@@ -49,8 +49,8 @@ import ReactDOM from '${dependency('react-dom_client.js')}';
 import { useAudioPlayer } from '/src/features/player/hooks/useAudioPlayer.ts';
 import { PlaylistCoverImage } from '/src/features/player/components/PlaylistCoverImage.tsx';
 import { isPlaylistCoverDecoded } from '/src/features/player/model/playlistCoverReadiness.ts';
-window.trace=[];window.config={count:12,scope:'a',pixelGate:false,decodeGate:false,failures:0,decodeFailures:0,noCover:[],unavailable:[]};
-window.calls=[];window.pendingPixels=[];window.pendingDecodes=[];window.created=[];window.revoked=[];
+window.trace=[];window.config={count:12,scope:'a',pixelGate:false,decodeGate:false,failures:0,decodeFailures:0,noCover:[],unavailable:[],hydrationGate:false,sourceGate:false,sourceFailures:0,dataUrlOnly:[],sourceMismatch:false};
+window.calls=[];window.pendingPixels=[];window.pendingDecodes=[];window.pendingHydrations=[];window.pendingSources=[];window.created=[];window.revoked=[];
 let state={phase:'idle',generation:null,currentTrackId:null,positionMs:0,durationMs:null,volume:.5,error:null,transportTransition:null,transportSettledRequestId:null};
 let generation=0,windowGeneration=0,active=0;
 window.maxActive=0;window.liveListeners=0;
@@ -70,7 +70,14 @@ window.backendInvoke=async(command,args)=>{
  if(command==='audio_get_current_track')return state.currentTrackId?track('/audio/'+state.currentTrackId.replace('-','/')+'.flac'):null;
  if(command==='audio_open_source')return {kind:'playlist',playlist:playlist()};
  if(command==='audio_load_file'){const result=track(input.path);state={...state,phase:'ready',generation:++generation,currentTrackId:result.id,durationMs:result.durationMs};return result}
- if(command==='audio_hydrate_track')return track(input.path);
+ if(command==='audio_hydrate_track'){if(window.config.hydrationGate)await new Promise(resolve=>window.pendingHydrations.push(resolve));return track(input.path)}
+ if(command==='audio_probe_playlist_cover'){
+  if(window.config.sourceGate)await new Promise(resolve=>window.pendingSources.push(resolve));
+  if(window.config.sourceFailures>0){window.config.sourceFailures--;throw {code:'INTERNAL_ERROR',message:'injected source capacity failure',recoverable:true}}
+  const result=track(input.path),index=Number(input.path.split('/').at(-1).split('.')[0]);
+  if(result.metadata.coverArt&&window.config.dataUrlOnly.includes(index))result.metadata.coverArt={...result.metadata.coverArt,filePath:null,dataUrl:'data:image/png;base64,AA=='};
+  return {id:window.config.sourceMismatch?'wrong-source-id':result.id,sourcePath:result.sourcePath,coverArt:result.metadata.coverArt};
+ }
  if(command==='audio_probe_playlist_track_summaries')return input.paths.map(sourcePath=>{const parts=sourcePath.replaceAll('\\\\','/').split('/'),i=Number(parts.at(-1).split('.')[0]);return {sourcePath,summary:{title:'Song '+i,artist:'Artist',album:'Album',albumArtist:null,bitDepth:24,sampleRateHz:96000,bitrateKbps:null,codec:'FLAC'},error:null}});
  if(command==='audio_begin_playlist_cover_window')return ++windowGeneration;
  if(command==='audio_load_playlist_cover_pixels'){
@@ -144,6 +151,73 @@ try {
   assert.deepEqual(errors, [])
   await page.close()
   if (process.env.SPMUSIC_PRELOAD_BASELINE !== '1') {
+    const {page: metadataBlocked,errors:metadataBlockedErrors}=await open()
+    await select(metadataBlocked,{hydrationGate:true})
+    await metadataBlocked.evaluate(()=>window.player.setVisiblePlaylistTrackIds(window.readFixture().ids,true,true,{visibleIds:window.readFixture().ids,prefetchIds:[],coverCssPixels:128,dpr:1}))
+    await metadataBlocked.waitForFunction(()=>window.pendingHydrations.length>0)
+    await waitReady(metadataBlocked,12)
+    assert((await metadataBlocked.evaluate(()=>window.readFixture().metadata.length))<12,'cover completion does not wait for metadata')
+    const visualFields=await metadataBlocked.evaluate(()=>Object.keys(window.player.playlistTrackVisuals['a-1']).sort())
+    assert.deepEqual(visualFields,['coverThumbnail','coverTone','hasLocalArtwork','id'],'visual results cannot overwrite text or duration')
+    await metadataBlocked.evaluate(()=>{window.config.hydrationGate=false;window.pendingHydrations.splice(0).forEach(resolve=>resolve())})
+    await metadataBlocked.waitForFunction(()=>window.readFixture().metadata.length===12)
+    assert.deepEqual(metadataBlockedErrors,[])
+    report.push({case:'visual completion is independent of blocked metadata',ready:12,visualFields})
+    await metadataBlocked.close()
+
+    const {page: sourceBlocked,errors:sourceBlockedErrors}=await open()
+    await select(sourceBlocked,{sourceGate:true})
+    await sourceBlocked.waitForFunction(()=>window.pendingSources.length===2)
+    await sourceBlocked.evaluate(()=>window.player.setVisiblePlaylistTrackIds(window.readFixture().ids,true,true,{visibleIds:window.readFixture().ids,prefetchIds:[],coverCssPixels:128,dpr:1}))
+    await sourceBlocked.waitForFunction(()=>window.readFixture().metadata.length===12)
+    assert.equal(await sourceBlocked.evaluate(()=>window.readFixture().ready.length),0,'metadata completion does not wait for cover source')
+    await sourceBlocked.evaluate(()=>{window.config.sourceGate=false;window.pendingSources.splice(0).forEach(resolve=>resolve())})
+    await waitReady(sourceBlocked,12)
+    assert.deepEqual(sourceBlockedErrors,[])
+    report.push({case:'metadata completion is independent of blocked source',metadata:12})
+    await sourceBlocked.close()
+
+    const {page: sourceRetry,errors:sourceRetryErrors}=await open()
+    await select(sourceRetry,{sourceFailures:2})
+    await waitReady(sourceRetry,12)
+    const sourceRequests=await sourceRetry.evaluate(()=>window.calls.filter(call=>call.command==='audio_probe_playlist_cover').length)
+    assert.equal(sourceRequests,14,'source capacity errors use the bounded retry budget')
+    assert.deepEqual(sourceRetryErrors,[])
+    report.push({case:'recoverable source errors',requests:sourceRequests})
+    await sourceRetry.close()
+
+    const {page: fallbackOnly,errors:fallbackOnlyErrors}=await open()
+    await select(fallbackOnly,{dataUrlOnly:[1]})
+    await waitReady(fallbackOnly,11)
+    await fallbackOnly.waitForFunction(()=>window.player.playlistTrackVisuals['a-1']?.hasLocalArtwork===true)
+    await fallbackOnly.evaluate(()=>window.player.setVisiblePlaylistTrackIds(['a-1'],true,true,{visibleIds:['a-1'],prefetchIds:[],coverCssPixels:256,dpr:1}))
+    await fallbackOnly.waitForTimeout(100)
+    const fallbackResult=await fallbackOnly.evaluate(()=>({thumbnail:window.player.playlistTrackVisuals['a-1'].coverThumbnail??null,calls:window.calls.filter(call=>call.command==='audio_probe_playlist_cover'&&call.input.path==='/audio/a/1.flac').length,decoded:window.trace.filter(event=>event.type==='decode-start'&&event.src.startsWith('data:')).length}))
+    assert.deepEqual(fallbackResult,{thumbnail:null,calls:1,decoded:0},'data URL-only originals stay quiet and do not become a successful upgrade')
+    assert.deepEqual(fallbackOnlyErrors,[])
+    report.push({case:'data URL-only source preserves bounded baseline placeholder',...fallbackResult})
+    await fallbackOnly.close()
+
+    const {page: fallbackUpgrade,errors:fallbackUpgradeErrors}=await open()
+    await select(fallbackUpgrade)
+    await waitReady(fallbackUpgrade,12)
+    const priorFallback=await fallbackUpgrade.evaluate(()=>window.player.playlistTrackVisuals['a-1'].coverThumbnail.src)
+    await fallbackUpgrade.evaluate(()=>{window.config.dataUrlOnly=[1];window.player.setVisiblePlaylistTrackIds(['a-1'],true,true,{visibleIds:['a-1'],prefetchIds:[],coverCssPixels:256,dpr:1})})
+    await fallbackUpgrade.waitForFunction(()=>window.calls.filter(call=>call.command==='audio_probe_playlist_cover'&&call.input.path==='/audio/a/1.flac').length===2)
+    await fallbackUpgrade.waitForTimeout(100)
+    assert.equal(await fallbackUpgrade.evaluate(()=>window.player.playlistTrackVisuals['a-1'].coverThumbnail.src),priorFallback,'unrenderable upgrade retains the previous owned URL')
+    assert.deepEqual(fallbackUpgradeErrors,[])
+    report.push({case:'data URL-only upgrade retains previous thumbnail',retained:true})
+    await fallbackUpgrade.close()
+
+    const {page: mismatched,errors:mismatchedErrors}=await open()
+    await select(mismatched,{sourceMismatch:true})
+    await mismatched.waitForFunction(()=>window.calls.filter(call=>call.command==='audio_probe_playlist_cover').length===12)
+    assert.equal(await mismatched.evaluate(()=>window.created.length),0,'mismatched source identities cannot produce URLs')
+    assert.deepEqual(mismatchedErrors,[])
+    report.push({case:'source identity mismatch is discarded',created:0})
+    await mismatched.close()
+
     const { page: fast, errors: fastErrors } = await open()
     await select(fast, {pixelGate:true})
     await fast.waitForFunction(() => window.pendingPixels.length===2)

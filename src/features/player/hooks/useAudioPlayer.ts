@@ -10,6 +10,7 @@ import {
   audioFolderTrackPlaceholder,
   audioTrackToPlaylistVisual,
   audioTrackToTrack,
+  coverToneForTrackId,
   normalizeAudioSourcePath,
   patchTrackDuration,
   playlistDisplayName,
@@ -74,6 +75,7 @@ import {
   openAudioSource,
   pauseAudio,
   playAudio,
+  probeAudioPlaylistCover,
   probeAudioPlaylistTrackSummaries,
   seekAudio,
   setAudioVolume,
@@ -1198,8 +1200,9 @@ export function useAudioPlayer() {
         playlistVisualHydrationActiveRef.current += 1
         playlistVisualHydrationActiveJobsRef.current.set(job.trackId, job)
         let published = false
-        void requestHydratedAudioTrack(job.sourcePath, job.playlistEpoch)
-          .then(async (hydratedTrack) => {
+        let loadingSource = true
+        void probeAudioPlaylistCover(job.sourcePath)
+          .then(async (coverSource) => {
             const jobIsStale = () => {
               const activePlaylist = folderPlaylistRef.current
               const activeDescriptor = activePlaylist?.tracks.find((candidate) => candidate.id === job.trackId)
@@ -1211,17 +1214,14 @@ export function useAudioPlayer() {
                 || playlistScope(activePlaylist) !== job.scope
                 || activeDescriptor?.id !== job.trackId
                 || normalizeAudioSourcePath(activeDescriptor.sourcePath) !== job.normalizedSourcePath
-                || hydratedTrack.id !== job.trackId
-                || normalizeAudioSourcePath(hydratedTrack.sourcePath) !== job.normalizedSourcePath
+                || coverSource.id !== job.trackId
+                || normalizeAudioSourcePath(coverSource.sourcePath) !== job.normalizedSourcePath
             }
             if (jobIsStale()) return
 
-            // Metadata must not wait for a thumbnail decode, which can fail or
-            // be invalidated independently of the audio hydration result.
-            commitPlaylistTrackMetadata(hydratedTrack)
-
+            loadingSource = false
             let coverThumbnail: PlaylistCoverImage | undefined
-            const coverFilePath = hydratedTrack.metadata.coverArt?.filePath
+            const coverFilePath = coverSource.coverArt?.filePath
             if (coverFilePath) {
               const firstPlaylistTrackId = folderPlaylistRef.current?.tracks[0]?.id
               const pixels = await loadAudioPlaylistCoverPixels({
@@ -1248,19 +1248,28 @@ export function useAudioPlayer() {
               if (coverThumbnail) URL.revokeObjectURL(coverThumbnail.src)
               return
             }
-            const visual = {
-              ...audioTrackToPlaylistVisual(hydratedTrack),
-              coverThumbnail,
-            }
             const previousVisual = playlistTrackVisualsRef.current[job.trackId]
             const previousThumbnail = previousVisual?.coverThumbnail
             const previousEdge = playlistVisualEdgeRef.current.get(job.trackId)
+            const hasUnrenderableCover = coverSource.coverArt !== null && !coverFilePath
+            if (hasUnrenderableCover) {
+              // Keep the baseline's quiet data-URL-only state. Do not decode an
+              // unchecked full-size original or advertise a successful upgrade.
+              playlistVisualFailedRef.current.set(job.trackId, job.normalizedSourcePath)
+              if (previousThumbnail) return
+            }
+            const visual: PlaylistTrackVisual = {
+              id: coverSource.id,
+              coverTone: coverToneForTrackId(coverSource.id),
+              hasLocalArtwork: coverSource.coverArt !== null,
+              coverThumbnail,
+            }
             const nextVisuals = { ...playlistTrackVisualsRef.current, [job.trackId]: visual }
             playlistTrackVisualsRef.current = nextVisuals
-            playlistVisualEdgeRef.current.set(job.trackId, job.maxEdge)
+            if (!hasUnrenderableCover) playlistVisualEdgeRef.current.set(job.trackId, job.maxEdge)
             playlistVisualSourceRef.current.set(job.trackId, job.normalizedSourcePath)
             setPlaylistTrackVisuals(nextVisuals)
-            published = true
+            published = !hasUnrenderableCover
             if (previousThumbnail && previousVisual && previousEdge && coverThumbnail) {
               const pendingPrevious = playlistPendingReplacementRef.current.get(previousThumbnail.src)
               playlistPendingReplacementRef.current.delete(previousThumbnail.src)
@@ -1286,9 +1295,12 @@ export function useAudioPlayer() {
           })
           .catch((error: unknown) => {
             const code = isAudioCoverPixelsError(error) ? error.code : 'WORKER_FAILED'
+            const retryable = loadingSource
+              ? (isAudioCommandError(error) ? error.code === 'INTERNAL_ERROR' && error.recoverable : code === 'WORKER_FAILED')
+              : ['WORKER_FAILED', 'ALLOCATION_FAILED', 'STALE_REQUEST'].includes(code)
             if (
               job.attempt >= 2
-              || !['WORKER_FAILED', 'ALLOCATION_FAILED', 'STALE_REQUEST'].includes(code)
+              || !retryable
               || playlistScopeEpochRef.current !== job.playlistEpoch
               || !playlistVisualDesiredIdsRef.current.has(job.trackId)
             ) {
@@ -1334,7 +1346,7 @@ export function useAudioPlayer() {
       }
     }
     pump()
-  }, [commitPlaylistTrackMetadata, requestHydratedAudioTrack])
+  }, [])
 
   const setVisiblePlaylistTrackIds = useCallback((
     trackIds: readonly string[],

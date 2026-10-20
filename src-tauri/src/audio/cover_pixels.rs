@@ -53,7 +53,7 @@ const THUMBNAIL_PENDING_FILES: usize = 128;
 const THUMBNAIL_PENDING_BYTES: usize = 32 * 1024 * 1024;
 const THUMBNAIL_DISK_MAGIC: [u8; 4] = *b"SPTC";
 const THUMBNAIL_DISK_VERSION: u16 = 1;
-const THUMBNAIL_TRANSFORM_VERSION: u16 = 1;
+const THUMBNAIL_TRANSFORM_VERSION: u16 = 2;
 const THUMBNAIL_DISK_HEADER_LEN: usize = 44;
 static THUMBNAIL_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static THUMBNAIL_WRITER: OnceLock<ThumbnailWriter> = OnceLock::new();
@@ -1005,7 +1005,7 @@ fn playlist_pixels_from_bytes(
     #[cfg(test)]
     let stage_started = Instant::now();
     before_decode();
-    let response = decode_and_pack(bytes, max_edge)?;
+    let response = decode_playlist_and_pack(bytes, max_edge)?;
     #[cfg(test)]
     THUMBNAIL_BENCH_DECODE_NS
         .fetch_add(stage_started.elapsed().as_nanos() as u64, Ordering::Relaxed);
@@ -1546,6 +1546,27 @@ fn read_bounded_file(path: &Path) -> Result<Vec<u8>, CoverPixelsError> {
 }
 
 fn decode_and_pack(bytes: &[u8], max_edge: u32) -> Result<Vec<u8>, CoverPixelsError> {
+    decode_and_pack_with_strategy(bytes, max_edge, false)
+}
+
+fn decode_playlist_and_pack(bytes: &[u8], max_edge: u32) -> Result<Vec<u8>, CoverPixelsError> {
+    decode_and_pack_with_strategy(bytes, max_edge, true)
+}
+
+/// Both axes must permit at least a 2:1 integer pre-reduction while retaining
+/// at least four times the final resolution. The wider final Lanczos pass
+/// avoids the visible high-frequency aliasing of a two-times intermediate.
+/// Thin images fall back to direct Lanczos.
+fn playlist_pre_dimensions(source: (u32, u32), target: (u32, u32)) -> Option<(u32, u32)> {
+    let factor = (source.0 / target.0.checked_mul(4)?).min(source.1 / target.1.checked_mul(4)?);
+    (factor >= 2).then(|| (source.0.div_ceil(factor), source.1.div_ceil(factor)))
+}
+
+fn decode_and_pack_with_strategy(
+    bytes: &[u8],
+    max_edge: u32,
+    playlist: bool,
+) -> Result<Vec<u8>, CoverPixelsError> {
     validate_decode_max_edge(max_edge)?;
 
     let mut reader = ImageReader::new(Cursor::new(bytes))
@@ -1587,6 +1608,16 @@ fn decode_and_pack(bytes: &[u8], max_edge: u32) -> Result<Vec<u8>, CoverPixelsEr
     let resized = (width, height) != (source_width, source_height);
 
     if resized {
+        if playlist {
+            if let Some((pre_width, pre_height)) =
+                playlist_pre_dimensions((source_width, source_height), (width, height))
+            {
+                // image's thumbnail_exact averages integer pixel blocks. It
+                // operates on the same straight channels as the existing
+                // resize, without introducing a color-space/alpha conversion.
+                image = image.thumbnail_exact(pre_width, pre_height);
+            }
+        }
         image = image.resize_exact(width, height, FilterType::Lanczos3);
     }
 
@@ -2617,6 +2648,241 @@ mod tests {
 
     fn u32_at(bytes: &[u8], offset: usize) -> u32 {
         u32::from_le_bytes(bytes[offset..offset + 4].try_into().expect("u32 field"))
+    }
+
+    fn patterned_png(width: u32, height: u32) -> Vec<u8> {
+        let image = RgbaImage::from_fn(width, height, |x, y| {
+            Rgba([
+                (x * 7 + y * 3) as u8,
+                (x / 3 + y * 11) as u8,
+                ((x / 11 ^ y / 13) * 43) as u8,
+                255,
+            ])
+        });
+        let mut bytes = Cursor::new(Vec::new());
+        DynamicImage::ImageRgba8(image)
+            .write_to(&mut bytes, ImageFormat::Png)
+            .unwrap();
+        bytes.into_inner()
+    }
+
+    #[test]
+    fn playlist_pre_reduction_keeps_geometry_and_isolates_player_strategy() {
+        assert_eq!(THUMBNAIL_TRANSFORM_VERSION, 2);
+        assert_eq!(
+            playlist_pre_dimensions((2048, 1024), (256, 128)),
+            Some((1024, 512))
+        );
+        assert_eq!(playlist_pre_dimensions((1000, 1000), (256, 256)), None);
+        assert_eq!(playlist_pre_dimensions((16384, 1), (128, 1)), None);
+        for (source, target) in [((4093, 106), (128, 3)), ((8192, 4096), (512, 256))] {
+            let pre = playlist_pre_dimensions(source, target).unwrap();
+            assert!(pre.0 >= target.0 * 4 && pre.1 >= target.1 * 4);
+            assert!(pre.0 < source.0 && pre.1 < source.1);
+        }
+        let bytes = patterned_png(2048, 1024);
+        for edge in [128, 256, 512] {
+            let player = decode_and_pack(&bytes, edge).unwrap();
+            let playlist = decode_playlist_and_pack(&bytes, edge).unwrap();
+            assert_eq!(&player[..40], &playlist[..40]);
+            if playlist_pre_dimensions((2048, 1024), (u32_at(&player, 8), u32_at(&player, 12)))
+                .is_some()
+            {
+                assert_ne!(&player[40..], &playlist[40..]);
+            } else {
+                assert_eq!(player, playlist);
+            }
+            assert!(valid_cached_spxr(&playlist, edge));
+            assert_eq!(
+                player,
+                decode_and_pack_with_strategy(&bytes, edge, false).unwrap()
+            );
+        }
+        for bytes in [patterned_png(321, 219), patterned_png(4096, 1)] {
+            for edge in [128, 256, 512] {
+                assert_eq!(
+                    decode_and_pack(&bytes, edge).unwrap(),
+                    decode_playlist_and_pack(&bytes, edge).unwrap()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn playlist_pre_reduction_preserves_orientation_source_dimensions_and_alpha() {
+        let oriented = jpeg_with_orientation(2048, 1024, 6);
+        let output = decode_playlist_and_pack(&oriented, 128).unwrap();
+        assert_eq!((u32_at(&output, 8), u32_at(&output, 12)), (64, 128));
+        assert_eq!((u32_at(&output, 32), u32_at(&output, 36)), (1024, 2048));
+        assert_eq!(u32_at(&output, 28), FLAG_RESIZED | FLAG_ORIENTATION_APPLIED);
+        let mut bytes = Cursor::new(Vec::new());
+        DynamicImage::ImageRgba8(RgbaImage::from_pixel(1024, 1024, Rgba([23, 59, 113, 0])))
+            .write_to(&mut bytes, ImageFormat::Png)
+            .unwrap();
+        let output = decode_playlist_and_pack(&bytes.into_inner(), 128).unwrap();
+        assert!(output[40..]
+            .chunks_exact(4)
+            .all(|pixel| pixel == [23, 59, 113, 0]));
+    }
+
+    /// Explicit manual quality export; no product probe or user-cache mutation.
+    /// Columns are direct Lanczos3, playlist strategy, and absolute difference x8.
+    #[test]
+    #[ignore]
+    fn export_playlist_transform_quality() {
+        let output =
+            PathBuf::from(std::env::var_os("THUMB_QUALITY_OUTPUT").expect("new output directory"));
+        assert!(!output.exists(), "quality evidence must not be overwritten");
+        fs::create_dir_all(&output).unwrap();
+        let mut cases: Vec<(String, Vec<u8>)> = Vec::new();
+        for kind in [
+            "smooth-face",
+            "text-lines",
+            "checkerboard",
+            "transparent-edge",
+        ] {
+            let image = RgbaImage::from_fn(2048, 1536, |x, y| {
+                let fx = x as f32 / 2048.0;
+                let fy = y as f32 / 1536.0;
+                match kind {
+                    "smooth-face" => {
+                        let face = ((fx - 0.5) / 0.27).powi(2) + ((fy - 0.52) / 0.42).powi(2) < 1.0;
+                        let eye = ((fx - 0.40).abs() < 0.026 || (fx - 0.60).abs() < 0.026)
+                            && (fy - 0.43).abs() < 0.012;
+                        let mouth = (fx - 0.5).abs() < 0.10 && (fy - 0.69).abs() < 0.013;
+                        if eye || mouth {
+                            Rgba([32, 25, 21, 255])
+                        } else if face {
+                            Rgba([
+                                (220.0 - fy * 35.0) as u8,
+                                (182.0 - fy * 45.0) as u8,
+                                (152.0 - fy * 35.0) as u8,
+                                255,
+                            ])
+                        } else {
+                            Rgba([(fx * 190.0) as u8, (fy * 190.0) as u8, 110, 255])
+                        }
+                    }
+                    "text-lines" => {
+                        // Repeated E/H-like stems and strokes at several scales.
+                        let cell = 24 + (y / 256) * 12;
+                        let ink = x % cell < 3
+                            || (y % cell < 3 && x % cell < cell * 3 / 4)
+                            || (y as i32 - x as i32 / 2).unsigned_abs() % 97 < 3;
+                        let v = if ink { 12 } else { 245 };
+                        Rgba([v, v, v, 255])
+                    }
+                    "checkerboard" => {
+                        let v = if (x / (1 + y / 192) ^ y / (1 + y / 192)) & 1 == 0 {
+                            0
+                        } else {
+                            255
+                        };
+                        Rgba([v, v, v, 255])
+                    }
+                    _ => {
+                        let r = ((fx - 0.5).powi(2) + (fy - 0.5).powi(2)).sqrt();
+                        let a = ((0.35 - r) * 2048.0).clamp(0.0, 255.0) as u8;
+                        if a == 0 {
+                            Rgba([255, 0, 255, 0])
+                        } else {
+                            Rgba([14, 192, 91, a])
+                        }
+                    }
+                }
+            });
+            let mut bytes = Cursor::new(Vec::new());
+            DynamicImage::ImageRgba8(image)
+                .write_to(&mut bytes, ImageFormat::Png)
+                .unwrap();
+            cases.push((kind.into(), bytes.into_inner()));
+        }
+        cases.push(("extreme-wide".into(), patterned_png(8192, 4)));
+        cases.push(("extreme-tall".into(), patterned_png(4, 8192)));
+        cases.push(("exif-rotated".into(), jpeg_with_orientation(2048, 1024, 6)));
+        if let Some(corpus) = std::env::var_os("THUMB_QUALITY_CORPUS") {
+            let corpus = PathBuf::from(corpus);
+            let manifest: serde_json::Value =
+                serde_json::from_slice(&fs::read(corpus.join("manifest.json")).unwrap()).unwrap();
+            for (index, row) in manifest["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .take(8)
+                .enumerate()
+            {
+                cases.push((
+                    format!("cover-{:02}", index + 1),
+                    fs::read(corpus.join(row["file"].as_str().unwrap())).unwrap(),
+                ));
+            }
+        }
+        let mut timings = Vec::new();
+        for (name, bytes) in cases {
+            for edge in [128, 256, 512] {
+                let started = Instant::now();
+                let direct = decode_and_pack(&bytes, edge).unwrap();
+                let direct_ms = started.elapsed().as_secs_f64() * 1000.0;
+                let started = Instant::now();
+                let candidate = decode_playlist_and_pack(&bytes, edge).unwrap();
+                let candidate_ms = started.elapsed().as_secs_f64() * 1000.0;
+                assert_eq!(&direct[..40], &candidate[..40]);
+                let (width, height) = (u32_at(&direct, 8), u32_at(&direct, 12));
+                for background in if name == "transparent-edge" {
+                    vec![0u8, 255]
+                } else {
+                    vec![255u8]
+                } {
+                    let mut sheet = RgbaImage::from_pixel(
+                        width * 3,
+                        height,
+                        Rgba([background, background, background, 255]),
+                    );
+                    for (index, (a, b)) in direct[40..]
+                        .chunks_exact(4)
+                        .zip(candidate[40..].chunks_exact(4))
+                        .enumerate()
+                    {
+                        let (x, y) = (index as u32 % width, index as u32 / width);
+                        let composite = |p: &[u8]| {
+                            let mut rgba = [0u8; 4];
+                            for c in 0..3 {
+                                rgba[c] = ((u32::from(p[c]) * u32::from(p[3])
+                                    + u32::from(background) * (255 - u32::from(p[3]))
+                                    + 127)
+                                    / 255) as u8;
+                            }
+                            rgba[3] = 255;
+                            Rgba(rgba)
+                        };
+                        let left = composite(a);
+                        let middle = composite(b);
+                        sheet.put_pixel(x, y, left);
+                        sheet.put_pixel(x + width, y, middle);
+                        sheet.put_pixel(
+                            x + width * 2,
+                            y,
+                            Rgba([
+                                left[0].abs_diff(middle[0]).saturating_mul(8),
+                                left[1].abs_diff(middle[1]).saturating_mul(8),
+                                left[2].abs_diff(middle[2]).saturating_mul(8),
+                                255,
+                            ]),
+                        );
+                    }
+                    sheet
+                        .save(output.join(format!("{name}-{edge}-bg{background}.png")))
+                        .unwrap();
+                }
+                timings.push(serde_json::json!({"case":name,"edge":edge,"direct_ms":direct_ms,"candidate_ms":candidate_ms}));
+            }
+        }
+        fs::write(
+            output.join("timings.json"),
+            serde_json::to_vec_pretty(&timings).unwrap(),
+        )
+        .unwrap();
+        println!("quality evidence: {}", output.display());
     }
 
     #[test]

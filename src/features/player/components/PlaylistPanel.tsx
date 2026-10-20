@@ -369,7 +369,9 @@ export function PlaylistPanel({
     || (appearance.metadata.tier === 'experimental' && Boolean(appearance.experimental.layoutCss.trim()))
   const contentWindowEnabled = filteredTracks.length > 64 && !hasCustomLayout
   const contentWindow = usePlaylistContentWindow({
-    panelRef, gridRef, enabled: contentWindowEnabled, active: isPresent,
+    // The loading branch has no grid. Re-activate when that grid mounts so its
+    // scroll/resize listeners cannot remain skipped after metadata resolves.
+    panelRef, gridRef, enabled: contentWindowEnabled, active: isPresent && metadataStatus !== 'loading',
     representatives: contentRepresentatives, theme: appearance,
     shapeKey: [...new Set(contentShapes.values())].sort((left, right) => left - right).join(','),
     trackIdsKey: filteredTrackIdsKey,

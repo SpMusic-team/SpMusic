@@ -111,6 +111,9 @@ fn playlist_cover_directory(app_cache_dir: &Path) -> Option<PlaylistCoverDirecto
 }
 
 fn existing_playlist_cover(path: &Path, expected: &[u8]) -> bool {
+    if expected.is_empty() || expected.len() > MAX_PLAYLIST_COVER_BYTES {
+        return false;
+    }
     let Ok(metadata) = fs::symlink_metadata(path) else {
         return false;
     };
@@ -122,9 +125,10 @@ fn existing_playlist_cover(path: &Path, expected: &[u8]) -> bool {
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt;
-        options.custom_flags(0x00200000); // FILE_FLAG_OPEN_REPARSE_POINT
+        // Keep the verified file stable while comparing the actual bytes.
+        options.custom_flags(0x00200000).share_mode(1); // OPEN_REPARSE_POINT; only READ share
     }
-    let Ok(file) = options.open(path) else {
+    let Ok(mut file) = options.open(path) else {
         return false;
     };
     let Ok(metadata) = file.metadata() else {
@@ -133,11 +137,13 @@ fn existing_playlist_cover(path: &Path, expected: &[u8]) -> bool {
     if !ordinary(&metadata) || !metadata.is_file() || metadata.len() != expected.len() as u64 {
         return false;
     }
-    let mut bytes = Vec::new();
-    file.take(MAX_PLAYLIST_COVER_BYTES as u64 + 1)
-        .read_to_end(&mut bytes)
-        .is_ok()
+    // The validated length is already known. A Take<File> read_to_end loses
+    // File's size hint and can repeatedly issue small reads while growing a
+    // buffer; read the bounded payload directly without weakening validation.
+    let mut bytes = vec![0; expected.len()];
+    file.read_exact(&mut bytes).is_ok()
         && bytes == expected
+        && file.read(&mut [0]).is_ok_and(|count| count == 0)
 }
 
 fn cache_playlist_cover(app_cache_dir: &Path, mime_type: &str, data: &[u8]) -> Option<String> {
@@ -289,6 +295,27 @@ mod tests {
     }
 
     #[test]
+    fn playlist_cache_verifies_complete_known_length_payload() {
+        let path = std::env::temp_dir().join(format!(
+            "spmusic-cover-known-length-{}-{}",
+            std::process::id(),
+            PLAYLIST_COVER_TEMP.fetch_add(1, Ordering::Relaxed)
+        ));
+        let mut bytes = vec![7; 1024 * 1024 + 3];
+        fs::write(&path, &bytes).unwrap();
+        assert!(existing_playlist_cover(&path, &bytes));
+        let last = bytes.len() - 1;
+        bytes[last] = 8;
+        assert!(!existing_playlist_cover(&path, &bytes));
+        bytes[last] = 7;
+        assert!(!existing_playlist_cover(&path, &bytes[..last]));
+        bytes.push(7);
+        assert!(!existing_playlist_cover(&path, &bytes));
+        assert!(!existing_playlist_cover(&path, &[]));
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn playlist_cache_rejects_directory_target_and_corrupt_existing_content() {
         let root = std::env::temp_dir().join(format!(
             "spmusic-cover-safety-{}-{}",
@@ -347,6 +374,46 @@ mod tests {
         assert!(cover.data_url.is_some());
         assert_eq!(fs::read(&root).unwrap(), b"not a directory");
         fs::remove_file(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn playlist_cache_rejects_real_junctions_without_writing_outside_root() {
+        let root = std::env::temp_dir().join(format!(
+            "spmusic-cover-junction-{}-{}",
+            std::process::id(),
+            PLAYLIST_COVER_TEMP.fetch_add(1, Ordering::Relaxed)
+        ));
+        let cache = root.join("cache");
+        let external = root.join("external");
+        fs::create_dir_all(&cache).unwrap();
+        fs::create_dir_all(&external).unwrap();
+        fs::write(external.join("sentinel"), b"unchanged").unwrap();
+        for parent in [&cache, &cache.join("audio")] {
+            fs::create_dir_all(parent).unwrap();
+            let link = parent.join(if parent == &cache { "audio" } else { "covers" });
+            let output = std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(&link)
+                .arg(&external)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "junction fixture creation failed: {:?}",
+                output.status
+            );
+            assert!(!ordinary(&fs::symlink_metadata(&link).unwrap()));
+            let cover = bounded_playlist_cover_from_tag(&playlist_tag(vec![1, 2, 3]), &cache)
+                .unwrap()
+                .unwrap();
+            assert!(cover.file_path.is_none());
+            assert!(cover.data_url.is_some());
+            assert_eq!(fs::read(external.join("sentinel")).unwrap(), b"unchanged");
+            assert_eq!(fs::read_dir(&external).unwrap().count(), 1);
+            fs::remove_dir(&link).unwrap();
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

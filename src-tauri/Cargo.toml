@@ -17,6 +17,11 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [build-dependencies]
 tauri-build = { version = "2.6.3", features = [] }
 
+[features]
+default = []
+# SP-022 diagnostic candidate; ordinary builds retain one playlist worker.
+sp022-playlist-decode-n2 = []
+
 [dependencies]
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }

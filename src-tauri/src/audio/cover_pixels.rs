@@ -7,7 +7,7 @@ use std::{
     io::{self, Cursor, Read, Write},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc, Condvar, Mutex as StdMutex, OnceLock,
     },
     time::SystemTime,
@@ -37,6 +37,13 @@ const FLAG_RESIZED: u32 = 1 << 1;
 const ALLOWED_MAX_EDGES: [u32; 7] = [256, 512, 768, 1024, 1536, 2048, 3072];
 const ALLOWED_PLAYLIST_MAX_EDGES: [u32; 3] = [128, 256, 512];
 const MAX_PLAYLIST_CLIENTS: usize = 16;
+const PLAYLIST_DECODE_PERMITS: usize = if cfg!(feature = "sp022-playlist-decode-n2") {
+    2
+} else {
+    1
+};
+const MAX_PLAYLIST_REQUESTS: usize = 32;
+const MAX_PLAYLIST_FLIGHT_WAITERS: usize = 32;
 const THUMBNAIL_DIRECTORY: &str = "thumbnails";
 const THUMBNAIL_CACHE_BYTES: u64 = 256 * 1024 * 1024;
 const THUMBNAIL_CACHE_FILES: usize = 2048;
@@ -64,8 +71,6 @@ static THUMBNAIL_BENCH_LOOKUP_NS: AtomicU64 = AtomicU64::new(0);
 static THUMBNAIL_BENCH_DECODE_NS: AtomicU64 = AtomicU64::new(0);
 #[cfg(test)]
 static THUMBNAIL_BENCH_WRITE_NS: AtomicU64 = AtomicU64::new(0);
-#[cfg(test)]
-static THUMBNAIL_BENCH_PENDING_HITS: AtomicU64 = AtomicU64::new(0);
 
 struct ThumbnailWriteJob {
     cache_dir: PathBuf,
@@ -328,7 +333,8 @@ pub fn shutdown_playlist_cover_cache() {
 }
 
 static REQUEST_COORDINATOR: OnceLock<CoverRequestCoordinator> = OnceLock::new();
-static PLAYLIST_REQUEST_COORDINATOR: OnceLock<PlaylistCoverRequestCoordinator> = OnceLock::new();
+static PLAYLIST_REQUEST_COORDINATOR: OnceLock<Arc<PlaylistCoverRequestCoordinator>> =
+    OnceLock::new();
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -368,7 +374,7 @@ pub enum CoverPixelsErrorCode {
     StaleRequest,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CoverPixelsError {
     pub code: CoverPixelsErrorCode,
@@ -465,9 +471,192 @@ impl CoverRequestCoordinator {
     }
 }
 
+// A token remains owned by the blocking closure even when its caller is aborted.
+// The receiver mutex establishes admission order among futures that keep waiting.
+struct PlaylistDecodeSlots {
+    release: tauri::async_runtime::Sender<()>,
+    tokens: tauri::async_runtime::Mutex<tauri::async_runtime::Receiver<()>>,
+}
+
+impl PlaylistDecodeSlots {
+    fn new() -> Self {
+        let (release, tokens) = tauri::async_runtime::channel(PLAYLIST_DECODE_PERMITS);
+        for _ in 0..PLAYLIST_DECODE_PERMITS {
+            release.try_send(()).expect("seed playlist decode slots");
+        }
+        Self {
+            release,
+            tokens: tauri::async_runtime::Mutex::new(tokens),
+        }
+    }
+
+    async fn acquire(&self) -> Result<PlaylistDecodePermit, CoverPixelsError> {
+        self.tokens
+            .lock()
+            .await
+            .recv()
+            .await
+            .ok_or_else(playlist_worker_failed)?;
+        Ok(PlaylistDecodePermit(self.release.clone()))
+    }
+}
+
+struct PlaylistDecodePermit(tauri::async_runtime::Sender<()>);
+
+impl Drop for PlaylistDecodePermit {
+    fn drop(&mut self) {
+        // Exactly one return per acquired token; no await or panicking cleanup.
+        let _ = self.0.try_send(());
+    }
+}
+
+struct PlaylistRequestReservation {
+    count: Arc<AtomicUsize>,
+    #[cfg(test)]
+    hook: Option<PlaylistTestHook>,
+}
+
+impl Drop for PlaylistRequestReservation {
+    fn drop(&mut self) {
+        self.count.fetch_sub(1, Ordering::AcqRel);
+        #[cfg(test)]
+        if let Some(hook) = &self.hook {
+            hook(PlaylistTestStage::RequestReleased);
+        }
+    }
+}
+
+#[derive(Clone, Hash, PartialEq, Eq)]
+struct PlaylistDecodeKey {
+    covers_root: PathBuf,
+    source_hash: blake3::Hash,
+    max_edge: u32,
+    transform_version: u16,
+    disk_version: u16,
+}
+
+type PlaylistFlightOutcome = Result<Arc<Vec<u8>>, CoverPixelsError>;
+type PlaylistFlightReceiver = tauri::async_runtime::Receiver<PlaylistFlightOutcome>;
+
+#[derive(Default)]
+struct PlaylistFlights {
+    entries: StdMutex<
+        HashMap<PlaylistDecodeKey, Vec<tauri::async_runtime::Sender<PlaylistFlightOutcome>>>,
+    >,
+}
+
+enum PlaylistFlightAttempt {
+    Leader(PlaylistFlightLeader),
+    Joined(PlaylistFlightReceiver),
+}
+
+impl PlaylistFlights {
+    fn register(
+        self: &Arc<Self>,
+        key: PlaylistDecodeKey,
+    ) -> Result<PlaylistFlightAttempt, CoverPixelsError> {
+        let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(waiters) = entries.get_mut(&key) {
+            waiters.retain(|sender| !sender.is_closed());
+            if waiters.len() >= MAX_PLAYLIST_FLIGHT_WAITERS {
+                return Err(playlist_worker_failed());
+            }
+            let (sender, receiver) = tauri::async_runtime::channel(1);
+            waiters.push(sender);
+            Ok(PlaylistFlightAttempt::Joined(receiver))
+        } else {
+            entries.insert(key.clone(), Vec::new());
+            Ok(PlaylistFlightAttempt::Leader(PlaylistFlightLeader {
+                registry: Arc::clone(self),
+                key: Some(key),
+            }))
+        }
+    }
+
+    fn publish(&self, key: &PlaylistDecodeKey, outcome: PlaylistFlightOutcome) {
+        let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(waiters) = entries.remove(key) {
+            for waiter in waiters {
+                let _ = waiter.try_send(outcome.clone());
+            }
+        }
+    }
+}
+
+struct PlaylistFlightLeader {
+    registry: Arc<PlaylistFlights>,
+    key: Option<PlaylistDecodeKey>,
+}
+
+impl PlaylistFlightLeader {
+    fn publish(mut self, outcome: PlaylistFlightOutcome) {
+        if let Some(key) = self.key.take() {
+            self.registry.publish(&key, outcome);
+        }
+    }
+}
+
+impl Drop for PlaylistFlightLeader {
+    fn drop(&mut self) {
+        // Unwind (including test-injected panic) cannot leave a flight tombstone.
+        // Close channels without allocating while unwinding. Each consumer maps
+        // recv(None) to WORKER_FAILED outside this cleanup path.
+        if let Some(key) = self.key.take() {
+            self.registry
+                .entries
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(&key);
+        }
+    }
+}
+
+fn playlist_worker_failed() -> CoverPixelsError {
+    CoverPixelsError::internal(
+        CoverPixelsErrorCode::WorkerFailed,
+        "playlist cover pixel decoder worker failed",
+    )
+}
+
+enum PlaylistWorkerResult {
+    Complete(PlaylistFlightOutcome, PlaylistRequestReservation),
+    Joined(PlaylistFlightReceiver, PlaylistRequestReservation),
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PlaylistTestStage {
+    Queued,
+    RequestReleased,
+    Entered,
+    Left,
+    BeforeRead,
+    Leader,
+    Joined,
+    Decoding,
+    BeforePublish,
+}
+
+#[cfg(test)]
+type PlaylistTestHook = Arc<dyn Fn(PlaylistTestStage) + Send + Sync>;
+
+#[cfg(test)]
+struct PlaylistTestWorkerExit(Arc<PlaylistCoverRequestCoordinator>);
+
+#[cfg(test)]
+impl Drop for PlaylistTestWorkerExit {
+    fn drop(&mut self) {
+        self.0.test_stage(PlaylistTestStage::Left);
+    }
+}
+
 struct PlaylistCoverRequestCoordinator {
     clients: StdMutex<PlaylistCoverClients>,
-    decode_gate: tauri::async_runtime::Mutex<()>,
+    slots: PlaylistDecodeSlots,
+    requests: Arc<AtomicUsize>,
+    flights: Arc<PlaylistFlights>,
+    #[cfg(test)]
+    hook: StdMutex<Option<PlaylistTestHook>>,
 }
 
 #[derive(Default)]
@@ -480,7 +669,11 @@ impl PlaylistCoverRequestCoordinator {
     fn new() -> Self {
         Self {
             clients: StdMutex::new(PlaylistCoverClients::default()),
-            decode_gate: tauri::async_runtime::Mutex::new(()),
+            slots: PlaylistDecodeSlots::new(),
+            requests: Arc::new(AtomicUsize::new(0)),
+            flights: Arc::new(PlaylistFlights::default()),
+            #[cfg(test)]
+            hook: StdMutex::new(None),
         }
     }
 
@@ -523,6 +716,7 @@ impl PlaylistCoverRequestCoordinator {
         }
     }
 
+    #[cfg(test)]
     async fn run_registered<T, F, Fut>(
         &self,
         client_id: &str,
@@ -537,17 +731,146 @@ impl PlaylistCoverRequestCoordinator {
         // generation can still advance while this request waits, so it is checked
         // again after acquiring the gate and immediately before publishing output.
         self.ensure_current(client_id, window_generation)?;
-        let _guard = self.decode_gate.lock().await;
+        let _guard = self.slots.acquire().await?;
         self.ensure_current(client_id, window_generation)?;
         let result = work().await?;
         self.ensure_current(client_id, window_generation)?;
         Ok(result)
     }
+
+    fn reserve_request(&self) -> Result<PlaylistRequestReservation, CoverPixelsError> {
+        self.requests
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                (count < MAX_PLAYLIST_REQUESTS).then_some(count + 1)
+            })
+            .map_err(|_| playlist_worker_failed())?;
+        Ok(PlaylistRequestReservation {
+            count: Arc::clone(&self.requests),
+            #[cfg(test)]
+            hook: self.hook.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+        })
+    }
+
+    #[cfg(test)]
+    fn test_stage(&self, stage: PlaylistTestStage) {
+        let hook = self.hook.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if let Some(hook) = hook {
+            hook(stage);
+        }
+    }
+
+    async fn load(
+        self: &Arc<Self>,
+        app_cache_dir: PathBuf,
+        input: AudioLoadPlaylistCoverPixelsInput,
+    ) -> Result<Vec<u8>, CoverPixelsError> {
+        validate_playlist_max_edge(input.max_edge)?;
+        self.ensure_current(&input.client_id, input.window_generation)?;
+        let request = self.reserve_request()?;
+        #[cfg(test)]
+        self.test_stage(PlaylistTestStage::Queued);
+        let permit = self.slots.acquire().await?;
+        self.ensure_current(&input.client_id, input.window_generation)?;
+        let worker_coordinator = Arc::clone(self);
+        let worker_input = input.clone();
+        let result = tauri::async_runtime::spawn_blocking(move || {
+            let _permit = permit;
+            let request = request;
+            #[cfg(test)]
+            let _exit = PlaylistTestWorkerExit(Arc::clone(&worker_coordinator));
+            #[cfg(test)]
+            worker_coordinator.test_stage(PlaylistTestStage::Entered);
+            worker_coordinator
+                .ensure_current(&worker_input.client_id, worker_input.window_generation)?;
+            worker_coordinator.run_worker(&app_cache_dir, &worker_input, request)
+        })
+        .await
+        .map_err(|error| {
+            tracing::error!(
+                operation = "audio.playlist_cover_pixels.join",
+                window_generation = input.window_generation,
+                error = %error,
+                "playlist cover pixel decoder worker failed",
+            );
+            playlist_worker_failed()
+        })??;
+        let (outcome, request) = match result {
+            PlaylistWorkerResult::Complete(outcome, request) => (outcome, request),
+            PlaylistWorkerResult::Joined(mut receiver, request) => {
+                self.ensure_current(&input.client_id, input.window_generation)?;
+                (
+                    receiver.recv().await.ok_or_else(playlist_worker_failed)?,
+                    request,
+                )
+            }
+        };
+        let _request = request;
+        self.ensure_current(&input.client_id, input.window_generation)?;
+        outcome.map(|response| response.as_ref().clone())
+    }
+
+    fn run_worker(
+        &self,
+        root: &Path,
+        input: &AudioLoadPlaylistCoverPixelsInput,
+        request: PlaylistRequestReservation,
+    ) -> Result<PlaylistWorkerResult, CoverPixelsError> {
+        #[cfg(test)]
+        self.test_stage(PlaylistTestStage::BeforeRead);
+        // Every consumer validates and hashes its own bytes before it can join.
+        let covers_root = root.join(AUDIO_CACHE_DIRECTORY).join(COVER_DIRECTORY);
+        let path = validate_cover_path(&covers_root, Path::new(&input.file_path))?;
+        let bytes = read_bounded_file(&path)?;
+        let source_hash = blake3::hash(&bytes);
+        let covers_root = fs::canonicalize(&covers_root).map_err(|_| {
+            CoverPixelsError::recoverable(
+                CoverPixelsErrorCode::InvalidPath,
+                "cover cache root cannot be resolved",
+            )
+        })?;
+        let key = PlaylistDecodeKey {
+            covers_root,
+            source_hash,
+            max_edge: input.max_edge,
+            transform_version: THUMBNAIL_TRANSFORM_VERSION,
+            disk_version: THUMBNAIL_DISK_VERSION,
+        };
+        let leader = match self.flights.register(key)? {
+            PlaylistFlightAttempt::Joined(receiver) => {
+                #[cfg(test)]
+                self.test_stage(PlaylistTestStage::Joined);
+                return Ok(PlaylistWorkerResult::Joined(receiver, request));
+            }
+            PlaylistFlightAttempt::Leader(leader) => leader,
+        };
+        #[cfg(test)]
+        self.test_stage(PlaylistTestStage::Leader);
+        let result = playlist_pixels_from_bytes(
+            root,
+            &bytes,
+            source_hash,
+            input.max_edge,
+            || {
+                self.ensure_current(&input.client_id, input.window_generation)
+                    .is_ok()
+            },
+            || {
+                #[cfg(test)]
+                self.test_stage(PlaylistTestStage::Decoding);
+            },
+        )
+        .map(Arc::new);
+        #[cfg(test)]
+        self.test_stage(PlaylistTestStage::BeforePublish);
+        leader.publish(result.clone());
+        // Request reservation intentionally lives through read/decode/publish.
+        Ok(PlaylistWorkerResult::Complete(result, request))
+    }
 }
 
 pub fn begin_playlist_cover_window(client_id: &str) -> Result<u64, CoverPixelsError> {
     PLAYLIST_REQUEST_COORDINATOR
-        .get_or_init(PlaylistCoverRequestCoordinator::new)
+        .get_or_init(|| Arc::new(PlaylistCoverRequestCoordinator::new()))
         .begin_window(client_id)
 }
 
@@ -588,40 +911,9 @@ pub async fn load_playlist_cover_pixels(
     app_cache_dir: PathBuf,
     input: AudioLoadPlaylistCoverPixelsInput,
 ) -> Result<Vec<u8>, CoverPixelsError> {
-    validate_playlist_max_edge(input.max_edge)?;
-
-    // Playlist requests share a window generation rather than a per-cover latest-wins
-    // id. This coordinator is intentionally independent from foreground artwork so
-    // thumbnail hydration cannot supersede the currently playing cover request.
-    let coordinator =
-        PLAYLIST_REQUEST_COORDINATOR.get_or_init(PlaylistCoverRequestCoordinator::new);
-    let client_id = input.client_id.clone();
-    let window_generation = input.window_generation;
-    coordinator
-        .run_registered(&client_id, window_generation, || async move {
-            tauri::async_runtime::spawn_blocking(move || {
-                load_playlist_cover_pixels_blocking_with_session(
-                    &app_cache_dir,
-                    &input.file_path,
-                    input.max_edge,
-                    Some((&input.client_id, input.window_generation)),
-                )
-            })
-            .await
-            .map_err(|error| {
-                tracing::error!(
-                    operation = "audio.playlist_cover_pixels.join",
-                    window_generation,
-                    error = %error,
-                    "playlist cover pixel decoder worker failed",
-                );
-                CoverPixelsError::internal(
-                    CoverPixelsErrorCode::WorkerFailed,
-                    "playlist cover pixel decoder worker failed",
-                )
-            })?
-        })
-        .await
+    let coordinator = PLAYLIST_REQUEST_COORDINATOR
+        .get_or_init(|| Arc::new(PlaylistCoverRequestCoordinator::new()));
+    coordinator.load(app_cache_dir, input).await
 }
 
 #[cfg(test)]
@@ -633,6 +925,7 @@ fn load_playlist_cover_pixels_blocking(
     load_playlist_cover_pixels_blocking_with_session(app_cache_dir, requested_path, max_edge, None)
 }
 
+#[cfg(test)]
 fn load_playlist_cover_pixels_blocking_with_session(
     app_cache_dir: &Path,
     requested_path: &str,
@@ -653,6 +946,38 @@ fn load_playlist_cover_pixels_blocking_with_session(
     let source_hash = blake3::hash(&bytes);
     #[cfg(test)]
     THUMBNAIL_BENCH_HASH_NS.fetch_add(stage_started.elapsed().as_nanos() as u64, Ordering::Relaxed);
+    let response = playlist_pixels_from_bytes(
+        app_cache_dir,
+        &bytes,
+        source_hash,
+        max_edge,
+        || {
+            session.is_none_or(|(client_id, generation)| {
+                PLAYLIST_REQUEST_COORDINATOR
+                    .get()
+                    .is_none_or(|coordinator| {
+                        coordinator.ensure_current(client_id, generation).is_ok()
+                    })
+            })
+        },
+        || {},
+    )?;
+    if let Some((client_id, generation)) = session {
+        if let Some(coordinator) = PLAYLIST_REQUEST_COORDINATOR.get() {
+            coordinator.ensure_current(client_id, generation)?;
+        }
+    }
+    Ok(response)
+}
+
+fn playlist_pixels_from_bytes(
+    app_cache_dir: &Path,
+    bytes: &[u8],
+    source_hash: blake3::Hash,
+    max_edge: u32,
+    is_current: impl FnOnce() -> bool,
+    before_decode: impl FnOnce(),
+) -> Result<Vec<u8>, CoverPixelsError> {
     #[cfg(test)]
     let stage_started = Instant::now();
     let cache_dir = app_cache_dir
@@ -666,10 +991,6 @@ fn load_playlist_cover_pixels_blocking_with_session(
     let pending = THUMBNAIL_WRITER
         .get_or_init(ThumbnailWriter::new)
         .pending(&cache_path);
-    #[cfg(test)]
-    if pending.is_some() {
-        THUMBNAIL_BENCH_PENDING_HITS.fetch_add(1, Ordering::Relaxed);
-    }
     let cached = pending.or_else(|| read_thumbnail_cache(&cache_dir, &filename, max_edge));
     #[cfg(test)]
     THUMBNAIL_BENCH_LOOKUP_NS
@@ -683,14 +1004,13 @@ fn load_playlist_cover_pixels_blocking_with_session(
     THUMBNAIL_BENCH_MISSES.fetch_add(1, Ordering::Relaxed);
     #[cfg(test)]
     let stage_started = Instant::now();
-    let response = decode_and_pack(&bytes, max_edge)?;
+    before_decode();
+    let response = decode_and_pack(bytes, max_edge)?;
     #[cfg(test)]
     THUMBNAIL_BENCH_DECODE_NS
         .fetch_add(stage_started.elapsed().as_nanos() as u64, Ordering::Relaxed);
-    if let Some((client_id, generation)) = session {
-        if let Some(coordinator) = PLAYLIST_REQUEST_COORDINATOR.get() {
-            coordinator.ensure_current(client_id, generation)?;
-        }
+    if !is_current() {
+        return Ok(response);
     }
     #[cfg(test)]
     let stage_started = Instant::now();
@@ -1488,6 +1808,603 @@ mod tests {
         }
     }
 
+    // These hooks/counters belong to one coordinator, so independent tests may run
+    // in parallel. Blocking gates use notifications, never scheduling sleeps.
+    struct SafetyPauseState {
+        events: std::sync::mpsc::Sender<PlaylistTestStage>,
+        stage: PlaylistTestStage,
+        remaining: AtomicUsize,
+        released: (StdMutex<bool>, Condvar),
+        panic_on_release: bool,
+        active: AtomicUsize,
+        peak: AtomicUsize,
+        decodes: AtomicUsize,
+        released_requests: (StdMutex<usize>, Condvar),
+    }
+
+    struct SafetyPause {
+        state: Arc<SafetyPauseState>,
+        events: std::sync::mpsc::Receiver<PlaylistTestStage>,
+    }
+
+    impl SafetyPause {
+        fn install(
+            coordinator: &PlaylistCoverRequestCoordinator,
+            stage: PlaylistTestStage,
+            count: usize,
+            panic_on_release: bool,
+        ) -> Self {
+            let (sender, events) = std::sync::mpsc::channel();
+            let state = Arc::new(SafetyPauseState {
+                events: sender,
+                stage,
+                remaining: AtomicUsize::new(count),
+                released: (StdMutex::new(false), Condvar::new()),
+                panic_on_release,
+                active: AtomicUsize::new(0),
+                peak: AtomicUsize::new(0),
+                decodes: AtomicUsize::new(0),
+                released_requests: (StdMutex::new(0), Condvar::new()),
+            });
+            let hook_state = Arc::clone(&state);
+            *coordinator.hook.lock().unwrap() = Some(Arc::new(move |observed| {
+                if observed == PlaylistTestStage::Entered {
+                    let active = hook_state.active.fetch_add(1, Ordering::AcqRel) + 1;
+                    hook_state.peak.fetch_max(active, Ordering::AcqRel);
+                } else if observed == PlaylistTestStage::Left {
+                    hook_state.active.fetch_sub(1, Ordering::AcqRel);
+                } else if observed == PlaylistTestStage::Decoding {
+                    hook_state.decodes.fetch_add(1, Ordering::AcqRel);
+                } else if observed == PlaylistTestStage::RequestReleased {
+                    *hook_state.released_requests.0.lock().unwrap() += 1;
+                    hook_state.released_requests.1.notify_all();
+                }
+                let _ = hook_state.events.send(observed);
+                if observed == hook_state.stage
+                    && hook_state
+                        .remaining
+                        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |left| {
+                            left.checked_sub(1)
+                        })
+                        .is_ok()
+                {
+                    let (lock, wake) = &hook_state.released;
+                    let mut released = lock.lock().unwrap();
+                    while !*released {
+                        let (next, timeout) = wake
+                            .wait_timeout(released, std::time::Duration::from_secs(15))
+                            .unwrap();
+                        released = next;
+                        assert!(!timeout.timed_out(), "safety gate timed out");
+                    }
+                    drop(released);
+                    assert!(!hook_state.panic_on_release, "injected flight leader panic");
+                }
+            }));
+            Self { state, events }
+        }
+
+        fn wait(&self, wanted: PlaylistTestStage, count: usize) {
+            let mut seen = 0;
+            while seen < count {
+                let stage = self
+                    .events
+                    .recv_timeout(std::time::Duration::from_secs(15))
+                    .expect("safety event timed out");
+                if stage == wanted {
+                    seen += 1;
+                }
+            }
+        }
+
+        fn release(&self) {
+            *self.state.released.0.lock().unwrap() = true;
+            self.state.released.1.notify_all();
+        }
+
+        fn wait_released(&self, count: usize) {
+            let (lock, wake) = &self.state.released_requests;
+            let mut released = lock.lock().unwrap();
+            while *released < count {
+                let (next, timeout) = wake
+                    .wait_timeout(released, std::time::Duration::from_secs(15))
+                    .unwrap();
+                released = next;
+                assert!(!timeout.timed_out(), "request cleanup timed out");
+            }
+        }
+    }
+
+    impl Drop for SafetyPause {
+        fn drop(&mut self) {
+            self.release();
+        }
+    }
+
+    fn safety_source(dir: &TestDirectory, name: &str, width: u32) -> PathBuf {
+        let covers = dir.path().join("audio").join(COVER_DIRECTORY);
+        fs::create_dir_all(&covers).unwrap();
+        let path = covers.join(name);
+        fs::write(&path, png_bytes(width, 2)).unwrap();
+        path
+    }
+
+    fn safety_input(
+        coordinator: &PlaylistCoverRequestCoordinator,
+        path: &Path,
+        client: &str,
+    ) -> AudioLoadPlaylistCoverPixelsInput {
+        AudioLoadPlaylistCoverPixelsInput {
+            client_id: client.into(),
+            file_path: path.to_str().unwrap().into(),
+            max_edge: 128,
+            window_generation: coordinator.begin_window(client).unwrap(),
+        }
+    }
+
+    fn safety_start(
+        coordinator: &Arc<PlaylistCoverRequestCoordinator>,
+        root: &Path,
+        input: AudioLoadPlaylistCoverPixelsInput,
+    ) -> tauri::async_runtime::JoinHandle<Result<Vec<u8>, CoverPixelsError>> {
+        let coordinator = Arc::clone(coordinator);
+        let root = root.to_owned();
+        tauri::async_runtime::spawn(async move { coordinator.load(root, input).await })
+    }
+
+    fn safety_assert_idle(coordinator: &PlaylistCoverRequestCoordinator) {
+        assert_eq!(coordinator.requests.load(Ordering::Acquire), 0);
+        assert!(coordinator.flights.entries.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn sp022_safety_panic_drop_wakes_waiters_and_removes_flight() {
+        let registry = Arc::new(PlaylistFlights::default());
+        let key = PlaylistDecodeKey {
+            covers_root: PathBuf::from("synthetic-root"),
+            source_hash: blake3::hash(b"a"),
+            max_edge: 128,
+            transform_version: 1,
+            disk_version: 1,
+        };
+        for _ in 0..5 {
+            let leader = match registry.register(key.clone()).unwrap() {
+                PlaylistFlightAttempt::Leader(leader) => leader,
+                _ => panic!("expected leader"),
+            };
+            let mut waiters = Vec::new();
+            for _ in 0..4 {
+                if let PlaylistFlightAttempt::Joined(receiver) =
+                    registry.register(key.clone()).unwrap()
+                {
+                    waiters.push(receiver);
+                }
+            }
+            assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _leader = leader;
+                panic!("injected unwind");
+            }))
+            .is_err());
+            tauri::async_runtime::block_on(async {
+                for mut waiter in waiters {
+                    let error = waiter
+                        .recv()
+                        .await
+                        .unwrap_or_else(|| Err(playlist_worker_failed()))
+                        .unwrap_err();
+                    assert!(matches!(error.code, CoverPixelsErrorCode::WorkerFailed));
+                    assert!(!error.recoverable);
+                }
+            });
+            assert!(registry.entries.lock().unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn sp022_safety_flight_waiters_are_bounded_across_cancellation_churn() {
+        let registry = Arc::new(PlaylistFlights::default());
+        let key = PlaylistDecodeKey {
+            covers_root: PathBuf::from("synthetic-root"),
+            source_hash: blake3::hash(b"a"),
+            max_edge: 128,
+            transform_version: 1,
+            disk_version: 1,
+        };
+        let leader = match registry.register(key.clone()).unwrap() {
+            PlaylistFlightAttempt::Leader(leader) => leader,
+            _ => panic!("expected leader"),
+        };
+        for _ in 0..100 {
+            let receiver = match registry.register(key.clone()).unwrap() {
+                PlaylistFlightAttempt::Joined(receiver) => receiver,
+                _ => panic!("expected waiter"),
+            };
+            drop(receiver);
+            assert!(registry.entries.lock().unwrap()[&key].len() <= 1);
+        }
+        let waiters: Vec<_> = (0..MAX_PLAYLIST_FLIGHT_WAITERS)
+            .map(|_| match registry.register(key.clone()).unwrap() {
+                PlaylistFlightAttempt::Joined(receiver) => receiver,
+                _ => panic!("expected waiter"),
+            })
+            .collect();
+        let error = match registry.register(key.clone()) {
+            Err(error) => error,
+            Ok(_) => panic!("must reject excess waiter"),
+        };
+        assert!(matches!(error.code, CoverPixelsErrorCode::WorkerFailed));
+        assert!(!error.recoverable);
+        drop(waiters);
+        leader.publish(Ok(Arc::new(vec![1])));
+        assert!(registry.entries.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn sp022_safety_keys_isolate_root_edge_transform_and_disk_version() {
+        let registry = Arc::new(PlaylistFlights::default());
+        let key = PlaylistDecodeKey {
+            covers_root: PathBuf::from("root-a"),
+            source_hash: blake3::hash(b"same bytes"),
+            max_edge: 128,
+            transform_version: 1,
+            disk_version: 1,
+        };
+        let mut keys = vec![key.clone()];
+        let mut changed = key.clone();
+        changed.covers_root = PathBuf::from("root-b");
+        keys.push(changed);
+        let mut changed = key.clone();
+        changed.max_edge = 256;
+        keys.push(changed);
+        let mut changed = key.clone();
+        changed.transform_version += 1;
+        keys.push(changed);
+        let mut changed = key;
+        changed.disk_version += 1;
+        keys.push(changed);
+        let leaders: Vec<_> = keys
+            .into_iter()
+            .map(|key| match registry.register(key).unwrap() {
+                PlaylistFlightAttempt::Leader(leader) => leader,
+                _ => panic!("different complete keys must not join"),
+            })
+            .collect();
+        assert_eq!(registry.entries.lock().unwrap().len(), 5);
+        drop(leaders);
+        assert!(registry.entries.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn sp022_safety_fifo_survivors_progress_after_head_and_middle_cancellation() {
+        use std::{
+            pin::Pin,
+            task::{Context, Poll, Waker},
+        };
+        tauri::async_runtime::block_on(async {
+            let coordinator = Arc::new(PlaylistCoverRequestCoordinator::new());
+            let mut held = Vec::new();
+            for _ in 0..PLAYLIST_DECODE_PERMITS {
+                held.push(coordinator.slots.acquire().await.unwrap());
+            }
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let mut jobs = Vec::new();
+            for index in 0..5 {
+                let coordinator = Arc::clone(&coordinator);
+                let sender = sender.clone();
+                let mut queued = Box::pin(async move {
+                    let permit = coordinator.slots.acquire().await.unwrap();
+                    sender.send(index).unwrap();
+                    permit
+                });
+                // Poll once while all tokens are held: this establishes actual
+                // async Mutex queue order instead of relying on task scheduling.
+                assert!(matches!(
+                    Pin::new(&mut queued).poll(&mut Context::from_waker(Waker::noop())),
+                    Poll::Pending
+                ));
+                jobs.push(Some(tauri::async_runtime::spawn(queued)));
+            }
+            for index in [0, 2] {
+                let job = jobs[index].take().unwrap();
+                job.abort();
+                assert!(job.await.is_err());
+            }
+            // Keep N-1 tokens held; one survivor at a time can acquire the final
+            // token, and its returned permit remains in its join result.
+            drop(held.pop());
+            for expected in [1, 3, 4] {
+                assert_eq!(
+                    receiver
+                        .recv_timeout(std::time::Duration::from_secs(10))
+                        .unwrap(),
+                    expected
+                );
+                let permit = jobs[expected].take().unwrap().await.unwrap();
+                drop(permit);
+            }
+            drop(held);
+            let mut reacquired = Vec::new();
+            for _ in 0..PLAYLIST_DECODE_PERMITS {
+                reacquired.push(coordinator.slots.acquire().await.unwrap());
+            }
+            drop(reacquired);
+        });
+    }
+
+    #[test]
+    fn sp022_safety_completed_response_keeps_request_reservation_until_consumed() {
+        let coordinator = PlaylistCoverRequestCoordinator::new();
+        let reservation = coordinator.reserve_request().unwrap();
+        let result = PlaylistWorkerResult::Complete(
+            Ok(Arc::new(vec![0; usize::from(HEADER_LEN) + 512 * 512 * 4])),
+            reservation,
+        );
+        assert_eq!(coordinator.requests.load(Ordering::Acquire), 1);
+        drop(result);
+        assert_eq!(coordinator.requests.load(Ordering::Acquire), 0);
+        assert!(validate_source_dimensions(8192, 8192, MAX_DECODE_BYTES).is_ok());
+        assert!(validate_source_dimensions(8192, 8193, MAX_DECODE_BYTES + 1).is_err());
+        assert!(validate_source_dimensions(MAX_SOURCE_EDGE + 1, 1, 4).is_err());
+    }
+
+    #[test]
+    fn sp022_safety_request_cap_and_queued_cancellation_release_every_reservation() {
+        tauri::async_runtime::block_on(async {
+            let dir = TestDirectory::new();
+            let source = safety_source(&dir, "source.png", 4);
+            let coordinator = Arc::new(PlaylistCoverRequestCoordinator::new());
+            let input = safety_input(&coordinator, &source, "cap-client");
+            let pause = SafetyPause::install(&coordinator, PlaylistTestStage::Entered, 0, false);
+            let mut held = Vec::new();
+            for _ in 0..PLAYLIST_DECODE_PERMITS {
+                held.push(coordinator.slots.acquire().await.unwrap());
+            }
+            let jobs: Vec<_> = (0..MAX_PLAYLIST_REQUESTS)
+                .map(|_| safety_start(&coordinator, dir.path(), input.clone()))
+                .collect();
+            pause.wait(PlaylistTestStage::Queued, MAX_PLAYLIST_REQUESTS);
+            assert_eq!(
+                coordinator.requests.load(Ordering::Acquire),
+                MAX_PLAYLIST_REQUESTS
+            );
+            let error = coordinator
+                .load(dir.path().into(), input.clone())
+                .await
+                .unwrap_err();
+            assert!(matches!(error.code, CoverPixelsErrorCode::WorkerFailed));
+            assert!(!error.recoverable);
+            for job in &jobs {
+                job.abort();
+            }
+            for job in jobs {
+                assert!(job.await.is_err());
+            }
+            safety_assert_idle(&coordinator);
+            assert_eq!(pause.state.active.load(Ordering::Acquire), 0);
+            drop(held);
+            coordinator.load(dir.path().into(), input).await.unwrap();
+            safety_assert_idle(&coordinator);
+        });
+    }
+
+    #[test]
+    fn sp022_safety_cancelled_workers_keep_permits_and_request_reservations() {
+        tauri::async_runtime::block_on(async {
+            let dir = TestDirectory::new();
+            let coordinator = Arc::new(PlaylistCoverRequestCoordinator::new());
+            let pause = SafetyPause::install(
+                &coordinator,
+                PlaylistTestStage::Entered,
+                PLAYLIST_DECODE_PERMITS,
+                false,
+            );
+            let mut active = Vec::new();
+            for index in 0..PLAYLIST_DECODE_PERMITS {
+                let source = safety_source(&dir, &format!("{index}.png"), 4 + index as u32);
+                let input = safety_input(&coordinator, &source, &format!("active-{index}"));
+                active.push(safety_start(&coordinator, dir.path(), input));
+            }
+            pause.wait(PlaylistTestStage::Entered, PLAYLIST_DECODE_PERMITS);
+            for job in &active {
+                job.abort();
+            }
+            for job in active {
+                assert!(job.await.is_err());
+            }
+            assert_eq!(
+                coordinator.requests.load(Ordering::Acquire),
+                PLAYLIST_DECODE_PERMITS
+            );
+            let source = safety_source(&dir, "later.png", 9);
+            let input = safety_input(&coordinator, &source, "later");
+            let later = safety_start(&coordinator, dir.path(), input);
+            pause.wait(PlaylistTestStage::Queued, 1);
+            assert_eq!(
+                pause.state.active.load(Ordering::Acquire),
+                PLAYLIST_DECODE_PERMITS
+            );
+            if let Ok(mut tokens) = coordinator.slots.tokens.try_lock() {
+                assert!(tokens.try_recv().is_err());
+            }
+            pause.release();
+            later.await.unwrap().unwrap();
+            pause.wait(PlaylistTestStage::Left, PLAYLIST_DECODE_PERMITS + 1);
+            pause.wait_released(PLAYLIST_DECODE_PERMITS + 1);
+            assert_eq!(
+                pause.state.peak.load(Ordering::Acquire),
+                PLAYLIST_DECODE_PERMITS
+            );
+            safety_assert_idle(&coordinator);
+        });
+    }
+
+    #[test]
+    fn sp022_safety_content_aliases_share_decode_and_path_changes_rehash() {
+        tauri::async_runtime::block_on(async {
+            let dir = TestDirectory::new();
+            let source = safety_source(&dir, "one.png", 4);
+            let alias = source.with_file_name("two.png");
+            fs::copy(&source, &alias).unwrap();
+            let coordinator = Arc::new(PlaylistCoverRequestCoordinator::new());
+            let first = safety_input(&coordinator, &source, "first");
+            let second = safety_input(&coordinator, &alias, "second");
+            let pause = SafetyPause::install(&coordinator, PlaylistTestStage::Leader, 1, false);
+            let a = safety_start(&coordinator, dir.path(), first.clone());
+            pause.wait(PlaylistTestStage::Leader, 1);
+            let b = safety_start(&coordinator, dir.path(), second.clone());
+            if PLAYLIST_DECODE_PERMITS == 2 {
+                pause.wait(PlaylistTestStage::Joined, 1);
+            }
+            pause.release();
+            let first_bytes = a.await.unwrap().unwrap();
+            assert_eq!(first_bytes, b.await.unwrap().unwrap());
+            assert_eq!(pause.state.decodes.load(Ordering::Acquire), 1);
+            fs::write(&alias, png_bytes(7, 2)).unwrap();
+            let changed = coordinator.load(dir.path().into(), second).await.unwrap();
+            assert_ne!(first_bytes, changed);
+            let mut other_edge = first.clone();
+            other_edge.max_edge = 256;
+            coordinator
+                .load(dir.path().into(), other_edge)
+                .await
+                .unwrap();
+            let outside = dir.path().join("outside.png");
+            fs::copy(&source, &outside).unwrap();
+            let mut invalid = first;
+            invalid.file_path = outside.to_str().unwrap().into();
+            assert!(matches!(
+                coordinator
+                    .load(dir.path().into(), invalid)
+                    .await
+                    .unwrap_err()
+                    .code,
+                CoverPixelsErrorCode::InvalidPath
+            ));
+            assert_eq!(pause.state.decodes.load(Ordering::Acquire), 3);
+            safety_assert_idle(&coordinator);
+        });
+    }
+
+    #[test]
+    #[cfg(feature = "sp022-playlist-decode-n2")]
+    fn sp022_safety_leader_abort_stale_failure_and_panic_leave_valid_waiter_independent() {
+        // With N=1, actual followers cannot read/register until the leader exits;
+        // panic fan-out is independently checked by the registry test above.
+        for mode in ["abort", "stale", "panic", "invalid"] {
+            for _ in 0..5 {
+                tauri::async_runtime::block_on(async {
+                    let dir = TestDirectory::new();
+                    let source = safety_source(&dir, "shared.png", 4);
+                    if mode == "invalid" {
+                        fs::write(&source, b"invalid image").unwrap();
+                    }
+                    let coordinator = Arc::new(PlaylistCoverRequestCoordinator::new());
+                    let first = safety_input(&coordinator, &source, "leader");
+                    let second = safety_input(&coordinator, &source, "waiter");
+                    let pause = SafetyPause::install(
+                        &coordinator,
+                        PlaylistTestStage::Leader,
+                        1,
+                        mode == "panic",
+                    );
+                    let leader = safety_start(&coordinator, dir.path(), first.clone());
+                    pause.wait(PlaylistTestStage::Leader, 1);
+                    let waiter = safety_start(&coordinator, dir.path(), second.clone());
+                    pause.wait(PlaylistTestStage::Joined, 1);
+                    if mode == "abort" {
+                        leader.abort();
+                    }
+                    if mode == "stale" {
+                        coordinator.begin_window("leader").unwrap();
+                    }
+                    pause.release();
+                    let leader_result = leader.await;
+                    let waiter_result = waiter.await.unwrap();
+                    match mode {
+                        "abort" => {
+                            assert!(leader_result.is_err());
+                            waiter_result.unwrap();
+                        }
+                        "stale" => {
+                            assert!(matches!(
+                                leader_result.unwrap().unwrap_err().code,
+                                CoverPixelsErrorCode::StaleRequest
+                            ));
+                            waiter_result.unwrap();
+                            let thumbs = dir.path().join("audio").join(THUMBNAIL_DIRECTORY);
+                            assert_eq!(fs::read_dir(thumbs).unwrap().count(), 0);
+                        }
+                        "panic" => {
+                            assert!(matches!(
+                                leader_result.unwrap().unwrap_err().code,
+                                CoverPixelsErrorCode::WorkerFailed
+                            ));
+                            assert!(matches!(
+                                waiter_result.unwrap_err().code,
+                                CoverPixelsErrorCode::WorkerFailed
+                            ));
+                        }
+                        "invalid" => {
+                            assert!(matches!(
+                                leader_result.unwrap().unwrap_err().code,
+                                CoverPixelsErrorCode::InvalidImage
+                            ));
+                            assert!(matches!(
+                                waiter_result.unwrap_err().code,
+                                CoverPixelsErrorCode::InvalidImage
+                            ));
+                        }
+                        _ => unreachable!(),
+                    }
+                    safety_assert_idle(&coordinator);
+                    // Same content key after a leader failure must never hang.
+                    if mode == "panic" {
+                        coordinator.load(dir.path().into(), second).await.unwrap();
+                    } else if mode == "invalid" {
+                        fs::write(&source, png_bytes(4, 2)).unwrap();
+                        coordinator.load(dir.path().into(), second).await.unwrap();
+                    }
+                    safety_assert_idle(&coordinator);
+                });
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "sp022-playlist-decode-n2")]
+    fn sp022_safety_waiter_cancellation_and_generation_do_not_cancel_leader() {
+        tauri::async_runtime::block_on(async {
+            let dir = TestDirectory::new();
+            let source = safety_source(&dir, "source.png", 5);
+            let coordinator = Arc::new(PlaylistCoverRequestCoordinator::new());
+            let a = safety_input(&coordinator, &source, "leader");
+            let b = safety_input(&coordinator, &source, "cancelled");
+            let c = safety_input(&coordinator, &source, "stale");
+            let d = safety_input(&coordinator, &source, "valid");
+            let pause = SafetyPause::install(&coordinator, PlaylistTestStage::Leader, 1, false);
+            let leader = safety_start(&coordinator, dir.path(), a);
+            pause.wait(PlaylistTestStage::Leader, 1);
+            let cancelled = safety_start(&coordinator, dir.path(), b);
+            pause.wait(PlaylistTestStage::Joined, 1);
+            cancelled.abort();
+            assert!(cancelled.await.is_err());
+            let stale = safety_start(&coordinator, dir.path(), c);
+            pause.wait(PlaylistTestStage::Joined, 1);
+            let valid = safety_start(&coordinator, dir.path(), d);
+            pause.wait(PlaylistTestStage::Joined, 1);
+            coordinator.begin_window("stale").unwrap();
+            pause.release();
+            let expected = leader.await.unwrap().unwrap();
+            assert_eq!(expected, valid.await.unwrap().unwrap());
+            assert!(matches!(
+                stale.await.unwrap().unwrap_err().code,
+                CoverPixelsErrorCode::StaleRequest
+            ));
+            assert_eq!(pause.state.decodes.load(Ordering::Acquire), 1);
+            safety_assert_idle(&coordinator);
+        });
+    }
+
     // Release-only manual probe. It reads the library without changing it, stages
     // anonymous embedded covers in a temporary app cache, and exercises the same
     // blocking function as the playlist command. No media paths are printed.
@@ -2177,7 +3094,10 @@ mod tests {
         tauri::async_runtime::block_on(async {
             let coordinator = Arc::new(PlaylistCoverRequestCoordinator::new());
             let old_window = coordinator.begin_window("client-a").unwrap();
-            let held_gate = coordinator.decode_gate.lock().await;
+            let mut held_gate = Vec::new();
+            for _ in 0..PLAYLIST_DECODE_PERMITS {
+                held_gate.push(coordinator.slots.acquire().await.unwrap());
+            }
             let stale_coordinator = Arc::clone(&coordinator);
             let entered_decode = Arc::new(AtomicUsize::new(0));
             let stale_counter = Arc::clone(&entered_decode);

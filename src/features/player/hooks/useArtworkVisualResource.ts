@@ -28,23 +28,9 @@ export type OwnedArtworkResource = {
   isReleased: () => boolean
 }
 
-type ArtworkCanvasPoolDebug = {
-  created: number
-  leased: number
-  peakLeased: number
-  waiters: number
-  maxWaiters: number
-  staleWrites: number
-  useAfterRelease: number
-  backingResizeCount: number
-  backingResetCount: number
-  backingEdges: number[]
-}
-
 type ArtworkCanvasPoolEntry = {
   canvas: HTMLCanvasElement
   backingEdge: number
-  debugIndex: number
   idleResetTimer: number | null
 }
 
@@ -53,7 +39,6 @@ type ArtworkCanvasLease = {
   backingEdge: number
   isActive: () => boolean
   release: () => void
-  recordUseAfterRelease: () => void
 }
 
 type ArtworkCanvasPool = {
@@ -244,29 +229,12 @@ function scheduleArtworkLoad(
 function createArtworkCanvasPool(): ArtworkCanvasPool {
   // current±3 stay decoded; the eighth lease stages the incoming outer edge
   // while an overlapping window remains pinned during rapid navigation.
-  const entries = Array.from({ length: 8 }, (_, debugIndex): ArtworkCanvasPoolEntry => ({
+  const entries = Array.from({ length: 8 }, (): ArtworkCanvasPoolEntry => ({
     canvas: document.createElement('canvas'),
     backingEdge: 0,
-    debugIndex,
     idleResetTimer: null,
   }))
   const available = [...entries]
-  const debug: ArtworkCanvasPoolDebug = {
-    created: entries.length,
-    leased: 0,
-    peakLeased: 0,
-    waiters: 0,
-    maxWaiters: 0,
-    staleWrites: 0,
-    useAfterRelease: 0,
-    backingResizeCount: 0,
-    backingResetCount: 0,
-    backingEdges: entries.map(() => 0),
-  }
-  if (import.meta.env.DEV) {
-    ;(window as Window & { __SPMUSIC_ARTWORK_CANVAS_POOL__?: ArtworkCanvasPoolDebug })
-      .__SPMUSIC_ARTWORK_CANVAS_POOL__ = debug
-  }
 
   let disposed = false
   const waiters: ArtworkCanvasWaiter[] = []
@@ -289,8 +257,6 @@ function createArtworkCanvasPool(): ArtworkCanvasPool {
     entry.canvas.width = requestedEdge
     entry.canvas.height = requestedEdge
     entry.backingEdge = requestedEdge
-    debug.backingResizeCount += 1
-    debug.backingEdges[entry.debugIndex] = requestedEdge
   }
 
   const makeLease = (
@@ -299,22 +265,17 @@ function createArtworkCanvasPool(): ArtworkCanvasPool {
   ): ArtworkCanvasLease => {
     prepareEntry(entry, requestedEdge)
     let active = true
-    debug.leased += 1
-    debug.peakLeased = Math.max(debug.peakLeased, debug.leased)
     return {
       canvas: entry.canvas,
       backingEdge: entry.backingEdge,
       isActive: () => active && !disposed,
-      recordUseAfterRelease: () => { debug.useAfterRelease += 1 },
       release: () => {
         if (!active) return
         active = false
-        debug.leased -= 1
         if (disposed) return
         while (waiters.length) {
           const foregroundIndex = waiters.findIndex((pending) => pending.purpose === 'foreground')
           const [pending] = waiters.splice(foregroundIndex >= 0 ? foregroundIndex : 0, 1)
-          debug.waiters = waiters.length
           pending.signal.removeEventListener('abort', pending.abort)
           if (!pending.signal.aborted) {
             pending.resolve(makeLease(entry, pending.backingEdge))
@@ -329,8 +290,6 @@ function createArtworkCanvasPool(): ArtworkCanvasPool {
           entry.canvas.width = 0
           entry.canvas.height = 0
           entry.backingEdge = 0
-          debug.backingResetCount += 1
-          debug.backingEdges[entry.debugIndex] = 0
         }, ARTWORK_CANVAS_IDLE_RESET_MS)
         publishAvailability(true)
       },
@@ -364,13 +323,10 @@ function createArtworkCanvasPool(): ArtworkCanvasPool {
             const index = waiters.indexOf(pending)
             if (index < 0) return
             waiters.splice(index, 1)
-            debug.waiters = waiters.length
             resolve(null)
           },
         }
         waiters.push(pending)
-        debug.waiters = waiters.length
-        debug.maxWaiters = Math.max(debug.maxWaiters, debug.waiters)
         signal.addEventListener('abort', pending.abort, { once: true })
       })
     },
@@ -387,7 +343,6 @@ function createArtworkCanvasPool(): ArtworkCanvasPool {
         pending.signal.removeEventListener('abort', pending.abort)
         pending.resolve(null)
       }
-      debug.waiters = 0
       publishAvailability(false)
       for (const entry of entries) {
         if (entry.idleResetTimer !== null) window.clearTimeout(entry.idleResetTimer)
@@ -395,7 +350,6 @@ function createArtworkCanvasPool(): ArtworkCanvasPool {
         entry.canvas.width = 0
         entry.canvas.height = 0
         entry.backingEdge = 0
-        debug.backingEdges[entry.debugIndex] = 0
       }
     },
   }
@@ -441,25 +395,6 @@ type PreparedArtwork = {
   promoted: boolean
 }
 
-type ArtworkPrefetchDebug = {
-  prepared: number
-  inFlight: number
-  peakPrepared: number
-  started: number
-  ready: number
-  promoted: number
-  promotedInFlight: number
-  evicted: number
-  foregroundLoads: number
-  foregroundInFlight: number
-  foregroundDeduplicated: number
-  coldDebounceWaits: number
-  coldDebounced: number
-  foregroundPreemptions: number
-  foregroundRetries: number
-  coverPixelInvokes: number
-}
-
 function createOwnedArtworkResource(
   lease?: ArtworkCanvasLease,
   view?: ArtworkSourceView,
@@ -479,14 +414,12 @@ function createOwnedArtworkResource(
     get view() {
       if (!lease || !view) return undefined
       if (released || !lease.isActive()) {
-        lease.recordUseAfterRelease()
         return undefined
       }
       return view
     },
     retain: () => {
       if (released) {
-        lease?.recordUseAfterRelease()
         return () => undefined
       }
       let leaseReleased = false
@@ -784,37 +717,12 @@ export function useArtworkVisualResource(
     transitionIntent: currentTransitionIntent,
   })
   const latestArtworkDetailsReadyRef = useRef(!detailsPending || Boolean(matchingPrefetchCandidate))
-  const prefetchDebugRef = useRef<ArtworkPrefetchDebug>({
-    prepared: 0,
-    inFlight: 0,
-    peakPrepared: 0,
-    started: 0,
-    ready: 0,
-    promoted: 0,
-    promotedInFlight: 0,
-    evicted: 0,
-    foregroundLoads: 0,
-    foregroundInFlight: 0,
-    foregroundDeduplicated: 0,
-    coldDebounceWaits: 0,
-    coldDebounced: 0,
-    foregroundPreemptions: 0,
-    foregroundRetries: 0,
-    coverPixelInvokes: 0,
-  })
 
   const scheduleStablePrefetchRetry = useCallback((identity: string) => {
     const retryCount = prefetchRetryCountsRef.current.get(identity) ?? 0
     if (retryCount >= MAX_STABLE_PREFETCH_RETRIES) return
     prefetchRetryCountsRef.current.set(identity, retryCount + 1)
     setPrefetchRetryRevision((revision) => revision + 1)
-  }, [])
-
-  useEffect(() => {
-    if (!import.meta.env.DEV) return
-    const devWindow = window as Window & { __SPMUSIC_ARTWORK_PREFETCH__?: ArtworkPrefetchDebug }
-    devWindow.__SPMUSIC_ARTWORK_PREFETCH__ = prefetchDebugRef.current
-    return () => { delete devWindow.__SPMUSIC_ARTWORK_PREFETCH__ }
   }, [])
 
   const getCanvasPool = useCallback(() => {
@@ -894,8 +802,6 @@ export function useArtworkVisualResource(
 
     if (!requestFilePath) return loadImageFallback()
     try {
-      prefetchDebugRef.current.coverPixelInvokes += 1
-      if (getPurpose() === 'foreground') prefetchDebugRef.current.foregroundLoads += 1
       const pixels = await loadAudioCoverPixels({
         filePath: requestFilePath,
         maxEdge: coverMaxEdge,
@@ -1065,10 +971,6 @@ export function useArtworkVisualResource(
     ) {
       registryDelete(prepared.identity, prepared.resource)
     }
-    const debug = prefetchDebugRef.current
-    debug.prepared = 0
-    debug.inFlight = 0
-    debug.evicted += 1
   }, [registryDelete])
 
   useLayoutEffect(() => {
@@ -1077,7 +979,6 @@ export function useArtworkVisualResource(
     requestControllerRef.current?.abort()
     requestControllerRef.current = null
     foregroundRequestRef.current = null
-    prefetchDebugRef.current.foregroundInFlight = 0
     previewGenerationRef.current += 1
     previewControllerRef.current?.abort()
     previewControllerRef.current = null
@@ -1577,7 +1478,6 @@ export function useArtworkVisualResource(
     )
     if (prepared?.identity === identity) return
     if (prepared) {
-      prefetchDebugRef.current.foregroundPreemptions += 1
       evictPreparedArtwork(prepared)
     }
 
@@ -1602,21 +1502,14 @@ export function useArtworkVisualResource(
       promise: Promise.resolve(null),
       promoted: false,
     }
-    const debug = prefetchDebugRef.current
-    debug.prepared = 1
-    debug.inFlight = 1
-    debug.peakPrepared = Math.max(debug.peakPrepared, debug.prepared)
-    debug.started += 1
     nextPrepared.promise = loadArtworkResource(
       nextPrepared.artwork,
       controller,
       'prefetch',
     ).then((loaded) => {
-      debug.inFlight = 0
       if (!loaded) {
         if (!controller.signal.aborted && preparedArtworkRef.current === nextPrepared) {
           preparedArtworkRef.current = null
-          debug.prepared = 0
           scheduleStablePrefetchRetry(identity)
         }
         return null
@@ -1628,7 +1521,6 @@ export function useArtworkVisualResource(
       prefetchRetryCountsRef.current.delete(identity)
       nextPrepared.resource = loaded.resource
       registrySet(identity, loaded)
-      debug.ready += 1
       return loaded
     })
     preparedArtworkRef.current = nextPrepared
@@ -1783,7 +1675,6 @@ export function useArtworkVisualResource(
         requestControllerRef.current = null
       }
       generationRef.current += 1
-      prefetchDebugRef.current.foregroundInFlight = 0
       foregroundRequest.controller.abort()
     }
     const promotedArtwork = promotedArtworkRef.current
@@ -1795,7 +1686,6 @@ export function useArtworkVisualResource(
       requestControllerRef.current?.abort()
       foregroundRequestRef.current = null
       requestControllerRef.current = null
-      prefetchDebugRef.current.foregroundInFlight = 0
       evictPreparedArtwork()
       generationRef.current += 1
       const queued = queuedLayerRef.current
@@ -1824,7 +1714,6 @@ export function useArtworkVisualResource(
       matchingForegroundRequest?.identity === identity
       && !matchingForegroundRequest.controller.signal.aborted
     ) {
-      prefetchDebugRef.current.foregroundDeduplicated += 1
       return
     }
     if (promotedArtworkRef.current?.identity === identity) return
@@ -1862,7 +1751,6 @@ export function useArtworkVisualResource(
       // but before its paint barrier. Keep the exact incoming layer and lease:
       // rebuilding it from the same cached resource would orphan the drag pair.
       registryGet(identity)
-      prefetchDebugRef.current.foregroundDeduplicated += 1
       return
     }
     const existingActive = layersRef.current.find(
@@ -1921,10 +1809,6 @@ export function useArtworkVisualResource(
       preparedArtworkRef.current = null
       prepared.promoted = true
       promotedArtworkRef.current = prepared
-      const debug = prefetchDebugRef.current
-      debug.prepared = 0
-      debug.promoted += 1
-      if (!prepared.resource) debug.promotedInFlight += 1
       const promotionGeneration = generationRef.current
       const installPromoted = (loaded: LoadedArtworkResource) => {
         const current = latestRequestRef.current
@@ -1952,7 +1836,6 @@ export function useArtworkVisualResource(
         const retryController = new AbortController()
         requestControllerRef.current = retryController
         foregroundRequestRef.current = { identity, controller: retryController }
-        prefetchDebugRef.current.foregroundInFlight = 1
         try {
           let retried: LoadedArtworkResource | null = null
           for (
@@ -1968,9 +1851,6 @@ export function useArtworkVisualResource(
               retryController,
               'foreground',
             )
-            if (!retried && !retryController.signal.aborted) {
-              prefetchDebugRef.current.foregroundRetries += 1
-            }
           }
           if (!retried) return
           registrySet(identity, retried)
@@ -1979,7 +1859,6 @@ export function useArtworkVisualResource(
           if (requestControllerRef.current === retryController) requestControllerRef.current = null
           if (foregroundRequestRef.current?.controller === retryController) {
             foregroundRequestRef.current = null
-            prefetchDebugRef.current.foregroundInFlight = 0
           }
         }
       }).finally(() => {
@@ -2024,7 +1903,6 @@ export function useArtworkVisualResource(
     const controller = new AbortController()
     requestControllerRef.current = controller
     foregroundRequestRef.current = { identity, controller }
-    prefetchDebugRef.current.foregroundInFlight = 1
     const currentTrack = latest.track
     const currentArtwork = latest.requestedArtwork
     const isCurrent = () => !controller.signal.aborted && generation === generationRef.current
@@ -2060,10 +1938,8 @@ export function useArtworkVisualResource(
         && !currentArtwork.coverImage
         && !currentArtwork.coverImageFallback
       if (!isPlaceholder) {
-        prefetchDebugRef.current.coldDebounceWaits += 1
         const isTrailingSelection = await waitForColdArtworkRapidSelection(controller.signal)
         if (!isTrailingSelection || !coldRequestStillCurrent()) {
-          prefetchDebugRef.current.coldDebounced += 1
           return
         }
       }
@@ -2073,14 +1949,12 @@ export function useArtworkVisualResource(
           install(loaded)
           return
         }
-        if (isCurrent()) prefetchDebugRef.current.foregroundRetries += 1
       }
     })()
       .finally(() => {
         if (requestControllerRef.current === controller) requestControllerRef.current = null
         if (foregroundRequestRef.current?.controller === controller) {
           foregroundRequestRef.current = null
-          prefetchDebugRef.current.foregroundInFlight = 0
         }
       })
   }, [
@@ -2117,7 +1991,6 @@ export function useArtworkVisualResource(
     previewGenerationRef.current += 1
     previewControllerRef.current?.abort()
     foregroundRequestRef.current = null
-    prefetchDebugRef.current.foregroundInFlight = 0
     promotedArtworkRef.current?.controller.abort()
     promotedArtworkRef.current = null
     for (const controller of adjacentWarmControllersRef.current.values()) controller.abort()

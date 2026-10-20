@@ -12,6 +12,7 @@ mod error;
 mod lyrics_cache;
 mod metadata;
 mod playlist;
+pub(crate) mod playlist_cover;
 mod playlist_duration;
 mod playlist_summary;
 mod runtime;
@@ -34,13 +35,14 @@ pub use cover_pixels::{
 };
 pub(crate) use device::current_output_info;
 pub use error::AudioCommandError;
+pub(crate) use playlist_cover::probe_playlist_cover;
 pub use playlist_duration::probe_playlist_durations;
 pub use playlist_summary::probe_playlist_track_summaries;
 pub use types::{
     AudioEmbedLyricsInput, AudioFolderPlaylist, AudioFolderPlaylistInput, AudioLoadAndPlayInput,
     AudioLoadAndPlayResult, AudioLoadFileInput, AudioOpenFileInput, AudioOpenSourceResult,
-    AudioOutputInfo, AudioPlayInput, AudioPlaybackState, AudioPlaylistDurationItem,
-    AudioPlaylistTrackSummaryItem, AudioProbePlaylistDurationsInput,
+    AudioOutputInfo, AudioPlayInput, AudioPlaybackState, AudioPlaylistCoverSource,
+    AudioPlaylistDurationItem, AudioPlaylistTrackSummaryItem, AudioProbePlaylistDurationsInput,
     AudioProbePlaylistTrackSummariesInput, AudioSeekInput, AudioSetVolumeInput, AudioTrackRef,
     AudioTransitionPlaybackInput,
 };

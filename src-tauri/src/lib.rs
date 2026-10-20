@@ -9,12 +9,13 @@ use app_paths::AppPaths;
 use audio::current_output_info;
 use audio::{
     begin_playlist_cover_window, load_cover_pixels, load_playlist_cover_pixels,
-    probe_playlist_durations, probe_playlist_track_summaries, shutdown_playlist_cover_cache,
-    AudioBeginPlaylistCoverWindowInput, AudioCommandError, AudioController, AudioEmbedLyricsInput,
-    AudioFolderPlaylist, AudioFolderPlaylistInput, AudioLoadAndPlayInput, AudioLoadAndPlayResult,
-    AudioLoadCoverPixelsInput, AudioLoadFileInput, AudioLoadPlaylistCoverPixelsInput,
-    AudioOpenFileInput, AudioOpenSourceResult, AudioOutputInfo, AudioPlayInput, AudioPlaybackState,
-    AudioPlaylistDurationItem, AudioPlaylistTrackSummaryItem, AudioProbePlaylistDurationsInput,
+    probe_playlist_cover, probe_playlist_durations, probe_playlist_track_summaries,
+    shutdown_playlist_cover_cache, AudioBeginPlaylistCoverWindowInput, AudioCommandError,
+    AudioController, AudioEmbedLyricsInput, AudioFolderPlaylist, AudioFolderPlaylistInput,
+    AudioLoadAndPlayInput, AudioLoadAndPlayResult, AudioLoadCoverPixelsInput, AudioLoadFileInput,
+    AudioLoadPlaylistCoverPixelsInput, AudioOpenFileInput, AudioOpenSourceResult, AudioOutputInfo,
+    AudioPlayInput, AudioPlaybackState, AudioPlaylistCoverSource, AudioPlaylistDurationItem,
+    AudioPlaylistTrackSummaryItem, AudioProbePlaylistDurationsInput,
     AudioProbePlaylistTrackSummariesInput, AudioSeekInput, AudioSetVolumeInput, AudioTrackRef,
     AudioTransitionPlaybackInput, CoverPixelsError,
 };
@@ -112,6 +113,14 @@ fn audio_hydrate_track(
     let result = state.hydrate_track(input);
     log_track_command_result("audio_hydrate_track", &result);
     result
+}
+
+#[tauri::command]
+async fn audio_probe_playlist_cover(
+    state: State<'_, AppPaths>,
+    input: AudioLoadFileInput,
+) -> Result<AudioPlaylistCoverSource, AudioCommandError> {
+    probe_playlist_cover(state.cache_dir.clone(), input).await
 }
 
 #[tauri::command]
@@ -398,6 +407,7 @@ pub fn run() {
             audio_load_file,
             audio_load_and_play,
             audio_hydrate_track,
+            audio_probe_playlist_cover,
             audio_list_folder_tracks,
             audio_probe_playlist_durations,
             audio_probe_playlist_track_summaries,

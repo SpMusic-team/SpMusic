@@ -66,6 +66,15 @@ pub struct AudioCoverArt {
     pub byte_len: usize,
 }
 
+/// A visual source probe does not assert playback support or hydrate metadata.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioPlaylistCoverSource {
+    pub id: String,
+    pub source_path: String,
+    pub cover_art: Option<AudioCoverArt>,
+}
+
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AudioPlaybackState {
@@ -322,6 +331,22 @@ mod tests {
     use ts_rs::{Config, TS};
 
     use super::*;
+
+    #[test]
+    fn playlist_cover_source_contract_has_only_identity_and_nullable_artwork() {
+        let source = AudioPlaylistCoverSource {
+            id: "local-1".into(),
+            source_path: "source.wav".into(),
+            cover_art: None,
+        };
+        let serialized = serde_json::to_value(source).unwrap();
+        assert_eq!(serialized.as_object().unwrap().len(), 3);
+        assert!(serialized["coverArt"].is_null());
+        assert_eq!(serialized["sourcePath"], "source.wav");
+        let exported = AudioPlaylistCoverSource::export_to_string(&Config::default()).unwrap();
+        assert!(exported.contains("coverArt: AudioCoverArt | null"));
+        assert!(!exported.contains("durationMs"));
+    }
 
     #[test]
     fn audio_playback_state_can_export_typescript_contract() {

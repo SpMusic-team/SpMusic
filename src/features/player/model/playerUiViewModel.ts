@@ -135,17 +135,28 @@ export type PlaylistLibraryItem = {
   sourceKind?: 'folder' | 'm3u8'
 }
 
+export type AllSongsItem = Readonly<{
+  key: string
+  scope: string
+  trackId: string
+  sourcePath: string
+  track: PlaylistTrackItemViewModel
+  available: boolean
+}>
+
 export type PlaylistLibraryViewModel = {
   route?: MediaLibraryRoute
   onOpenOverview?: () => void
   onSelectCategory?: (categoryId: MediaLibraryCategoryId) => void
   isOpen: boolean
   items: readonly PlaylistLibraryItem[]
+  allSongs?: readonly AllSongsItem[]
   currentScope?: string | null
   activeScope?: string | null
   onOpen: () => void
   onSelect: (scope: string) => void
   onPlay: (scope: string) => void
+  onPlaySong?: (scope: string, trackId: string) => void
 }
 
 export type PlayerPlaylistViewModel = {

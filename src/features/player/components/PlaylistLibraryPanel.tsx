@@ -6,6 +6,9 @@ import { motion, useAnimationControls, useIsPresent } from 'motion/react'
 import { useLibraryDockBinding } from '@/features/player/hooks/useLibraryDockBinding'
 import { readLibraryLayoutRect } from '@/features/player/model/libraryNavigationGeometry'
 import { useCollectionLayout } from '@/features/player/hooks/useCollectionLayout'
+import { useAllSongsWindow } from '@/features/player/hooks/useAllSongsWindow'
+import { PlaylistCard } from '@/features/player/components/PlaylistCard'
+import { PLAYLIST_SONG_LAYOUTS, ALL_SONGS_LAYOUT_STORAGE_KEY, defaultAllSongsLevel } from '@/features/player/model/playlistSongLayouts'
 import { PLAYLIST_MANAGEMENT_LAYOUTS, PLAYLIST_MANAGEMENT_LAYOUT_STORAGE_KEY, defaultPlaylistManagementLevel } from '@/features/player/model/playlistManagementLayouts'
 import { useAppearanceMotion } from '@/features/appearance/hooks/useAppearance'
 import { Button } from '@/components/ui/button'
@@ -27,15 +30,49 @@ const MANAGEMENT_LAYOUT_SELECTORS = {
   item: '[data-playlist-scope]', cover: '.playlist-management-cover', copy: '.playlist-management-copy',
   getId: (element: HTMLElement) => element.dataset.playlistScope,
 }
+const ALL_SONGS_LAYOUT_SELECTORS = {
+  item: '[data-song-key]', cover: '.playlist-card-cover', copy: '.playlist-card-copy',
+  getId: (element: HTMLElement) => element.dataset.songKey,
+}
 const MotionEmpty = motion.create(Empty)
 const QUICK_INDEX_KEYS = ['0', ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ', '#'] as const
 const QUICK_INDEX_COUNT = QUICK_INDEX_KEYS.length + 1
 
 function quickIndexKey(name: string): string {
-  const first = name.trimStart().charAt(0).toUpperCase()
-  if (first >= 'A' && first <= 'Z') return first
-  if (first >= '0' && first <= '9') return '0'
+  const trimmed = name.trimStart()
+  const firstCode = trimmed.charCodeAt(0)
+  if (firstCode >= 65 && firstCode <= 90) return trimmed.charAt(0)
+  if (firstCode >= 97 && firstCode <= 122) return String.fromCharCode(firstCode - 32)
+  if (firstCode >= 48 && firstCode <= 64) return '0'
+  if (firstCode >= 33 && firstCode <= 47) return 'top'
   return '#'
+}
+
+function compareByQuickIndex(left: string, right: string): number {
+  const leftKey = quickIndexKey(left)
+  const rightKey = quickIndexKey(right)
+  const order = (key: string) => key === 'top' ? -1 : key === '0' ? 0 : key === '#' ? 27 : key.charCodeAt(0) - 64
+  const group = order(leftKey) - order(rightKey)
+  if (!group && leftKey === 'top') {
+    const leftName = left.trimStart()
+    const rightName = right.trimStart()
+    return leftName < rightName ? -1 : leftName > rightName ? 1 : 0
+  }
+  if (!group && leftKey === '0') {
+    const leftCode = left.trimStart().charCodeAt(0)
+    const rightCode = right.trimStart().charCodeAt(0)
+    const leftIsDigit = leftCode <= 57
+    const rightIsDigit = rightCode <= 57
+    if (leftIsDigit !== rightIsDigit) return leftIsDigit ? -1 : 1
+  }
+  if (!group && leftKey === '#') {
+    const leftCode = left.trimStart().charCodeAt(0)
+    const rightCode = right.trimStart().charCodeAt(0)
+    const leftIsAscii = leftCode <= 127
+    const rightIsAscii = rightCode <= 127
+    if (leftIsAscii !== rightIsAscii) return leftIsAscii ? -1 : 1
+  }
+  return group || left.localeCompare(right, undefined, { numeric: true })
 }
 
 type Props = {
@@ -73,7 +110,8 @@ export function PlaylistLibraryPanel({ playlist, librarySidebarOpen, onLibrarySi
   const library = playlist.library!
   const categoryId = library.route?.view === 'category' ? library.route.categoryId : 'playlists'
   const category = mediaLibraryCategories.find((item) => item.id === categoryId)!
-  const hasDataSource = categoryId === 'playlists' || categoryId === 'folder'
+  const isSongs = categoryId === 'songs'
+  const hasDataSource = isSongs || categoryId === 'playlists' || categoryId === 'folder'
   const categoryItems = useMemo(() => categoryId === 'playlists' ? library.items : categoryId === 'folder' ? library.items.filter((item) => item.sourceKind === 'folder') : [], [categoryId, library.items])
   const [query, setQuery] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
@@ -88,6 +126,9 @@ export function PlaylistLibraryPanel({ playlist, librarySidebarOpen, onLibrarySi
   const searchRef = useRef<HTMLInputElement>(null)
   const panelRef = useRef<HTMLElement | null>(null)
   const gridRef = useRef<HTMLDivElement | null>(null)
+  const songsListRef = useRef<HTMLDivElement | null>(null)
+  const managementPanelRef = useRef<HTMLElement | null>(null)
+  const [failedSongCovers, setFailedSongCovers] = useState<ReadonlySet<string>>(new Set())
   const headingRef = useRef<HTMLElement | null>(null)
   const toolbarControls = useAnimationControls()
   const navigationMotion = appearanceMotion.libraryNavigation
@@ -134,20 +175,35 @@ export function PlaylistLibraryPanel({ playlist, librarySidebarOpen, onLibrarySi
     return source && target ? { x: source.x - target.x, y: source.y - target.y } : { x: 0, y: 0 }
   }
   const { layout, announcement } = useCollectionLayout({
-    panelRef, gridRef, layouts: PLAYLIST_MANAGEMENT_LAYOUTS,
+    panelRef: managementPanelRef, gridRef, layouts: PLAYLIST_MANAGEMENT_LAYOUTS,
     storageKey: PLAYLIST_MANAGEMENT_LAYOUT_STORAGE_KEY,
     defaultLevel: defaultPlaylistManagementLevel, selectors: MANAGEMENT_LAYOUT_SELECTORS,
     gestureArea: 'panel',
     announce: (nextLayout) => `列表视图已切换为${nextLayout.label}`,
   })
-  const visible = categoryItems.filter((item) => item.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
+  const { layout: songsLayout, announcement: songsAnnouncement } = useCollectionLayout({
+    panelRef, gridRef: songsListRef, layouts: PLAYLIST_SONG_LAYOUTS,
+    storageKey: ALL_SONGS_LAYOUT_STORAGE_KEY, defaultLevel: defaultAllSongsLevel,
+    selectors: ALL_SONGS_LAYOUT_SELECTORS,
+    announce: (nextLayout) => `歌曲视图已切换为${nextLayout.label}`,
+  })
+  const visible = categoryItems
+    .filter((item) => item.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
+    .sort((left, right) => compareByQuickIndex(left.name, right.name))
+  const visibleSongs = useMemo(() => (library.allSongs ?? [])
+    .filter((item) => `${item.track.title} ${item.track.artist} ${item.track.album}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
+    .sort((left, right) => compareByQuickIndex(left.track.title, right.track.title)), [library.allSongs, query])
+  const windowRows = useAllSongsWindow(visibleSongs, panelRef, songsListRef, isSongs)
   const quickIndexTargets = new Map<string, number>()
-  visible.forEach((item, index) => {
-    const key = quickIndexKey(item.name)
+  ;(isSongs ? visibleSongs.map((item) => item.track.title) : visible.map((item) => item.name)).forEach((name, index) => {
+    const key = quickIndexKey(name)
     if (!quickIndexTargets.has(key)) quickIndexTargets.set(key, index)
   })
   const selectedItems = visible.filter((item) => selected.has(item.scope))
   const playTarget = selectMode ? selectedItems[0] : visible[0]
+  const selectedSongs = visibleSongs.filter((item) => selected.has(item.key) && item.available)
+  const playableSongs = visibleSongs.filter((item) => item.available)
+  const songPlayTarget = selectMode ? selectedSongs[0] : playableSongs[0]
   useEffect(() => {
     if (searchRequestId > 0) {
       // Focus after the input has mounted, with no timing-dependent delay.
@@ -194,7 +250,7 @@ export function PlaylistLibraryPanel({ playlist, librarySidebarOpen, onLibrarySi
       return
     }
     const index = quickIndexTargets.get(key)
-    const card = index === undefined ? null : gridRef.current?.children.item(index)
+    const card = index === undefined ? null : (isSongs ? songsListRef.current : gridRef.current)?.children.item(index)
     if (!card) return
     panel.scrollTop += card.getBoundingClientRect().top - panel.getBoundingClientRect().top - 8
   }
@@ -254,7 +310,7 @@ export function PlaylistLibraryPanel({ playlist, librarySidebarOpen, onLibrarySi
         <PlaylistLibrarySidebar {...sidebarProps} overlay />
       </DialogContent>
     </Dialog>
-    <motion.section ref={panelRef} className="playlist-management-content" aria-label={`${category.label}管理`}
+    <motion.section ref={(node) => { panelRef.current = node; managementPanelRef.current = isSongs ? null : node }} className="playlist-management-content" aria-label={`${category.label}管理`}
       variants={offscreenEntry ? navigationMotion.detailReturn.incoming : appearanceMotion.variants.backdrop}
       transition={offscreenEntry ? navigationMotion.transition : atomicOverview ? { duration: 0 } : returnTransition}
       initial={atomicOverview ? false : 'initial'} animate={offscreenEntry ? entryControls : 'animate'} exit={atomicOverview ? 'animate' : 'exit'}>
@@ -267,7 +323,7 @@ export function PlaylistLibraryPanel({ playlist, librarySidebarOpen, onLibrarySi
           layoutId={sharedProjection ? `library-category-icon:${categoryId}` : undefined} layoutCrossfade={false}
           transition={{ layout: navigationMotion.transition }}><span className="media-library-category-glyph" style={{ width: category.glyphWidth, height: category.glyphHeight, maskImage: `url("${category.overviewIcon}")`, WebkitMaskImage: `url("${category.overviewIcon}")` }} /></motion.span>
         <motion.h2 key={`category-label:${projectionKey}`} layoutId={sharedProjection ? `library-category-label:${categoryId}` : undefined} layoutCrossfade={false}
-          transition={{ layout: navigationMotion.transition }}>{category.label}</motion.h2>
+          transition={{ layout: navigationMotion.transition }}>{isSongs ? '全部歌曲' : category.label}</motion.h2>
       </header>
       <motion.div className="playlist-management-toolbar" custom={toolbarOffset} variants={navigationMotion.toolbar}
         initial={false} animate={toolbarControls} exit={atomicOverview ? 'exit' : 'animate'} transition={navigationMotion.transition}>
@@ -275,28 +331,63 @@ export function PlaylistLibraryPanel({ playlist, librarySidebarOpen, onLibrarySi
           layout={sharedProjection ? 'position' : undefined}
           layoutId={sharedProjection && library.currentScope ? `playlist-library-actions:${library.currentScope}` : undefined}
           transition={{ layout: returnTransition }}>
-          <Button variant="outline" aria-label={`随机播放${category.label}`} disabled={!playTarget || playlist.isOpenAudioDisabled} onClick={() => {
+          <Button variant="outline" aria-label={`随机播放${category.label}`} disabled={isSongs ? !playableSongs.length || playlist.isOpenAudioDisabled : !playTarget || playlist.isOpenAudioDisabled} onClick={() => {
+            if (isSongs) {
+              const candidates = selectMode ? selectedSongs : playableSongs
+              const target = candidates[Math.floor(Math.random() * candidates.length)]
+              if (target) library.onPlaySong?.(target.scope, target.trackId)
+              return
+            }
             const candidates = selectMode ? selectedItems : visible
             const target = candidates[Math.floor(Math.random() * candidates.length)]
             if (target) library.onPlay(target.scope)
           }}><img src={shuffleIcon} alt="" /></Button>
-          <Button variant="outline" aria-label={`${category.label}中的歌曲`} disabled={!playTarget || playlist.isOpenAudioDisabled} onClick={() => playTarget && library.onPlay(playTarget.scope)}><img src={playIcon} alt="" /></Button>
+          <Button variant="outline" aria-label={`播放${category.label}`} disabled={isSongs ? !songPlayTarget || playlist.isOpenAudioDisabled : !playTarget || playlist.isOpenAudioDisabled} onClick={() => {
+            if (isSongs) { if (songPlayTarget) library.onPlaySong?.(songPlayTarget.scope, songPlayTarget.trackId) }
+            else if (playTarget) library.onPlay(playTarget.scope)
+          }}><img src={playIcon} alt="" /></Button>
           <Button variant="outline" aria-label={`搜索${category.label}`} aria-expanded={showSearch} onClick={() => { setSearchOpen(true); queueMicrotask(() => searchRef.current?.focus()) }}><img src={searchIcon} alt="" /></Button>
-          <Button variant="outline" aria-pressed={selectMode} disabled={!categoryItems.length} onClick={() => { setSelectMode(!selectMode); setSelected(new Set()) }}>{selectMode ? '取消选择' : '选择'}</Button>
+          <Button variant="outline" aria-pressed={selectMode} disabled={isSongs ? !(library.allSongs?.length) : !categoryItems.length} onClick={() => { setSelectMode(!selectMode); setSelected(new Set()) }}>{selectMode ? '取消选择' : '选择'}</Button>
           {selectMode ? <span role="status">已选择 {selected.size} 项</span> : null}
         </motion.div> : <div />}
         <DropdownMenu>
           <DropdownMenuTrigger render={<Button className="playlist-management-more" variant="outline" aria-label="更多列表操作"><img src={moreIcon} alt="" /></Button>} />
           <DropdownMenuContent align="end"><DropdownMenuGroup>
             <DropdownMenuItem disabled={playlist.isOpenAudioDisabled} onClick={playlist.onOpenAudio}>导入音频或播放列表</DropdownMenuItem>
-            <DropdownMenuItem disabled={!visible.length} onClick={() => { setSelectMode(true); setSelected(new Set(visible.map((item) => item.scope))) }}>选择全部可见列表</DropdownMenuItem>
+            <DropdownMenuItem disabled={isSongs ? !visibleSongs.length : !visible.length} onClick={() => { setSelectMode(true); setSelected(new Set(isSongs ? visibleSongs.map((item) => item.key) : visible.map((item) => item.scope))) }}>选择全部可见{isSongs ? '歌曲' : '列表'}</DropdownMenuItem>
           </DropdownMenuGroup></DropdownMenuContent>
         </DropdownMenu>
       </motion.div>
       {showSearch ? <motion.div className="playlist-management-search" variants={navigationMotion.chrome}
-        initial={atomicOverview ? 'initial' : false} animate="animate" exit={atomicOverview ? 'exit' : 'animate'} transition={navigationMotion.transition}><Input ref={searchRef} type="search" aria-label={`搜索${category.label}名称`} placeholder={`搜索${category.label}`} value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape') { setQuery(''); setSearchOpen(false); setDismissedSearchRequestId(searchRequestId) } }} /></motion.div> : null}
-      <span className="sr-only" role="status" aria-live="polite">{announcement}</span>
-      {visible.length ? <div ref={gridRef} className="playlist-management-grid"
+        initial={atomicOverview ? 'initial' : false} animate="animate" exit={atomicOverview ? 'exit' : 'animate'} transition={navigationMotion.transition}><Input ref={searchRef} type="search" aria-label={isSongs ? '搜索歌曲标题、艺术家或专辑' : `搜索${category.label}名称`} placeholder={isSongs ? '搜索歌曲' : `搜索${category.label}`} value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape') { setQuery(''); setSearchOpen(false); setDismissedSearchRequestId(searchRequestId) } }} /></motion.div> : null}
+      <span className="sr-only" role="status" aria-live="polite">{isSongs ? songsAnnouncement : announcement}</span>
+      {isSongs ? (visibleSongs.length ? <div ref={songsListRef} className="playlist-grid all-songs-list" aria-label="全部歌曲列表"
+        data-layout-level={songsLayout.level} data-layout-flow={songsLayout.flow} data-layout-columns={songsLayout.columns}
+        data-content-window="full" data-cover-motion={appearanceMotion.disabled ? 'off' : undefined}
+        style={{ ...songsLayout.style, touchAction: 'pan-y' }}>
+        {visibleSongs.map((item, index) => {
+          const row = windowRows.get(item.key)
+          const track = row?.track ?? item.track
+          const bitDepth = track.audioFormat?.bitDepth
+          const hasFormat = Boolean((track.durationSeconds ?? 0) > 0 || track.fileExtension || (bitDepth != null && bitDepth >= 24))
+          const contentShape = Number(Boolean(track.title)) | (Number(Boolean(track.artist)) << 1)
+            | (Number(Boolean(track.artist || track.album)) << 2) | (Number(hasFormat) << 3)
+          return <PlaylistCard key={item.key} songKey={item.key} track={track} index={index}
+            current={item.scope === library.activeScope && item.trackId === playlist.currentTrackId}
+            unavailable={!item.available} canSelectUnavailable canActivate={!playlist.isOpenAudioDisabled}
+            selectMode={selectMode} selected={selected.has(item.key)}
+            artworkVisible={songsLayout.showArtwork} coverUrl={row?.coverUrl}
+            showExtendedMetadata={songsLayout.flow !== 'tile'} contentVisible contentRepresentative={false}
+            contentShape={contentShape} coverFailed={failedSongCovers.has(item.key)}
+            onCoverFailed={() => setFailedSongCovers((previous) => new Set(previous).add(item.key))}
+            onActivate={() => library.onPlaySong?.(item.scope, item.trackId)}
+            onToggleSelect={() => setSelected((previous) => {
+              const next = new Set(previous)
+              if (next.has(item.key)) next.delete(item.key); else next.add(item.key)
+              return next
+            })} />
+        })}
+      </div> : <MotionEmpty className="playlist-management-empty" variants={navigationMotion.chrome} initial={false} animate="animate"><EmptyHeader><EmptyTitle>{(library.allSongs?.length ?? 0) ? '没有匹配的歌曲' : '暂无歌曲'}</EmptyTitle><EmptyDescription>{(library.allSongs?.length ?? 0) ? '尝试其他名称，或清空搜索。' : '导入本地音频文件夹后，这里会列出本次会话中各文件夹的歌曲。'}</EmptyDescription></EmptyHeader><Button disabled={playlist.isOpenAudioDisabled} onClick={(library.allSongs?.length ?? 0) ? () => setQuery('') : playlist.onOpenAudio}>{(library.allSongs?.length ?? 0) ? '清空搜索' : '导入音频文件夹'}</Button></MotionEmpty>) : visible.length ? <div ref={gridRef} className="playlist-management-grid"
         data-layout-level={layout.level} data-layout-flow={layout.flow} data-layout-artwork={layout.showArtwork}
         aria-label={layout.label} style={{ ...layout.style, touchAction: 'pan-y' }}>
         {visible.map((item) => <motion.div key={item.scope} className="playlist-management-card"
@@ -322,11 +413,11 @@ export function PlaylistLibraryPanel({ playlist, librarySidebarOpen, onLibrarySi
         </motion.div>)}
       </div> : <MotionEmpty className="playlist-management-empty" variants={navigationMotion.chrome} initial={atomicOverview ? 'initial' : false} animate="animate" exit={atomicOverview ? 'exit' : 'animate'} transition={navigationMotion.transition}><EmptyHeader><EmptyTitle>{!hasDataSource ? `${category.label}尚未接入数据` : categoryItems.length ? `没有匹配的${category.label}` : `暂无${category.label}`}</EmptyTitle><EmptyDescription>{!hasDataSource ? `此分类的数据管理能力尚未接入。可返回媒体库，或在播放列表中浏览本次会话已导入的列表。` : categoryItems.length ? '尝试其他名称，或清空搜索。' : categoryId === 'folder' ? '导入本地音频文件夹后，可在这里浏览。本次会话中的 M3U8 列表显示在播放列表分类。' : '导入本地音频文件夹或 M3U8 列表后，在这里选择要浏览的播放列表。列表保留在本次会话中。'}</EmptyDescription></EmptyHeader><Button disabled={playlist.isOpenAudioDisabled} onClick={!hasDataSource ? library.onOpen : categoryItems.length ? () => setQuery('') : playlist.onOpenAudio}>{!hasDataSource ? '打开播放列表' : categoryItems.length ? '清空搜索' : '导入音频或播放列表'}</Button></MotionEmpty>}
     </motion.section>
-    {categoryId === 'playlists' ? <>
+    {(categoryId === 'playlists' || isSongs) ? <>
     {quickIndexPreview ? <div className="playlist-management-quick-index-preview" data-visible={quickIndexPreview.visible} style={{ top: quickIndexPreview.top }} aria-hidden="true">
       {quickIndexPreview.key === 'top' ? <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m2 7 6-6 6 6M2 14l6-6 6 6" /></svg> : quickIndexPreview.key}
     </div> : null}
-    <nav className="playlist-management-quick-index" aria-label="播放列表快速查找"
+    <nav className="playlist-management-quick-index" aria-label={isSongs ? '歌曲快速查找' : '播放列表快速查找'}
       onPointerDown={(event) => {
         if (!event.isPrimary || event.button !== 0) return
         event.preventDefault()
@@ -343,7 +434,7 @@ export function PlaylistLibraryPanel({ playlist, librarySidebarOpen, onLibrarySi
           <path d="m2 7 6-6 6 6M2 14l6-6 6 6" />
         </svg>
       </button>
-      {QUICK_INDEX_KEYS.map((key) => <button key={key} type="button" aria-label={key === '0' ? '查找数字开头的播放列表' : key === '#' ? '查找其他字符开头的播放列表' : `查找 ${key} 开头的播放列表`}
+      {QUICK_INDEX_KEYS.map((key) => <button key={key} type="button" aria-label={key === '0' ? `查找数字开头的${isSongs ? '歌曲' : '播放列表'}` : key === '#' ? `查找其他字符开头的${isSongs ? '歌曲' : '播放列表'}` : `查找 ${key} 开头的${isSongs ? '歌曲' : '播放列表'}`}
         aria-current={activeQuickIndex === key ? 'true' : undefined} title={key === '0' ? '数字' : key === '#' ? '其他字符' : key}
         onClick={(event) => activateQuickIndexByKeyboard(key, event)}>{key}</button>)}
     </nav></> : null}

@@ -6,9 +6,12 @@ import type { PlaylistTrackItemViewModel } from '@/features/player/model/playerU
 
 type PlaylistCardProps = {
   track: PlaylistTrackItemViewModel
+  songKey?: string
+  coverUrl?: string
   index?: number
   current: boolean
   unavailable: boolean
+  canSelectUnavailable?: boolean
   canActivate: boolean
   selectMode: boolean
   selected: boolean
@@ -42,9 +45,12 @@ function formatTrackClock(durationSeconds?: number): string | null {
 
 export const PlaylistCard = memo(function PlaylistCard({
   track,
+  songKey,
+  coverUrl,
   index = 0,
   current,
   unavailable,
+  canSelectUnavailable = false,
   canActivate,
   selectMode,
   selected,
@@ -78,7 +84,7 @@ export const PlaylistCard = memo(function PlaylistCard({
   // coming, so the card keeps the quiet surface instead of claiming there is no
   // cover. The state stays in the machine for the moment the visual pipeline can
   // report a dropped entry, and `error` outranks `loading` for that case.
-  const coverState: PlaylistCardCoverState = track.coverThumbnail
+  const coverState: PlaylistCardCoverState = coverUrl || track.coverThumbnail
     ? 'ready'
     : artworkVisible
       ? coverFailed
@@ -93,6 +99,7 @@ export const PlaylistCard = memo(function PlaylistCard({
       type="button"
       className="playlist-card"
       data-playlist-track-id={track.id}
+      data-song-key={songKey}
       data-cover-state={coverState}
       data-content-visible={contentVisible ? 'true' : 'false'}
       data-content-representative={contentRepresentative ? 'true' : undefined}
@@ -104,21 +111,21 @@ export const PlaylistCard = memo(function PlaylistCard({
       data-select-mode={selectMode ? 'true' : undefined}
       aria-current={current ? 'true' : undefined}
       aria-pressed={selectMode ? selected : undefined}
-      disabled={unavailable || (!selectMode && !canActivate)}
+      disabled={(unavailable && !(selectMode && canSelectUnavailable)) || (!selectMode && !canActivate)}
       title={label}
       aria-label={label}
       onClick={handleClick}
     >
-      {contentVisible ? <PlaylistCardContent track={track} artworkVisible={artworkVisible}
+      {contentVisible ? <PlaylistCardContent track={track} coverUrl={coverUrl} artworkVisible={artworkVisible}
         selectMode={selectMode} unavailable={unavailable} showExtendedMetadata={showExtendedMetadata}
         coverState={coverState} coverFailed={coverFailed} onCoverFailed={onCoverFailed} /> : null}
     </button>
   )
 })
 
-function PlaylistCardContent({ track, artworkVisible, selectMode, unavailable, showExtendedMetadata, coverState, coverFailed, onCoverFailed }: Pick<PlaylistCardProps, 'track' | 'artworkVisible' | 'selectMode' | 'unavailable' | 'showExtendedMetadata' | 'coverFailed' | 'onCoverFailed'> & { coverState: PlaylistCardCoverState }) {
+function PlaylistCardContent({ track, coverUrl, artworkVisible, selectMode, unavailable, showExtendedMetadata, coverState, coverFailed, onCoverFailed }: Pick<PlaylistCardProps, 'track' | 'coverUrl' | 'artworkVisible' | 'selectMode' | 'unavailable' | 'showExtendedMetadata' | 'coverFailed' | 'onCoverFailed'> & { coverState: PlaylistCardCoverState }) {
   const systemIcons = useSystemIcons()
-  const coverSource = track.coverImage ?? track.coverImageFallback
+  const coverSource = coverUrl ?? track.coverImage ?? track.coverImageFallback
   const coverMarkVisible = coverState === 'empty' || coverState === 'error'
   // Empty text means "unknown", so a missing artist/album must not leave an
   // empty line behind. `playlistCardContentShape` already counts these bits.
@@ -143,7 +150,9 @@ function PlaylistCardContent({ track, artworkVisible, selectMode, unavailable, s
   }
   return <>
       <span className="playlist-card-cover" aria-hidden="true">
-        {track.coverThumbnail ? (
+        {coverUrl ? (
+          <img className="playlist-card-cover-image playlist-card-cover-image-eager" src={coverUrl} alt="" onError={handleCoverError} />
+        ) : track.coverThumbnail ? (
           <PlaylistCoverImage className="playlist-card-cover-image" image={track.coverThumbnail} />
         ) : !coverFailed && artworkVisible && track.hasLocalArtwork === false && coverSource ? (
           // This eager <img> has no thumbnail pipeline and therefore no load

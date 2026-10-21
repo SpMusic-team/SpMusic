@@ -6,9 +6,9 @@ import { playlistScope, useAudioPlayer } from '@/features/player/hooks/useAudioP
 import { usePlaylistLibraryDurations } from '@/features/player/hooks/usePlaylistDuration'
 import { playlistDisplayName } from '@/features/player/model/audioTrackModel'
 import { formatPlaylistDurationLabel } from '@/features/player/model/playlistDuration'
-import { pendingPlaylistTrackRow } from '@/features/player/model/playlistTrackSummary'
+import { normalizeAudioSourcePath, pendingPlaylistTrackRow } from '@/features/player/model/playlistTrackSummary'
 import { useGlobalShortcuts } from '@/features/shortcuts/hooks/useGlobalShortcuts'
-import type { DevAudioToolsViewModel, PlayerUiViewModel, PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
+import type { AllSongsItem, DevAudioToolsViewModel, PlayerUiViewModel, PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
 import { readStartupPage } from '@/features/player/model/startupPageStorage'
 
 const EMPTY_KNOWN_DURATIONS: ReadonlyMap<string, number> = new Map()
@@ -42,6 +42,12 @@ export function PlayerShell() {
   useEffect(() => {
     if (!isBrowsingActive && browsedScope) ensurePlaylistSummaries(browsedScope)
   }, [browsedScope, ensurePlaylistSummaries, isBrowsingActive])
+  useEffect(() => {
+    if (libraryRoute.view !== 'category' || libraryRoute.categoryId !== 'songs') return
+    for (const source of player.sessionPlaylists) {
+      if (source.sourceKind === 'folder') ensurePlaylistSummaries(playlistScope(source))
+    }
+  }, [libraryRoute, player.sessionPlaylists, ensurePlaylistSummaries])
   const handlePlaylistOpenChange = useCallback((open: boolean) => {
     setIsPlaylistOpen(open)
     if (open) {
@@ -91,6 +97,25 @@ export function PlayerShell() {
   const browsedUnavailableIds = useMemo(() => isBrowsingActive ? player.unavailableTrackIds
     : new Set(browsedPlaylist?.tracks.filter((item) => !item.available).map((item) => item.id)),
   [isBrowsingActive, player.unavailableTrackIds, browsedPlaylist])
+  const allSongs = useMemo<AllSongsItem[]>(() => {
+    const seen = new Set<string>()
+    const rows: AllSongsItem[] = []
+    const activeRows = new Map(playlistTracks.map((item) => [item.id, item]))
+    for (const source of player.sessionPlaylists) {
+      if (source.sourceKind !== 'folder') continue
+      const scope = playlistScope(source)
+      const summaries = summariesByScope[scope]
+      for (const descriptor of source.tracks) {
+        const key = normalizeAudioSourcePath(descriptor.sourcePath)
+        if (seen.has(key)) continue
+        seen.add(key)
+        const activeRow = scope === player.activePlaylistScope ? activeRows.get(descriptor.id) : undefined
+        rows.push({ key, scope, trackId: descriptor.id, sourcePath: descriptor.sourcePath, available: descriptor.available,
+          track: activeRow ?? summaries?.[descriptor.id] ?? pendingPlaylistTrackRow(descriptor) })
+      }
+    }
+    return rows
+  }, [player.sessionPlaylists, player.activePlaylistScope, playlistTracks, summariesByScope])
   const singleTrackSource = player.currentAudioTrack?.sourcePath
   const durationSources = useMemo<readonly { sourcePath: string; id?: string; available?: boolean }[]>(() => player.playlistDurationTracks
     ?? (singleTrackSource ? [{ sourcePath: singleTrackSource }] : []), [player.playlistDurationTracks, singleTrackSource])
@@ -226,6 +251,7 @@ export function PlayerShell() {
             item.tracks.length,
           ),
         })),
+        allSongs,
         currentScope: browsedScope,
         activeScope: player.activePlaylistScope,
         onOpen: openLibrary,
@@ -235,6 +261,7 @@ export function PlayerShell() {
           const track = item?.tracks.find((entry) => entry.available)
           if (track) void player.selectSessionPlaylistTrack(scope, track.id)
         },
+        onPlaySong: (scope, trackId) => { void player.selectSessionPlaylistTrack(scope, trackId) },
       },
       isOpenAudioDisabled: player.audioBusy
         || player.transportBusy

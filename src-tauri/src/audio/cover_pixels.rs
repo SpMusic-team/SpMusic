@@ -480,9 +480,13 @@ struct PlaylistDecodeSlots {
 
 impl PlaylistDecodeSlots {
     fn new() -> Self {
-        let (release, tokens) = tauri::async_runtime::channel(PLAYLIST_DECODE_PERMITS);
-        for _ in 0..PLAYLIST_DECODE_PERMITS {
-            release.try_send(()).expect("seed playlist decode slots");
+        Self::with_permits(PLAYLIST_DECODE_PERMITS)
+    }
+
+    fn with_permits(permits: usize) -> Self {
+        let (release, tokens) = tauri::async_runtime::channel(permits);
+        for _ in 0..permits {
+            release.try_send(()).expect("seed playlist worker slots");
         }
         Self {
             release,
@@ -623,6 +627,11 @@ enum PlaylistWorkerResult {
     Joined(PlaylistFlightReceiver, PlaylistRequestReservation),
 }
 
+enum PlaylistLookupResult {
+    Hit(Vec<u8>, PlaylistRequestReservation),
+    Miss(PlaylistRequestReservation),
+}
+
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PlaylistTestStage {
@@ -635,6 +644,10 @@ enum PlaylistTestStage {
     Joined,
     Decoding,
     BeforePublish,
+    LookupEntered,
+    LookupLeft,
+    LookupHit,
+    LookupMiss,
 }
 
 #[cfg(test)]
@@ -650,9 +663,22 @@ impl Drop for PlaylistTestWorkerExit {
     }
 }
 
+#[cfg(test)]
+struct PlaylistTestLookupExit(Arc<PlaylistCoverRequestCoordinator>);
+
+#[cfg(test)]
+impl Drop for PlaylistTestLookupExit {
+    fn drop(&mut self) {
+        self.0.test_stage(PlaylistTestStage::LookupLeft);
+    }
+}
+
 struct PlaylistCoverRequestCoordinator {
     clients: StdMutex<PlaylistCoverClients>,
     slots: PlaylistDecodeSlots,
+    // Cache reads can progress beside a cold decode, but at most one lookup
+    // owns an additional bounded original buffer (16 MiB) at a time.
+    lookup_slots: PlaylistDecodeSlots,
     requests: Arc<AtomicUsize>,
     flights: Arc<PlaylistFlights>,
     #[cfg(test)]
@@ -670,6 +696,7 @@ impl PlaylistCoverRequestCoordinator {
         Self {
             clients: StdMutex::new(PlaylistCoverClients::default()),
             slots: PlaylistDecodeSlots::new(),
+            lookup_slots: PlaylistDecodeSlots::with_permits(1),
             requests: Arc::new(AtomicUsize::new(0)),
             flights: Arc::new(PlaylistFlights::default()),
             #[cfg(test)]
@@ -769,6 +796,40 @@ impl PlaylistCoverRequestCoordinator {
         let request = self.reserve_request()?;
         #[cfg(test)]
         self.test_stage(PlaylistTestStage::Queued);
+        let lookup_permit = self.lookup_slots.acquire().await?;
+        self.ensure_current(&input.client_id, input.window_generation)?;
+        let lookup_coordinator = Arc::clone(self);
+        let lookup_root = app_cache_dir.clone();
+        let lookup_input = input.clone();
+        let lookup = tauri::async_runtime::spawn_blocking(move || {
+            let _permit = lookup_permit;
+            let request = request;
+            #[cfg(test)]
+            let _exit = PlaylistTestLookupExit(Arc::clone(&lookup_coordinator));
+            #[cfg(test)]
+            lookup_coordinator.test_stage(PlaylistTestStage::LookupEntered);
+            lookup_coordinator.lookup_cached(&lookup_root, &lookup_input, request)
+        })
+        .await
+        .map_err(|error| {
+            tracing::error!(
+                operation = "audio.playlist_cover_pixels.lookup_join",
+                window_generation = input.window_generation,
+                error = %error,
+                "playlist thumbnail cache lookup worker failed",
+            );
+            playlist_worker_failed()
+        })??;
+        let request = match lookup {
+            PlaylistLookupResult::Hit(response, request) => {
+                let _request = request;
+                self.ensure_current(&input.client_id, input.window_generation)?;
+                return Ok(response);
+            }
+            PlaylistLookupResult::Miss(request) => request,
+        };
+        // Misses return no original bytes. They revalidate/re-read under the
+        // existing decode gate instead of retaining up to 32 queued originals.
         let permit = self.slots.acquire().await?;
         self.ensure_current(&input.client_id, input.window_generation)?;
         let worker_coordinator = Arc::clone(self);
@@ -807,6 +868,53 @@ impl PlaylistCoverRequestCoordinator {
         let _request = request;
         self.ensure_current(&input.client_id, input.window_generation)?;
         outcome.map(|response| response.as_ref().clone())
+    }
+
+    fn lookup_cached(
+        &self,
+        root: &Path,
+        input: &AudioLoadPlaylistCoverPixelsInput,
+        request: PlaylistRequestReservation,
+    ) -> Result<PlaylistLookupResult, CoverPixelsError> {
+        self.ensure_current(&input.client_id, input.window_generation)?;
+        #[cfg(test)]
+        let stage_started = Instant::now();
+        let covers_root = root.join(AUDIO_CACHE_DIRECTORY).join(COVER_DIRECTORY);
+        let path = validate_cover_path(&covers_root, Path::new(&input.file_path))?;
+        let bytes = read_bounded_file(&path)?;
+        #[cfg(test)]
+        THUMBNAIL_BENCH_READ_NS
+            .fetch_add(stage_started.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        #[cfg(test)]
+        let stage_started = Instant::now();
+        let source_hash = blake3::hash(&bytes);
+        #[cfg(test)]
+        THUMBNAIL_BENCH_HASH_NS
+            .fetch_add(stage_started.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        // Content identity always comes from current bytes, never filename or
+        // mtime. Release the original before cache lookup/output or miss queueing.
+        drop(bytes);
+        self.ensure_current(&input.client_id, input.window_generation)?;
+        #[cfg(test)]
+        let stage_started = Instant::now();
+        let cache_dir = root.join(AUDIO_CACHE_DIRECTORY).join(THUMBNAIL_DIRECTORY);
+        let filename = playlist_thumbnail_filename(source_hash, input.max_edge);
+        let cached = lookup_playlist_thumbnail(&cache_dir, &filename, input.max_edge);
+        #[cfg(test)]
+        THUMBNAIL_BENCH_LOOKUP_NS
+            .fetch_add(stage_started.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        self.ensure_current(&input.client_id, input.window_generation)?;
+        if let Some(response) = cached {
+            #[cfg(test)]
+            THUMBNAIL_BENCH_HITS.fetch_add(1, Ordering::Relaxed);
+            #[cfg(test)]
+            self.test_stage(PlaylistTestStage::LookupHit);
+            Ok(PlaylistLookupResult::Hit(response, request))
+        } else {
+            #[cfg(test)]
+            self.test_stage(PlaylistTestStage::LookupMiss);
+            Ok(PlaylistLookupResult::Miss(request))
+        }
     }
 
     fn run_worker(
@@ -983,15 +1091,8 @@ fn playlist_pixels_from_bytes(
     let cache_dir = app_cache_dir
         .join(AUDIO_CACHE_DIRECTORY)
         .join(THUMBNAIL_DIRECTORY);
-    let filename = format!(
-        "{}-{max_edge}-t{THUMBNAIL_TRANSFORM_VERSION}-d{THUMBNAIL_DISK_VERSION}.spxr",
-        source_hash.to_hex()
-    );
-    let cache_path = cache_dir.join(&filename);
-    let pending = THUMBNAIL_WRITER
-        .get_or_init(ThumbnailWriter::new)
-        .pending(&cache_path);
-    let cached = pending.or_else(|| read_thumbnail_cache(&cache_dir, &filename, max_edge));
+    let filename = playlist_thumbnail_filename(source_hash, max_edge);
+    let cached = lookup_playlist_thumbnail(&cache_dir, &filename, max_edge);
     #[cfg(test)]
     THUMBNAIL_BENCH_LOOKUP_NS
         .fetch_add(stage_started.elapsed().as_nanos() as u64, Ordering::Relaxed);
@@ -1021,6 +1122,20 @@ fn playlist_pixels_from_bytes(
     THUMBNAIL_BENCH_WRITE_NS
         .fetch_add(stage_started.elapsed().as_nanos() as u64, Ordering::Relaxed);
     Ok(response)
+}
+
+fn playlist_thumbnail_filename(source_hash: blake3::Hash, max_edge: u32) -> String {
+    format!(
+        "{}-{max_edge}-t{THUMBNAIL_TRANSFORM_VERSION}-d{THUMBNAIL_DISK_VERSION}.spxr",
+        source_hash.to_hex()
+    )
+}
+
+fn lookup_playlist_thumbnail(cache_dir: &Path, filename: &str, max_edge: u32) -> Option<Vec<u8>> {
+    THUMBNAIL_WRITER
+        .get_or_init(ThumbnailWriter::new)
+        .pending(&cache_dir.join(filename))
+        .or_else(|| read_thumbnail_cache(cache_dir, filename, max_edge))
 }
 
 fn thumbnail_cache_root(cache_dir: &Path) -> Option<()> {
@@ -1988,6 +2103,171 @@ mod tests {
         assert!(coordinator.flights.entries.lock().unwrap().is_empty());
     }
 
+    fn safety_seed_thumbnail(root: &Path, source: &Path) -> Vec<u8> {
+        let bytes = fs::read(source).unwrap();
+        let response = decode_playlist_and_pack(&bytes, 128).unwrap();
+        assert!(matches!(
+            write_thumbnail_cache(
+                &root.join(AUDIO_CACHE_DIRECTORY).join(THUMBNAIL_DIRECTORY),
+                &playlist_thumbnail_filename(blake3::hash(&bytes), 128),
+                &response,
+            ),
+            ThumbnailWriteOutcome::Written
+        ));
+        response
+    }
+
+    #[test]
+    fn playlist_cache_hit_finishes_while_every_cold_decode_slot_is_held() {
+        tauri::async_runtime::block_on(async {
+            let dir = TestDirectory::new();
+            let coordinator = Arc::new(PlaylistCoverRequestCoordinator::new());
+            let warm_source = safety_source(&dir, "warm.png", 20);
+            let expected = safety_seed_thumbnail(dir.path(), &warm_source);
+            let warm_input = safety_input(&coordinator, &warm_source, "warm");
+            let pause = SafetyPause::install(
+                &coordinator,
+                PlaylistTestStage::Decoding,
+                PLAYLIST_DECODE_PERMITS,
+                false,
+            );
+            let cold: Vec<_> = (0..PLAYLIST_DECODE_PERMITS)
+                .map(|index| {
+                    let source =
+                        safety_source(&dir, &format!("cold-{index}.png"), 4 + index as u32);
+                    let input = safety_input(&coordinator, &source, &format!("cold-{index}"));
+                    safety_start(&coordinator, dir.path(), input)
+                })
+                .collect();
+            pause.wait(PlaylistTestStage::Decoding, PLAYLIST_DECODE_PERMITS);
+            let warm = safety_start(&coordinator, dir.path(), warm_input);
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let waiter = tauri::async_runtime::spawn(async move {
+                let result = warm.await.unwrap();
+                sender.send(result).unwrap();
+            });
+            let result = receiver.recv_timeout(std::time::Duration::from_secs(5));
+            // Release even on the old (blocked) implementation so this assertion
+            // has a bounded failure and leaves no paused worker behind.
+            pause.release();
+            for job in cold {
+                job.await.unwrap().unwrap();
+            }
+            waiter.await.unwrap();
+            assert_eq!(
+                result.expect("cache hit waited for a cold decode").unwrap(),
+                expected
+            );
+            assert_eq!(
+                pause.state.decodes.load(Ordering::Acquire),
+                PLAYLIST_DECODE_PERMITS
+            );
+            safety_assert_idle(&coordinator);
+        });
+    }
+
+    #[test]
+    fn playlist_cache_miss_waits_for_decode_and_rehashes_changed_source() {
+        tauri::async_runtime::block_on(async {
+            let dir = TestDirectory::new();
+            let coordinator = Arc::new(PlaylistCoverRequestCoordinator::new());
+            let source = safety_source(&dir, "changed.png", 4);
+            let input = safety_input(&coordinator, &source, "changed");
+            let pause = SafetyPause::install(&coordinator, PlaylistTestStage::Entered, 0, false);
+            let mut held = Vec::new();
+            for _ in 0..PLAYLIST_DECODE_PERMITS {
+                held.push(coordinator.slots.acquire().await.unwrap());
+            }
+            let job = safety_start(&coordinator, dir.path(), input);
+            pause.wait(PlaylistTestStage::LookupMiss, 1);
+            assert_eq!(pause.state.active.load(Ordering::Acquire), 0);
+            assert_eq!(coordinator.requests.load(Ordering::Acquire), 1);
+            fs::write(&source, png_bytes(9, 2)).unwrap();
+            drop(held);
+            let response = job.await.unwrap().unwrap();
+            assert_eq!(u32_at(&response, 32), 9);
+            assert_eq!(pause.state.decodes.load(Ordering::Acquire), 1);
+            safety_assert_idle(&coordinator);
+        });
+    }
+
+    #[test]
+    fn playlist_cache_lookup_abort_keeps_io_permit_and_request_until_worker_exits() {
+        tauri::async_runtime::block_on(async {
+            let dir = TestDirectory::new();
+            let coordinator = Arc::new(PlaylistCoverRequestCoordinator::new());
+            let source = safety_source(&dir, "lookup.png", 4);
+            let input = safety_input(&coordinator, &source, "lookup");
+            let pause =
+                SafetyPause::install(&coordinator, PlaylistTestStage::LookupEntered, 1, false);
+            let active = safety_start(&coordinator, dir.path(), input.clone());
+            pause.wait(PlaylistTestStage::LookupEntered, 1);
+            active.abort();
+            assert!(active.await.is_err());
+            assert_eq!(coordinator.requests.load(Ordering::Acquire), 1);
+            if let Ok(mut tokens) = coordinator.lookup_slots.tokens.try_lock() {
+                assert!(tokens.try_recv().is_err());
+            }
+            let queued = safety_start(&coordinator, dir.path(), input);
+            pause.wait(PlaylistTestStage::Queued, 1);
+            queued.abort();
+            assert!(queued.await.is_err());
+            assert_eq!(coordinator.requests.load(Ordering::Acquire), 1);
+            coordinator.begin_window("lookup").unwrap();
+            pause.release();
+            pause.wait(PlaylistTestStage::LookupLeft, 1);
+            pause.wait_released(2);
+            safety_assert_idle(&coordinator);
+        });
+    }
+
+    #[test]
+    fn playlist_cache_hit_rechecks_generation_before_returning() {
+        tauri::async_runtime::block_on(async {
+            let dir = TestDirectory::new();
+            let coordinator = Arc::new(PlaylistCoverRequestCoordinator::new());
+            let source = safety_source(&dir, "warm-stale.png", 4);
+            safety_seed_thumbnail(dir.path(), &source);
+            let input = safety_input(&coordinator, &source, "warm-stale");
+            let pause = SafetyPause::install(&coordinator, PlaylistTestStage::LookupHit, 1, false);
+            let job = safety_start(&coordinator, dir.path(), input);
+            pause.wait(PlaylistTestStage::LookupHit, 1);
+            coordinator.begin_window("warm-stale").unwrap();
+            pause.release();
+            let error = job.await.unwrap().unwrap_err();
+            assert!(matches!(error.code, CoverPixelsErrorCode::StaleRequest));
+            assert_eq!(pause.state.decodes.load(Ordering::Acquire), 0);
+            safety_assert_idle(&coordinator);
+        });
+    }
+
+    #[test]
+    fn playlist_cache_lookup_uses_current_bytes_not_a_forged_source_filename() {
+        tauri::async_runtime::block_on(async {
+            let dir = TestDirectory::new();
+            let old_bytes = png_bytes(4, 2);
+            let old_hash = blake3::hash(&old_bytes);
+            let source = safety_source(&dir, &format!("{}.png", old_hash.to_hex()), 4);
+            let old_response = safety_seed_thumbnail(dir.path(), &source);
+            let new_bytes = png_bytes(8, 2);
+            let original_time = fs::metadata(&source).unwrap().modified().unwrap();
+            fs::write(&source, &new_bytes).unwrap();
+            File::options()
+                .write(true)
+                .open(&source)
+                .unwrap()
+                .set_modified(original_time)
+                .unwrap();
+            let coordinator = Arc::new(PlaylistCoverRequestCoordinator::new());
+            let input = safety_input(&coordinator, &source, "forged");
+            let response = coordinator.load(dir.path().into(), input).await.unwrap();
+            assert_eq!(u32_at(&response, 32), 8);
+            assert_ne!(response, old_response);
+            assert_eq!(response, decode_playlist_and_pack(&new_bytes, 128).unwrap());
+            safety_assert_idle(&coordinator);
+        });
+    }
+
     #[test]
     fn sp022_safety_panic_drop_wakes_waiters_and_removes_flight() {
         let registry = Arc::new(PlaylistFlights::default());
@@ -2186,6 +2466,7 @@ mod tests {
             let coordinator = Arc::new(PlaylistCoverRequestCoordinator::new());
             let input = safety_input(&coordinator, &source, "cap-client");
             let pause = SafetyPause::install(&coordinator, PlaylistTestStage::Entered, 0, false);
+            let held_lookup = coordinator.lookup_slots.acquire().await.unwrap();
             let mut held = Vec::new();
             for _ in 0..PLAYLIST_DECODE_PERMITS {
                 held.push(coordinator.slots.acquire().await.unwrap());
@@ -2213,6 +2494,7 @@ mod tests {
             safety_assert_idle(&coordinator);
             assert_eq!(pause.state.active.load(Ordering::Acquire), 0);
             drop(held);
+            drop(held_lookup);
             coordinator.load(dir.path().into(), input).await.unwrap();
             safety_assert_idle(&coordinator);
         });

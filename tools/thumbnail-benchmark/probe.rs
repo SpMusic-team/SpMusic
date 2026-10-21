@@ -63,9 +63,13 @@ mod thumbnail_comparison {
         if let Some(writer) = THUMBNAIL_WRITER.get() { writer.wait_idle(); }
     }
 
-    fn resolve_cover(path: &Path, audio_cache: &Path) -> Option<String> {
-        super::super::source::hydrate_track_ref(path, Some(audio_cache), None)
-            .expect("hydrate source").metadata.cover_art.and_then(|cover| cover.file_path)
+    async fn resolve_cover(source: PathBuf, root: PathBuf) -> Option<String> {
+        // BEGIN SOURCE ADAPTER
+        tauri::async_runtime::spawn_blocking(move || {
+            super::super::source::hydrate_track_ref(&source, Some(&root.join("audio")), None)
+                .expect("hydrate source").metadata.cover_art.and_then(|cover| cover.file_path)
+        }).await.unwrap()
+        // END SOURCE ADAPTER
     }
 
     fn complete_pipeline(root: &Path, rows: &[Value], phase: &str) {
@@ -87,9 +91,8 @@ mod thumbnail_comparison {
                     let mut samples = Vec::new();
                     for row in rows.iter().skip(consumer).step_by(2) {
                         let source = PathBuf::from(row["source"].as_str().unwrap());
-                        let audio = root.join("audio");
                         let started = Instant::now();
-                        let path = tauri::async_runtime::spawn_blocking(move || resolve_cover(&source, &audio)).await.unwrap().expect("cover path");
+                        let path = resolve_cover(source, root.clone()).await.expect("cover path");
                         let locate = started.elapsed().as_secs_f64()*1000.0;
                         let pixels_started = Instant::now();
                         let bytes = coordinator.load(root.clone(), AudioLoadPlaylistCoverPixelsInput {
@@ -120,28 +123,31 @@ mod thumbnail_comparison {
             let mut durations = Vec::new();
             let mut bytes = 0usize;
             let mut responses = Vec::new();
-            // Two genuine request consumers, matching the production frontend cap.
-            // Every chunk starts two futures before either is awaited.
-            for chunk in paths.chunks(2) {
-                let mut handles = Vec::new();
-                for path in chunk {
-                    let coordinator = Arc::clone(&coordinator);
-                    let root = root.to_path_buf();
-                    let path = path.to_string_lossy().into_owned();
-                    handles.push(tauri::async_runtime::spawn(async move {
+            let mut handles = Vec::new();
+            // Two continuing consumers, with no artificial barrier per pair.
+            for consumer in 0..2 {
+                let coordinator = Arc::clone(&coordinator);
+                let root = root.to_path_buf();
+                let paths = paths.to_vec();
+                handles.push(tauri::async_runtime::spawn(async move {
+                    let mut samples = Vec::new();
+                    for (index, path) in paths.iter().enumerate().skip(consumer).step_by(2) {
                         let started = Instant::now();
-                        let response = coordinator.load(root, AudioLoadPlaylistCoverPixelsInput {
-                            file_path: path, max_edge: edge, client_id: "comparison".into(), window_generation: generation,
+                        let response = coordinator.load(root.clone(), AudioLoadPlaylistCoverPixelsInput {
+                            file_path: path.to_string_lossy().into_owned(), max_edge: edge, client_id: "comparison".into(), window_generation: generation,
                         }).await.expect("pixel response");
-                        (started.elapsed().as_secs_f64() * 1000.0, response)
-                    }));
-                }
-                for handle in handles {
-                    let (elapsed, response) = handle.await.unwrap();
+                        samples.push((index, started.elapsed().as_secs_f64() * 1000.0, response));
+                    }
+                    samples
+                }));
+            }
+            let mut samples = Vec::new();
+            for handle in handles { samples.extend(handle.await.unwrap()); }
+            samples.sort_by_key(|sample| sample.0);
+            for (_, elapsed, response) in samples {
                     durations.push(elapsed);
                     bytes += response.len();
                     responses.push(blake3::hash(&response).to_hex().to_string());
-                }
             }
             (durations, bytes, responses)
         });
@@ -153,6 +159,48 @@ mod thumbnail_comparison {
             "response_bytes":bytes,"response_digest":blake3::hash(responses.join("").as_bytes()).to_hex().to_string(),
             "drain_ms":drain_started.elapsed().as_secs_f64()*1000.0}));
         assert_eq!(coordinator.requests.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    #[ignore]
+    fn diagnose_reads() {
+        let corpus = env_path("THUMB_BENCH_CORPUS");
+        let manifest: Value = serde_json::from_slice(&fs::read(corpus.join("manifest.json")).unwrap()).unwrap();
+        let rows = manifest["rows"].as_array().unwrap();
+        assert_eq!(manifest["digest"].as_str().unwrap(), std::env::var("THUMB_BENCH_DIGEST").unwrap());
+        let root = env_path("THUMB_BENCH_ROOT");
+        assert!(!root.exists());
+        fs::create_dir_all(root.join("locate/audio")).unwrap();
+        for phase in ["diagnostic_locate_cold", "diagnostic_locate_hot_1", "diagnostic_locate_hot_2", "diagnostic_locate_hot_3"] {
+            let started = Instant::now();
+            let mut durations = Vec::new();
+            for row in rows {
+                let before = Instant::now();
+                let source = PathBuf::from(row["source"].as_str().unwrap());
+                let cover = tauri::async_runtime::block_on(resolve_cover(source, root.join("locate")));
+                assert!(cover.is_some());
+                durations.push(before.elapsed().as_secs_f64() * 1000.0);
+            }
+            println!("THUMBJSON {}", json!({"phase":phase,"count":rows.len(),"elapsed_ms":started.elapsed().as_secs_f64()*1000.0,"request_p50_ms":percentile(&durations,0.5),"request_p95_ms":percentile(&durations,0.95)}));
+        }
+        let pixel_root = root.join("pixels");
+        let covers = pixel_root.join("audio/covers");
+        fs::create_dir_all(&covers).unwrap();
+        let mut paths = Vec::new();
+        for row in rows {
+            let bytes = fs::read(corpus.join(row["file"].as_str().unwrap())).unwrap();
+            assert_eq!(blake3::hash(&bytes).to_hex().as_str(), row["hash"].as_str().unwrap());
+            let destination = covers.join(row["file"].as_str().unwrap());
+            fs::write(&destination, bytes).unwrap();
+            paths.push(destination);
+        }
+        for phase in ["diagnostic_pixels_cold", "diagnostic_pixels_hot_1", "diagnostic_pixels_hot_2", "diagnostic_pixels_hot_3"] {
+            pixel_batch(&pixel_root, &paths, phase, 256);
+        }
+        for phase in ["diagnostic_pipeline_cold", "diagnostic_pipeline_hot_1", "diagnostic_pipeline_hot_2"] {
+            complete_pipeline(&root.join("pipeline"), rows, phase);
+        }
+        drain();
     }
 
     #[test]
@@ -176,21 +224,23 @@ mod thumbnail_comparison {
             paths.push(covers.join(file));
         }
         println!("THUMBJSON {}", json!({"phase":"identity","count":paths.len(),"digest":expected,"permits":PLAYLIST_DECODE_PERMITS,"consumers":2,"os_cache":"uncontrolled; corpus preparation warmed"}));
+        pixel_batch(&root, &paths, "pixels_128_cold", 128);
+        pixel_batch(&root, &paths, "pixels_128_hot", 128);
         pixel_batch(&root, &paths, "pixels_cold", 256);
         pixel_batch(&root, &paths, "pixels_disk_hot", 256);
         pixel_batch(&root, &paths, "pixels_repeat_hot", 256);
         pixel_batch(&root, &paths, "pixels_upgrade", 512);
-        let audio_cache = root.join("hydrate").join("audio");
-        fs::create_dir_all(&audio_cache).unwrap();
-        for phase in ["hydrate_cold", "hydrate_cover_cached"] {
+        let locate_root = root.join("locate");
+        fs::create_dir_all(locate_root.join("audio")).unwrap();
+        for phase in ["locate_cold", "locate_cover_cached"] {
             let started = Instant::now();
             let mut durations = Vec::new();
             let mut found = 0;
             for row in rows {
                 let before = Instant::now();
-                let track = super::super::source::hydrate_track_ref(Path::new(row["source"].as_str().unwrap()), Some(&audio_cache), None).expect("hydrate source");
+                let cover = tauri::async_runtime::block_on(resolve_cover(PathBuf::from(row["source"].as_str().unwrap()), locate_root.clone()));
                 durations.push(before.elapsed().as_secs_f64()*1000.0);
-                found += usize::from(track.metadata.cover_art.is_some());
+                found += usize::from(cover.is_some());
             }
             println!("THUMBJSON {}", json!({"phase":phase,"count":rows.len(),"found":found,"elapsed_ms":started.elapsed().as_secs_f64()*1000.0,"request_p50_ms":percentile(&durations,0.5),"request_p95_ms":percentile(&durations,0.95)}));
         }

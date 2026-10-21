@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from 'node:fs'
 import { resolve, join } from 'node:path'
 import { createHash } from 'node:crypto'
 
@@ -33,7 +33,11 @@ async function run(exe, pair, arm) {
   writeFileSync(join(output, `${name}.log`), stdout + stderr)
   if (result !== 0) throw new Error(`${name} exited ${result}; see its log`)
   const rows = [...stdout.matchAll(/THUMBJSON (\{[^\r\n]+\})/g)].map(match => ({ pair, arm, ...JSON.parse(match[1]) }))
-  if (rows.length !== 9) throw new Error(`${name} expected 9 phase rows, got ${rows.length}`)
+  if (rows.length !== 11) throw new Error(`${name} expected 11 phase rows, got ${rows.length}`)
+  const covers = join(output, `${name}-cache`, 'pipeline', 'audio', 'covers')
+  const coverHashes = readdirSync(covers).filter(file => !file.startsWith('.')).map(file => sha(join(covers, file))).sort()
+  rows.find(row => row.phase === 'identity').locatedCoversDigest = createHash('sha256').update(coverHashes.join('')).digest('hex')
+  rows.find(row => row.phase === 'identity').locatedUniqueCovers = coverHashes.length
   console.log(JSON.stringify({ pair, arm, phases: rows.filter(row => row.elapsed_ms).map(row => ({ phase: row.phase, ms: row.elapsed_ms })) }))
   return rows
 }
@@ -45,6 +49,14 @@ for (let pair = 1; pair <= 5; pair++) {
   }
 }
 const phases = [...new Set(results.filter(row => row.elapsed_ms).map(row => row.phase))]
+const identities = results.filter(row => row.phase === 'identity')
+if (new Set(identities.map(row => row.locatedCoversDigest)).size !== 1) throw new Error('Located cover bytes differ across arms or rounds')
+for (const phase of phases) {
+  const rows = results.filter(row => row.phase === phase)
+  if (new Set(rows.map(row => row.count)).size !== 1 || rows.some(row => row.count !== manifest.count)) throw new Error(`${phase}: completion count mismatch`)
+  const sizes = rows.filter(row => row.response_bytes !== undefined).map(row => row.response_bytes)
+  if (new Set(sizes).size > 1) throw new Error(`${phase}: output geometry/byte counts differ`)
+}
 const median = xs => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)]
 const summary = phases.map(phase => {
   const a = results.filter(row => row.phase === phase && row.arm === 'baseline')

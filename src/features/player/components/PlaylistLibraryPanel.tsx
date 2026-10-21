@@ -210,6 +210,8 @@ export function PlaylistLibraryPanel({ playlist, librarySidebarOpen, onLibrarySi
   const selectedSongs = visibleSongs.filter((item) => selected.has(item.key) && item.available)
   const playableSongs = visibleSongs.filter((item) => item.available)
   const songPlayTarget = selectMode ? selectedSongs[0] : playableSongs[0]
+  // An in-flight playback command locks interaction; it is not unavailability.
+  const playbackCommandLocked = Boolean(playlist.isOpenAudioDisabled)
   useEffect(() => {
     if (searchRequestId > 0) {
       // Focus after the input has mounted, with no timing-dependent delay.
@@ -355,7 +357,7 @@ export function PlaylistLibraryPanel({ playlist, librarySidebarOpen, onLibrarySi
           layout={sharedProjection ? 'position' : undefined}
           layoutId={sharedProjection && library.currentScope ? `playlist-library-actions:${library.currentScope}` : undefined}
           transition={{ layout: returnTransition }}>
-          <Button variant="outline" aria-label={`随机播放${category.label}`} disabled={isSongs ? !playableSongs.length || playlist.isOpenAudioDisabled : !playTarget || playlist.isOpenAudioDisabled} onClick={() => {
+          <Button variant="outline" aria-label={`随机播放${category.label}`} data-playback-command-lock={playbackCommandLocked || undefined} disabled={isSongs ? !playableSongs.length || playlist.isOpenAudioDisabled : !playTarget || playlist.isOpenAudioDisabled} onClick={() => {
             if (isSongs) {
               const candidates = selectMode ? selectedSongs : playableSongs
               const target = candidates[Math.floor(Math.random() * candidates.length)]
@@ -366,7 +368,7 @@ export function PlaylistLibraryPanel({ playlist, librarySidebarOpen, onLibrarySi
             const target = candidates[Math.floor(Math.random() * candidates.length)]
             if (target) library.onPlay(target.scope)
           }}><img src={shuffleIcon} alt="" /></Button>
-          <Button variant="outline" aria-label={`播放${category.label}`} disabled={isSongs ? !songPlayTarget || playlist.isOpenAudioDisabled : !playTarget || playlist.isOpenAudioDisabled} onClick={() => {
+          <Button variant="outline" aria-label={`播放${category.label}`} data-playback-command-lock={playbackCommandLocked || undefined} disabled={isSongs ? !songPlayTarget || playlist.isOpenAudioDisabled : !playTarget || playlist.isOpenAudioDisabled} onClick={() => {
             if (isSongs) { if (songPlayTarget) library.onPlaySong?.(songPlayTarget.scope, songPlayTarget.trackId) }
             else if (playTarget) library.onPlay(playTarget.scope)
           }}><img src={playIcon} alt="" /></Button>

@@ -4,11 +4,15 @@ import { playlistCoverImageFromPixels } from '@/features/player/model/playlistCo
 import { decodePlaylistCover } from '@/features/player/model/playlistCoverReadiness'
 import type { PlaylistArtworkDemand, PlaylistCoverImage } from '@/features/player/model/playerUiViewModel'
 import {
+  selectArtworkEvictionKey,
+  type ReadOnlyArtworkRow,
+} from '@/features/player/model/playlistArtworkFallback'
+import {
   beginAudioPlaylistCoverWindow, loadAudioPlaylistCoverPixels, probeAudioPlaylistCover,
   type AudioFolderPlaylist, type AudioFolderTrackRef,
 } from '@/features/player/services/audioCommands'
 
-type ArtworkRow = Readonly<{ hasLocalArtwork?: boolean; coverThumbnail?: PlaylistCoverImage }>
+type ArtworkRow = ReadOnlyArtworkRow
 type CacheEntry = { row: ArtworkRow; edge: number; trackId: string }
 type Runtime = {
   mounted: boolean
@@ -16,6 +20,7 @@ type Runtime = {
   descriptors: Map<string, AudioFolderTrackRef>
   previews: Map<Element, string>
   desired: Map<string, 128 | 256 | 512>
+  pinned: Set<string>
   detail: AudioFolderPlaylist | null
   detailPaths: Map<string, 128 | 256 | 512>
   cache: Map<string, CacheEntry>
@@ -59,6 +64,7 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
   useEffect(() => {
     const runtime: Runtime = {
       mounted: true, revision: 0, descriptors: new Map(), previews: new Map(), desired: new Map(),
+      pinned: new Set(),
       detail: null, detailPaths: new Map(), cache: new Map(), queued: new Set(), active: 0,
       pump: () => {}, refresh: () => {},
     }
@@ -69,9 +75,12 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
       return null
     })
     const publish = () => {
+      const desired = new Set(runtime.desired.keys())
       while (runtime.cache.size > MAX_RESIDENT) {
-        const key = [...runtime.cache.keys()].find((candidate) => !runtime.desired.has(candidate))
-          ?? runtime.cache.keys().next().value
+        // Covers that are still on screen through a fallback layer are pinned by
+        // their consumer and are not eviction candidates; when every other entry
+        // is demanded, the bounded cache still drops its oldest resident.
+        const key = selectArtworkEvictionKey([...runtime.cache.keys()], desired, runtime.pinned)
         if (key === undefined) break
         const entry = runtime.cache.get(key)
         if (entry?.row.coverThumbnail) URL.revokeObjectURL(entry.row.coverThumbnail.src)
@@ -254,5 +263,14 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
     runtime.refresh()
   }, [])
 
-  return { rows, setVisibleTrackIds }
+  // The player can show cached library thumbnails for the active scope while its
+  // own visual lane rehydrates. Those object URLs belong to this cache, so the
+  // caller reports the paths it is still displaying to keep them resident.
+  const retainSourcePaths = useCallback((sourcePaths: readonly string[]) => {
+    const runtime = runtimeRef.current
+    if (!runtime) return
+    runtime.pinned = new Set(sourcePaths)
+  }, [])
+
+  return { rows, setVisibleTrackIds, retainSourcePaths }
 }

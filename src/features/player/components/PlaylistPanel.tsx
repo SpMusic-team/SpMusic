@@ -840,6 +840,7 @@ export function PlaylistPanel({
           className="playlist-hero-icon playlist-hero-play-button"
           icon={systemIcons.play}
           label={appCopy.playlistPage.play}
+          data-playback-command-lock={isOpenAudioDisabled || undefined}
           disabled={!playableTrackId || !onTrackSelect}
           pressFeedback={!compact}
           pressFeedbackTone="surface-variant"
@@ -864,7 +865,7 @@ export function PlaylistPanel({
         >
           {selectMode ? appCopy.playlistPage.done : appCopy.playlistPage.select}
         </Button>
-        <IconButton className="playlist-hero-icon playlist-hero-more-button" icon={systemIcons.more} label={appCopy.playlistPage.more} disabled={isOpenAudioDisabled || !onOpenAudio} onClick={handleMore} />
+        <IconButton className="playlist-hero-icon playlist-hero-more-button" icon={systemIcons.more} label={appCopy.playlistPage.more} data-playback-command-lock={isOpenAudioDisabled || undefined} disabled={isOpenAudioDisabled || !onOpenAudio} onClick={handleMore} />
       </motion.div>
     )
   }

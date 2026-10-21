@@ -13,6 +13,9 @@
 .playlist-management-toolbar { display: flex; min-height: 80px; justify-content: space-between; align-items: center; gap: 16px; padding: 8px 25px; }
 .playlist-management-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .playlist-management-actions button { height: 46px; padding: 5px 15px; border: 2px solid var(--player-blue); border-radius: var(--app-radius-pill); color: var(--player-blue); background: transparent; font-size: 22px; line-height: 28px; font-weight: 400; }
+/* An in-flight playback command locks these actions; a lock is not unavailability,
+   so keep their material stable instead of flashing Base UI's disabled opacity. */
+.playlist-management-actions button[data-playback-command-lock]:disabled { opacity: 1; }
 .playlist-management-more { width: 64px; height: 64px; flex: 0 0 auto; padding: 0 20px; border: 2px solid var(--player-blue); border-radius: var(--app-radius-pill); background: transparent; }
 .playlist-management-more img { width: 20px; height: 20px; }
 .playlist-management-search { padding: 12px 24px; }

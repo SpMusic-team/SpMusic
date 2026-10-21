@@ -8,6 +8,7 @@ import { useLibraryArtwork } from '@/features/player/hooks/useLibraryArtwork'
 import { playlistDisplayName } from '@/features/player/model/audioTrackModel'
 import { formatPlaylistDurationLabel } from '@/features/player/model/playlistDuration'
 import { normalizeAudioSourcePath, pendingPlaylistTrackRow } from '@/features/player/model/playlistTrackSummary'
+import { readOnlyArtworkFallbackPaths, withReadOnlyArtworkFallback, type ReadOnlyArtworkRow } from '@/features/player/model/playlistArtworkFallback'
 import { useGlobalShortcuts } from '@/features/shortcuts/hooks/useGlobalShortcuts'
 import type { AllSongsItem, DevAudioToolsViewModel, PlayerUiViewModel, PlaylistArtworkDemand, PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
 import { readStartupPage } from '@/features/player/model/startupPageStorage'
@@ -25,7 +26,7 @@ export function PlayerShell() {
   const librarySources = useMemo(() => [...player.libraryFolderPlaylists, ...player.sessionPlaylists], [player.libraryFolderPlaylists, player.sessionPlaylists])
   const browsedPlaylist = librarySources.find((item) => playlistScope(item) === browsedScope)
   const isBrowsingActive = !browsedPlaylist || browsedScope === player.activePlaylistScope
-  const { rows: libraryArtwork, setVisibleTrackIds: setLibraryVisibleTrackIds } = useLibraryArtwork(librarySources,
+  const { rows: libraryArtwork, setVisibleTrackIds: setLibraryVisibleTrackIds, retainSourcePaths: retainLibrarySourcePaths } = useLibraryArtwork(librarySources,
     isPlaylistOpen && libraryRoute.view === 'tracks' && !isBrowsingActive ? browsedPlaylist ?? null : null)
   const artworkDetailPath = browsedPlaylist?.sourcePath
   const handleLibraryVisibleTrackIds = useCallback((trackIds: readonly string[], keepPersistentArtwork?: boolean, showArtwork?: boolean, demand?: PlaylistArtworkDemand) => {
@@ -152,14 +153,31 @@ export function PlayerShell() {
   const playlistDurations = durationData.totals
   const playlistDuration = playlistDurations.get(durationScope)!
   const browsedDuration = browsedPlaylist ? playlistDurations.get(playlistScope(browsedPlaylist))! : playlistDuration
-  const playlistTracks = useMemo(() => {
-    const descriptors = new Map(player.playlistDurationTracks?.map((item) => [item.id, item.sourcePath]))
+  // The queue and the playlist page must agree about a song, so the read-only
+  // library artwork is layered onto the shared active rows. It only fills what
+  // the active metadata/visual lanes do not know yet: after a cross-source
+  // selection the newly active scope has to re-read its own artwork, and the
+  // browsed list's real covers bridge that gap instead of dropping to empty.
+  const playlistPresentation = useMemo(() => {
+    const descriptors = new Map(player.playlistDurationTracks?.map((item) => [item.id, item]))
     const durations = durationData.durationsByScope.get(player.activePlaylistScope ?? '')
-    return rawPlaylistTracks.map((item) => {
-      const durationMs = durations?.get(descriptors.get(item.id) ?? '')
+    const sourcePathById = new Map<string, string>()
+    const timedTracks = rawPlaylistTracks.map((item) => {
+      const descriptor = descriptors.get(item.id)
+      if (descriptor) sourcePathById.set(item.id, normalizeAudioSourcePath(descriptor.sourcePath))
+      const durationMs = durations?.get(descriptor?.sourcePath ?? '')
       return (item.durationSeconds ?? 0) > 0 || durationMs == null ? item : { ...item, durationSeconds: durationMs / 1000 }
     })
-  }, [rawPlaylistTracks, player.playlistDurationTracks, player.activePlaylistScope, durationData.durationsByScope])
+    const fallbackSourcePaths = readOnlyArtworkFallbackPaths(timedTracks, sourcePathById, libraryArtwork)
+    const tracks = timedTracks.map((row) => {
+      const sourcePath = sourcePathById.get(row.id)
+      return withReadOnlyArtworkFallback(row, sourcePath ? libraryArtwork.get(sourcePath) : undefined)
+    })
+    return { tracks, fallbackSourcePaths }
+  }, [rawPlaylistTracks, player.playlistDurationTracks, player.activePlaylistScope, durationData.durationsByScope, libraryArtwork])
+  const playlistTracks = playlistPresentation.tracks
+  const libraryFallbackSourcePaths = playlistPresentation.fallbackSourcePaths
+  const isSongsCategoryOpen = isPlaylistOpen && libraryRoute.view === 'category' && libraryRoute.categoryId === 'songs'
   const browsedTracks = useMemo<PlaylistTrackItemViewModel[]>(() => {
     if (isBrowsingActive) return playlistTracks
     const summaries = browsedScope ? summariesByScope[browsedScope] : undefined
@@ -168,13 +186,14 @@ export function PlayerShell() {
       const row = (browsedScope ? summaries?.[item.id] : undefined) ?? pendingPlaylistTrackRow(item)
       const durationMs = durations?.get(item.sourcePath)
       const artwork = libraryArtwork.get(normalizeAudioSourcePath(item.sourcePath))
-      const covered = artwork ? { ...row, ...artwork } : row
+      const covered = withReadOnlyArtworkFallback(row, artwork)
       return durationMs == null ? covered : { ...covered, durationSeconds: durationMs / 1000 }
     })
   }, [isBrowsingActive, playlistTracks, browsedPlaylist, browsedScope, summariesByScope, durationData.durationsByScope, libraryArtwork])
-  const allSongs = useMemo<AllSongsItem[]>(() => {
+  const allSongsPresentation = useMemo(() => {
     const seen = new Set<string>()
     const rows: AllSongsItem[] = []
+    const fallbackSourcePaths = new Set<string>()
     const activeRows = new Map(playlistTracks.map((item) => [item.id, item]))
     for (const source of player.libraryFolderPlaylists) {
       const scope = playlistScope(source)
@@ -187,12 +206,31 @@ export function PlayerShell() {
         const activeRow = scope === player.activePlaylistScope ? activeRows.get(descriptor.id) : undefined
         const row = activeRow ?? summaries?.[descriptor.id] ?? pendingPlaylistTrackRow(descriptor)
         const durationMs = durations?.get(descriptor.sourcePath)
+        // The aggregated page must stay painted when a click activates another
+        // folder: the previous active rows lose their player-owned thumbnails,
+        // and the read-only artwork already cached for those files bridges the
+        // gap. Only rows whose current owner has no cover are pinned to the cache.
+        const artwork = libraryArtwork.get(key)
+        if (artwork?.coverThumbnail && !(row as ReadOnlyArtworkRow).coverThumbnail) fallbackSourcePaths.add(key)
+        const merged = withReadOnlyArtworkFallback(row, artwork)
         rows.push({ key, scope, trackId: descriptor.id, sourcePath: descriptor.sourcePath, available: descriptor.available,
-          track: (row.durationSeconds ?? 0) > 0 || durationMs == null ? row : { ...row, durationSeconds: durationMs / 1000 } })
+          track: (row.durationSeconds ?? 0) > 0 || durationMs == null ? merged : { ...merged, durationSeconds: durationMs / 1000 } })
       }
     }
-    return rows
-  }, [player.libraryFolderPlaylists, player.activePlaylistScope, playlistTracks, summariesByScope, durationData.durationsByScope])
+    return { rows, fallbackSourcePaths }
+  }, [player.libraryFolderPlaylists, player.activePlaylistScope, playlistTracks, summariesByScope, durationData.durationsByScope, libraryArtwork])
+  const allSongs = allSongsPresentation.rows
+  const allSongsFallbackSourcePaths = allSongsPresentation.fallbackSourcePaths
+  // The displayed fallback thumbnails are owned by the library cache, so the
+  // cache must keep their object URLs resident until an active visual replaces
+  // them. `useEffect` runs after the commit that first displays them. The
+  // aggregated "all songs" page only pins the cache while it is visible;
+  // otherwise its rows are not rendered and the bounded cache may evict.
+  useEffect(() => {
+    retainLibrarySourcePaths(isSongsCategoryOpen
+      ? [...libraryFallbackSourcePaths, ...allSongsFallbackSourcePaths]
+      : [...libraryFallbackSourcePaths])
+  }, [allSongsFallbackSourcePaths, isSongsCategoryOpen, libraryFallbackSourcePaths, retainLibrarySourcePaths])
   const playlistRowsReady = !displayScope || (
     player.playlistSummaryStatusByScope[displayScope] === 'ready'
     && durationData.settledByScope.get(displayScope) === true

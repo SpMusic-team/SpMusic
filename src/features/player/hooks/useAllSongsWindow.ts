@@ -60,7 +60,12 @@ export function useAllSongsWindow(items: readonly AllSongsItem[], panelRef: RefO
       // Text and durations are prepared before the scrollable list mounts.
       // Only artwork remains windowed, so scrolling never starts audio hydration.
       while (runtime.coverActive < WINDOW_CONCURRENCY) {
-        const item = itemsRef.current.find((candidate) => runtime.desired.has(candidate.key) && candidate.available && !runtime.coverDone.has(candidate.key) && !runtime.coverQueued.has(candidate.key))
+        // Rows already carrying a player thumbnail are skipped: the visual
+        // pipeline has the same artwork, so reading it again here would only
+        // replace one image with another and flash the cover. Pump re-runs when
+        // `items` change, so a row becomes a candidate again if the thumbnail
+        // disappears.
+        const item = itemsRef.current.find((candidate) => runtime.desired.has(candidate.key) && candidate.available && !runtime.coverDone.has(candidate.key) && !runtime.coverQueued.has(candidate.key) && !candidate.track.coverThumbnail)
         if (!item) break
         runtime.coverQueued.add(item.key)
         runtime.coverActive += 1

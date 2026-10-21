@@ -65,8 +65,8 @@
   --player-progress-thumb-size: 23px;
   --playlist-dock-inline-padding: 24px;
   position: fixed;
-  left: 16px;
-  right: 16px;
+  left: 25px;
+  right: 25px;
   bottom: 24px;
   /* Keep the viewport-fixed dock above the animated playlist scroller. The
      dock must be its sibling: a transformed ancestor would otherwise become

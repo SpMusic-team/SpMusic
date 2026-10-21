@@ -1,5 +1,6 @@
 import { mediaLibraryCategories } from '@/features/player/model/mediaLibraryCategories'
 import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from 'react'
 import { LibraryChromeTransitionContext } from '@/features/player/hooks/useLibraryChromeTransition'
 import { motion, useAnimationControls, useIsPresent } from 'motion/react'
 import { useLibraryDockBinding } from '@/features/player/hooks/useLibraryDockBinding'
@@ -27,6 +28,15 @@ const MANAGEMENT_LAYOUT_SELECTORS = {
   getId: (element: HTMLElement) => element.dataset.playlistScope,
 }
 const MotionEmpty = motion.create(Empty)
+const QUICK_INDEX_KEYS = ['0', ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ', '#'] as const
+const QUICK_INDEX_COUNT = QUICK_INDEX_KEYS.length + 1
+
+function quickIndexKey(name: string): string {
+  const first = name.trimStart().charAt(0).toUpperCase()
+  if (first >= 'A' && first <= 'Z') return first
+  if (first >= '0' && first <= '9') return '0'
+  return '#'
+}
 
 type Props = {
   playlist: PlayerPlaylistViewModel
@@ -70,6 +80,11 @@ export function PlaylistLibraryPanel({ playlist, librarySidebarOpen, onLibrarySi
   const [dismissedSearchRequestId, setDismissedSearchRequestId] = useState(0)
   const [selectMode, setSelectMode] = useState(false)
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
+  const [activeQuickIndex, setActiveQuickIndex] = useState<string | null>(null)
+  const [quickIndexPreview, setQuickIndexPreview] = useState<{ key: string; top: number; visible: boolean } | null>(null)
+  const quickIndexPointer = useRef<number | null>(null)
+  const quickIndexPointerKey = useRef<string | null>(null)
+  const quickIndexPreviewTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   const panelRef = useRef<HTMLElement | null>(null)
   const gridRef = useRef<HTMLDivElement | null>(null)
@@ -126,6 +141,11 @@ export function PlaylistLibraryPanel({ playlist, librarySidebarOpen, onLibrarySi
     announce: (nextLayout) => `列表视图已切换为${nextLayout.label}`,
   })
   const visible = categoryItems.filter((item) => item.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
+  const quickIndexTargets = new Map<string, number>()
+  visible.forEach((item, index) => {
+    const key = quickIndexKey(item.name)
+    if (!quickIndexTargets.has(key)) quickIndexTargets.set(key, index)
+  })
   const selectedItems = visible.filter((item) => selected.has(item.scope))
   const playTarget = selectMode ? selectedItems[0] : visible[0]
   useEffect(() => {
@@ -134,6 +154,9 @@ export function PlaylistLibraryPanel({ playlist, librarySidebarOpen, onLibrarySi
       searchRef.current?.focus()
     }
   }, [searchRequestId, searchOpen])
+  useEffect(() => () => {
+    if (quickIndexPreviewTimer.current) clearTimeout(quickIndexPreviewTimer.current)
+  }, [])
   const showSearch = hasDataSource && (searchOpen || searchRequestId > dismissedSearchRequestId)
   const sidebarProps = {
     playlistName: '', trackCount: 0, totalClock: null,
@@ -161,6 +184,65 @@ export function PlaylistLibraryPanel({ playlist, librarySidebarOpen, onLibrarySi
       setSearchOpen(true)
       queueMicrotask(() => searchRef.current?.focus())
     }
+  }
+  function jumpToIndex(key: string) {
+    setActiveQuickIndex(key)
+    const panel = panelRef.current
+    if (!panel) return
+    if (key === 'top') {
+      panel.scrollTop = 0
+      return
+    }
+    const index = quickIndexTargets.get(key)
+    const card = index === undefined ? null : gridRef.current?.children.item(index)
+    if (!card) return
+    panel.scrollTop += card.getBoundingClientRect().top - panel.getBoundingClientRect().top - 8
+  }
+  function showQuickIndexPreview(key: string, clientY: number, nav: HTMLElement) {
+    if (quickIndexPreviewTimer.current) clearTimeout(quickIndexPreviewTimer.current)
+    const navRect = nav.getBoundingClientRect()
+    const panelRect = nav.parentElement!.getBoundingClientRect()
+    const previewSize = 100
+    const dockTop = document.querySelector<HTMLElement>('.playlist-playback-dock:not([data-dock-superseded])')?.getBoundingClientRect().top
+    const previewBottom = Math.min(navRect.bottom, dockTop ?? navRect.bottom)
+    const maxTop = Math.max(navRect.top, previewBottom - previewSize)
+    const top = Math.max(navRect.top, Math.min(clientY - previewSize / 2, maxTop)) - panelRect.top
+    setQuickIndexPreview({ key, top, visible: true })
+  }
+  function hideQuickIndexPreview() {
+    if (quickIndexPreviewTimer.current) clearTimeout(quickIndexPreviewTimer.current)
+    quickIndexPreviewTimer.current = setTimeout(() => {
+      setQuickIndexPreview((previous) => previous ? { ...previous, visible: false } : null)
+      quickIndexPreviewTimer.current = null
+    }, 240)
+  }
+  function updateQuickIndexPointer(event: ReactPointerEvent<HTMLElement>) {
+    const nav = event.currentTarget
+    const rect = nav.getBoundingClientRect()
+    const position = Math.max(0, Math.min(QUICK_INDEX_COUNT - 1,
+      Math.floor((event.clientY - rect.top) / (rect.height / QUICK_INDEX_COUNT))))
+    const key = position === 0 ? 'top' : QUICK_INDEX_KEYS[position - 1]
+    showQuickIndexPreview(key, event.clientY, nav)
+    if (key !== quickIndexPointerKey.current) {
+      quickIndexPointerKey.current = key
+      jumpToIndex(key)
+    }
+  }
+  function endQuickIndexPointer(event: ReactPointerEvent<HTMLElement>) {
+    if (quickIndexPointer.current !== event.pointerId) return
+    quickIndexPointer.current = null
+    quickIndexPointerKey.current = null
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+    hideQuickIndexPreview()
+  }
+  function activateQuickIndexByKeyboard(key: string, event: ReactMouseEvent<HTMLButtonElement>) {
+    if (event.detail !== 0) return
+    const nav = event.currentTarget.parentElement
+    if (!nav) return
+    const rect = event.currentTarget.getBoundingClientRect()
+    jumpToIndex(key)
+    showQuickIndexPreview(key, rect.top + rect.height / 2, nav)
+    hideQuickIndexPreview()
   }
   useLibraryDockBinding(`category:${categoryId}`, { searchOpen: showSearch, onSearchToggle: hasDataSource ? toggleSearch : undefined })
   return <motion.div className="playlist-management" data-select-mode={selectMode || undefined}
@@ -240,5 +322,30 @@ export function PlaylistLibraryPanel({ playlist, librarySidebarOpen, onLibrarySi
         </motion.div>)}
       </div> : <MotionEmpty className="playlist-management-empty" variants={navigationMotion.chrome} initial={atomicOverview ? 'initial' : false} animate="animate" exit={atomicOverview ? 'exit' : 'animate'} transition={navigationMotion.transition}><EmptyHeader><EmptyTitle>{!hasDataSource ? `${category.label}尚未接入数据` : categoryItems.length ? `没有匹配的${category.label}` : `暂无${category.label}`}</EmptyTitle><EmptyDescription>{!hasDataSource ? `此分类的数据管理能力尚未接入。可返回媒体库，或在播放列表中浏览本次会话已导入的列表。` : categoryItems.length ? '尝试其他名称，或清空搜索。' : categoryId === 'folder' ? '导入本地音频文件夹后，可在这里浏览。本次会话中的 M3U8 列表显示在播放列表分类。' : '导入本地音频文件夹或 M3U8 列表后，在这里选择要浏览的播放列表。列表保留在本次会话中。'}</EmptyDescription></EmptyHeader><Button disabled={playlist.isOpenAudioDisabled} onClick={!hasDataSource ? library.onOpen : categoryItems.length ? () => setQuery('') : playlist.onOpenAudio}>{!hasDataSource ? '打开播放列表' : categoryItems.length ? '清空搜索' : '导入音频或播放列表'}</Button></MotionEmpty>}
     </motion.section>
+    {categoryId === 'playlists' ? <>
+    {quickIndexPreview ? <div className="playlist-management-quick-index-preview" data-visible={quickIndexPreview.visible} style={{ top: quickIndexPreview.top }} aria-hidden="true">
+      {quickIndexPreview.key === 'top' ? <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m2 7 6-6 6 6M2 14l6-6 6 6" /></svg> : quickIndexPreview.key}
+    </div> : null}
+    <nav className="playlist-management-quick-index" aria-label="播放列表快速查找"
+      onPointerDown={(event) => {
+        if (!event.isPrimary || event.button !== 0) return
+        event.preventDefault()
+        quickIndexPointer.current = event.pointerId
+        quickIndexPointerKey.current = null
+        event.currentTarget.setPointerCapture(event.pointerId)
+        updateQuickIndexPointer(event)
+      }}
+      onPointerMove={(event) => { if (quickIndexPointer.current === event.pointerId) updateQuickIndexPointer(event) }}
+      onPointerUp={endQuickIndexPointer} onPointerCancel={endQuickIndexPointer}
+      onLostPointerCapture={(event) => { if (quickIndexPointer.current === event.pointerId) endQuickIndexPointer(event) }}>
+      <button type="button" aria-label="返回列表顶部" aria-current={activeQuickIndex === 'top' ? 'true' : undefined} title="返回顶部" onClick={(event) => activateQuickIndexByKeyboard('top', event)}>
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="m2 7 6-6 6 6M2 14l6-6 6 6" />
+        </svg>
+      </button>
+      {QUICK_INDEX_KEYS.map((key) => <button key={key} type="button" aria-label={key === '0' ? '查找数字开头的播放列表' : key === '#' ? '查找其他字符开头的播放列表' : `查找 ${key} 开头的播放列表`}
+        aria-current={activeQuickIndex === key ? 'true' : undefined} title={key === '0' ? '数字' : key === '#' ? '其他字符' : key}
+        onClick={(event) => activateQuickIndexByKeyboard(key, event)}>{key}</button>)}
+    </nav></> : null}
   </motion.div>
 }

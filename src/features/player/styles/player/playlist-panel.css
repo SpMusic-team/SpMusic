@@ -121,7 +121,7 @@
   top: calc(100% + (10px - 100%) / var(--playlist-hero-overscroll-scale, 1));
   left: 10px;
   z-index: 1;
-  height: 28px;
+  height: 36px;
   min-width: 94px;
   max-width: calc(100% - 20px);
   gap: 4px;
@@ -131,15 +131,15 @@
   background: color-mix(in srgb, var(--player-blue-soft) 92%, transparent);
   box-shadow: 0 1px 2px rgb(23 33 43 / 12%);
   color: var(--player-blue-ink, var(--player-blue));
-  font-size: 14px;
-  font-weight: 500;
-  line-height: 20px;
+  font-size: 22px;
+  font-weight: 400;
+  line-height: 28px;
   backdrop-filter: blur(10px);
 }
 
 .playlist-hero-category svg {
-  width: 14px;
-  height: 14px;
+  width: 28px;
+  height: 28px;
 }
 
 .playlist-hero-category:hover,
@@ -754,8 +754,8 @@
 @media (width > 1024px) {
   .playlist-panel { left: 320px; padding-inline: 25px; background: var(--player-dock); }
   .playlist-hero { height: 320px; min-height: 320px; flex-shrink: 0; }
-  .playlist-hero-category { height: 32px; min-width: 100px; font-size: 16px; line-height: 24px; }
-  .playlist-hero-category svg { width: 16px; height: 16px; }
+  .playlist-hero-category { height: 36px; min-width: 100px; font-size: 22px; line-height: 28px; }
+  .playlist-hero-category svg { width: 28px; height: 28px; }
   .playlist-hero-copy { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; }
   .playlist-hero-title { grid-column: 1; font-size: 22px; line-height: 28px; }
   .playlist-hero-meta { grid-column: 2; align-self: center; justify-self: end; }

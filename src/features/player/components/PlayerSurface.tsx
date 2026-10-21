@@ -2791,8 +2791,9 @@ export function PlayerSurface({
             /> : null}
           </AnimatePresence>
           <AnimatePresence initial={false}>
-            {/* Presence retains this layer until every library page has exited.
-                Fade its own surface so it cannot cover the entering player. */}
+            {/* AnimatePresence retains this backdrop until every exiting library page
+                has unmounted. Give the backdrop its own exit so it cannot cover
+                the entering player throughout those page transitions. */}
             {playlist.isOpen ? <motion.div key="library-navigation-background" className="library-navigation-background" aria-hidden="true"
               variants={appearanceMotion.variants.backdrop} transition={appearanceMotion.layoutTransition}
               initial="initial" animate="animate" exit="exit" /> : null}

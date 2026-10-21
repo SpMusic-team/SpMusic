@@ -514,6 +514,7 @@ export function useAudioPlayer() {
     playlistArtworkGrace.setExpiryHandler(expirePlaylistArtworkGrace)
   }, [expirePlaylistArtworkGrace, playlistArtworkGrace])
   const playlistVisualRetryTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>())
+  const playlistVisualDeferredRetriesRef = useRef(new Map<string, PlaylistVisualHydrationJob>())
   const playlistImageErrorCountsRef = useRef(new Map<string, number>())
   const playlistVisualFailedRef = useRef(new Map<string, string>())
   const playlistPendingReplacementRef = useRef(new Map<string, { trackId: string; previous: PlaylistTrackVisual; edge: 128 | 256 | 512; olderVisuals: Array<{ visual: PlaylistTrackVisual; edge: 128 | 256 | 512 }> }>())
@@ -587,6 +588,7 @@ export function useAudioPlayer() {
     playlistCoverSessionRetryTimerRef.current = null
     for (const timer of playlistVisualRetryTimersRef.current.values()) clearTimeout(timer)
     playlistVisualRetryTimersRef.current.clear()
+    playlistVisualDeferredRetriesRef.current.clear()
     playlistImageErrorCountsRef.current.clear()
     playlistVisualFailedRef.current.clear()
     for (const pending of playlistPendingReplacementRef.current.values()) {
@@ -915,6 +917,7 @@ export function useAudioPlayer() {
     void ensurePlaylistCoverSession().catch(() => undefined)
     for (const timer of playlistVisualRetryTimersRef.current.values()) clearTimeout(timer)
     playlistVisualRetryTimersRef.current.clear()
+    playlistVisualDeferredRetriesRef.current.clear()
     playlistImageErrorCountsRef.current.clear()
     playlistVisualFailedRef.current.clear()
     for (const pending of playlistPendingReplacementRef.current.values()) {
@@ -1197,27 +1200,35 @@ export function useAudioPlayer() {
       ) {
         const job = playlistVisualHydrationQueueRef.current.shift()
         if (!job) break
+        playlistVisualDeferredRetriesRef.current.delete(job.trackId)
         playlistVisualHydrationActiveRef.current += 1
         playlistVisualHydrationActiveJobsRef.current.set(job.trackId, job)
         let published = false
+        let terminalFailure = false
         let loadingSource = true
+        const jobIsStale = () => {
+          const activePlaylist = folderPlaylistRef.current
+          const activeDescriptor = activePlaylist?.tracks.find((candidate) => candidate.id === job.trackId)
+          return playlistVisualGenerationRef.current !== job.generation
+            || playlistScopeEpochRef.current !== job.playlistEpoch
+            || playlistScopeRef.current !== job.scope
+            || !playlistVisualDesiredIdsRef.current.has(job.trackId)
+            || !activePlaylist
+            || playlistScope(activePlaylist) !== job.scope
+            || activeDescriptor?.id !== job.trackId
+            || normalizeAudioSourcePath(activeDescriptor.sourcePath) !== job.normalizedSourcePath
+        }
         void probeAudioPlaylistCover(job.sourcePath)
           .then(async (coverSource) => {
-            const jobIsStale = () => {
-              const activePlaylist = folderPlaylistRef.current
-              const activeDescriptor = activePlaylist?.tracks.find((candidate) => candidate.id === job.trackId)
-              return playlistVisualGenerationRef.current !== job.generation
-                || playlistScopeEpochRef.current !== job.playlistEpoch
-                || playlistScopeRef.current !== job.scope
-                || !playlistVisualDesiredIdsRef.current.has(job.trackId)
-                || !activePlaylist
-                || playlistScope(activePlaylist) !== job.scope
-                || activeDescriptor?.id !== job.trackId
-                || normalizeAudioSourcePath(activeDescriptor.sourcePath) !== job.normalizedSourcePath
-                || coverSource.id !== job.trackId
-                || normalizeAudioSourcePath(coverSource.sourcePath) !== job.normalizedSourcePath
-            }
             if (jobIsStale()) return
+            if (coverSource.id !== job.trackId
+              || normalizeAudioSourcePath(coverSource.sourcePath) !== job.normalizedSourcePath) {
+              // A rejected response for the current request must not leave all
+              // other visible previews waiting for a permanently missing image.
+              playlistVisualFailedRef.current.set(job.trackId, job.normalizedSourcePath)
+              terminalFailure = true
+              return
+            }
 
             loadingSource = false
             let coverThumbnail: PlaylistCoverImage | undefined
@@ -1256,6 +1267,7 @@ export function useAudioPlayer() {
               // Keep the baseline's quiet data-URL-only state. Do not decode an
               // unchecked full-size original or advertise a successful upgrade.
               playlistVisualFailedRef.current.set(job.trackId, job.normalizedSourcePath)
+              terminalFailure = true
               if (previousThumbnail) return
             }
             const visual: PlaylistTrackVisual = {
@@ -1304,8 +1316,9 @@ export function useAudioPlayer() {
               || playlistScopeEpochRef.current !== job.playlistEpoch
               || !playlistVisualDesiredIdsRef.current.has(job.trackId)
             ) {
-              if (playlistScopeEpochRef.current === job.playlistEpoch && code !== 'STALE_REQUEST') {
+              if (!jobIsStale() && (code !== 'STALE_REQUEST' || job.attempt >= 2)) {
                 playlistVisualFailedRef.current.set(job.trackId, job.normalizedSourcePath)
+                terminalFailure = true
               }
               return
             }
@@ -1321,8 +1334,12 @@ export function useAudioPlayer() {
                   && (playlistVisualEdgeRef.current.get(job.trackId) ?? 0) >= job.maxEdge)
               ) return
               if (playlistVisualHydrationActiveJobsRef.current.has(job.trackId)) return
-              playlistVisualHydrationQueueRef.current.unshift({ ...job, attempt: job.attempt + 1 })
-              pump()
+              // Retry through the same preview priority barrier, preserving its
+              // attempt while it waits instead of letting a high-edge retry jump
+              // ahead of missing previews or resetting its bounded backoff.
+              playlistVisualDeferredRetriesRef.current.set(job.trackId, { ...job, attempt: job.attempt + 1 })
+              playlistVisualWindowKeyRef.current = null
+              refreshPlaylistVisualDemandRef.current()
             }, delay)
             playlistVisualRetryTimersRef.current.set(job.trackId, timer)
           })
@@ -1331,13 +1348,16 @@ export function useAudioPlayer() {
             if (playlistVisualHydrationActiveJobsRef.current.get(job.trackId) === job) {
               playlistVisualHydrationActiveJobsRef.current.delete(job.trackId)
             }
-            // A viewport can request a larger edge while its background 128px
-            // job is decoding. Publish that prepared bitmap as a visible
-            // fallback, then schedule the upgrade through the same worker pool.
+            // Rebuild visible work after each preview or terminal result. The
+            // last missing/failed preview must release the upgrade barrier too.
             const desiredEdge = playlistDesiredEdgeRef.current.get(job.trackId)
-            if (published && playlistScopeEpochRef.current === job.playlistEpoch
-              && playlistVisualSourceRef.current.get(job.trackId) === job.normalizedSourcePath
-              && desiredEdge && (playlistVisualEdgeRef.current.get(job.trackId) ?? 0) < desiredEdge) {
+            const visibleIds = playlistArtworkDemandRef.current?.visibleIds ?? visiblePlaylistTrackIdsRef.current
+            const visibleProgress = showPlaylistArtworkRef.current && visibleIds.includes(job.trackId)
+            if (playlistScopeEpochRef.current === job.playlistEpoch
+              && playlistScopeRef.current === job.scope
+              && ((published && desiredEdge
+                && (playlistVisualEdgeRef.current.get(job.trackId) ?? 0) < desiredEdge)
+                || ((published || terminalFailure) && visibleProgress))) {
               playlistVisualWindowKeyRef.current = null
               refreshPlaylistVisualDemandRef.current()
             }
@@ -1481,6 +1501,12 @@ export function useAudioPlayer() {
     const generation = playlistVisualGenerationRef.current
     playlistDesiredEdgeRef.current = new Map(budgetedIds.map((id) => [id, targetEdgeFor(id, cardEdge)]))
     playlistVisualDesiredIdsRef.current = desiredIds
+    for (const [id, retry] of playlistVisualDeferredRetriesRef.current) {
+      if (retry.playlistEpoch !== playlistScopeEpochRef.current || !desiredIds.has(id)
+        || retry.normalizedSourcePath !== normalizeAudioSourcePath(descriptorsById.get(id)?.sourcePath ?? '')) {
+        playlistVisualDeferredRetriesRef.current.delete(id)
+      }
+    }
     playlistVisualHydrationQueueRef.current = []
     const retained = Object.fromEntries(
       Object.entries(currentVisuals).filter(([trackId]) => residentIds.has(trackId)
@@ -1523,18 +1549,37 @@ export function useAudioPlayer() {
         playlistVisualGenerationRef.current !== generation
         || playlistScopeEpochRef.current !== playlistEpoch
         || playlistScopeRef.current !== scope
+        || playlistVisualWindowKeyRef.current !== windowKey
       ) return
+      const isOrdinaryVisible = (id: string) => visibleIds.has(id) && id !== firstTrackId && id !== dockTrackId
+      const hasVisiblePreview = (id: string) => {
+        const path = normalizeAudioSourcePath(descriptorsById.get(id)?.sourcePath ?? '')
+        const visual = playlistTrackVisualsRef.current[id]
+        return playlistVisualFailedRef.current.get(id) === path
+          || (playlistVisualSourceRef.current.get(id) === path
+            && Boolean(visual?.coverThumbnail || (visual && !visual.hasLocalArtwork)))
+      }
+      const waitingForVisiblePreview = [...visibleIds].some((id) => (
+        isOrdinaryVisible(id) && descriptorsById.get(id)?.available && !hasVisiblePreview(id)
+      ))
       const jobs: PlaylistVisualHydrationJob[] = []
       for (const trackId of budgetedIds) {
         const descriptor = descriptorsById.get(trackId)
         if (!descriptor) continue
         if (heldOnly(trackId) && !playlistTrackVisualsRef.current[trackId]) continue
+        const needsVisiblePreview = isOrdinaryVisible(trackId) && !hasVisiblePreview(trackId)
+        // Finish every missing visible preview before spending either slot on
+        // upgrades or background work. Persistent hero/dock quality is unchanged.
+        if (waitingForVisiblePreview && !needsVisiblePreview && trackId !== firstTrackId && trackId !== dockTrackId) continue
         const activeJob = playlistVisualHydrationActiveJobsRef.current.get(descriptor.id)
+        const visual = playlistTrackVisualsRef.current[descriptor.id]
         if (
           !descriptor.available
           || !desiredIds.has(descriptor.id)
           || playlistVisualFailedRef.current.get(descriptor.id) === normalizeAudioSourcePath(descriptor.sourcePath)
           || playlistVisualRetryTimersRef.current.has(descriptor.id)
+          || (visual && !visual.hasLocalArtwork
+            && playlistVisualSourceRef.current.get(descriptor.id) === normalizeAudioSourcePath(descriptor.sourcePath))
           || (playlistTrackVisualsRef.current[descriptor.id]
             && (playlistVisualEdgeRef.current.get(descriptor.id) ?? 0) >= targetEdgeFor(descriptor.id, cardEdge))
           || (activeJob?.generation === generation
@@ -1549,8 +1594,8 @@ export function useAudioPlayer() {
           trackId: descriptor.id,
           sourcePath: descriptor.sourcePath,
           normalizedSourcePath: normalizeAudioSourcePath(descriptor.sourcePath),
-          maxEdge: targetEdgeFor(descriptor.id, cardEdge),
-          attempt: 0,
+          maxEdge: needsVisiblePreview ? 128 : targetEdgeFor(descriptor.id, cardEdge),
+          attempt: playlistVisualDeferredRetriesRef.current.get(descriptor.id)?.attempt ?? 0,
         })
       }
       playlistVisualHydrationQueueRef.current = jobs

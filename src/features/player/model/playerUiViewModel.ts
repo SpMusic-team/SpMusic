@@ -131,8 +131,9 @@ export type PlaylistLibraryItem = {
   name: string
   trackCount: number
   coverTrack?: PlaylistTrackItemViewModel
+  coverSourcePath?: string
   totalClock?: string | null
-  sourceKind?: 'folder' | 'm3u8'
+  sourceKind?: 'folder' | 'm3u8' | 'custom'
 }
 
 export type AllSongsItem = Readonly<{
@@ -158,6 +159,11 @@ export type PlaylistLibraryViewModel = {
   onSelect: (scope: string) => void
   onPlay: (scope: string) => void
   onPlaySong?: (scope: string, trackId: string) => void
+  onSelectFolders?: () => void
+  onImportPlaylist?: () => void
+  isImportPending?: boolean
+  isPlaylistRestorePending?: boolean
+  onCreatePlaylist?: (name: string, songKeys: readonly string[]) => string | null
 }
 
 export type PlayerPlaylistViewModel = {

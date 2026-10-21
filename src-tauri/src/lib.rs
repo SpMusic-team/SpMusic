@@ -3,6 +3,7 @@ mod audio;
 mod global_shortcuts;
 mod library_cover_warmup;
 mod library_folders;
+mod library_playlists;
 mod webview_memory;
 
 use std::sync::Once;
@@ -20,12 +21,13 @@ use audio::{
     AudioProbePlaylistTrackSummariesInput, AudioSeekInput, AudioSetVolumeInput, AudioTrackRef,
     AudioTransitionPlaybackInput, CoverPixelsError,
 };
-use audio::{current_output_info, load_library_folder};
+use audio::{current_output_info, import_m3u8_playlist, load_library_folder};
 use global_shortcuts::{
     global_shortcuts_get_settings, global_shortcuts_set_suspended, global_shortcuts_update_settings,
 };
 use library_cover_warmup::{LibraryCoverWarmupInput, LibraryCoverWarmupResult};
 use library_folders::{LibraryError, LibraryFolderRegistry, LibraryFolders};
+use library_playlists::LibraryPlaylistRegistry;
 use tauri::{ipc::Response, Manager, State};
 use tracing_subscriber::EnvFilter;
 use webview_memory::WebviewMemoryCoordinator;
@@ -54,6 +56,28 @@ fn audio_open_source(
 ) -> Result<AudioOpenSourceResult, AudioCommandError> {
     tracing::info!(command = "audio_open_source", "Tauri command invoked");
     state.open_source()
+}
+
+#[tauri::command]
+fn audio_import_playlist(
+    registry: State<'_, LibraryPlaylistRegistry>,
+) -> Result<Option<AudioFolderPlaylist>, AudioCommandError> {
+    let Some(path) = rfd::FileDialog::new()
+        .set_title("导入 M3U8 播放列表")
+        .add_filter("M3U8 播放列表", &["m3u8"])
+        .pick_file()
+    else {
+        return Ok(None);
+    };
+    let playlist = import_m3u8_playlist(&path)?;
+    registry
+        .upsert(&playlist)
+        .map_err(|error| AudioCommandError {
+            code: audio::AudioErrorCode::InternalError,
+            message: format!("保存播放列表失败：{}", error.message),
+            recoverable: true,
+        })?;
+    Ok(Some(playlist))
 }
 
 #[tauri::command]
@@ -145,6 +169,37 @@ fn library_get_folders(
     state: State<'_, LibraryFolderRegistry>,
 ) -> Result<LibraryFolders, LibraryError> {
     state.get()
+}
+
+#[tauri::command]
+fn library_get_playlists(
+    state: State<'_, LibraryPlaylistRegistry>,
+) -> Result<Vec<AudioFolderPlaylist>, LibraryError> {
+    state.get()
+}
+
+#[tauri::command]
+fn library_select_folders() -> Result<Option<Vec<String>>, LibraryError> {
+    let Some(paths) = rfd::FileDialog::new()
+        .set_title("选择音乐文件夹")
+        .pick_folders()
+    else {
+        return Ok(None);
+    };
+    let mut folders = Vec::with_capacity(paths.len());
+    for path in paths {
+        let path = path
+            .canonicalize()
+            .map_err(|error| LibraryError::invalid(format!("无法访问所选音乐文件夹：{error}")))?;
+        if !path.is_dir() {
+            return Err(LibraryError::invalid("所选路径不是文件夹"));
+        }
+        let normalized = path.to_string_lossy().into_owned();
+        if !folders.contains(&normalized) {
+            folders.push(normalized);
+        }
+    }
+    Ok(Some(folders))
 }
 
 #[tauri::command]
@@ -448,12 +503,15 @@ pub fn run() {
             global_shortcuts_set_suspended,
             audio_open_file,
             audio_open_source,
+            audio_import_playlist,
             audio_load_file,
             audio_load_and_play,
             audio_hydrate_track,
             audio_probe_playlist_cover,
             audio_list_folder_tracks,
             library_get_folders,
+            library_get_playlists,
+            library_select_folders,
             library_add_folder,
             library_clear_folders,
             library_scan_folder,
@@ -487,6 +545,7 @@ pub fn run() {
             let audio_cache_dir = app_paths.cache_dir.clone();
             global_shortcuts::GlobalShortcuts::initialize(app.handle(), &app_paths.config_dir);
             app.manage(LibraryFolderRegistry::new(&app_paths.data_dir));
+            app.manage(LibraryPlaylistRegistry::new(&app_paths.data_dir));
             app.manage(app_paths);
             app.manage(AudioController::new(app.handle().clone(), audio_cache_dir));
 

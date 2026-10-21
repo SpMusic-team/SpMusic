@@ -41,6 +41,9 @@ const all=new Map(Object.values(entries).flat().map(pair=>[pair[1],descriptor(pa
 const track=path=>{const row=all.get(path);if(!row)throw Error('Unknown '+path);return {...row,durationMs:180000,metadata:{title:row.id,artist:'Artist '+row.id,album:'Album '+row.id,albumArtist:null,genre:null,year:null,trackNumber:null,discNumber:null,comment:null,lyrics:null,audioFormat:null,coverArt:null}}};
 window.backendInvoke=async(command,args)=>{
  const input=args?.input;window.calls.push({command,input,args});
+ if(command==='library_select_folders')return ['/audio/'+window.choice];
+ if(command==='audio_import_playlist')return folder(window.choice,'m3u8');
+ if(command==='library_get_playlists')return [];
  if(command==='library_get_folders'){
   const folders=readRegistry();
   if(window.registryGetGate)await new Promise(resolve=>window.pendingGets.push(resolve));
@@ -97,8 +100,8 @@ const visit = async () => {
   await page.getByRole('heading', { name: '全部歌曲' }).waitFor()
 }
 const importChoice = async choice => {
-  await page.evaluate(choice => {window.choice=choice;window.viewModel.playback.onOpenAudio()}, choice)
-  await page.waitForFunction(() => !window.viewModel.playback.isAudioBusy && !window.viewModel.playback.isSelectionPending)
+  await page.evaluate(choice => {window.choice=choice;if(choice==='m3u8')window.viewModel.playlist.library.onImportPlaylist();else window.viewModel.playlist.library.onSelectFolders()}, choice)
+  await page.waitForFunction(() => !window.viewModel.playback.isAudioBusy && !window.viewModel.playback.isSelectionPending && !window.viewModel.playlist.library.isImportPending)
 }
 const songs = () => page.evaluate(() => window.viewModel.playlist.library.allSongs.map(row => row.trackId))
 const registry = () => page.evaluate(() => JSON.parse(localStorage.getItem('spmusic-test-native-library-registry') || '[]'))
@@ -123,6 +126,7 @@ try {
   await visit()
   await page.waitForFunction(() => window.viewModel.playlist.library.allSongs.length === 3)
   assert.deepEqual(await songs(), ['a-0', 'shared', 'b-0'], 'reloaded app rescans both folders')
+  assert.equal(await page.evaluate(() => window.viewModel.playlist.library.items.filter(item=>item.sourceKind!=='folder').length), 0, 'folder restore creates no user playlists')
   assert.equal(await page.evaluate(() => window.viewModel.playback.track?.id ?? null), null, 'restore does not start playback')
   assert.deepEqual(await page.evaluate(() => window.calls.filter(call => call.command === 'library_scan_folder').map(call => call.args.path)), ['/audio/a', '/audio/b'], 'restore uses direct directory scan')
   await importChoice('sidecar')
@@ -138,6 +142,8 @@ try {
   assert.deepEqual(await songs(), [], 'clear survives reload')
   await importChoice('a')
   await page.waitForFunction(() => JSON.parse(localStorage.getItem('spmusic-test-native-library-registry') || '[]').length === 1)
+  await page.evaluate(() => {const row=window.viewModel.playlist.library.allSongs[0];window.viewModel.playlist.library.onPlaySong(row.scope,row.trackId)})
+  await page.waitForFunction(() => window.viewModel.playback.track?.id === 'a-0' && !window.viewModel.playback.isSelectionPending)
   const activeId = await page.evaluate(() => window.viewModel.playback.track?.id)
   await clear()
   await page.waitForFunction(() => window.viewModel.playlist.library.allSongs.length === 0)

@@ -36,11 +36,13 @@ pub use cover_pixels::{
 };
 pub(crate) use device::current_output_info;
 pub use error::AudioCommandError;
-pub(crate) use playlist::load_library_folder;
+pub(crate) use error::AudioErrorCode;
+pub(crate) use playlist::{import_m3u8_playlist, load_library_folder, restore_playlist_track};
 pub(crate) use playlist_cover::probe_playlist_cover;
 pub(crate) use playlist_cover::try_probe_playlist_cover_for_warmup;
 pub use playlist_duration::probe_playlist_durations;
 pub use playlist_summary::probe_playlist_track_summaries;
+pub(crate) use types::AudioPlaylistSourceKind;
 pub use types::{
     AudioEmbedLyricsInput, AudioFolderPlaylist, AudioFolderPlaylistInput, AudioLoadAndPlayInput,
     AudioLoadAndPlayResult, AudioLoadFileInput, AudioOpenFileInput, AudioOpenSourceResult,

@@ -95,7 +95,8 @@ export function MediaLibraryPanel({ playlist, onOpenPlayer }: { playlist: Player
       <DropdownMenu>
         <DropdownMenuTrigger render={<Button variant="outline" className="media-library-more" aria-label="更多媒体库操作"><span aria-hidden="true" style={{ maskImage: `url("${more}")`, WebkitMaskImage: `url("${more}")` }} /></Button>} />
         <DropdownMenuContent align="end"><DropdownMenuGroup>
-          <DropdownMenuItem disabled={playlist.isOpenAudioDisabled} onClick={playlist.onOpenAudio}>导入音频或播放列表</DropdownMenuItem>
+          <DropdownMenuItem disabled={library.isImportPending} onClick={library.onSelectFolders}>选择文件夹</DropdownMenuItem>
+          <DropdownMenuItem disabled={library.isImportPending} onClick={library.onImportPlaylist}>导入 M3U8 播放列表</DropdownMenuItem>
           <DropdownMenuItem onClick={onOpenPlayer}>打开播放界面</DropdownMenuItem>
           <DropdownMenuItem onClick={() => library.onSelectCategory?.('playlists')}>管理播放列表</DropdownMenuItem>
         </DropdownMenuGroup></DropdownMenuContent>

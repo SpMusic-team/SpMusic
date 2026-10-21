@@ -284,7 +284,7 @@ export type AudioFolderTrackRef = {
   available: boolean
 }
 
-export type AudioPlaylistSourceKind = 'folder' | 'm3u8'
+export type AudioPlaylistSourceKind = 'folder' | 'm3u8' | 'custom'
 
 export type AudioFolderPlaylist = {
   directoryPath: string
@@ -487,6 +487,18 @@ export async function listAudioFolderTracks(selectedPath: string): Promise<Audio
 }
 
 export type LibraryFolders = { folders: string[] }
+
+export async function selectLibraryFolders(): Promise<string[] | null> {
+  return invoke<string[] | null>('library_select_folders')
+}
+
+export async function importAudioPlaylist(): Promise<AudioFolderPlaylist | null> {
+  return invoke<AudioFolderPlaylist | null>('audio_import_playlist')
+}
+
+export async function getLibraryPlaylists(): Promise<AudioFolderPlaylist[]> {
+  return invoke<AudioFolderPlaylist[]>('library_get_playlists')
+}
 
 export async function getLibraryFolders(): Promise<LibraryFolders> {
   return invoke<LibraryFolders>('library_get_folders')

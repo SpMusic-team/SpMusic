@@ -4,11 +4,12 @@ import { DevAudioToolsAvailability, DevAudioToolsSlot } from '@/features/player/
 import { PlayerSurface } from '@/features/player/components/PlayerSurface'
 import { playlistScope, useAudioPlayer } from '@/features/player/hooks/useAudioPlayer'
 import { usePlaylistLibraryDurations } from '@/features/player/hooks/usePlaylistDuration'
+import { useLibraryArtwork } from '@/features/player/hooks/useLibraryArtwork'
 import { playlistDisplayName } from '@/features/player/model/audioTrackModel'
 import { formatPlaylistDurationLabel } from '@/features/player/model/playlistDuration'
 import { normalizeAudioSourcePath, pendingPlaylistTrackRow } from '@/features/player/model/playlistTrackSummary'
 import { useGlobalShortcuts } from '@/features/shortcuts/hooks/useGlobalShortcuts'
-import type { AllSongsItem, DevAudioToolsViewModel, PlayerUiViewModel, PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
+import type { AllSongsItem, DevAudioToolsViewModel, PlayerUiViewModel, PlaylistArtworkDemand, PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
 import { readStartupPage } from '@/features/player/model/startupPageStorage'
 
 const EMPTY_KNOWN_DURATIONS: ReadonlyMap<string, number> = new Map()
@@ -21,8 +22,15 @@ export function PlayerShell() {
   const [libraryRoute, setLibraryRoute] = useState<MediaLibraryRoute>({ view: 'overview' })
   const [browsedScope, setBrowsedScope] = useState<string | null>(null)
   const [playlistEntryPosition, setPlaylistEntryPosition] = useState<NonNullable<PlayerUiViewModel['playlist']['entryPosition']>>({ requestId: 0, target: 'current-track' })
-  const browsedPlaylist = player.sessionPlaylists.find((item) => playlistScope(item) === browsedScope)
+  const librarySources = useMemo(() => [...player.libraryFolderPlaylists, ...player.sessionPlaylists], [player.libraryFolderPlaylists, player.sessionPlaylists])
+  const browsedPlaylist = librarySources.find((item) => playlistScope(item) === browsedScope)
   const isBrowsingActive = !browsedPlaylist || browsedScope === player.activePlaylistScope
+  const { rows: libraryArtwork, setVisibleTrackIds: setLibraryVisibleTrackIds } = useLibraryArtwork(librarySources,
+    isPlaylistOpen && libraryRoute.view === 'tracks' && !isBrowsingActive ? browsedPlaylist ?? null : null)
+  const artworkDetailPath = browsedPlaylist?.sourcePath
+  const handleLibraryVisibleTrackIds = useCallback((trackIds: readonly string[], keepPersistentArtwork?: boolean, showArtwork?: boolean, demand?: PlaylistArtworkDemand) => {
+    if (artworkDetailPath) setLibraryVisibleTrackIds(artworkDetailPath, trackIds, keepPersistentArtwork, showArtwork, demand)
+  }, [artworkDetailPath, setLibraryVisibleTrackIds])
   const ensurePlaylistSummaries = player.ensurePlaylistSummaries
   const displayScope = isBrowsingActive ? player.activePlaylistScope : browsedScope
   const selectLibraryCategory = (categoryId: MediaLibraryCategoryId) => { setIsPlaylistOpen(true); setLibraryRoute({ view: 'category', categoryId }) }
@@ -119,9 +127,9 @@ export function PlayerShell() {
   // can never complete another scope. `react-hooks/refs` forbids reading a ref
   // during render, so this uses React's documented "adjust state when the input
   // changes" form, which re-renders before committing.
-  const libraryDurationSources = useMemo(() => player.sessionPlaylists.map((item) => ({
+  const libraryDurationSources = useMemo(() => librarySources.map((item) => ({
     scope: playlistScope(item), sources: item.tracks,
-  })), [player.sessionPlaylists])
+  })), [librarySources])
   const [knownScopeState, setKnownScopeState] = useState<Readonly<{
     scope: string
     known: ReadonlyMap<string, number>
@@ -159,9 +167,11 @@ export function PlayerShell() {
     return (browsedPlaylist?.tracks ?? []).map((item) => {
       const row = (browsedScope ? summaries?.[item.id] : undefined) ?? pendingPlaylistTrackRow(item)
       const durationMs = durations?.get(item.sourcePath)
-      return durationMs == null ? row : { ...row, durationSeconds: durationMs / 1000 }
+      const artwork = libraryArtwork.get(normalizeAudioSourcePath(item.sourcePath))
+      const covered = artwork ? { ...row, ...artwork } : row
+      return durationMs == null ? covered : { ...covered, durationSeconds: durationMs / 1000 }
     })
-  }, [isBrowsingActive, playlistTracks, browsedPlaylist, browsedScope, summariesByScope, durationData.durationsByScope])
+  }, [isBrowsingActive, playlistTracks, browsedPlaylist, browsedScope, summariesByScope, durationData.durationsByScope, libraryArtwork])
   const allSongs = useMemo<AllSongsItem[]>(() => {
     const seen = new Set<string>()
     const rows: AllSongsItem[] = []
@@ -268,15 +278,21 @@ export function PlayerShell() {
         route: libraryRoute,
         onOpenOverview: openLibraryOverview,
         onSelectCategory: selectLibraryCategory,
-        items: player.sessionPlaylists.filter((item) => item.sourceKind === 'm3u8'
-          || player.libraryFolderPlaylists.some((folder) => playlistScope(folder) === playlistScope(item))).map((item) => ({
-          scope: playlistScope(item), name: playlistDisplayName(item), trackCount: item.tracks.length, sourceKind: item.sourceKind,
-          coverTrack: playlistScope(item) === player.activePlaylistScope ? playlistTracks[0] : undefined,
+        items: librarySources.map((item) => {
+          const first = item.tracks.find((descriptor) => descriptor.available)
+          const scope = playlistScope(item)
+          const firstRow: PlaylistTrackItemViewModel | undefined = first ? (scope === player.activePlaylistScope ? playlistTracks.find((row) => row.id === first.id) : undefined)
+            ?? summariesByScope[scope]?.[first.id] ?? pendingPlaylistTrackRow(first) : undefined
+          const artwork = first ? libraryArtwork.get(normalizeAudioSourcePath(first.sourcePath)) : undefined
+          return {
+          scope, name: playlistDisplayName(item), trackCount: item.tracks.length, sourceKind: item.sourceKind,
+          coverSourcePath: scope === player.activePlaylistScope && firstRow?.coverThumbnail ? undefined : first?.sourcePath,
+          coverTrack: firstRow ? { ...firstRow, ...artwork, coverThumbnail: firstRow.coverThumbnail ?? artwork?.coverThumbnail } : undefined,
           totalClock: formatPlaylistDurationLabel(
             playlistDurations.get(playlistScope(item))!,
             item.tracks.length,
           ),
-        })),
+        }}),
         allSongs,
         allSongsMetadataStatus: allSongsRowsReady ? 'ready' : 'loading',
         currentScope: browsedScope,
@@ -284,11 +300,16 @@ export function PlayerShell() {
         onOpen: openLibrary,
         onSelect: browsePlaylist,
         onPlay: (scope) => {
-          const item = player.sessionPlaylists.find((entry) => playlistScope(entry) === scope)
+          const item = librarySources.find((entry) => playlistScope(entry) === scope)
           const track = item?.tracks.find((entry) => entry.available)
           if (track) void player.selectSessionPlaylistTrack(scope, track.id)
         },
         onPlaySong: (scope, trackId) => { void player.selectSessionPlaylistTrack(scope, trackId) },
+        onSelectFolders: () => { void player.selectFolders() },
+        onImportPlaylist: () => { void player.importPlaylist() },
+        isImportPending: player.libraryImportPending || player.libraryStatus === 'clearing',
+        isPlaylistRestorePending: player.playlistRestorePending,
+        onCreatePlaylist: player.createPlaylist,
       },
       isOpenAudioDisabled: player.audioBusy
         || player.transportBusy
@@ -308,7 +329,7 @@ export function PlayerShell() {
       onTrackSelect: player.audioBusy || player.transportBusy || player.timelineInteraction === 'seeking'
         ? undefined
         : isBrowsingActive ? player.selectQueueTrack : (trackId) => { if (browsedScope) void player.selectSessionPlaylistTrack(browsedScope, trackId) },
-      onVisibleTrackIdsChange: isBrowsingActive ? player.setVisiblePlaylistTrackIds : undefined,
+      onVisibleTrackIdsChange: isBrowsingActive ? player.setVisiblePlaylistTrackIds : handleLibraryVisibleTrackIds,
     },
     feedback: {
       value: player.currentFeedback,

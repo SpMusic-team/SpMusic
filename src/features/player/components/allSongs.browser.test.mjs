@@ -45,13 +45,16 @@ const descriptors={
  ...Object.fromEntries(Object.keys(indexFolders).map(key=>[key,[[key,'/audio/'+key+'/0.flac']]]))
 };
 const descriptor=([id,sourcePath])=>({id,sourcePath,fileName:sourcePath.split('/').at(-1),available:true});
-const playlist=()=>({directoryPath:'/audio/'+window.choice,directoryName:indexFolders[window.choice]??'Folder '+window.choice,sourceKind:window.choice==='c'?'m3u8':'folder',sourcePath:window.choice==='c'?'/lists/c.m3u8':'/audio/'+window.choice,sourceName:'List '+window.choice,selectedIndex:0,tracks:descriptors[window.choice].map(descriptor)});
+const playlist=()=>({directoryPath:'/audio/'+window.choice,directoryName:indexFolders[window.choice]??'Folder '+window.choice,sourceKind:window.choice==='c'||window.playlistImport?'m3u8':'folder',sourcePath:window.choice==='c'||window.playlistImport?'/lists/'+window.choice+'.m3u8':'/audio/'+window.choice,sourceName:window.playlistImport?(indexFolders[window.choice]??'List '+window.choice):'List '+window.choice,selectedIndex:0,tracks:descriptors[window.choice].map(descriptor)});
 const byPath=new Map(Object.values(descriptors).flat().map(pair=>[pair[1],descriptor(pair)]));
 const names={'a-0':'A Song','b-0':'B Song','c-0':'C Playlist Song',shared:'Shared Song'};
 const title=id=>names[id]??(id.startsWith('order-')?orderTitles[Number(id.slice(6))]:id.startsWith('many-')?(Number(id.slice(5))<25?'A Song ':'Z Song ')+id.slice(5):id);
 const track=path=>{const row=byPath.get(path);if(!row)throw Error('Unknown '+path);return {...row,durationMs:180000,metadata:{title:title(row.id),artist:'Artist '+row.id,album:'Album '+row.id,albumArtist:null,genre:null,year:null,trackNumber:null,discNumber:null,comment:null,lyrics:null,audioFormat:null,coverArt:null}}};
 window.backendInvoke=async(command,args)=>{
  const input=args?.input;window.calls.push({command,input});
+ if(command==='library_select_folders')return ['/audio/'+window.choice];
+ if(command==='audio_import_playlist')return playlist();
+ if(command==='library_get_playlists')return [];
  if(command==='library_get_folders')return {folders:window.savedLibraryFolders??[]};
  if(command==='library_add_folder'){window.savedLibraryFolders=[...new Set([...(window.savedLibraryFolders??[]),args.path])];return {folders:window.savedLibraryFolders};}
  if(command==='library_clear_folders'){window.savedLibraryFolders=[];return null;}
@@ -112,8 +115,8 @@ async function open(width) {
 }
 
 async function importChoice(page, choice) {
-  await page.evaluate(choice => { window.choice = choice; window.viewModel.playback.onOpenAudio() }, choice)
-  await page.waitForFunction(() => !window.viewModel.playback.isAudioBusy && !window.viewModel.playback.isSelectionPending)
+  await page.evaluate(choice => { window.choice = choice; if(choice==='c'||window.playlistImport)window.viewModel.playlist.library.onImportPlaylist();else window.viewModel.playlist.library.onSelectFolders() }, choice)
+  await page.waitForFunction(() => !window.viewModel.playback.isAudioBusy && !window.viewModel.playback.isSelectionPending && !window.viewModel.playlist.library.isImportPending)
 }
 
 try {
@@ -246,6 +249,7 @@ try {
   }
   {
     const { page, errors } = await open(640)
+    await page.evaluate(() => { window.playlistImport = true })
     for (const choice of ['idxAccent', 'idxCyrillic', 'idxZ', 'idxB', 'idxGreek', 'idxZero', 'idxAngle', 'idxBracket', 'idxA', 'idxPlus', 'idxParen', 'idxHashCyrillic', 'idxHashLatin', 'idxC']) await importChoice(page, choice)
     await page.evaluate(() => window.viewModel.playlist.library.onSelectCategory('playlists'))
     await page.getByRole('heading', { name: '播放列表' }).waitFor()

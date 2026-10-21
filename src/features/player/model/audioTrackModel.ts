@@ -21,7 +21,7 @@ import {
 export { coverToneForTrackId, fileExtension, fileNameTitle, normalizeAudioSourcePath }
 
 export function playlistDisplayName(playlist: AudioFolderPlaylist): string {
-  return playlist.sourceKind === 'm3u8' ? playlist.sourceName : playlist.directoryName
+  return playlist.sourceKind === 'folder' ? playlist.directoryName : playlist.sourceName
 }
 
 export function singleTrackFolderPlaylist(track: AudioTrackRef): AudioFolderPlaylist {

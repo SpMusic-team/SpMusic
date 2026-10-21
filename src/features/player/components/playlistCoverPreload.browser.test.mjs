@@ -65,6 +65,9 @@ const track=path=>{const parts=path.split('/');const scope=parts.at(-2),i=Number
 function spxr(edge){const bytes=new Uint8Array(40+edge*edge*4),view=new DataView(bytes.buffer);bytes.set([83,80,88,82]);view.setUint16(4,1,true);view.setUint16(6,40,true);for(const [offset,value]of [[8,edge],[12,edge],[16,edge*4],[20,1],[24,edge*edge*4],[28,0],[32,512],[36,512]])view.setUint32(offset,value,true);for(let i=40;i<bytes.length;i+=4)bytes.set([60,120,180,255],i);return bytes}
 window.backendInvoke=async(command,args)=>{
  const input=args?.input;window.calls.push({command,input,time:performance.now()});
+ if(command==='library_get_playlists')return [];
+ if(command==='library_get_folders')return {folders:[]};
+ if(command==='library_cancel_cover_warmup')return null;
  if(command==='audio_get_state')return state;
  if(command==='audio_get_output_info')return null;
  if(command==='audio_get_current_track')return state.currentTrackId?track('/audio/'+state.currentTrackId.replace('-','/')+'.flac'):null;

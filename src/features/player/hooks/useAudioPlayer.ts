@@ -65,10 +65,12 @@ import {
   cancelLibraryCoverWarmup,
   clearLibraryFolders,
   getLibraryFolders,
+  getLibraryPlaylists,
   getAudioState,
   getAudioOutputInfo,
   getCurrentAudioTrack,
   hydrateAudioTrack,
+  importAudioPlaylist,
   isAudioCoverPixelsError,
   isAudioCommandError,
   listAudioFolderTracks,
@@ -84,6 +86,7 @@ import {
   probeAudioPlaylistTrackSummaries,
   seekAudio,
   scanLibraryFolder,
+  selectLibraryFolders,
   setAudioVolume,
   stopAudio,
   transitionAudioPlayback,
@@ -401,6 +404,9 @@ export function useAudioPlayer() {
   const [libraryFolderErrors, setLibraryFolderErrors] = useState<Readonly<Record<string, string>>>({})
   const [libraryStatus, setLibraryStatus] = useState<'loading' | 'ready' | 'clearing' | 'error'>('loading')
   const [libraryRestorePending, setLibraryRestorePending] = useState(true)
+  const [libraryImportPending, setLibraryImportPending] = useState(false)
+  const [playlistRestorePending, setPlaylistRestorePending] = useState(true)
+  const libraryImportPendingRef = useRef(false)
   const [playlistTrackVisuals, setPlaylistTrackVisuals] = useState<Readonly<Record<string, PlaylistTrackVisual>>>({})
   const [playlistTrackMetadata, setPlaylistTrackMetadata] = useState<Readonly<Record<string, PlaylistTrackMetadata>>>({})
   // Read-only tag summaries, keyed by playlist scope. This is a third channel:
@@ -737,9 +743,6 @@ export function useAudioPlayer() {
     }
     libraryWarmPathsRef.current = paths
     sessionPlaylistDescriptorsRef.current.set(scope, playlist)
-    setSessionPlaylists((previous) => previous.some((item) => playlistScope(item) === scope)
-      ? previous.map((item) => playlistScope(item) === scope ? playlist : item)
-      : [...previous, playlist])
     setLibraryFolderPlaylists((previous) => previous.some((item) => playlistScope(item) === scope)
       ? previous.map((item) => playlistScope(item) === scope ? playlist : item)
       : [...previous, playlist])
@@ -751,7 +754,7 @@ export function useAudioPlayer() {
     })
   }, [])
 
-  const registerLibraryPlaylist = useCallback((playlist: AudioFolderPlaylist, epoch: number) => {
+  const registerLibraryPlaylist = useCallback(async (playlist: AudioFolderPlaylist, epoch: number) => {
     if (playlist.sourceKind !== 'folder' || libraryEpochRef.current !== epoch) return
     const path = playlist.sourcePath
     const mutation = libraryMutationRef.current.then(async () => {
@@ -759,19 +762,22 @@ export function useAudioPlayer() {
       try {
         const result = await addLibraryFolder(path)
         if (libraryEpochRef.current !== epoch) return
-        if (!Array.isArray(result.folders)) throw new Error('歌曲文件夹列表格式错误')
+        if (!Array.isArray(result.folders) || !result.folders.every((folder) => typeof folder === 'string')) throw new Error('歌曲文件夹列表格式错误')
         selectedFolderPathsRef.current = result.folders
         setSelectedFolderPaths(result.folders)
         rememberLibraryPlaylist(playlist, epoch)
         scheduleLibraryWarmup(epoch)
+        setLibraryStatus('ready')
       } catch (error) {
         if (libraryEpochRef.current !== epoch) return
-        const message = error instanceof Error ? error.message : String(error)
+        const message = commandError(error).message
         setLibraryFolderErrors((previous) => ({ ...previous, [path]: `无法保存选择：${message}` }))
         setLibraryStatus('error')
+        toast.error(`无法保存文件夹选择：${message}`)
       }
     })
     libraryMutationRef.current = mutation.catch(() => undefined)
+    await mutation
   }, [rememberLibraryPlaylist, scheduleLibraryWarmup])
 
   const clearSelectedLibraryFolders = useCallback(async () => {
@@ -1012,12 +1018,126 @@ export function useAudioPlayer() {
     void runPlaylistSummaryPass(scope, runId, fingerprint, playlist.tracks)
   }, [commitPlaylistSummaryStatus, findPlaylistForScope, runPlaylistSummaryPass])
 
+  useEffect(() => {
+    let disposed = false
+    void (async () => {
+      try {
+        const playlists = await getLibraryPlaylists()
+        if (disposed) return
+        if (!Array.isArray(playlists) || playlists.some((playlist) => playlist.sourceKind !== 'm3u8'
+          || typeof playlist.sourcePath !== 'string' || !playlist.sourcePath
+          || typeof playlist.sourceName !== 'string' || typeof playlist.directoryName !== 'string'
+          || !Array.isArray(playlist.tracks) || playlist.tracks.some((track) => !track || typeof track.id !== 'string'
+            || typeof track.sourcePath !== 'string' || typeof track.fileName !== 'string' || typeof track.available !== 'boolean'))) {
+          throw new Error('已保存的播放列表格式错误')
+        }
+        const restored: AudioFolderPlaylist[] = []
+        for (const playlist of playlists) {
+          const scope = playlistScope(playlist)
+          // Imports completed during this read own their newer descriptors.
+          if (sessionPlaylistDescriptorsRef.current.has(scope)) continue
+          sessionPlaylistDescriptorsRef.current.set(scope, playlist)
+          restored.push(playlist)
+          ensurePlaylistSummaries(scope, playlist)
+        }
+        setSessionPlaylists((previous) => {
+          const currentScopes = new Set(previous.map(playlistScope))
+          return [...restored.filter((playlist) => !currentScopes.has(playlistScope(playlist))), ...previous]
+        })
+      } catch (error) {
+        if (!disposed) toast.error(`恢复播放列表失败：${commandError(error).message}`)
+      } finally {
+        if (!disposed) setPlaylistRestorePending(false)
+      }
+    })()
+    return () => { disposed = true }
+  }, [ensurePlaylistSummaries])
+
+  const selectFolders = useCallback(async () => {
+    if (libraryImportPendingRef.current) return
+    libraryImportPendingRef.current = true
+    setLibraryImportPending(true)
+    const epoch = libraryEpochRef.current
+    try {
+      const paths = await selectLibraryFolders()
+      if (paths === null || libraryEpochRef.current !== epoch) return
+      const seen = new Set<string>()
+      for (const path of paths) {
+        if (libraryEpochRef.current !== epoch) return
+        const key = normalizeAudioSourcePath(path)
+        if (seen.has(key)) continue
+        seen.add(key)
+        try {
+          const source = await scanLibraryFolder(path)
+          if (libraryEpochRef.current !== epoch) return
+          if (source.sourceKind !== 'folder') throw new Error('返回的歌曲来源不是文件夹')
+          await registerLibraryPlaylist(source, epoch)
+          if (libraryEpochRef.current !== epoch) return
+          if (sessionPlaylistDescriptorsRef.current.get(playlistScope(source)) === source) {
+            ensurePlaylistSummaries(playlistScope(source), source)
+          }
+        } catch (error) {
+          if (libraryEpochRef.current !== epoch) return
+          const message = commandError(error).message
+          setLibraryFolderErrors((previous) => ({ ...previous, [path]: message }))
+          toast.error(`无法添加文件夹：${message}`)
+        }
+      }
+    } catch (error) {
+      if (libraryEpochRef.current === epoch) toast.error(`无法选择文件夹：${commandError(error).message}`)
+    } finally {
+      libraryImportPendingRef.current = false
+      setLibraryImportPending(false)
+    }
+  }, [ensurePlaylistSummaries, registerLibraryPlaylist])
+
+  const importPlaylist = useCallback(async () => {
+    if (libraryImportPendingRef.current) return
+    libraryImportPendingRef.current = true
+    setLibraryImportPending(true)
+    try {
+      const playlist = await importAudioPlaylist()
+      if (playlist === null || playlistSummaryDisposedRef.current) return
+      if (playlist.sourceKind !== 'm3u8') throw new Error('返回的来源不是 M3U8 播放列表')
+      const scope = playlistScope(playlist)
+      sessionPlaylistDescriptorsRef.current.set(scope, playlist)
+      setSessionPlaylists((previous) => previous.some((item) => playlistScope(item) === scope)
+        ? previous.map((item) => playlistScope(item) === scope ? playlist : item)
+        : [...previous, playlist])
+      ensurePlaylistSummaries(scope, playlist)
+    } catch (error) {
+      if (!playlistSummaryDisposedRef.current) toast.error(`无法导入播放列表：${commandError(error).message}`)
+    } finally {
+      libraryImportPendingRef.current = false
+      setLibraryImportPending(false)
+    }
+  }, [ensurePlaylistSummaries])
+
+  const createPlaylist = useCallback((name: string, songKeys: readonly string[]): string | null => {
+    const title = name.trim()
+    if (!title) return null
+    const descriptors = new Map(libraryFolderPlaylists.flatMap((source) => source.tracks.map((item) => [normalizeAudioSourcePath(item.sourcePath), item] as const)))
+    const tracks = [...new Set(songKeys)].flatMap((key) => {
+      const descriptor = descriptors.get(key)
+      return descriptor ? [{ ...descriptor }] : []
+    })
+    if (!tracks.length) return null
+    const id = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
+    const playlist: AudioFolderPlaylist = {
+      sourceKind: 'custom', sourcePath: `custom:${id}`, sourceName: title,
+      directoryPath: '', directoryName: title, selectedIndex: 0, tracks,
+    }
+    const scope = playlistScope(playlist)
+    sessionPlaylistDescriptorsRef.current.set(scope, playlist)
+    setSessionPlaylists((previous) => [...previous, playlist])
+    ensurePlaylistSummaries(scope, playlist)
+    return scope
+  }, [libraryFolderPlaylists, ensurePlaylistSummaries])
+
   const activatePlaylistScope = useCallback((playlist: AudioFolderPlaylist) => {
     const nextScope = playlistScope(playlist)
     // Store descriptors only; thumbnail object URLs belong to the active scope.
-    if (playlist.sourceKind !== 'folder' || selectedFolderPathsRef.current.some(
-      (path) => normalizeAudioSourcePath(path) === normalizeAudioSourcePath(playlist.sourcePath),
-    )) {
+    if (playlist.sourceKind !== 'folder') {
       setSessionPlaylists((previous) => previous.some((item) => playlistScope(item) === nextScope)
         ? previous.map((item) => playlistScope(item) === nextScope ? playlist : item)
         : [...previous, playlist])
@@ -2493,7 +2613,7 @@ export function useAudioPlayer() {
     for (let attempts = 0; attempts < playlist.tracks.length; attempts += 1) {
       const target = playlist.tracks[index]
       if (!target) return false
-      if (!target.available && playlist.sourceKind === 'm3u8' && skipMissing) {
+      if (!target.available && playlist.sourceKind !== 'folder' && skipMissing) {
         const nextIndex = index + step
         if (nextIndex < 0 || nextIndex >= playlist.tracks.length) {
           if (!allowWrap) return false
@@ -2512,7 +2632,7 @@ export function useAudioPlayer() {
         visualSource ? { direction, source: visualSource } : undefined,
       )) return true
       if (selectionRequestIdRef.current !== expectedSelectionRequestId) return false
-      if (playlist.sourceKind !== 'm3u8' || !skipMissing) return false
+      if (playlist.sourceKind === 'folder' || !skipMissing) return false
 
       const nextIndex = index + step
       if (nextIndex < 0 || nextIndex >= playlist.tracks.length) {
@@ -3026,7 +3146,6 @@ export function useAudioPlayer() {
       || transportOperationInProgress()
       || timelineInteractionRef.current === 'seeking'
     ) return
-    const libraryEpoch = libraryEpochRef.current
     seekRequestIdRef.current += 1
     audioStateRequestGenerationRef.current += 1
     timelineInteractionRef.current = 'following'
@@ -3039,11 +3158,6 @@ export function useAudioPlayer() {
       if (!selectionIsCurrent(selectionRequestId)) return
       if (source.kind === 'playlist') {
         await loadFolderPlaylistSelection(source.playlist, autoplay, selectionRequestId)
-        // Loading the first track starts a nested selection request, so the
-        // original picker request ID is no longer current after activation.
-        if (playlistScopeRef.current === playlistScope(source.playlist)) {
-          registerLibraryPlaylist(source.playlist, libraryEpoch)
-        }
         endingTrackRef.current = null
         return
       }
@@ -3106,7 +3220,6 @@ export function useAudioPlayer() {
         || audioTrackRef.current?.id !== nextAudioTrack.id
       ) return
       activatePlaylistScope(nextFolderPlaylist)
-      registerLibraryPlaylist(nextFolderPlaylist, libraryEpoch)
       prefetchAdjacentPlaylistTracks(nextAudioTrack.id)
       endingTrackRef.current = null
     } catch (error) {
@@ -3333,7 +3446,7 @@ export function useAudioPlayer() {
   const selectSessionPlaylistTrack = useCallback(async (scope: string, trackId: string) => {
     if (audioSelectionInProgressRef.current || transportOperationInProgress()
       || timelineInteractionRef.current === 'seeking') return false
-    const playlist = sessionPlaylists.find((item) => playlistScope(item) === scope)
+    const playlist = findPlaylistForScope(scope)
     const index = playlist?.tracks.findIndex((item) => item.id === trackId) ?? -1
     if (!playlist || index < 0) return false
     const expectedRequestId = selectionRequestIdRef.current + 1
@@ -3343,7 +3456,7 @@ export function useAudioPlayer() {
     activatePlaylistScope(playlist)
     prefetchAdjacentPlaylistTracks(trackId)
     return true
-  }, [sessionPlaylists, loadPlaylistTrackOrSkip, activatePlaylistScope, prefetchAdjacentPlaylistTracks])
+  }, [findPlaylistForScope, loadPlaylistTrackOrSkip, activatePlaylistScope, prefetchAdjacentPlaylistTracks])
 
   function refreshAudioState() {
     if (
@@ -3414,6 +3527,11 @@ export function useAudioPlayer() {
     libraryFolderErrors,
     libraryStatus,
     libraryRestorePending,
+    libraryImportPending,
+    playlistRestorePending,
+    selectFolders,
+    importPlaylist,
+    createPlaylist,
     clearSelectedLibraryFolders,
     activePlaylistScope: folderPlaylist ? playlistScope(folderPlaylist) : null,
     selectSessionPlaylistTrack,

@@ -28,7 +28,7 @@ export function PlaylistLibrarySidebar({ playlistName, trackCount, totalClock, c
   const stationaryHandoff = atomicOverview || !overlay && chromeTransition.handoff && !chromeTransition.playerVisible
   const headingId = useId()
   const systemIcons = useSystemIcons()
-  const items = library?.items ?? (trackCount > 0 ? [{ scope: 'current', name: playlistName, trackCount, coverTrack, totalClock }] : [])
+  const items = library?.items.filter((item) => item.sourceKind !== 'folder') ?? (trackCount > 0 ? [{ scope: 'current', name: playlistName, trackCount, coverTrack, totalClock }] : [])
   return (
     <motion.aside
       className="playlist-library-sidebar"
@@ -84,7 +84,7 @@ export function PlaylistLibrarySidebar({ playlistName, trackCount, totalClock, c
             <Button key={item.scope} className="playlist-library-list" variant="ghost"
               aria-current={!library || (!library.isOpen && library.currentScope === item.scope) ? 'page' : undefined}
               onClick={() => library ? library.onSelect(item.scope) : onCurrentPlaylist()}>
-              <span className="playlist-library-list-cover" aria-hidden="true">
+              <span className="playlist-library-list-cover" aria-hidden="true" data-library-cover-source={item.coverSourcePath}>
                 <LibraryCover coverTrack={item.coverTrack} />
               </span>
               <span className="playlist-library-list-copy">
@@ -95,8 +95,8 @@ export function PlaylistLibrarySidebar({ playlistName, trackCount, totalClock, c
           )) : (
             <Empty className="playlist-library-empty">
               <EmptyHeader>
-                <EmptyTitle>暂无播放列表</EmptyTitle>
-                <EmptyDescription>导入歌曲后，当前列表会显示在这里。</EmptyDescription>
+                <EmptyTitle>{library?.isPlaylistRestorePending ? '正在恢复播放列表' : '暂无播放列表'}</EmptyTitle>
+                <EmptyDescription>{library?.isPlaylistRestorePending ? '正在读取已保存的 M3U8 清单。' : '导入 M3U8 后会自动保存，也可从全部歌曲中选择歌曲新建临时播放列表。'}</EmptyDescription>
               </EmptyHeader>
             </Empty>
           )}

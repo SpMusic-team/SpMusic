@@ -18,7 +18,7 @@ use super::{
         bounded_replay_gain_multiplier, parse_replay_gain_db, read_embedded_metadata,
         read_metadata, read_sidecar_lyrics, replay_gain_multiplier,
     },
-    playlist::{default_filters, load_folder_playlist, load_library_folder},
+    playlist::{default_filters, import_m3u8_playlist, load_folder_playlist, load_library_folder},
     source::{downmix_frame_to_stereo, input_path, load_track_ref, open_source, track_id},
     symphonia_source::SymphoniaAudioSource,
     tag_writer::{embed_lyrics, safe_update_tag},
@@ -244,6 +244,181 @@ fn library_folder_scan_ignores_same_folder_m3u8() {
     assert_eq!(file_names, vec!["one.mp3", "two.flac"]);
     assert_eq!(playlist.selected_index, 0);
 
+    std::fs::remove_dir_all(test_dir).unwrap();
+}
+
+#[test]
+fn library_folder_scan_recurses_and_preserves_overlapping_track_identity() {
+    let test_dir = std::env::temp_dir().join(format!(
+        "spmusic-recursive-library-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let nested = test_dir.join("artist").join("album");
+    std::fs::create_dir_all(&nested).unwrap();
+    for path in [test_dir.join("z-root.mp3"), nested.join("a-nested.FLAC")] {
+        std::fs::write(path, []).unwrap();
+    }
+    std::fs::write(nested.join("notes.txt"), []).unwrap();
+    std::fs::write(nested.join("album.m3u8"), b"missing.mp3\n").unwrap();
+
+    let playlist = load_library_folder(&test_dir).unwrap();
+    assert_eq!(
+        playlist
+            .tracks
+            .iter()
+            .map(|track| track.file_name.as_str())
+            .collect::<Vec<_>>(),
+        ["a-nested.FLAC", "z-root.mp3"]
+    );
+    let album = load_library_folder(&nested).unwrap();
+    assert_eq!(album.tracks.len(), 1);
+    assert_eq!(playlist.tracks[0].id, album.tracks[0].id);
+    assert_eq!(playlist.tracks[0].source_path, album.tracks[0].source_path);
+    assert!(playlist.tracks.iter().all(|track| track.available));
+    let repeated = load_library_folder(&test_dir).unwrap();
+    assert_eq!(
+        playlist
+            .tracks
+            .iter()
+            .map(|track| &track.id)
+            .collect::<Vec<_>>(),
+        repeated
+            .tracks
+            .iter()
+            .map(|track| &track.id)
+            .collect::<Vec<_>>()
+    );
+    std::fs::remove_dir_all(test_dir).unwrap();
+}
+
+#[test]
+fn library_folder_scan_rejects_invalid_roots_and_empty_trees() {
+    assert!(matches!(
+        load_library_folder(Path::new("relative-folder"))
+            .unwrap_err()
+            .code,
+        AudioErrorCode::InvalidPath
+    ));
+    let test_dir = std::env::temp_dir().join(format!(
+        "spmusic-empty-library-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(test_dir.join("empty")).unwrap();
+    std::fs::write(test_dir.join("list.m3u8"), b"missing.mp3\n").unwrap();
+    assert!(matches!(
+        load_library_folder(&test_dir).unwrap_err().code,
+        AudioErrorCode::UnsupportedFormat
+    ));
+    assert!(matches!(
+        load_library_folder(&test_dir.join("list.m3u8"))
+            .unwrap_err()
+            .code,
+        AudioErrorCode::InvalidPath
+    ));
+    assert!(matches!(
+        load_library_folder(&test_dir.join("missing"))
+            .unwrap_err()
+            .code,
+        AudioErrorCode::FileNotFound
+    ));
+    std::fs::remove_dir_all(test_dir).unwrap();
+}
+
+#[test]
+#[cfg(any(unix, target_os = "windows"))]
+fn library_folder_scan_skips_link_cycles_and_outside_directories() {
+    let test_dir = std::env::temp_dir().join(format!(
+        "spmusic-library-links-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let root = test_dir.join("music");
+    let outside = test_dir.join("outside");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(root.join("inside.mp3"), []).unwrap();
+    std::fs::write(outside.join("outside.flac"), []).unwrap();
+    let loop_link = root.join("loop");
+    let outside_link = root.join("elsewhere");
+    for (link, target) in [(&loop_link, &root), (&outside_link, &outside)] {
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(target, link).unwrap();
+        #[cfg(target_os = "windows")]
+        {
+            // Junctions require no developer mode or symlink privilege.
+            let result = Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(link)
+                .arg(target)
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+        }
+    }
+    let playlist = load_library_folder(&root).unwrap();
+    assert_eq!(playlist.tracks.len(), 1);
+    assert_eq!(playlist.tracks[0].file_name, "inside.mp3");
+    for link in [&loop_link, &outside_link] {
+        #[cfg(unix)]
+        std::fs::remove_file(link).unwrap();
+        #[cfg(target_os = "windows")]
+        std::fs::remove_dir(link).unwrap();
+    }
+    assert!(outside.join("outside.flac").is_file());
+    std::fs::remove_dir_all(test_dir).unwrap();
+}
+
+#[test]
+fn m3u8_import_is_descriptor_only_and_preserves_missing_entries() {
+    let test_dir = std::env::temp_dir().join(format!(
+        "spmusic-m3u8-import-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&test_dir).unwrap();
+    let invalid_audio = test_dir.join("present.wav");
+    std::fs::write(&invalid_audio, []).unwrap();
+    let path = test_dir.join("chosen.M3U8");
+    std::fs::write(&path, b"#EXTM3U\nmissing.mp3\npresent.wav\nmissing.mp3\n").unwrap();
+    let playlist = import_m3u8_playlist(&path).unwrap();
+    assert_eq!(playlist.source_kind, AudioPlaylistSourceKind::M3u8);
+    assert_eq!(playlist.tracks.len(), 2);
+    assert!(!playlist.tracks[0].available);
+    assert!(playlist.tracks[1].available);
+    // A zero-byte file cannot decode: successful import proves the parser
+    // describes existing paths without loading any audio engine source.
+    assert!(open_source(&invalid_audio).is_err());
+    std::fs::write(&path, b"missing.mp3\n").unwrap();
+    let missing = import_m3u8_playlist(&path).unwrap();
+    assert_eq!(missing.tracks.len(), 1);
+    assert!(!missing.tracks[0].available);
+    std::fs::write(&path, b"#EXTM3U\nnotes.txt\nhttps://example.com/song.mp3\n").unwrap();
+    assert!(matches!(
+        import_m3u8_playlist(&path).unwrap_err().code,
+        AudioErrorCode::UnsupportedFormat
+    ));
+    assert!(matches!(
+        import_m3u8_playlist(&invalid_audio).unwrap_err().code,
+        AudioErrorCode::UnsupportedFormat
+    ));
     std::fs::remove_dir_all(test_dir).unwrap();
 }
 

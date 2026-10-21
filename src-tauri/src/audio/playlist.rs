@@ -70,6 +70,24 @@ pub(crate) fn load_folder_playlist(
     load_directory_audio_playlist(&directory, Some(selected_id.as_str()))
 }
 
+// Importing a list only resolves descriptors. It must not load audio or
+// require any entry to be playable right now.
+pub(crate) fn import_m3u8_playlist(path: &Path) -> Result<AudioFolderPlaylist, AudioCommandError> {
+    if !has_supported_m3u8_extension(path) {
+        return Err(audio_error(
+            AudioErrorCode::UnsupportedFormat,
+            "Please select an M3U8 playlist",
+            true,
+        ));
+    }
+    load_m3u8_playlist(path, None, true)
+}
+
+pub(crate) fn restore_playlist_track(source_path: &str) -> AudioFolderTrackRef {
+    let path = Path::new(source_path);
+    folder_track_ref(path, path.is_file())
+}
+
 // Saved library folders are directories, not selected audio files. In
 // particular, a same-folder M3U8 must not replace the directory's songs.
 pub(crate) fn load_library_folder(
@@ -108,7 +126,110 @@ pub(crate) fn load_library_folder(
             true,
         )
     })?;
-    load_directory_audio_playlist(&directory, None)
+    load_recursive_library_playlist(&directory)
+}
+
+fn load_recursive_library_playlist(root: &Path) -> Result<AudioFolderPlaylist, AudioCommandError> {
+    let mut pending = vec![root.to_path_buf()];
+    let mut visited = HashSet::new();
+    let mut sources = HashSet::new();
+    let mut tracks = Vec::new();
+    while let Some(directory) = pending.pop() {
+        if !visited.insert(directory.clone()) {
+            continue;
+        }
+        let entries = match fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) if directory == root => {
+                return Err(audio_error(
+                    AudioErrorCode::UnreadableFile,
+                    format!("Cannot read library folder: {error}"),
+                    true,
+                ));
+            }
+            Err(error) => {
+                tracing::warn!(path = %directory.display(), %error, "skipping unreadable library subdirectory");
+                continue;
+            }
+        };
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) => {
+                    tracing::warn!(path = %directory.display(), %error, "skipping unreadable library entry");
+                    continue;
+                }
+            };
+            let path = entry.path();
+            let metadata = match fs::symlink_metadata(&path) {
+                Ok(metadata) => metadata,
+                Err(error) => {
+                    tracing::warn!(path = %path.display(), %error, "skipping inaccessible library entry");
+                    continue;
+                }
+            };
+            // Do not follow links: a junction can escape the selected root or
+            // point back to an ancestor. Check canonical containment before
+            // adding any source or subdirectory to this scan.
+            if metadata.file_type().is_symlink() || is_directory_reparse_point(&metadata) {
+                continue;
+            }
+            let normalized = match path.canonicalize() {
+                Ok(normalized) if normalized.starts_with(root) => normalized,
+                Ok(_) => continue,
+                Err(error) => {
+                    tracing::warn!(path = %path.display(), %error, "skipping unresolved library entry");
+                    continue;
+                }
+            };
+            if metadata.is_dir() {
+                pending.push(normalized);
+            } else if metadata.is_file()
+                && has_supported_audio_extension(&normalized)
+                && sources.insert(normalized.clone())
+            {
+                tracks.push(folder_track_ref(&normalized, true));
+            }
+        }
+    }
+    tracks.sort_by(|left, right| {
+        left.file_name
+            .to_lowercase()
+            .cmp(&right.file_name.to_lowercase())
+            .then_with(|| left.file_name.cmp(&right.file_name))
+            .then_with(|| left.source_path.cmp(&right.source_path))
+    });
+    if tracks.is_empty() {
+        return Err(audio_error(
+            AudioErrorCode::UnsupportedFormat,
+            "Folder does not contain supported local audio files",
+            true,
+        ));
+    }
+    let name = directory_display_name(root);
+    Ok(AudioFolderPlaylist {
+        directory_path: root.to_string_lossy().into_owned(),
+        directory_name: name.clone(),
+        source_kind: AudioPlaylistSourceKind::Folder,
+        source_path: root.to_string_lossy().into_owned(),
+        source_name: name,
+        selected_index: 0,
+        tracks,
+    })
+}
+
+fn is_directory_reparse_point(metadata: &fs::Metadata) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        metadata.is_dir() && metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = metadata;
+        false
+    }
 }
 
 fn load_directory_audio_playlist(

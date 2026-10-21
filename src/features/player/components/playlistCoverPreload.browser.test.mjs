@@ -5,7 +5,6 @@ import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 import { execFileSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { pathToFileURL } from 'node:url'
 
 const require = createRequire(import.meta.url)
 const { chromium } = require(process.env.SPMUSIC_PLAYWRIGHT || 'playwright')
@@ -50,7 +49,7 @@ import ReactDOM from '${dependency('react-dom_client.js')}';
 import { useAudioPlayer } from '/src/features/player/hooks/useAudioPlayer.ts';
 import { PlaylistCoverImage } from '/src/features/player/components/PlaylistCoverImage.tsx';
 import { isPlaylistCoverDecoded } from '/src/features/player/model/playlistCoverReadiness.ts';
-window.trace=[];window.config={count:12,scope:'a',pixelGate:false,decodeGate:false,failures:0,decodeFailures:0,noCover:[],unavailable:[],hydrationGate:false,sourceGate:false,sourceFailures:0,dataUrlOnly:[],sourceMismatch:false,terminalSources:[],sourceMismatchIds:[],edgeFailures:{},edgeFailureCode:'WORKER_FAILED'};
+window.trace=[];window.config={count:12,scope:'a',pixelGate:false,decodeGate:false,failures:0,decodeFailures:0,noCover:[],unavailable:[],hydrationGate:false,sourceGate:false,sourceFailures:0,dataUrlOnly:[],sourceMismatch:false};
 window.calls=[];window.pendingPixels=[];window.pendingDecodes=[];window.pendingHydrations=[];window.pendingSources=[];window.created=[];window.revoked=[];
 let state={phase:'idle',generation:null,currentTrackId:null,positionMs:0,durationMs:null,volume:.5,error:null,transportTransition:null,transportSettledRequestId:null};
 let generation=0,windowGeneration=0,active=0;
@@ -76,15 +75,14 @@ window.backendInvoke=async(command,args)=>{
   if(window.config.sourceGate)await new Promise(resolve=>window.pendingSources.push(resolve));
   if(window.config.sourceFailures>0){window.config.sourceFailures--;throw {code:'INTERNAL_ERROR',message:'injected source capacity failure',recoverable:true}}
   const result=track(input.path),index=Number(input.path.split('/').at(-1).split('.')[0]);
-  if(window.config.terminalSources.includes(index))throw {code:'FILE_NOT_FOUND',message:'injected terminal cover source failure',recoverable:false};
   if(result.metadata.coverArt&&window.config.dataUrlOnly.includes(index))result.metadata.coverArt={...result.metadata.coverArt,filePath:null,dataUrl:'data:image/png;base64,AA=='};
-  return {id:window.config.sourceMismatch||window.config.sourceMismatchIds.includes(index)?'wrong-source-id':result.id,sourcePath:result.sourcePath,coverArt:result.metadata.coverArt};
+  return {id:window.config.sourceMismatch?'wrong-source-id':result.id,sourcePath:result.sourcePath,coverArt:result.metadata.coverArt};
  }
  if(command==='audio_probe_playlist_track_summaries')return input.paths.map(sourcePath=>{const parts=sourcePath.replaceAll('\\\\','/').split('/'),i=Number(parts.at(-1).split('.')[0]);return {sourcePath,summary:{title:'Song '+i,artist:'Artist',album:'Album',albumArtist:null,bitDepth:24,sampleRateHz:96000,bitrateKbps:null,codec:'FLAC'},error:null}});
  if(command==='audio_begin_playlist_cover_window')return ++windowGeneration;
  if(command==='audio_load_playlist_cover_pixels'){
   active++;window.maxActive=Math.max(active,window.maxActive);window.trace.push({type:'pixels-start',input,time:performance.now()});
-  try{if(window.config.pixelGate)await new Promise(resolve=>window.pendingPixels.push(Object.assign(resolve,{input})));const failureKey=input.filePath+'|'+input.maxEdge;if(window.config.edgeFailures[failureKey]>0){window.config.edgeFailures[failureKey]--;throw {code:window.config.edgeFailureCode,message:'injected edge failure',recoverable:true}}if(window.config.failures>0){window.config.failures--;throw {code:'WORKER_FAILED',message:'injected',recoverable:true}}return spxr(input.maxEdge)}finally{active--}
+  try{if(window.config.pixelGate)await new Promise(resolve=>window.pendingPixels.push(resolve));if(window.config.failures>0){window.config.failures--;throw {code:'WORKER_FAILED',message:'injected',recoverable:true}}return spxr(input.maxEdge)}finally{active--}
  }
  throw new Error('Unexpected command '+command);
 };
@@ -121,10 +119,8 @@ async function select(page, patch = {}) {
 async function waitReady(page, count) {
   await page.waitForFunction(count => window.readFixture().ready.length === count, count)
 }
-export { browser, open, select, waitReady }
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
- const report = []
- try {
+const report = []
+try {
   const { page, errors } = await open()
   await select(page)
   if (process.env.SPMUSIC_PRELOAD_BASELINE === '1') {
@@ -338,5 +334,4 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     await text.close()
   }
   console.log('REGRESSION',JSON.stringify(report))
- } finally { await browser.close() }
-}
+} finally { await browser.close() }

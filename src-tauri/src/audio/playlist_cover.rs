@@ -96,6 +96,38 @@ pub(crate) async fn probe_playlist_cover(
         .await
 }
 
+// Background library warming never joins the foreground probe queue. A probe
+// already in progress may finish, but a queued visible cover always wins the
+// next slot.
+pub(crate) async fn try_probe_playlist_cover_for_warmup(
+    app_cache_dir: PathBuf,
+    path: String,
+) -> Result<Option<AudioPlaylistCoverSource>, AudioCommandError> {
+    let coordinator = COORDINATOR.get_or_init(CoverSourceCoordinator::new);
+    if coordinator.requests.load(Ordering::Acquire) != 0 {
+        return Ok(None);
+    }
+    let Ok(permit) = Arc::clone(&coordinator.gate).try_lock_owned() else {
+        return Ok(None);
+    };
+    if coordinator.requests.load(Ordering::Acquire) != 0 {
+        return Ok(None);
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let _permit = permit;
+        probe_playlist_cover_blocking(&app_cache_dir, &path)
+    })
+    .await
+    .map_err(|_| {
+        audio_error(
+            AudioErrorCode::InternalError,
+            "Library cover source worker failed",
+            true,
+        )
+    })?
+    .map(Some)
+}
+
 pub(crate) fn probe_playlist_cover_blocking(
     app_cache_dir: &Path,
     requested_path: &str,

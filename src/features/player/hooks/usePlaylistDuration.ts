@@ -6,6 +6,11 @@ const scanDuration = createPlaylistDurationScanner(probeAudioPlaylistDurations)
 type DurationSource = { sourcePath: string; available?: boolean }
 type LibraryDurationSource = { scope: string; sources: readonly DurationSource[] }
 type CompletedDuration = { sourceKey: string; sources: readonly DurationSource[]; result: PlaylistDurationScanResult }
+export type PlaylistLibraryDurationData = {
+  totals: ReadonlyMap<string, PlaylistDurationResult>
+  settledByScope: ReadonlyMap<string, boolean>
+  durationsByScope: ReadonlyMap<string, ReadonlyMap<string, number>>
+}
 const noKnownDurations: ReadonlyMap<string, number> = new Map()
 
 function knownForScope(knownDurationsByScope: ReadonlyMap<string, ReadonlyMap<string, number>>, scope: string): ReadonlyMap<string, number> {
@@ -37,10 +42,17 @@ export function usePlaylistLibraryDurations(
   scope: string,
   librarySources: readonly LibraryDurationSource[],
   knownDurationsByScope: ReadonlyMap<string, ReadonlyMap<string, number>>,
-): ReadonlyMap<string, PlaylistDurationResult> {
+  preferredScopes: readonly string[] = [],
+): PlaylistLibraryDurationData {
   const tasks = useMemo(() => [{ scope, sources }, ...librarySources.filter((item) => item.scope !== scope)]
+    .sort((left, right) => {
+      const leftPriority = preferredScopes.indexOf(left.scope)
+      const rightPriority = preferredScopes.indexOf(right.scope)
+      return (leftPriority < 0 ? preferredScopes.length : leftPriority)
+        - (rightPriority < 0 ? preferredScopes.length : rightPriority)
+    })
     .map((item) => ({ ...item, sourceKey: JSON.stringify(item.sources.map(({ sourcePath, available }) => [sourcePath, available !== false])) })),
-  [sources, scope, librarySources])
+  [sources, scope, librarySources, preferredScopes])
   const [completed, setCompleted] = useState<ReadonlyMap<string, CompletedDuration>>(new Map())
   const completedRef = useRef(completed)
   const readKnownDurationsByScope = useEffectEvent(() => knownDurationsByScope)
@@ -99,11 +111,20 @@ export function usePlaylistLibraryDurations(
     })
     return () => { current = false }
   }, [tasks, knownDurationsByScope])
-  return new Map(tasks.map((task) => {
-    const cached = completed.get(task.scope)
-    const result = cached?.sourceKey === task.sourceKey ? cached.result : undefined
-    return [task.scope, resolvePlaylistDuration(task.sources, knownForScope(knownDurationsByScope, task.scope), result, !result)]
-  }))
+  return useMemo(() => {
+    const totals = new Map<string, PlaylistDurationResult>()
+    const settledByScope = new Map<string, boolean>()
+    const durationsByScope = new Map<string, ReadonlyMap<string, number>>()
+    for (const task of tasks) {
+      const cached = completed.get(task.scope)
+      const result = cached?.sourceKey === task.sourceKey ? cached.result : undefined
+      const known = knownForScope(knownDurationsByScope, task.scope)
+      totals.set(task.scope, resolvePlaylistDuration(task.sources, known, result, !result))
+      settledByScope.set(task.scope, task.sources.length === 0 || Boolean(result))
+      durationsByScope.set(task.scope, result ? result.durationsByPath : known)
+    }
+    return { totals, settledByScope, durationsByScope }
+  }, [tasks, completed, knownDurationsByScope])
 }
 
 export function usePlaylistDuration(sources: readonly DurationSource[], scope: string, knownDurations: ReadonlyMap<string, number>): PlaylistDurationResult {

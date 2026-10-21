@@ -20,6 +20,12 @@ type WindowBarProps = {
   debugToolsEnabled?: boolean
   debugToolsOpen?: boolean
   onDebugToolsOpenChange?: (open: boolean) => void
+  librarySettings?: {
+    selectedFolderCount: number
+    status: 'loading' | 'ready' | 'clearing' | 'error'
+    errors: Readonly<Record<string, string>>
+    onClear: () => Promise<void>
+  }
   playlistOpen?: boolean
   onTogglePlaylist?: () => void
   compactPlaylist?: boolean
@@ -39,6 +45,7 @@ export function WindowBar({
   debugToolsEnabled = false,
   debugToolsOpen = false,
   onDebugToolsOpenChange,
+  librarySettings,
   playlistOpen = false,
   onTogglePlaylist,
   compactPlaylist = false,
@@ -160,6 +167,7 @@ export function WindowBar({
           debugToolsEnabled={debugToolsEnabled}
           debugToolsOpen={debugToolsOpen}
           onDebugToolsOpenChange={onDebugToolsOpenChange}
+          librarySettings={librarySettings}
         />
         <IconButton icon={systemIcons.minimize} label={appCopy.controls.minimize} onClick={() => runWindowAction((windowRef) => windowRef.minimize())} />
         <IconButton

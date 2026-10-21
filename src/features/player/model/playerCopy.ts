@@ -58,6 +58,15 @@ export const appCopy = {
       player: '播放界面',
       mediaLibrary: '媒体库',
     },
+    librarySelection: {
+      title: '歌曲文件夹',
+      description: '已选文件夹会在下次启动时重新扫描。清空选择不会删除本地歌曲，也不会停止当前播放。',
+      clear: '清空歌曲选择',
+      clearing: '正在清空…',
+      loading: '正在恢复歌曲文件夹…',
+      count: (count: number) => `已选择 ${count} 个文件夹`,
+      errors: '以下文件夹未能加载或保存：',
+    },
     theme: {
       title: '主题管理',
       description: '打开主题工作室，管理内置和用户主题。',

@@ -67,3 +67,29 @@
 .player-settings-theme-row button {
   flex: 0 0 auto;
 }
+
+.player-settings-library-row button {
+  flex: 0 0 auto;
+}
+
+.player-settings-library-errors {
+  overflow-wrap: anywhere;
+  font-size: 0.875rem;
+  color: var(--player-muted);
+}
+
+.player-settings-library-errors ul {
+  margin: 4px 0 0;
+  padding-left: 20px;
+}
+
+@media (max-width: 460px) {
+  .player-settings-library-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .player-settings-library-row button {
+    align-self: flex-start;
+  }
+}

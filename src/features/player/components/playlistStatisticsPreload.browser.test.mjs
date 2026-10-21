@@ -25,7 +25,8 @@ if (process.env.SPMUSIC_STATS_BASELINE === '1') {
   // the historical behavior being measured by this optional baseline run.
   baselineHook += `\nexport function usePlaylistLibraryDurations(sources,scope,lists,known){
     const active=usePlaylistDuration(sources,scope,known);
-    return new Map([[scope,active],...lists.filter(item=>item.scope!==scope).map(item=>[item.scope,{status:'unknown'}])]);
+    const totals=new Map([[scope,active],...lists.filter(item=>item.scope!==scope).map(item=>[item.scope,{status:'unknown'}])]);
+    return {totals,settledByScope:new Map([...totals].map(([key,value])=>[key,value.status!=='loading'])),durationsByScope:new Map([...totals].map(([key])=>[key,new Map()]))};
   }\n`
 }
 const service = (await (await fetch(origin + '/src/features/player/services/audioCommands.ts')).text())
@@ -97,7 +98,7 @@ function LibraryHookFixture(){
  const empty=React.useMemo(()=>[],[]);
  const sources=lists.find(item=>item.scope===scope)?.sources??empty;
  const results=usePlaylistLibraryDurations(sources,scope,lists,knownByScope);
- window.libraryResults=Object.fromEntries(results);
+ window.libraryResults=Object.fromEntries(results.totals);
  window.updateLibrary=(next,nextScope='a')=>{setLists(next);setScope(nextScope)};
  window.chooseLibraryScope=setScope;
  // Known durations are scope-shaped: the active scope's own rows feed its entry,

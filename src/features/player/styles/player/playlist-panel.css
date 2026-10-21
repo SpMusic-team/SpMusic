@@ -33,6 +33,8 @@
   scrollbar-width: thin;
 }
 
+.playlist-panel[data-metadata-loading="true"] { overflow-y: hidden; }
+
 .playlist-hero {
   scale: 1 var(--playlist-hero-overscroll-scale, 1);
   transform-origin: center top;

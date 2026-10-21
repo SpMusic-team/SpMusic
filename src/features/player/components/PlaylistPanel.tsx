@@ -192,7 +192,7 @@ function indexedPlaylistCandidates(index: PlaylistCardIndex, grid: HTMLElement, 
 // any song text: a fabricated title, artist or album is indistinguishable from a
 // real answer once the summary lands, and the hero already shows the true
 // playlist name, song count and total duration.
-function PlaylistMetadataLoading({
+export function PlaylistMetadataLoading({
   layout,
   trackCount,
 }: {
@@ -776,7 +776,9 @@ export function PlaylistPanel({
       selected={selectedIds.has(track.id)}
       artworkVisible={artworkWindowIds.has(track.id)}
       showExtendedMetadata={showExtendedMetadata}
-      contentVisible={!contentWindowEnabled || contentRepresentatives.has(track.id) || contentWindow.ids.has(track.id)}
+      // Text and duration are prepared before this grid mounts. Keep them in
+      // every card's first DOM frame; only the artwork window remains lazy.
+      contentVisible
       contentRepresentative={contentRepresentatives.has(track.id)}
       contentShape={contentShapes.get(track.id)!}
       coverFailed={failedCoverSources.get(track.id) === `${track.coverImage ?? track.coverImageFallback}\0${track.coverImageFallback ?? ''}`}
@@ -785,8 +787,8 @@ export function PlaylistPanel({
       onToggleSelect={handleToggleSelect}
     />
   )), [filteredTracks, currentTrackId, unavailable, onTrackSelect, selectMode, selectedIds,
-    artworkWindowIds, showExtendedMetadata, handleActivate, handleToggleSelect, contentWindowEnabled,
-    contentRepresentatives, contentWindow.ids, contentShapes, failedCoverSources, handleCoverFailed])
+    artworkWindowIds, showExtendedMetadata, handleActivate, handleToggleSelect,
+    contentRepresentatives, contentShapes, failedCoverSources, handleCoverFailed])
 
   function renderPlaylistActions(compact = false) {
     const returning = compact && !isPresent && chromeTransition.offscreenReturn && controllerActionsVisible
@@ -907,6 +909,7 @@ export function PlaylistPanel({
       <motion.section
         ref={panelRef}
         className="playlist-panel"
+        data-metadata-loading={metadataStatus === 'loading' || undefined}
         data-select-mode={selectMode ? 'true' : undefined}
         variants={chromeTransition.offscreenReturn ? appearanceMotion.libraryNavigation.detailReturn.outgoing : appearanceMotion.variants.backdrop}
         transition={returnTransition}
@@ -994,7 +997,7 @@ export function PlaylistPanel({
           <div
             ref={gridRef}
             className="playlist-grid"
-            data-content-window={contentWindowEnabled ? 'bounded' : 'full'}
+            data-content-window="full"
             data-layout-level={layout.level}
             data-layout-flow={layout.flow}
             data-layout-columns={layout.columns}

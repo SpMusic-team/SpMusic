@@ -486,6 +486,42 @@ export async function listAudioFolderTracks(selectedPath: string): Promise<Audio
   })
 }
 
+export type LibraryFolders = { folders: string[] }
+
+export async function getLibraryFolders(): Promise<LibraryFolders> {
+  return invoke<LibraryFolders>('library_get_folders')
+}
+
+export async function addLibraryFolder(path: string): Promise<LibraryFolders> {
+  return invoke<LibraryFolders>('library_add_folder', { path })
+}
+
+export async function clearLibraryFolders(): Promise<void> {
+  return invoke<void>('library_clear_folders')
+}
+
+export async function scanLibraryFolder(path: string): Promise<AudioFolderPlaylist> {
+  return invoke<AudioFolderPlaylist>('library_scan_folder', { path })
+}
+
+export type LibraryCoverWarmupResult = {
+  attempted: number
+  warmed: number
+  computed: number
+  persisted: number
+  skipped: number
+  failed: number
+  cancelled: boolean
+}
+
+export async function warmLibraryCoverThumbnails(paths: string[]): Promise<LibraryCoverWarmupResult> {
+  return invoke<LibraryCoverWarmupResult>('library_warm_cover_thumbnails', { input: { paths } })
+}
+
+export async function cancelLibraryCoverWarmup(): Promise<void> {
+  return invoke<void>('library_cancel_cover_warmup')
+}
+
 export async function playAudio(input?: AudioPlayInput): Promise<AudioPlaybackState> {
   return invoke<AudioPlaybackState>('audio_play', { input: input ?? null })
 }

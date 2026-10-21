@@ -229,6 +229,19 @@ impl ThumbnailWriter {
         }
     }
 
+    fn wait_path_idle(&self, target: &Path, timeout: std::time::Duration) {
+        let (lock, wake) = &*self.shared;
+        let mut state = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let deadline = std::time::Instant::now() + timeout;
+        while state.pending.contains_key(target) {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            state = wake.wait_timeout(state, remaining).unwrap().0;
+        }
+    }
+
     #[cfg(test)]
     fn wait_idle(&self) {
         let (lock, wake) = &*self.shared;
@@ -916,6 +929,60 @@ pub async fn load_playlist_cover_pixels(
     coordinator.load(app_cache_dir, input).await
 }
 
+// Warm one existing cover source through the ordinary thumbnail cache without
+// returning its RGBA payload. Taking only an immediately available slot keeps
+// this work out of the foreground decode queue.
+pub(crate) async fn try_warm_playlist_cover_pixels(
+    app_cache_dir: PathBuf,
+    file_path: String,
+    max_edge: u32,
+) -> Result<Option<bool>, CoverPixelsError> {
+    validate_playlist_max_edge(max_edge)?;
+    let coordinator = PLAYLIST_REQUEST_COORDINATOR
+        .get_or_init(|| Arc::new(PlaylistCoverRequestCoordinator::new()));
+    if coordinator.requests.load(Ordering::Acquire) != 0 {
+        return Ok(None);
+    }
+    let Ok(mut tokens) = coordinator.slots.tokens.try_lock() else {
+        return Ok(None);
+    };
+    if tokens.try_recv().is_err() {
+        return Ok(None);
+    }
+    let permit = PlaylistDecodePermit(coordinator.slots.release.clone());
+    drop(tokens);
+    if coordinator.requests.load(Ordering::Acquire) != 0 {
+        return Ok(None);
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let _permit = permit;
+        let (response, cache_dir, filename) = load_playlist_cover_pixels_blocking_with_cache_path(
+            &app_cache_dir,
+            &file_path,
+            max_edge,
+            None,
+        )?;
+        // Release the decode slot before waiting for disk I/O. Visible covers
+        // can decode while the single cache writer drains this entry.
+        drop(_permit);
+        let target = cache_dir.join(&filename);
+        THUMBNAIL_WRITER
+            .get_or_init(ThumbnailWriter::new)
+            .wait_path_idle(&target, std::time::Duration::from_secs(5));
+        let mut persisted = read_thumbnail_cache(&cache_dir, &filename, max_edge).is_some();
+        if !persisted {
+            // The shared writer may have skipped a full queue or failed. This
+            // background-only fallback uses the same bounded, validated writer.
+            let _ = write_thumbnail_cache(&cache_dir, &filename, &response);
+            persisted = read_thumbnail_cache(&cache_dir, &filename, max_edge).is_some();
+        }
+        Ok(persisted)
+    })
+    .await
+    .map_err(|_| playlist_worker_failed())?
+    .map(Some)
+}
+
 #[cfg(test)]
 fn load_playlist_cover_pixels_blocking(
     app_cache_dir: &Path,
@@ -932,6 +999,21 @@ fn load_playlist_cover_pixels_blocking_with_session(
     max_edge: u32,
     session: Option<(&str, u64)>,
 ) -> Result<Vec<u8>, CoverPixelsError> {
+    load_playlist_cover_pixels_blocking_with_cache_path(
+        app_cache_dir,
+        requested_path,
+        max_edge,
+        session,
+    )
+    .map(|(response, _, _)| response)
+}
+
+fn load_playlist_cover_pixels_blocking_with_cache_path(
+    app_cache_dir: &Path,
+    requested_path: &str,
+    max_edge: u32,
+    session: Option<(&str, u64)>,
+) -> Result<(Vec<u8>, PathBuf, String), CoverPixelsError> {
     #[cfg(test)]
     let stage_started = Instant::now();
     let covers_root = app_cache_dir
@@ -967,7 +1049,18 @@ fn load_playlist_cover_pixels_blocking_with_session(
             coordinator.ensure_current(client_id, generation)?;
         }
     }
-    Ok(response)
+    let cache_dir = app_cache_dir
+        .join(AUDIO_CACHE_DIRECTORY)
+        .join(THUMBNAIL_DIRECTORY);
+    let filename = thumbnail_filename(source_hash, max_edge);
+    Ok((response, cache_dir, filename))
+}
+
+fn thumbnail_filename(source_hash: blake3::Hash, max_edge: u32) -> String {
+    format!(
+        "{}-{max_edge}-t{THUMBNAIL_TRANSFORM_VERSION}-d{THUMBNAIL_DISK_VERSION}.spxr",
+        source_hash.to_hex()
+    )
 }
 
 fn playlist_pixels_from_bytes(
@@ -983,10 +1076,7 @@ fn playlist_pixels_from_bytes(
     let cache_dir = app_cache_dir
         .join(AUDIO_CACHE_DIRECTORY)
         .join(THUMBNAIL_DIRECTORY);
-    let filename = format!(
-        "{}-{max_edge}-t{THUMBNAIL_TRANSFORM_VERSION}-d{THUMBNAIL_DISK_VERSION}.spxr",
-        source_hash.to_hex()
-    );
+    let filename = thumbnail_filename(source_hash, max_edge);
     let cache_path = cache_dir.join(&filename);
     let pending = THUMBNAIL_WRITER
         .get_or_init(ThumbnailWriter::new)
@@ -2902,6 +2992,42 @@ mod tests {
         assert_eq!(u32_at(&response, 36), 3);
         assert_eq!(response.len(), 40 + 24);
         assert_eq!(&response[40..44], &[12, 34, 56, 255]);
+    }
+
+    #[test]
+    fn background_warmup_persists_both_thumbnail_edges() {
+        let directory = TestDirectory::new();
+        let covers = directory
+            .path()
+            .join(AUDIO_CACHE_DIRECTORY)
+            .join(COVER_DIRECTORY);
+        fs::create_dir_all(&covers).unwrap();
+        let source = covers.join("warmup.png");
+        fs::write(&source, png_bytes(400, 400)).unwrap();
+
+        for edge in [128, 256] {
+            let mut persisted = None;
+            for _ in 0..100 {
+                let result = tauri::async_runtime::block_on(try_warm_playlist_cover_pixels(
+                    directory.path().to_path_buf(),
+                    source.to_string_lossy().into_owned(),
+                    edge,
+                ))
+                .unwrap();
+                if result.is_some() {
+                    persisted = result;
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            assert_eq!(persisted, Some(true), "{edge}px thumbnail reaches disk");
+        }
+
+        let thumbnails = directory
+            .path()
+            .join(AUDIO_CACHE_DIRECTORY)
+            .join(THUMBNAIL_DIRECTORY);
+        assert_eq!(fs::read_dir(thumbnails).unwrap().count(), 2);
     }
 
     #[test]

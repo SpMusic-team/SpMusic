@@ -28,6 +28,7 @@ mod types;
 mod source_tests;
 
 pub use controller::AudioController;
+pub(crate) use cover_pixels::try_warm_playlist_cover_pixels;
 pub use cover_pixels::{
     begin_playlist_cover_window, load_cover_pixels, load_playlist_cover_pixels,
     shutdown_playlist_cover_cache, AudioBeginPlaylistCoverWindowInput, AudioLoadCoverPixelsInput,
@@ -35,7 +36,9 @@ pub use cover_pixels::{
 };
 pub(crate) use device::current_output_info;
 pub use error::AudioCommandError;
+pub(crate) use playlist::load_library_folder;
 pub(crate) use playlist_cover::probe_playlist_cover;
+pub(crate) use playlist_cover::try_probe_playlist_cover_for_warmup;
 pub use playlist_duration::probe_playlist_durations;
 pub use playlist_summary::probe_playlist_track_summaries;
 pub use types::{

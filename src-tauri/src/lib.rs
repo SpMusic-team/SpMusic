@@ -1,12 +1,13 @@
 mod app_paths;
 mod audio;
 mod global_shortcuts;
+mod library_cover_warmup;
+mod library_folders;
 mod webview_memory;
 
 use std::sync::Once;
 
 use app_paths::AppPaths;
-use audio::current_output_info;
 use audio::{
     begin_playlist_cover_window, load_cover_pixels, load_playlist_cover_pixels,
     probe_playlist_cover, probe_playlist_durations, probe_playlist_track_summaries,
@@ -19,9 +20,12 @@ use audio::{
     AudioProbePlaylistTrackSummariesInput, AudioSeekInput, AudioSetVolumeInput, AudioTrackRef,
     AudioTransitionPlaybackInput, CoverPixelsError,
 };
+use audio::{current_output_info, load_library_folder};
 use global_shortcuts::{
     global_shortcuts_get_settings, global_shortcuts_set_suspended, global_shortcuts_update_settings,
 };
+use library_cover_warmup::{LibraryCoverWarmupInput, LibraryCoverWarmupResult};
+use library_folders::{LibraryError, LibraryFolderRegistry, LibraryFolders};
 use tauri::{ipc::Response, Manager, State};
 use tracing_subscriber::EnvFilter;
 use webview_memory::WebviewMemoryCoordinator;
@@ -134,6 +138,46 @@ fn audio_list_folder_tracks(
         "Tauri command invoked",
     );
     state.list_folder_tracks(input)
+}
+
+#[tauri::command]
+fn library_get_folders(
+    state: State<'_, LibraryFolderRegistry>,
+) -> Result<LibraryFolders, LibraryError> {
+    state.get()
+}
+
+#[tauri::command]
+fn library_add_folder(
+    state: State<'_, LibraryFolderRegistry>,
+    path: String,
+) -> Result<LibraryFolders, LibraryError> {
+    state.add(&path)
+}
+
+#[tauri::command]
+fn library_clear_folders(state: State<'_, LibraryFolderRegistry>) -> Result<(), LibraryError> {
+    state.clear()?;
+    library_cover_warmup::cancel();
+    Ok(())
+}
+
+#[tauri::command]
+fn library_scan_folder(path: String) -> Result<AudioFolderPlaylist, AudioCommandError> {
+    load_library_folder(std::path::Path::new(&path))
+}
+
+#[tauri::command]
+async fn library_warm_cover_thumbnails(
+    state: State<'_, AppPaths>,
+    input: LibraryCoverWarmupInput,
+) -> Result<LibraryCoverWarmupResult, LibraryError> {
+    library_cover_warmup::warm(state.cache_dir.clone(), input).await
+}
+
+#[tauri::command]
+fn library_cancel_cover_warmup() {
+    library_cover_warmup::cancel();
 }
 
 #[tauri::command]
@@ -409,6 +453,12 @@ pub fn run() {
             audio_hydrate_track,
             audio_probe_playlist_cover,
             audio_list_folder_tracks,
+            library_get_folders,
+            library_add_folder,
+            library_clear_folders,
+            library_scan_folder,
+            library_warm_cover_thumbnails,
+            library_cancel_cover_warmup,
             audio_probe_playlist_durations,
             audio_probe_playlist_track_summaries,
             audio_embed_lyrics,
@@ -436,6 +486,7 @@ pub fn run() {
             );
             let audio_cache_dir = app_paths.cache_dir.clone();
             global_shortcuts::GlobalShortcuts::initialize(app.handle(), &app_paths.config_dir);
+            app.manage(LibraryFolderRegistry::new(&app_paths.data_dir));
             app.manage(app_paths);
             app.manage(AudioController::new(app.handle().clone(), audio_cache_dir));
 

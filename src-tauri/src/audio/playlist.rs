@@ -70,6 +70,47 @@ pub(crate) fn load_folder_playlist(
     load_directory_audio_playlist(&directory, Some(selected_id.as_str()))
 }
 
+// Saved library folders are directories, not selected audio files. In
+// particular, a same-folder M3U8 must not replace the directory's songs.
+pub(crate) fn load_library_folder(
+    directory: &Path,
+) -> Result<AudioFolderPlaylist, AudioCommandError> {
+    if !directory.is_absolute()
+        || directory
+            .components()
+            .any(|part| matches!(part, std::path::Component::ParentDir))
+    {
+        return Err(audio_error(
+            AudioErrorCode::InvalidPath,
+            "Library folder path must be absolute and normalized",
+            true,
+        ));
+    }
+    let metadata = fs::metadata(directory).map_err(|error| {
+        let code = if error.kind() == std::io::ErrorKind::NotFound {
+            AudioErrorCode::FileNotFound
+        } else {
+            AudioErrorCode::UnreadableFile
+        };
+        audio_error(code, format!("Cannot access library folder: {error}"), true)
+    })?;
+    if !metadata.is_dir() {
+        return Err(audio_error(
+            AudioErrorCode::InvalidPath,
+            "Library folder path is not a directory",
+            true,
+        ));
+    }
+    let directory = directory.canonicalize().map_err(|error| {
+        audio_error(
+            AudioErrorCode::UnreadableFile,
+            format!("Cannot resolve library folder: {error}"),
+            true,
+        )
+    })?;
+    load_directory_audio_playlist(&directory, None)
+}
+
 fn load_directory_audio_playlist(
     directory: &Path,
     selected_id: Option<&str>,

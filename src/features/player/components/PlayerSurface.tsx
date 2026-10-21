@@ -48,6 +48,12 @@ export type PlayerSurfaceDevAudioTools = {
 export type PlayerSurfaceProps = {
   viewModel: PlayerUiViewModel
   devAudioTools?: PlayerSurfaceDevAudioTools
+  librarySettings?: {
+    selectedFolderCount: number
+    status: 'loading' | 'ready' | 'clearing' | 'error'
+    errors: Readonly<Record<string, string>>
+    onClear: () => Promise<void>
+  }
 }
 
 type PlaylistWindowReport = NonNullable<ComponentProps<typeof PlaylistPanel>['onVisibleTrackIdsChange']>
@@ -601,6 +607,7 @@ let lastCoverDragGestureId = 0
 export function PlayerSurface({
   viewModel,
   devAudioTools,
+  librarySettings,
 }: PlayerSurfaceProps) {
   const { playback, timeline, volume, queue, playlist, feedback } = viewModel
   const { appearance } = useAppearance()
@@ -2613,6 +2620,7 @@ export function PlayerSurface({
                 debugToolsEnabled={devAudioTools !== undefined}
                 debugToolsOpen={devAudioTools?.isOpen ?? false}
                 onDebugToolsOpenChange={devAudioTools?.onOpenChange}
+                librarySettings={librarySettings}
                 playlistOpen={playlist.isOpen}
                 compactPlaylist={compactPlaylist && playlist.library?.route?.view !== 'overview'}
                 librarySidebarOpen={librarySidebarOpen}

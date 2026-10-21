@@ -18,7 +18,7 @@ use super::{
         bounded_replay_gain_multiplier, parse_replay_gain_db, read_embedded_metadata,
         read_metadata, read_sidecar_lyrics, replay_gain_multiplier,
     },
-    playlist::{default_filters, load_folder_playlist},
+    playlist::{default_filters, load_folder_playlist, load_library_folder},
     source::{downmix_frame_to_stereo, input_path, load_track_ref, open_source, track_id},
     symphonia_source::SymphoniaAudioSource,
     tag_writer::{embed_lyrics, safe_update_tag},
@@ -220,6 +220,31 @@ fn folder_playlist_lists_supported_sibling_audio_in_stable_order() {
     );
 
     std::fs::remove_dir_all(test_dir).expect("test directory should be removed");
+}
+
+#[test]
+fn library_folder_scan_ignores_same_folder_m3u8() {
+    let test_dir = std::env::temp_dir().join(format!(
+        "spmusic-library-folder-scan-{}-{}",
+        std::process::id(),
+        line!()
+    ));
+    std::fs::create_dir_all(&test_dir).expect("test directory should be created");
+    std::fs::write(test_dir.join("one.mp3"), []).unwrap();
+    std::fs::write(test_dir.join("two.flac"), []).unwrap();
+    std::fs::write(test_dir.join("only-one.m3u8"), b"#EXTM3U\none.mp3\n").unwrap();
+
+    let playlist = load_library_folder(&test_dir).expect("directory should be scanned directly");
+    let file_names = playlist
+        .tracks
+        .iter()
+        .map(|track| track.file_name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(playlist.source_kind, AudioPlaylistSourceKind::Folder);
+    assert_eq!(file_names, vec!["one.mp3", "two.flac"]);
+    assert_eq!(playlist.selected_index, 0);
+
+    std::fs::remove_dir_all(test_dir).unwrap();
 }
 
 #[test]

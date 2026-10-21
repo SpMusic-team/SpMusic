@@ -29,7 +29,7 @@ import ReactDOM from '${dependency('react-dom_client.js')}';
 import {AppearanceProvider} from '/src/features/appearance/components/AppearanceProvider.tsx';
 import {PlayerShell} from '/src/features/player/components/PlayerShell.tsx';
 import '/src/index.css';
-window.calls=[];window.choice='a';window.summaryGate=false;window.pendingSummaries=[];window.pendingHydrations=[];
+window.calls=[];window.choice='a';window.summaryGate=false;window.pendingSummaries=[];window.pendingHydrations=[];window.coverPerfHydrateGate=false;window.coverPerfPixelGate=false;window.pendingPixelLoads=[];
 let state={phase:'idle',generation:null,currentTrackId:null,positionMs:0,durationMs:null,volume:.5,error:null,transportTransition:null,transportSettledRequestId:null},generation=0,currentTrack=null;
 const boundaryTitles=['#Lov3 #Ngẫu Hứng','#ТАМАДА (DJ Mexx & DJ Dikson Remix)','(What Is) Love?','+ERABY+E CONNEC+1ON'];
 const angleTitle='<<wr/d::maker>> ~Harmony in Re...';
@@ -52,6 +52,12 @@ const title=id=>names[id]??(id.startsWith('order-')?orderTitles[Number(id.slice(
 const track=path=>{const row=byPath.get(path);if(!row)throw Error('Unknown '+path);return {...row,durationMs:180000,metadata:{title:title(row.id),artist:'Artist '+row.id,album:'Album '+row.id,albumArtist:null,genre:null,year:null,trackNumber:null,discNumber:null,comment:null,lyrics:null,audioFormat:null,coverArt:null}}};
 window.backendInvoke=async(command,args)=>{
  const input=args?.input;window.calls.push({command,input});
+ if(command==='library_get_folders')return {folders:window.savedLibraryFolders??[]};
+ if(command==='library_add_folder'){window.savedLibraryFolders=[...new Set([...(window.savedLibraryFolders??[]),args.path])];return {folders:window.savedLibraryFolders};}
+ if(command==='library_clear_folders'){window.savedLibraryFolders=[];return null;}
+ if(command==='library_scan_folder'){const choice=args.path.split('/').at(-1);const before=window.choice;window.choice=choice;const result=playlist();window.choice=before;return result;}
+ if(command==='library_warm_cover_thumbnails')return {attempted:input.paths.length,computed:0,persisted:0,warmed:0,skipped:input.paths.length,failed:0,cancelled:false};
+ if(command==='library_cancel_cover_warmup')return null;
  if(command==='audio_get_state')return {...state};
  if(command==='audio_get_current_track')return currentTrack;
  if(command==='audio_get_output_info')return null;
@@ -64,16 +70,23 @@ window.backendInvoke=async(command,args)=>{
  }
  if(command==='audio_hydrate_track'){
   if(window.summaryGate && input.path.endsWith('shared.flac'))await new Promise(resolve=>window.pendingHydrations.push(resolve));
+  if(window.coverPerfHydrateGate && input.path.startsWith('/audio/many/'))await new Promise(resolve=>window.pendingHydrations.push(resolve));
   return track(input.path);
  }
- if(command==='audio_probe_playlist_cover'){const result=track(input.path);return {id:result.id,sourcePath:result.sourcePath,coverArt:null}}
+ if(command==='audio_probe_playlist_cover'){const result=track(input.path);return {id:result.id,sourcePath:result.sourcePath,coverArt:input.path.startsWith('/audio/many/')?{mimeType:'image/png',filePath:'/covers/'+result.id+'.png',dataUrl:null,byteLen:64}:null}}
  if(command==='audio_begin_playlist_cover_window')return 1;
  if(command==='audio_probe_playlist_durations')return input.paths.map(sourcePath=>({sourcePath,durationMs:180000,error:null}));
  if(command==='audio_probe_playlist_track_summaries'){
   if(window.summaryGate)await new Promise(resolve=>window.pendingSummaries.push(resolve));
   return input.paths.map(sourcePath=>{const item=track(sourcePath);return {sourcePath,summary:{title:item.metadata.title,artist:item.metadata.artist,album:item.metadata.album,albumArtist:null,bitDepth:24,sampleRateHz:96000,bitrateKbps:null,codec:'FLAC'},error:null}});
  }
- if(command==='audio_load_playlist_cover_pixels')throw {code:'NO_COVER_ART',message:'fixture has no artwork',recoverable:false};
+ if(command==='audio_load_playlist_cover_pixels'){
+  if(!input.filePath.startsWith('/covers/many-'))throw {code:'NO_COVER_ART',message:'fixture has no artwork',recoverable:false};
+  if(window.coverPerfPixelGate && input.clientId?.startsWith('all-songs-'))await new Promise(resolve=>window.pendingPixelLoads.push(resolve));
+  const bytes=new Uint8Array(44);const view=new DataView(bytes.buffer);bytes.set([83,80,88,82]);view.setUint16(4,1,true);view.setUint16(6,40,true);
+  view.setUint32(8,1,true);view.setUint32(12,1,true);view.setUint32(16,4,true);view.setUint32(20,1,true);view.setUint32(24,4,true);
+  view.setUint32(32,1,true);view.setUint32(36,1,true);bytes.set([255,0,0,255],40);return bytes;
+ }
  if(command==='audio_transition_playback'||command==='audio_play'||command==='audio_pause'){state={...state,phase:command==='audio_pause'?'paused':input?.target??'playing',transportSettledRequestId:input?.requestId??null};return {...state}}
  if(command==='audio_seek'){state={...state,positionMs:input.positionMs};return {...state}}
  throw Error('Unexpected native command '+command);
@@ -175,7 +188,7 @@ try {
     await importChoice(page, 'a')
     await page.evaluate(() => window.viewModel.playlist.library.onSelectCategory('songs'))
     await page.getByRole('heading', { name: '全部歌曲' }).waitFor()
-    assert.equal(await page.locator('.all-songs-list .playlist-card').filter({ hasText: 'shared' }).count(), 1, 'pending summary keeps filename only')
+    assert.equal(await page.locator('.all-songs-list .playlist-card').count(), 0, 'pending summary holds the list in a non-scrollable loading state')
     assert.equal(await page.locator('.all-songs-list .playlist-card').filter({ hasText: 'Shared Song' }).count(), 0, 'unresolved tag title is not fabricated')
     await page.evaluate(() => { window.summaryGate = false; window.pendingSummaries.splice(0).forEach(resolve => resolve()); window.pendingHydrations.splice(0).forEach(resolve => resolve()) })
     await page.locator('.all-songs-list .playlist-card').filter({ hasText: 'Shared Song' }).waitFor()
@@ -262,6 +275,61 @@ try {
     assert.deepEqual(errors, [], 'no browser errors during playlist boundary ordering')
     await page.close()
     console.log('playlist index boundaries: punctuation, 0, angle bracket, A–Z, non-ASCII, top and # passed')
+  }
+  {
+    const { page, errors } = await open(640)
+    await importChoice(page, 'many')
+    await page.evaluate(() => {
+      window.coverObjectUrls = { created: [], createdRecords: [], revoked: [] }
+      const create = URL.createObjectURL.bind(URL)
+      const revoke = URL.revokeObjectURL.bind(URL)
+      URL.createObjectURL = blob => {
+        const url = create(blob)
+        window.coverObjectUrls.created.push(url)
+        window.coverObjectUrls.createdRecords.push({ url, stack: new Error().stack })
+        return url
+      }
+      URL.revokeObjectURL = url => {
+        window.coverObjectUrls.revoked.push(url)
+        return revoke(url)
+      }
+      HTMLCanvasElement.prototype.toBlob = () => { throw new Error('all-songs cover conversion must not serialize PNG on the main thread') }
+      window.viewModel.playlist.library.onSelectCategory('songs')
+    })
+    await page.getByRole('heading', { name: '全部歌曲' }).waitFor()
+    await page.waitForFunction(() => [...document.querySelectorAll('.all-songs-list .playlist-card-format')].some(node => node.textContent?.includes('3:00')))
+    await page.waitForFunction(() => [...document.querySelectorAll('.all-songs-list .playlist-card-cover-image')].some(image => image.complete && image.naturalWidth > 0), null, { timeout: 5000 })
+    const evidence = await page.evaluate(() => ({
+      coverProbes: window.calls.filter(call => call.command === 'audio_probe_playlist_cover' && call.input.path.startsWith('/audio/many/')).length,
+      pixelLoads: window.calls.filter(call => call.command === 'audio_load_playlist_cover_pixels' && call.input.filePath.startsWith('/covers/many-')).length,
+    }))
+    assert(evidence.coverProbes >= 1 && evidence.pixelLoads >= 1, 'visible artwork uses the native cover probe and pixel path')
+    const visibleCoverUrl = await page.locator('.all-songs-list .playlist-card-cover-image').first().evaluate(image => image.src)
+    await page.getByRole('button', { name: '查找 Z 开头的歌曲' }).click()
+    await page.waitForFunction(() => window.calls.some(call => call.command === 'audio_probe_playlist_cover' && call.input.path === '/audio/many/25.flac'))
+    await page.locator('.all-songs-list .playlist-card').filter({ hasText: 'Z Song 25' }).locator('.playlist-card-cover-image').waitFor()
+    await page.evaluate(() => window.viewModel.playlist.library.onSelectCategory('artist'))
+    await page.waitForFunction(url => window.coverObjectUrls.revoked.includes(url), visibleCoverUrl)
+    assert(await page.evaluate(url => window.coverObjectUrls.revoked.includes(url), visibleCoverUrl), 'leaving all songs revokes a published cover URL')
+    await page.evaluate(() => {
+      window.coverPerfPixelGate = true
+      window.viewModel.playlist.library.onSelectCategory('songs')
+    })
+    await page.waitForFunction(() => window.pendingPixelLoads.length >= 1)
+    assert.equal(await page.evaluate(() => window.pendingPixelLoads.length), 2, 'artwork lane has at most two native pixel loads in flight')
+    await page.evaluate(() => window.viewModel.playlist.library.onSelectCategory('artist'))
+    await page.getByRole('heading', { name: '艺术家' }).waitFor()
+    const createdBeforeRelease = await page.evaluate(() => window.coverObjectUrls.created.length)
+    await page.evaluate(() => {
+      window.coverPerfPixelGate = false
+      window.pendingPixelLoads.splice(0).forEach(resolve => resolve())
+    })
+    await page.waitForTimeout(50)
+    const lateCreations = await page.evaluate(index => window.coverObjectUrls.createdRecords.slice(index), createdBeforeRelease)
+    assert.equal(lateCreations.filter(record => record.stack.includes('useAllSongsWindow')).length, 0, 'late pixel result after leaving songs does not create an orphan URL: ' + JSON.stringify(lateCreations.map(record => record.stack)))
+    assert.deepEqual(errors, [], 'delayed cover publication does not cause browser errors')
+    await page.close()
+    console.log('all songs artwork: preloaded metadata and independently arriving covers passed')
   }
 } finally {
   await browser.close()

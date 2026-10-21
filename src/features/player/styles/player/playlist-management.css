@@ -4,6 +4,7 @@
 .playlist-management .playlist-library-sidebar { padding-bottom: 248px; }
 .playlist-management .playlist-library-dialog .playlist-library-sidebar { padding-bottom: 24px; }
 .playlist-management-content { position: absolute; inset: 0 0 0 320px; padding-bottom: 248px; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--app-border) transparent; }
+.playlist-management-content[data-metadata-loading="true"] { overflow-y: hidden; }
 .playlist-management-parent { display: flex; height: 72px; align-items: center; padding: 8px 24px; }
 .playlist-management-parent button { width: 180px; height: 56px; padding: 4px 6px; gap: 4px; border: 2px solid var(--player-blue); border-radius: var(--app-radius-pill); background: transparent; color: var(--player-blue); font-size: 32px; font-weight: 400; line-height: 40px; }
 .playlist-management-heading { display: flex; min-height: 151px; align-items: center; gap: 36px; padding: 16px 24px 19px; }

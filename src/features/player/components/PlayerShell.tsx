@@ -44,10 +44,8 @@ export function PlayerShell() {
   }, [browsedScope, ensurePlaylistSummaries, isBrowsingActive])
   useEffect(() => {
     if (libraryRoute.view !== 'category' || libraryRoute.categoryId !== 'songs') return
-    for (const source of player.sessionPlaylists) {
-      if (source.sourceKind === 'folder') ensurePlaylistSummaries(playlistScope(source))
-    }
-  }, [libraryRoute, player.sessionPlaylists, ensurePlaylistSummaries])
+    for (const source of player.libraryFolderPlaylists) ensurePlaylistSummaries(playlistScope(source))
+  }, [libraryRoute, player.libraryFolderPlaylists, ensurePlaylistSummaries])
   const handlePlaylistOpenChange = useCallback((open: boolean) => {
     setIsPlaylistOpen(open)
     if (open) {
@@ -61,7 +59,7 @@ export function PlayerShell() {
   // Layering order: queue row < read-only tag summary < hydrated metadata <
   // windowed visual. The hydration pump stays authoritative for lyrics, cover
   // file paths, `hasLocalArtwork` and the exact duration.
-  const playlistTracks = useMemo<PlaylistTrackItemViewModel[]>(() => {
+  const rawPlaylistTracks = useMemo<PlaylistTrackItemViewModel[]>(() => {
     // `queueTracks` always describes the active scope, so its summaries come
     // from the active scope key and never from the list being browsed.
     const summaries = player.activePlaylistScope ? summariesByScope[player.activePlaylistScope] : undefined
@@ -87,35 +85,9 @@ export function PlayerShell() {
   // Browsing another session list reuses that scope's summary rows; until they
   // land, rows keep the filename title with an explicitly unknown artist/album
   // instead of the fabricated `本地音频` / playlist-name placeholder.
-  const browsedTracks = useMemo<PlaylistTrackItemViewModel[]>(() => {
-    if (isBrowsingActive) return playlistTracks
-    const summaries = browsedScope ? summariesByScope[browsedScope] : undefined
-    return (browsedPlaylist?.tracks ?? []).map((item) => (
-      (browsedScope ? summaries?.[item.id] : undefined) ?? pendingPlaylistTrackRow(item)
-    ))
-  }, [isBrowsingActive, playlistTracks, browsedPlaylist, browsedScope, summariesByScope])
   const browsedUnavailableIds = useMemo(() => isBrowsingActive ? player.unavailableTrackIds
     : new Set(browsedPlaylist?.tracks.filter((item) => !item.available).map((item) => item.id)),
   [isBrowsingActive, player.unavailableTrackIds, browsedPlaylist])
-  const allSongs = useMemo<AllSongsItem[]>(() => {
-    const seen = new Set<string>()
-    const rows: AllSongsItem[] = []
-    const activeRows = new Map(playlistTracks.map((item) => [item.id, item]))
-    for (const source of player.sessionPlaylists) {
-      if (source.sourceKind !== 'folder') continue
-      const scope = playlistScope(source)
-      const summaries = summariesByScope[scope]
-      for (const descriptor of source.tracks) {
-        const key = normalizeAudioSourcePath(descriptor.sourcePath)
-        if (seen.has(key)) continue
-        seen.add(key)
-        const activeRow = scope === player.activePlaylistScope ? activeRows.get(descriptor.id) : undefined
-        rows.push({ key, scope, trackId: descriptor.id, sourcePath: descriptor.sourcePath, available: descriptor.available,
-          track: activeRow ?? summaries?.[descriptor.id] ?? pendingPlaylistTrackRow(descriptor) })
-      }
-    }
-    return rows
-  }, [player.sessionPlaylists, player.activePlaylistScope, playlistTracks, summariesByScope])
   const singleTrackSource = player.currentAudioTrack?.sourcePath
   const durationSources = useMemo<readonly { sourcePath: string; id?: string; available?: boolean }[]>(() => player.playlistDurationTracks
     ?? (singleTrackSource ? [{ sourcePath: singleTrackSource }] : []), [player.playlistDurationTracks, singleTrackSource])
@@ -127,7 +99,7 @@ export function PlayerShell() {
   // unknown because the presentation mapper uses zero for "not hydrated".
   const activeKnownDurations = useMemo(() => {
     const known = new Map<string, number>()
-    const tracksById = new Map(playlistTracks.map((item) => [item.id, item]))
+    const tracksById = new Map(rawPlaylistTracks.map((item) => [item.id, item]))
     for (const source of durationSources) {
       if (source.available === false) continue
       const duration = source.id ? tracksById.get(source.id)?.durationSeconds : undefined
@@ -138,7 +110,7 @@ export function PlayerShell() {
     if (singleTrackSource && currentDurationMs != null && Number.isFinite(currentDurationMs) && currentDurationMs >= 0
       && !durationSources.some((source) => source.sourcePath === singleTrackSource && source.available === false)) known.set(singleTrackSource, currentDurationMs)
     return known
-  }, [durationSources, playlistTracks, singleTrackSource, currentDurationMs])
+  }, [durationSources, rawPlaylistTracks, singleTrackSource, currentDurationMs])
   // Known durations stay per scope and survive a scope switch. While a scope is
   // active, its rows hydrate exact durations; an inactive scope's tag summary
   // rows carry no duration by contract (`playlistTrackRowFromSummary` is always
@@ -164,9 +136,62 @@ export function PlayerShell() {
     setKnownScopeState({ scope: durationScope, known: activeKnownDurations, byScope })
   }
   const knownDurationsByScope = knownScopeState.byScope
-  const playlistDurations = usePlaylistLibraryDurations(durationSources, durationScope, libraryDurationSources, knownDurationsByScope)
+  const preferredDurationScopes = useMemo(() => libraryRoute.view === 'category' && libraryRoute.categoryId === 'songs'
+    ? player.libraryFolderPlaylists.map(playlistScope)
+    : displayScope ? [displayScope] : [],
+  [libraryRoute, player.libraryFolderPlaylists, displayScope])
+  const durationData = usePlaylistLibraryDurations(durationSources, durationScope, libraryDurationSources, knownDurationsByScope, preferredDurationScopes)
+  const playlistDurations = durationData.totals
   const playlistDuration = playlistDurations.get(durationScope)!
   const browsedDuration = browsedPlaylist ? playlistDurations.get(playlistScope(browsedPlaylist))! : playlistDuration
+  const playlistTracks = useMemo(() => {
+    const descriptors = new Map(player.playlistDurationTracks?.map((item) => [item.id, item.sourcePath]))
+    const durations = durationData.durationsByScope.get(player.activePlaylistScope ?? '')
+    return rawPlaylistTracks.map((item) => {
+      const durationMs = durations?.get(descriptors.get(item.id) ?? '')
+      return (item.durationSeconds ?? 0) > 0 || durationMs == null ? item : { ...item, durationSeconds: durationMs / 1000 }
+    })
+  }, [rawPlaylistTracks, player.playlistDurationTracks, player.activePlaylistScope, durationData.durationsByScope])
+  const browsedTracks = useMemo<PlaylistTrackItemViewModel[]>(() => {
+    if (isBrowsingActive) return playlistTracks
+    const summaries = browsedScope ? summariesByScope[browsedScope] : undefined
+    const durations = browsedScope ? durationData.durationsByScope.get(browsedScope) : undefined
+    return (browsedPlaylist?.tracks ?? []).map((item) => {
+      const row = (browsedScope ? summaries?.[item.id] : undefined) ?? pendingPlaylistTrackRow(item)
+      const durationMs = durations?.get(item.sourcePath)
+      return durationMs == null ? row : { ...row, durationSeconds: durationMs / 1000 }
+    })
+  }, [isBrowsingActive, playlistTracks, browsedPlaylist, browsedScope, summariesByScope, durationData.durationsByScope])
+  const allSongs = useMemo<AllSongsItem[]>(() => {
+    const seen = new Set<string>()
+    const rows: AllSongsItem[] = []
+    const activeRows = new Map(playlistTracks.map((item) => [item.id, item]))
+    for (const source of player.libraryFolderPlaylists) {
+      const scope = playlistScope(source)
+      const summaries = summariesByScope[scope]
+      const durations = durationData.durationsByScope.get(scope)
+      for (const descriptor of source.tracks) {
+        const key = normalizeAudioSourcePath(descriptor.sourcePath)
+        if (seen.has(key)) continue
+        seen.add(key)
+        const activeRow = scope === player.activePlaylistScope ? activeRows.get(descriptor.id) : undefined
+        const row = activeRow ?? summaries?.[descriptor.id] ?? pendingPlaylistTrackRow(descriptor)
+        const durationMs = durations?.get(descriptor.sourcePath)
+        rows.push({ key, scope, trackId: descriptor.id, sourcePath: descriptor.sourcePath, available: descriptor.available,
+          track: (row.durationSeconds ?? 0) > 0 || durationMs == null ? row : { ...row, durationSeconds: durationMs / 1000 } })
+      }
+    }
+    return rows
+  }, [player.libraryFolderPlaylists, player.activePlaylistScope, playlistTracks, summariesByScope, durationData.durationsByScope])
+  const playlistRowsReady = !displayScope || (
+    player.playlistSummaryStatusByScope[displayScope] === 'ready'
+    && durationData.settledByScope.get(displayScope) === true
+  )
+  const allSongsRowsReady = !player.libraryRestorePending && player.libraryFolderPlaylists.every((source) => {
+    const scope = playlistScope(source)
+    return player.playlistSummaryStatusByScope[scope] === 'ready'
+      && durationData.settledByScope.get(scope) === true
+  })
   const toggleTrackFeedback = player.toggleTrackFeedback
   const handleFeedbackToggle = useCallback((feedback: Parameters<typeof toggleTrackFeedback>[1]) => {
     if (currentTrackId) toggleTrackFeedback(currentTrackId, feedback)
@@ -243,7 +268,8 @@ export function PlayerShell() {
         route: libraryRoute,
         onOpenOverview: openLibraryOverview,
         onSelectCategory: selectLibraryCategory,
-        items: player.sessionPlaylists.map((item) => ({
+        items: player.sessionPlaylists.filter((item) => item.sourceKind === 'm3u8'
+          || player.libraryFolderPlaylists.some((folder) => playlistScope(folder) === playlistScope(item))).map((item) => ({
           scope: playlistScope(item), name: playlistDisplayName(item), trackCount: item.tracks.length, sourceKind: item.sourceKind,
           coverTrack: playlistScope(item) === player.activePlaylistScope ? playlistTracks[0] : undefined,
           totalClock: formatPlaylistDurationLabel(
@@ -252,6 +278,7 @@ export function PlayerShell() {
           ),
         })),
         allSongs,
+        allSongsMetadataStatus: allSongsRowsReady ? 'ready' : 'loading',
         currentScope: browsedScope,
         activeScope: player.activePlaylistScope,
         onOpen: openLibrary,
@@ -271,7 +298,7 @@ export function PlayerShell() {
       tracks: browsedTracks,
       unavailableTrackIds: browsedUnavailableIds,
       playlistName: browsedPlaylist ? playlistDisplayName(browsedPlaylist) : player.playlistName,
-      metadataStatus: displayScope && player.playlistSummaryStatusByScope[displayScope] === 'loading' ? 'loading' : 'ready',
+      metadataStatus: playlistRowsReady ? 'ready' : 'loading',
       totalDurationSeconds: browsedDuration.totalSeconds,
       totalDurationStatus: browsedDuration.status,
       totalDurationDetail: browsedDuration.detail,
@@ -315,6 +342,12 @@ export function PlayerShell() {
       {(isAvailable) => (
         <PlayerSurface
           viewModel={viewModel}
+          librarySettings={{
+            selectedFolderCount: player.selectedFolderPaths.length,
+            status: player.libraryStatus,
+            errors: player.libraryFolderErrors,
+            onClear: player.clearSelectedLibraryFolders,
+          }}
           devAudioTools={isAvailable ? {
             isOpen: isDevAudioToolsOpen,
             onOpenChange: setIsDevAudioToolsOpen,

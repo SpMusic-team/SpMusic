@@ -151,6 +151,7 @@ export type PlaylistLibraryViewModel = {
   isOpen: boolean
   items: readonly PlaylistLibraryItem[]
   allSongs?: readonly AllSongsItem[]
+  allSongsMetadataStatus?: 'loading' | 'ready'
   currentScope?: string | null
   activeScope?: string | null
   onOpen: () => void

@@ -8,6 +8,7 @@ import { readLibraryLayoutRect } from '@/features/player/model/libraryNavigation
 import { useCollectionLayout } from '@/features/player/hooks/useCollectionLayout'
 import { useAllSongsWindow } from '@/features/player/hooks/useAllSongsWindow'
 import { PlaylistCard } from '@/features/player/components/PlaylistCard'
+import { PlaylistMetadataLoading } from '@/features/player/components/PlaylistPanel'
 import { PLAYLIST_SONG_LAYOUTS, ALL_SONGS_LAYOUT_STORAGE_KEY, defaultAllSongsLevel } from '@/features/player/model/playlistSongLayouts'
 import { PLAYLIST_MANAGEMENT_LAYOUTS, PLAYLIST_MANAGEMENT_LAYOUT_STORAGE_KEY, defaultPlaylistManagementLevel } from '@/features/player/model/playlistManagementLayouts'
 import { useAppearanceMotion } from '@/features/appearance/hooks/useAppearance'
@@ -193,7 +194,7 @@ export function PlaylistLibraryPanel({ playlist, librarySidebarOpen, onLibrarySi
   const visibleSongs = useMemo(() => (library.allSongs ?? [])
     .filter((item) => `${item.track.title} ${item.track.artist} ${item.track.album}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
     .sort((left, right) => compareByQuickIndex(left.track.title, right.track.title)), [library.allSongs, query])
-  const windowRows = useAllSongsWindow(visibleSongs, panelRef, songsListRef, isSongs)
+  const windowRows = useAllSongsWindow(visibleSongs, panelRef, songsListRef, isSongs && library.allSongsMetadataStatus !== 'loading')
   const quickIndexTargets = new Map<string, number>()
   ;(isSongs ? visibleSongs.map((item) => item.track.title) : visible.map((item) => item.name)).forEach((name, index) => {
     const key = quickIndexKey(name)
@@ -311,6 +312,7 @@ export function PlaylistLibraryPanel({ playlist, librarySidebarOpen, onLibrarySi
       </DialogContent>
     </Dialog>
     <motion.section ref={(node) => { panelRef.current = node; managementPanelRef.current = isSongs ? null : node }} className="playlist-management-content" aria-label={`${category.label}管理`}
+      data-metadata-loading={isSongs && library.allSongsMetadataStatus === 'loading' || undefined}
       variants={offscreenEntry ? navigationMotion.detailReturn.incoming : appearanceMotion.variants.backdrop}
       transition={offscreenEntry ? navigationMotion.transition : atomicOverview ? { duration: 0 } : returnTransition}
       initial={atomicOverview ? false : 'initial'} animate={offscreenEntry ? entryControls : 'animate'} exit={atomicOverview ? 'animate' : 'exit'}>
@@ -361,13 +363,13 @@ export function PlaylistLibraryPanel({ playlist, librarySidebarOpen, onLibrarySi
       {showSearch ? <motion.div className="playlist-management-search" variants={navigationMotion.chrome}
         initial={atomicOverview ? 'initial' : false} animate="animate" exit={atomicOverview ? 'exit' : 'animate'} transition={navigationMotion.transition}><Input ref={searchRef} type="search" aria-label={isSongs ? '搜索歌曲标题、艺术家或专辑' : `搜索${category.label}名称`} placeholder={isSongs ? '搜索歌曲' : `搜索${category.label}`} value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape') { setQuery(''); setSearchOpen(false); setDismissedSearchRequestId(searchRequestId) } }} /></motion.div> : null}
       <span className="sr-only" role="status" aria-live="polite">{isSongs ? songsAnnouncement : announcement}</span>
-      {isSongs ? (visibleSongs.length ? <div ref={songsListRef} className="playlist-grid all-songs-list" aria-label="全部歌曲列表"
+      {isSongs ? (library.allSongsMetadataStatus === 'loading' ? <PlaylistMetadataLoading layout={songsLayout} trackCount={library.allSongs?.length ?? 0} /> : visibleSongs.length ? <div ref={songsListRef} className="playlist-grid all-songs-list" aria-label="全部歌曲列表"
         data-layout-level={songsLayout.level} data-layout-flow={songsLayout.flow} data-layout-columns={songsLayout.columns}
         data-content-window="full" data-cover-motion={appearanceMotion.disabled ? 'off' : undefined}
         style={{ ...songsLayout.style, touchAction: 'pan-y' }}>
         {visibleSongs.map((item, index) => {
           const row = windowRows.get(item.key)
-          const track = row?.track ?? item.track
+          const track = item.track
           const bitDepth = track.audioFormat?.bitDepth
           const hasFormat = Boolean((track.durationSeconds ?? 0) > 0 || track.fileExtension || (bitDepth != null && bitDepth >= 24))
           const contentShape = Number(Boolean(track.title)) | (Number(Boolean(track.artist)) << 1)
@@ -387,7 +389,7 @@ export function PlaylistLibraryPanel({ playlist, librarySidebarOpen, onLibrarySi
               return next
             })} />
         })}
-      </div> : <MotionEmpty className="playlist-management-empty" variants={navigationMotion.chrome} initial={false} animate="animate"><EmptyHeader><EmptyTitle>{(library.allSongs?.length ?? 0) ? '没有匹配的歌曲' : '暂无歌曲'}</EmptyTitle><EmptyDescription>{(library.allSongs?.length ?? 0) ? '尝试其他名称，或清空搜索。' : '导入本地音频文件夹后，这里会列出本次会话中各文件夹的歌曲。'}</EmptyDescription></EmptyHeader><Button disabled={playlist.isOpenAudioDisabled} onClick={(library.allSongs?.length ?? 0) ? () => setQuery('') : playlist.onOpenAudio}>{(library.allSongs?.length ?? 0) ? '清空搜索' : '导入音频文件夹'}</Button></MotionEmpty>) : visible.length ? <div ref={gridRef} className="playlist-management-grid"
+      </div> : <MotionEmpty className="playlist-management-empty" variants={navigationMotion.chrome} initial={false} animate="animate"><EmptyHeader><EmptyTitle>{(library.allSongs?.length ?? 0) ? '没有匹配的歌曲' : '暂无歌曲'}</EmptyTitle><EmptyDescription>{(library.allSongs?.length ?? 0) ? '尝试其他名称，或清空搜索。' : '导入本地音频文件夹后，这里会列出已选择文件夹中的歌曲；下次启动会重新扫描。'}</EmptyDescription></EmptyHeader><Button disabled={playlist.isOpenAudioDisabled} onClick={(library.allSongs?.length ?? 0) ? () => setQuery('') : playlist.onOpenAudio}>{(library.allSongs?.length ?? 0) ? '清空搜索' : '导入音频文件夹'}</Button></MotionEmpty>) : visible.length ? <div ref={gridRef} className="playlist-management-grid"
         data-layout-level={layout.level} data-layout-flow={layout.flow} data-layout-artwork={layout.showArtwork}
         aria-label={layout.label} style={{ ...layout.style, touchAction: 'pan-y' }}>
         {visible.map((item) => <motion.div key={item.scope} className="playlist-management-card"
@@ -411,9 +413,9 @@ export function PlaylistLibraryPanel({ playlist, librarySidebarOpen, onLibrarySi
               </span>
             </Button>
         </motion.div>)}
-      </div> : <MotionEmpty className="playlist-management-empty" variants={navigationMotion.chrome} initial={atomicOverview ? 'initial' : false} animate="animate" exit={atomicOverview ? 'exit' : 'animate'} transition={navigationMotion.transition}><EmptyHeader><EmptyTitle>{!hasDataSource ? `${category.label}尚未接入数据` : categoryItems.length ? `没有匹配的${category.label}` : `暂无${category.label}`}</EmptyTitle><EmptyDescription>{!hasDataSource ? `此分类的数据管理能力尚未接入。可返回媒体库，或在播放列表中浏览本次会话已导入的列表。` : categoryItems.length ? '尝试其他名称，或清空搜索。' : categoryId === 'folder' ? '导入本地音频文件夹后，可在这里浏览。本次会话中的 M3U8 列表显示在播放列表分类。' : '导入本地音频文件夹或 M3U8 列表后，在这里选择要浏览的播放列表。列表保留在本次会话中。'}</EmptyDescription></EmptyHeader><Button disabled={playlist.isOpenAudioDisabled} onClick={!hasDataSource ? library.onOpen : categoryItems.length ? () => setQuery('') : playlist.onOpenAudio}>{!hasDataSource ? '打开播放列表' : categoryItems.length ? '清空搜索' : '导入音频或播放列表'}</Button></MotionEmpty>}
+      </div> : <MotionEmpty className="playlist-management-empty" variants={navigationMotion.chrome} initial={atomicOverview ? 'initial' : false} animate="animate" exit={atomicOverview ? 'exit' : 'animate'} transition={navigationMotion.transition}><EmptyHeader><EmptyTitle>{!hasDataSource ? `${category.label}尚未接入数据` : categoryItems.length ? `没有匹配的${category.label}` : `暂无${category.label}`}</EmptyTitle><EmptyDescription>{!hasDataSource ? '此分类的数据管理能力尚未接入。可返回媒体库浏览已导入的列表。' : categoryItems.length ? '尝试其他名称，或清空搜索。' : categoryId === 'folder' ? '导入本地音频文件夹后，可在这里浏览；下次启动会重新扫描。M3U8 列表显示在播放列表分类。' : '导入本地音频文件夹或 M3U8 列表后，在这里选择要浏览的播放列表。文件夹选择会保留，M3U8 列表仅在本次会话显示。'}</EmptyDescription></EmptyHeader><Button disabled={playlist.isOpenAudioDisabled} onClick={!hasDataSource ? library.onOpen : categoryItems.length ? () => setQuery('') : playlist.onOpenAudio}>{!hasDataSource ? '打开播放列表' : categoryItems.length ? '清空搜索' : '导入音频或播放列表'}</Button></MotionEmpty>}
     </motion.section>
-    {(categoryId === 'playlists' || isSongs) ? <>
+    {(categoryId === 'playlists' || (isSongs && library.allSongsMetadataStatus !== 'loading')) ? <>
     {quickIndexPreview ? <div className="playlist-management-quick-index-preview" data-visible={quickIndexPreview.visible} style={{ top: quickIndexPreview.top }} aria-hidden="true">
       {quickIndexPreview.key === 'top' ? <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m2 7 6-6 6 6M2 14l6-6 6 6" /></svg> : quickIndexPreview.key}
     </div> : null}

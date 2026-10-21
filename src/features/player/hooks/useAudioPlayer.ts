@@ -27,6 +27,7 @@ import {
 } from '@/features/player/model/playbackModes'
 import { appCopy } from '@/features/player/model/playerCopy'
 import { createPlaylistArtworkGrace } from '@/features/player/model/playlistArtworkGrace'
+import { playlistCoverImageFromPixels } from '@/features/player/model/playlistCoverPixels'
 import { decodePlaylistCover } from '@/features/player/model/playlistCoverReadiness'
 import {
   chunkPlaylistSummaryPaths,
@@ -59,7 +60,11 @@ import type {
 import { createPlayerVisualTimelineClock } from '@/features/player/model/visualTimelineClock'
 import {
   AUDIO_PLAYLIST_TRACK_SUMMARY_BATCH_LIMIT,
+  addLibraryFolder,
   beginAudioPlaylistCoverWindow,
+  cancelLibraryCoverWarmup,
+  clearLibraryFolders,
+  getLibraryFolders,
   getAudioState,
   getAudioOutputInfo,
   getCurrentAudioTrack,
@@ -78,9 +83,11 @@ import {
   probeAudioPlaylistCover,
   probeAudioPlaylistTrackSummaries,
   seekAudio,
+  scanLibraryFolder,
   setAudioVolume,
   stopAudio,
   transitionAudioPlayback,
+  warmLibraryCoverThumbnails,
   type AudioCommandError,
   type AudioFolderPlaylist,
   type AudioFolderTrackRef,
@@ -159,45 +166,6 @@ function playlistArtworkBytes(edge: number): number {
 function createPlaylistCoverClientId(): string {
   if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID()
   return `playlist-${Date.now()}-${Math.random().toString(36).slice(2)}`
-}
-
-function playlistCoverImageFromPixels(
-  pixels: Awaited<ReturnType<typeof loadAudioPlaylistCoverPixels>>,
-): PlaylistCoverImage {
-  // A 24-bit BMP keeps the resident object-URL window compact without creating
-  // an ImageBitmap or one GPU-backed 2D canvas per playlist card. At the 40
-  // visible-card limit plus the current dock track, the encoded upper bound is
-  // about 8.5 MiB when the persistent first-track hero uses a 512 px thumbnail.
-  const rowStride = Math.ceil((pixels.width * 3) / 4) * 4
-  const pixelBytes = rowStride * pixels.height
-  const headerBytes = 54
-  const encoded = new Uint8Array(headerBytes + pixelBytes)
-  const header = new DataView(encoded.buffer)
-  encoded[0] = 0x42
-  encoded[1] = 0x4d
-  header.setUint32(2, encoded.byteLength, true)
-  header.setUint32(10, headerBytes, true)
-  header.setUint32(14, 40, true)
-  header.setInt32(18, pixels.width, true)
-  header.setInt32(22, pixels.height, true)
-  header.setUint16(26, 1, true)
-  header.setUint16(28, 24, true)
-  header.setUint32(34, pixelBytes, true)
-  header.setInt32(38, 2835, true)
-  header.setInt32(42, 2835, true)
-  for (let sourceY = 0; sourceY < pixels.height; sourceY += 1) {
-    const targetRow = headerBytes + (pixels.height - 1 - sourceY) * rowStride
-    const sourceRow = sourceY * pixels.stride
-    for (let x = 0; x < pixels.width; x += 1) {
-      const sourceOffset = sourceRow + x * 4
-      const targetOffset = targetRow + x * 3
-      encoded[targetOffset] = pixels.pixels[sourceOffset + 2]
-      encoded[targetOffset + 1] = pixels.pixels[sourceOffset + 1]
-      encoded[targetOffset + 2] = pixels.pixels[sourceOffset]
-    }
-  }
-  const src = URL.createObjectURL(new Blob([encoded], { type: 'image/bmp' }))
-  return { src, width: pixels.width, height: pixels.height, encodedBytes: encoded.byteLength }
 }
 
 function releasePlaylistVisuals(visuals: Readonly<Record<string, PlaylistTrackVisual>>) {
@@ -428,6 +396,11 @@ export function useAudioPlayer() {
   // instead of waiting for the full scope activation.
   const [pendingDurationPlaylist, setPendingDurationPlaylist] = useState<AudioFolderPlaylist | null>(null)
   const [sessionPlaylists, setSessionPlaylists] = useState<readonly AudioFolderPlaylist[]>([])
+  const [libraryFolderPlaylists, setLibraryFolderPlaylists] = useState<readonly AudioFolderPlaylist[]>([])
+  const [selectedFolderPaths, setSelectedFolderPaths] = useState<readonly string[]>([])
+  const [libraryFolderErrors, setLibraryFolderErrors] = useState<Readonly<Record<string, string>>>({})
+  const [libraryStatus, setLibraryStatus] = useState<'loading' | 'ready' | 'clearing' | 'error'>('loading')
+  const [libraryRestorePending, setLibraryRestorePending] = useState(true)
   const [playlistTrackVisuals, setPlaylistTrackVisuals] = useState<Readonly<Record<string, PlaylistTrackVisual>>>({})
   const [playlistTrackMetadata, setPlaylistTrackMetadata] = useState<Readonly<Record<string, PlaylistTrackMetadata>>>({})
   // Read-only tag summaries, keyed by playlist scope. This is a third channel:
@@ -527,6 +500,12 @@ export function useAudioPlayer() {
   // Descriptor snapshots per scope, so a pass can be started for a list the user
   // only browsed and survive an unrelated activation.
   const sessionPlaylistDescriptorsRef = useRef(new Map<string, AudioFolderPlaylist>())
+  const libraryEpochRef = useRef(0)
+  const selectedFolderPathsRef = useRef<readonly string[]>([])
+  const libraryMutationRef = useRef<Promise<void>>(Promise.resolve())
+  const libraryWarmPathsRef = useRef(new Set<string>())
+  const libraryWarmSourcesRef = useRef(new Map<string, string[]>())
+  const libraryWarmIdleRef = useRef<number | null>(null)
   const playlistSummaryRowsRef = useRef<Readonly<Record<string, Readonly<Record<string, PlaylistTrackRow>>>>>({})
   const playlistSummaryStatusRef = useRef<Readonly<Record<string, PlaylistSummaryStatus>>>({})
   const playlistSummaryRunRef = useRef(new Map<string, { runId: number; fingerprint: string }>())
@@ -728,6 +707,175 @@ export function useAudioPlayer() {
     return active && playlistScope(active) === scope ? active : undefined
   }, [])
 
+  const scheduleLibraryWarmup = useCallback((epoch: number) => {
+    if (libraryEpochRef.current !== epoch || libraryWarmIdleRef.current !== null) return
+    const run = () => {
+      libraryWarmIdleRef.current = null
+      if (libraryEpochRef.current !== epoch) return
+      const paths = [...libraryWarmPathsRef.current].slice(0, 256)
+      if (paths.length === 0) return
+      void warmLibraryCoverThumbnails(paths).catch((error: unknown) => {
+        if (libraryEpochRef.current === epoch) console.warn('歌曲封面预热失败', error)
+      })
+    }
+    libraryWarmIdleRef.current = typeof window.requestIdleCallback === 'function'
+      ? window.requestIdleCallback(run)
+      : window.setTimeout(run, 500)
+  }, [])
+
+  const rememberLibraryPlaylist = useCallback((playlist: AudioFolderPlaylist, epoch: number) => {
+    if (libraryEpochRef.current !== epoch || playlist.sourceKind !== 'folder') return
+    const scope = playlistScope(playlist)
+    libraryWarmSourcesRef.current.set(scope, playlist.tracks.filter((track) => track.available).map((track) => track.sourcePath))
+    const sources = [...libraryWarmSourcesRef.current.values()]
+    const paths = new Set<string>()
+    for (let index = 0; paths.size < 256 && sources.some((source) => index < source.length); index += 1) {
+      for (const source of sources) {
+        if (source[index]) paths.add(source[index])
+        if (paths.size >= 256) break
+      }
+    }
+    libraryWarmPathsRef.current = paths
+    sessionPlaylistDescriptorsRef.current.set(scope, playlist)
+    setSessionPlaylists((previous) => previous.some((item) => playlistScope(item) === scope)
+      ? previous.map((item) => playlistScope(item) === scope ? playlist : item)
+      : [...previous, playlist])
+    setLibraryFolderPlaylists((previous) => previous.some((item) => playlistScope(item) === scope)
+      ? previous.map((item) => playlistScope(item) === scope ? playlist : item)
+      : [...previous, playlist])
+    setLibraryFolderErrors((previous) => {
+      if (!(playlist.sourcePath in previous)) return previous
+      const next = { ...previous }
+      delete next[playlist.sourcePath]
+      return next
+    })
+  }, [])
+
+  const registerLibraryPlaylist = useCallback((playlist: AudioFolderPlaylist, epoch: number) => {
+    if (playlist.sourceKind !== 'folder' || libraryEpochRef.current !== epoch) return
+    const path = playlist.sourcePath
+    const mutation = libraryMutationRef.current.then(async () => {
+      if (libraryEpochRef.current !== epoch) return
+      try {
+        const result = await addLibraryFolder(path)
+        if (libraryEpochRef.current !== epoch) return
+        if (!Array.isArray(result.folders)) throw new Error('歌曲文件夹列表格式错误')
+        selectedFolderPathsRef.current = result.folders
+        setSelectedFolderPaths(result.folders)
+        rememberLibraryPlaylist(playlist, epoch)
+        scheduleLibraryWarmup(epoch)
+      } catch (error) {
+        if (libraryEpochRef.current !== epoch) return
+        const message = error instanceof Error ? error.message : String(error)
+        setLibraryFolderErrors((previous) => ({ ...previous, [path]: `无法保存选择：${message}` }))
+        setLibraryStatus('error')
+      }
+    })
+    libraryMutationRef.current = mutation.catch(() => undefined)
+  }, [rememberLibraryPlaylist, scheduleLibraryWarmup])
+
+  const clearSelectedLibraryFolders = useCallback(async () => {
+    const epoch = libraryEpochRef.current + 1
+    libraryEpochRef.current = epoch
+    const priorPaths = selectedFolderPathsRef.current
+    selectedFolderPathsRef.current = []
+    if (libraryWarmIdleRef.current !== null) {
+      if (typeof window.cancelIdleCallback === 'function') window.cancelIdleCallback(libraryWarmIdleRef.current)
+      else window.clearTimeout(libraryWarmIdleRef.current)
+      libraryWarmIdleRef.current = null
+    }
+    setLibraryStatus('clearing')
+    setLibraryRestorePending(false)
+    const mutation = libraryMutationRef.current.then(async () => {
+      try {
+        await clearLibraryFolders()
+        if (libraryEpochRef.current !== epoch) return
+        libraryWarmPathsRef.current.clear()
+        libraryWarmSourcesRef.current.clear()
+        try { await cancelLibraryCoverWarmup() } catch (error) { console.warn('取消歌曲封面预热失败', error) }
+        const activeScope = folderPlaylistRef.current ? playlistScope(folderPlaylistRef.current) : null
+        for (const [scope, playlist] of sessionPlaylistDescriptorsRef.current) {
+          if (playlist.sourceKind === 'folder' && scope !== activeScope) sessionPlaylistDescriptorsRef.current.delete(scope)
+        }
+        setSessionPlaylists((previous) => previous.filter((item) => item.sourceKind !== 'folder'))
+        setLibraryFolderPlaylists([])
+        setSelectedFolderPaths([])
+        setLibraryFolderErrors({})
+        setLibraryStatus('ready')
+      } catch (error) {
+        if (libraryEpochRef.current !== epoch) return
+        try {
+          const current = await getLibraryFolders()
+          if (libraryEpochRef.current !== epoch) return
+          selectedFolderPathsRef.current = current.folders
+          setSelectedFolderPaths(current.folders)
+        } catch {
+          selectedFolderPathsRef.current = priorPaths
+        }
+        const message = error instanceof Error ? error.message : String(error)
+        setLibraryStatus('error')
+        setLibraryFolderErrors((previous) => ({ ...previous, '': `清空歌曲选择失败：${message}` }))
+      }
+    })
+    libraryMutationRef.current = mutation.catch(() => undefined)
+    await mutation
+  }, [])
+
+  useEffect(() => {
+    const epoch = libraryEpochRef.current + 1
+    libraryEpochRef.current = epoch
+    let disposed = false
+    void (async () => {
+      try {
+        const result = await getLibraryFolders()
+        if (disposed || libraryEpochRef.current !== epoch) return
+        if (!Array.isArray(result.folders) || !result.folders.every((path) => typeof path === 'string')) {
+          throw new Error('歌曲文件夹列表格式错误')
+        }
+        selectedFolderPathsRef.current = [...new Set([...result.folders, ...selectedFolderPathsRef.current])]
+        setSelectedFolderPaths(selectedFolderPathsRef.current)
+        setLibraryStatus('ready')
+        // Scanning two directories at a time lets a large library restore
+        // progressively without monopolizing the backend's metadata path.
+        let cursor = 0
+        const scanNext = async () => {
+          while (!disposed && libraryEpochRef.current === epoch && cursor < result.folders.length) {
+            const path = result.folders[cursor++]
+            try {
+              const playlist = await scanLibraryFolder(path)
+              if (disposed || libraryEpochRef.current !== epoch) return
+              if (playlist.sourceKind !== 'folder') throw new Error('返回的歌曲来源不是文件夹')
+              rememberLibraryPlaylist(playlist, epoch)
+            } catch (error) {
+              if (disposed || libraryEpochRef.current !== epoch) return
+              const message = error instanceof Error ? error.message : String(error)
+              setLibraryFolderErrors((previous) => ({ ...previous, [path]: message }))
+            }
+          }
+        }
+        await Promise.all([scanNext(), scanNext()])
+        if (!disposed && libraryEpochRef.current === epoch) scheduleLibraryWarmup(epoch)
+      } catch (error) {
+        if (disposed || libraryEpochRef.current !== epoch) return
+        const message = error instanceof Error ? error.message : String(error)
+        setLibraryFolderErrors((previous) => ({ ...previous, '': `读取歌曲选择失败：${message}` }))
+        setLibraryStatus('error')
+      } finally {
+        if (!disposed && libraryEpochRef.current === epoch) setLibraryRestorePending(false)
+      }
+    })()
+    return () => {
+      disposed = true
+      libraryEpochRef.current += 1
+      if (libraryWarmIdleRef.current !== null) {
+        if (typeof window.cancelIdleCallback === 'function') window.cancelIdleCallback(libraryWarmIdleRef.current)
+        else window.clearTimeout(libraryWarmIdleRef.current)
+        libraryWarmIdleRef.current = null
+      }
+      void cancelLibraryCoverWarmup().catch(() => undefined)
+    }
+  }, [rememberLibraryPlaylist, scheduleLibraryWarmup])
+
   // Publish one batch of tag rows. Every guard below is load-bearing: a stale
   // pass must never write another scope, another descriptor set, or a list the
   // user removed, and a replaced list must not keep rows for vanished songs.
@@ -867,9 +1015,13 @@ export function useAudioPlayer() {
   const activatePlaylistScope = useCallback((playlist: AudioFolderPlaylist) => {
     const nextScope = playlistScope(playlist)
     // Store descriptors only; thumbnail object URLs belong to the active scope.
-    setSessionPlaylists((previous) => previous.some((item) => playlistScope(item) === nextScope)
-      ? previous.map((item) => playlistScope(item) === nextScope ? playlist : item)
-      : [...previous, playlist])
+    if (playlist.sourceKind !== 'folder' || selectedFolderPathsRef.current.some(
+      (path) => normalizeAudioSourcePath(path) === normalizeAudioSourcePath(playlist.sourcePath),
+    )) {
+      setSessionPlaylists((previous) => previous.some((item) => playlistScope(item) === nextScope)
+        ? previous.map((item) => playlistScope(item) === nextScope ? playlist : item)
+        : [...previous, playlist])
+    }
     sessionPlaylistDescriptorsRef.current.set(nextScope, playlist)
     // Start the read-only tag pass with the list itself, so the table is already
     // populated when the user looks at it. Cached rows are not cleared here.
@@ -2874,6 +3026,7 @@ export function useAudioPlayer() {
       || transportOperationInProgress()
       || timelineInteractionRef.current === 'seeking'
     ) return
+    const libraryEpoch = libraryEpochRef.current
     seekRequestIdRef.current += 1
     audioStateRequestGenerationRef.current += 1
     timelineInteractionRef.current = 'following'
@@ -2886,6 +3039,11 @@ export function useAudioPlayer() {
       if (!selectionIsCurrent(selectionRequestId)) return
       if (source.kind === 'playlist') {
         await loadFolderPlaylistSelection(source.playlist, autoplay, selectionRequestId)
+        // Loading the first track starts a nested selection request, so the
+        // original picker request ID is no longer current after activation.
+        if (playlistScopeRef.current === playlistScope(source.playlist)) {
+          registerLibraryPlaylist(source.playlist, libraryEpoch)
+        }
         endingTrackRef.current = null
         return
       }
@@ -2948,6 +3106,7 @@ export function useAudioPlayer() {
         || audioTrackRef.current?.id !== nextAudioTrack.id
       ) return
       activatePlaylistScope(nextFolderPlaylist)
+      registerLibraryPlaylist(nextFolderPlaylist, libraryEpoch)
       prefetchAdjacentPlaylistTracks(nextAudioTrack.id)
       endingTrackRef.current = null
     } catch (error) {
@@ -3250,6 +3409,12 @@ export function useAudioPlayer() {
     // after the first track finishes loading.
     playlistDurationTracks: folderPlaylist?.tracks ?? pendingDurationPlaylist?.tracks,
     sessionPlaylists,
+    libraryFolderPlaylists,
+    selectedFolderPaths,
+    libraryFolderErrors,
+    libraryStatus,
+    libraryRestorePending,
+    clearSelectedLibraryFolders,
     activePlaylistScope: folderPlaylist ? playlistScope(folderPlaylist) : null,
     selectSessionPlaylistTrack,
     playlistDurationScope: folderPlaylist

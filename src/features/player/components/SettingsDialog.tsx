@@ -34,6 +34,12 @@ type SettingsDialogProps = {
   debugToolsEnabled?: boolean
   debugToolsOpen?: boolean
   onDebugToolsOpenChange?: (open: boolean) => void
+  librarySettings?: {
+    selectedFolderCount: number
+    status: 'loading' | 'ready' | 'clearing' | 'error'
+    errors: Readonly<Record<string, string>>
+    onClear: () => Promise<void>
+  }
 }
 
 export function SettingsDialog({
@@ -42,6 +48,7 @@ export function SettingsDialog({
   debugToolsEnabled = false,
   debugToolsOpen = false,
   onDebugToolsOpenChange,
+  librarySettings,
 }: SettingsDialogProps) {
   const settingsCopy = appCopy.settings
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -125,6 +132,40 @@ export function SettingsDialog({
               </SelectContent>
             </Select>
           </Field>
+          {librarySettings ? (
+            <Field className="player-settings-row player-settings-library-row" orientation="horizontal">
+              <FieldContent>
+                <FieldLabel>{settingsCopy.librarySelection.title}</FieldLabel>
+                <FieldDescription>{settingsCopy.librarySelection.description}</FieldDescription>
+                <FieldDescription role="status">
+                  {librarySettings.status === 'loading'
+                    ? settingsCopy.librarySelection.loading
+                    : settingsCopy.librarySelection.count(librarySettings.selectedFolderCount)}
+                </FieldDescription>
+                {Object.keys(librarySettings.errors).length > 0 ? (
+                  <div className="player-settings-library-errors" role="alert">
+                    <span>{settingsCopy.librarySelection.errors}</span>
+                    <ul>
+                      {Object.entries(librarySettings.errors).map(([path, message]) => (
+                        <li key={path || 'registry'}>{path ? `${path}：` : ''}{message}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+              </FieldContent>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={librarySettings.status === 'loading' || librarySettings.status === 'clearing'
+                  || (librarySettings.selectedFolderCount === 0 && Object.keys(librarySettings.errors).length === 0)}
+                onClick={() => { void librarySettings.onClear() }}
+              >
+                {librarySettings.status === 'clearing'
+                  ? settingsCopy.librarySelection.clearing
+                  : settingsCopy.librarySelection.clear}
+              </Button>
+            </Field>
+          ) : null}
           {DevAudioSettingsField && debugToolsEnabled ? (
             <Suspense fallback={null}>
               <DevAudioSettingsField

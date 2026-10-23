@@ -1,12 +1,18 @@
 // Run with Vite on :5173 and SPMUSIC_PLAYWRIGHT pointing to a Playwright package.
 // The real shell, UI, player hook and command parser run against a deterministic
 // native transport. Covers aggregation and interaction across imported sources.
+// SPMUSIC_ALL_SONGS_PLAYBACK_ONLY=1 runs only cover ownership during playback.
+// Optional SPMUSIC_ALL_SONGS_PLAYBACK_BASELINE_REF compares a pre-fix Git ref;
+// the default always verifies the current source and remains valid after commit.
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
+import { execFileSync } from 'node:child_process'
+import ts from 'typescript'
 
 const require = createRequire(import.meta.url)
 const { chromium } = require(process.env.SPMUSIC_PLAYWRIGHT || 'playwright')
 const origin = process.env.SPMUSIC_TEST_ORIGIN || 'http://127.0.0.1:5173'
+const baselineRef = process.env.SPMUSIC_ALL_SONGS_PLAYBACK_BASELINE_REF
 const entry = await (await fetch(origin + '/src/main.tsx')).text()
 const dependency = name => {
   const match = entry.match(new RegExp('"(/node_modules/\\.vite/deps/' + name.replaceAll('.', '\\.') + '[^"\\n]*)"'))
@@ -103,12 +109,19 @@ ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(
 const html = (await (await fetch(origin)).text()).replace(/src="\/src\/[^\"]+"/, 'src="/__all_songs_fixture.js"')
 const browser = await chromium.launch({ headless: true, channel: 'msedge' })
 
-async function open(width, { countLibraryRenders = false } = {}) {
+async function open(width, { countLibraryRenders = false, baselineHook = false } = {}) {
   const page = await browser.newPage({ viewport: { width, height: 1000 }, reducedMotion: 'reduce' })
   page.setDefaultTimeout(15000)
   const errors = []
   page.on('pageerror', error => errors.push(error.message))
   await page.route('**/src/features/player/services/audioCommands.ts*', route => route.fulfill({ contentType: 'text/javascript', body: service }))
+  if (baselineHook) {
+    const source = execFileSync('git', ['show', baselineRef + ':src/features/player/hooks/useAllSongsWindow.ts'], { encoding: 'utf8' })
+    const body = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText
+      .replace(/import \{([^}]+)\} from 'react';?/, (_, names) => `import React from '${dependency('react.js')}';const {${names}}=React;`)
+      .replace(/from '(@\/[^']+)'/g, (_, path) => `from '/src/${path.slice(2)}.ts'`)
+    await page.route('**/src/features/player/hooks/useAllSongsWindow.ts*', route => route.fulfill({ contentType: 'text/javascript', body }))
+  }
   await page.route('**/src/features/player/components/PlayerSurface.tsx*', route => route.fulfill({ contentType: 'text/javascript', body: surface }))
   if (countLibraryRenders) await page.route('**/src/features/player/components/PlaylistLibraryPanel.tsx*', route => route.fulfill({ contentType: 'text/javascript', body: countedLibraryPanel }))
   await page.route('**/__all_songs_real_surface.js', route => route.fulfill({ contentType: 'text/javascript', body: realSurface }))
@@ -124,7 +137,84 @@ async function importChoice(page, choice) {
   await page.waitForFunction(() => !window.viewModel.playback.isAudioBusy && !window.viewModel.playback.isSelectionPending && !window.viewModel.playlist.library.isImportPending)
 }
 
+async function playbackCoverRegression(baselineHook = false, initialExternal = false) {
+  const { page, errors } = await open(1440, { baselineHook })
+  await importChoice(page, 'many')
+  if (initialExternal) {
+    await page.evaluate(() => {
+      const item=window.viewModel.playlist.library.allSongs.find(item=>item.trackId==='many-2')
+      window.viewModel.playlist.library.onPlay(item.scope)
+    })
+    await page.waitForFunction(() => window.viewModel.playback.track?.id === 'many-0' && !window.viewModel.playback.isSelectionPending && !window.viewModel.playback.isAudioBusy)
+    await page.evaluate(() => window.viewModel.queue.onTrackSelect('many-2'))
+    // Other routes expose descriptor-only allSongs rows; the queue reflects
+    // the actual player-owned visual prepared before entering Songs.
+    await page.waitForFunction(() => Boolean(window.viewModel.queue.tracks.find(item=>item.id==='many-2')?.coverThumbnail))
+  }
+  await page.evaluate(() => window.viewModel.playlist.library.onSelectCategory('songs'))
+  await page.getByRole('heading', { name: '全部歌曲' }).waitFor()
+  const key = '/audio/many/2.flac'
+  const card = page.locator(`[data-song-key="${key}"]`)
+  await card.scrollIntoViewIfNeeded()
+  await page.waitForFunction(key => {
+    const image = document.querySelector(`[data-song-key="${key}"] img.playlist-card-cover-image`)
+    return image?.complete && image.naturalWidth > 0
+  }, key)
+  if (initialExternal) await page.waitForFunction(key => {
+    const image=document.querySelector(`[data-song-key="${key}"] img.playlist-card-cover-image`)
+    const borrowed=window.viewModel.playlist.library.allSongs.find(item=>item.key===key)?.track.coverThumbnail?.src
+    return image?.complete && image.naturalWidth>0 && image.src!==borrowed
+  }, key)
+  const ownedUrl = await card.locator('.playlist-card-cover-image').getAttribute('src')
+  const countReads = () => page.evaluate(() => window.calls.filter(call => call.command === 'audio_load_playlist_cover_pixels'
+    && call.input.clientId?.startsWith('all-songs-') && call.input.filePath === '/covers/many-2.png').length)
+  const readsBefore = await countReads()
+  assert.equal(readsBefore, 1, 'target initially owns exactly one all-songs thumbnail')
+  await page.evaluate(key => {
+    window.playbackCoverFrames = []
+    window.playbackCoverSampling = true
+    const sample = () => {
+      const image = document.querySelector(`[data-song-key="${key}"] img.playlist-card-cover-image`)
+      window.playbackCoverFrames.push({ src:image?.src??null, ready:Boolean(image?.complete && image.naturalWidth>0),
+        external:Boolean(window.viewModel.playlist.library.allSongs.find(item=>item.key===key)?.track.coverThumbnail) })
+      if(window.playbackCoverSampling) requestAnimationFrame(sample)
+    }
+    requestAnimationFrame(sample)
+  }, key)
+  if (!initialExternal) await card.click()
+  await page.waitForFunction(() => window.viewModel.playback.track?.id === 'many-2')
+  await page.waitForFunction(key => Boolean(window.viewModel.playlist.library.allSongs.find(item=>item.key===key)?.track.coverThumbnail), key)
+  for (const id of ['many-3', 'many-4', 'many-5']) {
+    await page.evaluate(() => window.viewModel.playback.onNext())
+    await page.waitForFunction(id => window.viewModel.playback.track?.id === id, id)
+  }
+  // Wait on the actual resource lifecycle, including the existing 5 s grace.
+  // This is an observation deadline, not a product delay or an enlarged timeout.
+  await page.waitForFunction(key => !window.viewModel.playlist.library.allSongs.find(item=>item.key===key)?.track.coverThumbnail, key)
+  await page.waitForFunction(key => {
+    const image = document.querySelector(`[data-song-key="${key}"] img.playlist-card-cover-image`)
+    return image?.complete && image.naturalWidth > 0
+  }, key)
+  await page.evaluate(() => {window.playbackCoverSampling=false})
+  const readsAfter = await countReads()
+  const frames = await page.evaluate(() => window.playbackCoverFrames)
+  const result = { baselineHook, initialExternal, readsBefore, readsAfter, frames:frames.length, unreadyFrames:frames.filter(frame=>!frame.ready).length,
+    urlChanges:new Set(frames.map(frame=>frame.src)).size, externalSeen:frames.some(frame=>frame.external), retired:!frames.at(-1).external }
+  console.log('ALL_SONGS_PLAYBACK_COVER', JSON.stringify(result))
+  assert(result.externalSeen && result.retired, 'real playback thumbnail appears then retires')
+  if (baselineHook) {
+    assert(readsAfter > readsBefore, 'old hook loses cover ownership and rereads on playback retirement')
+  } else {
+    assert.equal(readsAfter, readsBefore, 'playback never rereads an already owned all-songs cover')
+    assert.equal(result.unreadyFrames, 0, 'every sampled card frame retains decoded artwork')
+    assert(frames.every(frame=>frame.src===ownedUrl), 'all-songs card keeps its own URL during player thumbnail takeover and retirement')
+  }
+  assert.deepEqual(errors, [])
+  await page.close()
+}
+
 try {
+  if (!process.env.SPMUSIC_ALL_SONGS_PLAYBACK_ONLY) {
   for (const width of [640, 1440]) {
     const { page, errors } = await open(width)
     await importChoice(page, 'a')
@@ -169,7 +259,10 @@ try {
     await page.getByRole('button', { name: '取消选择' }).click()
     await page.locator('.all-songs-list .playlist-card').filter({ hasText: 'Shared Song' }).click()
     await page.waitForFunction(() => window.viewModel.playback.track?.id === 'shared')
-    assert.equal(await page.evaluate(() => window.viewModel.playlist.library.activeScope?.includes('/audio/a')), true, 'song selection activates owning folder')
+    await page.waitForFunction(() => !window.viewModel.playback.isSelectionPending && !window.viewModel.playback.isAudioBusy)
+    assert.equal(await page.evaluate(() => window.viewModel.playlist.library.activeScope), null, 'all-songs playback retains its own source rather than activating a folder')
+    assert.deepEqual(await page.evaluate(() => window.viewModel.queue.tracks.map(track => track.id)), ['a-0', 'b-0', 'shared'], 'all-songs playback queue retains the complete displayed order across folders')
+    assert.equal(await page.evaluate(() => window.calls.filter(call => call.command === 'audio_load_and_play').at(-1)?.input.path), '/audio/common/shared.flac', 'selected song reaches the real native command boundary')
     const playlistDefault = width > 1024 ? '0' : '3'
     await page.evaluate(() => window.viewModel.playlist.library.onSelect(window.viewModel.playlist.library.items[0].scope))
     const detailGrid = page.locator('.playlist-grid:not(.all-songs-list)')
@@ -408,6 +501,10 @@ try {
     await page.close()
     console.log('all songs artwork: preloaded metadata and independently arriving covers passed')
   }
+  }
+  if (baselineRef) await playbackCoverRegression(true)
+  await playbackCoverRegression()
+  await playbackCoverRegression(false, true)
 } finally {
   await browser.close()
 }

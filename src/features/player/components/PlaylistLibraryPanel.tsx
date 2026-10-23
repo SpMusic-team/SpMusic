@@ -115,7 +115,7 @@ const AllSongsCard = memo(function AllSongsCard({ item, index, store, current, c
   const hasFormat = Boolean((track.durationSeconds ?? 0) > 0 || track.fileExtension || (bitDepth != null && bitDepth >= 24))
   const contentShape = Number(Boolean(track.title)) | (Number(Boolean(track.artist)) << 1)
     | (Number(Boolean(track.artist || track.album)) << 2) | (Number(hasFormat) << 3)
-  return <PlaylistCard songKey={item.key} track={track} index={index} coverUrl={track.coverThumbnail ? undefined : coverUrl}
+  return <PlaylistCard songKey={item.key} track={track} index={index} coverUrl={coverUrl}
     current={current} unavailable={!item.available} canSelectUnavailable canActivate={canActivate}
     selectMode={selectMode} selected={selected} artworkVisible={artworkVisible}
     showExtendedMetadata={showExtendedMetadata} contentVisible contentRepresentative={false}
@@ -235,11 +235,12 @@ export function PlaylistLibraryPanel({ playlist, allSongsCoverStore, librarySide
   const coverStore = useAllSongsWindow(visibleSongs, panelRef, songsListRef,
     isSongs && songsLayout.showArtwork, library.allSongsMetadataStatus === 'loading', allSongsCoverStore)
   const songsByKey = useMemo(() => new Map(visibleSongs.map((item) => [item.key, item])), [visibleSongs])
-  const songActionsRef = useRef({ songsByKey, onPlaySong: library.onPlaySong })
-  useLayoutEffect(() => { songActionsRef.current = { songsByKey, onPlaySong: library.onPlaySong } }, [songsByKey, library.onPlaySong])
+  const songActionsRef = useRef({ songsByKey, visibleSongs, onPlaySong: library.onPlaySong })
+  useLayoutEffect(() => { songActionsRef.current = { songsByKey, visibleSongs, onPlaySong: library.onPlaySong } }, [songsByKey, visibleSongs, library.onPlaySong])
   const handleSongActivate = useCallback((key: string) => {
     const item = songActionsRef.current.songsByKey.get(key)
-    if (item) songActionsRef.current.onPlaySong?.(item.scope, item.trackId)
+    if (item) songActionsRef.current.onPlaySong?.(item.scope, item.trackId,
+      songActionsRef.current.visibleSongs.map(({ scope, trackId }) => ({ scope, trackId })))
   }, [])
   const handleSongToggleSelect = useCallback((key: string) => {
     setSelected((previous) => {
@@ -448,7 +449,7 @@ export function PlaylistLibraryPanel({ playlist, allSongsCoverStore, librarySide
         data-content-window="full" data-cover-motion={appearanceMotion.disabled ? 'off' : undefined}
         style={{ ...songsLayout.style, touchAction: 'pan-y' }}>
         {visibleSongs.map((item, index) => <AllSongsCard key={item.key} item={item} index={index} store={coverStore}
-            current={item.scope === library.activeScope && item.trackId === playlist.currentTrackId}
+            current={item.trackId === playlist.currentTrackId}
             canActivate={!playlist.isOpenAudioDisabled}
             selectMode={selectMode} selected={selected.has(item.key)}
             artworkVisible={songsLayout.showArtwork} showExtendedMetadata={songsLayout.flow !== 'tile'}

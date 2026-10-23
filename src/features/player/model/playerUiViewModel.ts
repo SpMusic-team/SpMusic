@@ -3,6 +3,7 @@ import type { RepeatMode, ShuffleMode } from '@/features/player/model/playbackMo
 import type { PlaylistDurationStatus } from '@/features/player/model/playlistDuration'
 import type { Track, TrackArtwork, TrackArtworkPrefetchCandidate, TrackFeedback, TrackSummary } from '@/features/player/model/playerTypes'
 import type { PlayerVisualTimelineClock } from '@/features/player/model/visualTimelineClock'
+import type { PlaybackQueueEntry } from '@/features/player/model/playbackQueue'
 import type { AudioOutputInfo, AudioTransportTarget, AudioTransportTransition } from '@/features/player/services/audioCommands'
 
 export type PlayerContentState = 'empty' | 'loading' | 'track' | 'error'
@@ -161,7 +162,7 @@ export type PlaylistLibraryViewModel = {
   onOpen: () => void
   onSelect: (scope: string) => void
   onPlay: (scope: string) => void
-  onPlaySong?: (scope: string, trackId: string) => void
+  onPlaySong?: (scope: string, trackId: string, orderedSongs?: readonly PlaybackQueueEntry[]) => void
   onSelectFolders?: () => void
   onImportPlaylist?: () => void
   isImportPending?: boolean
@@ -193,7 +194,7 @@ export type PlayerPlaylistViewModel = {
   totalDurationDetail?: string
   shuffleMode: ShuffleMode
   onShuffleCycle: () => void
-  onTrackSelect?: (trackId: string) => void
+  onTrackSelect?: (trackId: string, orderedTrackIds?: readonly string[]) => void
   onVisibleTrackIdsChange?: (trackIds: readonly string[], keepPersistentArtwork?: boolean, showArtwork?: boolean, demand?: PlaylistArtworkDemand) => void
 }
 

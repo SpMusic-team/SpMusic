@@ -1,4 +1,5 @@
 import type { AudioFolderPlaylist } from '@/features/player/services/audioCommands'
+import { isPlaybackQueueOrigin, type PlaybackQueuePlaylist } from './playbackQueue.ts'
 
 const STORAGE_KEY = 'spmusic.player.session.v1'
 
@@ -6,7 +7,7 @@ export type SavedPlaybackSession = {
   version: 1
   sourcePath: string
   playlist: Pick<AudioFolderPlaylist, 'sourceKind' | 'sourcePath'> & {
-    customPlaylist?: AudioFolderPlaylist
+    customPlaylist?: AudioFolderPlaylist | PlaybackQueuePlaylist
     folderMode?: 'library' | 'file'
   }
   positionMs: number
@@ -36,6 +37,9 @@ export function readPlaybackSession(): SavedPlaybackSession | null {
         || !Array.isArray(custom.tracks) || custom.tracks.some((track) => !track
           || typeof track.id !== 'string' || typeof track.sourcePath !== 'string'
           || typeof track.fileName !== 'string' || typeof track.available !== 'boolean')) return null
+      if ('playbackQueue' in custom && (!isPlaybackQueueOrigin(custom.playbackQueue)
+        || !custom.sourcePath.startsWith('queue:'))) return null
+      if (custom.sourcePath.startsWith('queue:') && !('playbackQueue' in custom)) return null
     }
     if (playlist.folderMode !== undefined && (playlist.sourceKind !== 'folder'
       || !['library', 'file'].includes(playlist.folderMode))) return null

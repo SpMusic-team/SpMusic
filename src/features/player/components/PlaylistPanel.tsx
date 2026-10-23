@@ -41,7 +41,7 @@ type PlaylistPanelProps = {
   onShuffleCycle: () => void
   isOpenAudioDisabled?: boolean
   onOpenAudio?: () => void
-  onTrackSelect?: (trackId: string) => void
+  onTrackSelect?: (trackId: string, orderedTrackIds?: readonly string[]) => void
   onVisibleTrackIdsChange?: (trackIds: readonly string[], keepPersistentArtwork?: boolean, showArtwork?: boolean, demand?: PlaylistArtworkDemand) => void
   onEntrySettled?: () => void
   playback: PlayerPlaybackViewModel
@@ -397,8 +397,8 @@ export function PlaylistPanel({
   // must not revoke its covers; playlist replacement/player disposal do that.
 
   const handleActivate = useCallback((trackId: string) => {
-    onTrackSelect?.(trackId)
-  }, [onTrackSelect])
+    onTrackSelect?.(trackId, filteredTracks.map((track) => track.id))
+  }, [onTrackSelect, filteredTracks])
 
   const handleToggleSelect = useCallback((trackId: string) => {
     setSelectedIds((previous) => {
@@ -430,10 +430,10 @@ export function PlaylistPanel({
   })
 
   const handlePlay = useCallback(() => {
-    const target = tracks.find((track) => !unavailable.has(track.id))?.id
+    const target = filteredTracks.find((track) => !unavailable.has(track.id))?.id
     if (!target) return
-    onTrackSelect?.(target)
-  }, [onTrackSelect, tracks, unavailable])
+    onTrackSelect?.(target, filteredTracks.map((track) => track.id))
+  }, [onTrackSelect, filteredTracks, unavailable])
 
   useLayoutEffect(() => {
     let cancelled = false
@@ -730,7 +730,7 @@ export function PlaylistPanel({
     }
   }, [filteredTrackIdsKey, firstFilteredTrackId, layout.level, layout.showArtwork, metadataStatus, onVisibleTrackIdsChange, artworkWindowRevision, clearArtworkWindow])
 
-  const playableTrackId = tracks.find((track) => !unavailable.has(track.id))?.id
+  const playableTrackId = filteredTracks.find((track) => !unavailable.has(track.id))?.id
 
   const handleShuffle = useCallback(() => {
     const nextMode = nextShuffleMode[shuffleMode]

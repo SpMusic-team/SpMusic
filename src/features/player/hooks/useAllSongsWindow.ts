@@ -6,7 +6,7 @@ import type { AllSongsItem } from '@/features/player/model/playerUiViewModel'
 import { beginAudioPlaylistCoverWindow, probeAudioPlaylistCover } from '@/features/player/services/audioCommands'
 import { schedulePlaylistCoverPixels } from '@/features/player/services/playlistCoverScheduler'
 
-type WindowRow = Readonly<{ trackId: string; sourcePath: string; coverUrl?: string }>
+type WindowRow = Readonly<{ trackId: string; sourcePath: string; coverUrl?: string; transientFailure?: boolean }>
 export type AllSongsCoverStore = {
   cache: Map<string, WindowRow>
   listeners: Map<string, Set<() => void>>
@@ -17,7 +17,6 @@ type WindowRuntime = {
   controller: AbortController
   desired: Set<string>
   cache: AllSongsCoverStore['cache']
-  coverDone: Set<string>
   coverQueued: Set<string>
   coverActive: number
   pump: () => void
@@ -64,13 +63,32 @@ export function useAllSongsWindow(items: readonly AllSongsItem[], panelRef: RefO
 
   useEffect(() => {
     if (!enabled) return
+    // Retry failed reads on the next visit, while genuine missing artwork and
+    // prepared covers remain warm across visits.
+    for (const [key, row] of store.cache) {
+      if (row.transientFailure) store.cache.delete(key)
+    }
     const runtime: WindowRuntime = {
-      mounted: true, controller: new AbortController(), desired: new Set(), cache: store.cache, coverDone: new Set(store.cache.keys()),
+      mounted: true, controller: new AbortController(), desired: new Set(), cache: store.cache,
       coverQueued: new Set(), coverActive: 0, pump: () => {},
     }
     runtimeRef.current = runtime
     const clientId = `all-songs-${globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)}`
     const coverReady = beginAudioPlaylistCoverWindow(clientId).catch(() => null)
+
+    const trimCache = () => {
+      // The viewport plus observer overscan can exceed the warm-cache budget.
+      // Demanded rows own their URLs until they leave that window; evicting one
+      // here would make the pump immediately load it again and evict another.
+      const limit = Math.max(CACHE_LIMIT, runtime.desired.size)
+      for (const [key, evicted] of runtime.cache) {
+        if (runtime.cache.size <= limit) break
+        if (runtime.desired.has(key)) continue
+        if (evicted?.coverUrl) URL.revokeObjectURL(evicted.coverUrl)
+        runtime.cache.delete(key)
+        store.notify(key)
+      }
+    }
 
     const publish = (key: string, row: WindowRow) => {
       if (!runtime.mounted || !runtime.desired.has(key)) return false
@@ -78,28 +96,22 @@ export function useAllSongsWindow(items: readonly AllSongsItem[], panelRef: RefO
       if (previous?.coverUrl && previous.coverUrl !== row.coverUrl) URL.revokeObjectURL(previous.coverUrl)
       runtime.cache.delete(key)
       runtime.cache.set(key, row)
-      while (runtime.cache.size > CACHE_LIMIT) {
-        const oldest = runtime.cache.keys().next().value
-        if (!oldest) break
-        const evicted = runtime.cache.get(oldest)
-        if (evicted?.coverUrl) URL.revokeObjectURL(evicted.coverUrl)
-        runtime.cache.delete(oldest)
-        runtime.coverDone.delete(oldest)
-        store.notify(oldest)
-      }
+      trimCache()
       store.notify(key)
       return true
     }
 
     const pump = () => {
       if (!runtime.mounted) return
+      // Demand can shrink without a publication (all remaining rows cached).
+      trimCache()
       // Cover work is independent of the whole-library summary/duration pass.
       // Keep a small first-screen demand alive while that pass hides the list.
       while (runtime.coverActive < WINDOW_CONCURRENCY) {
         let item: AllSongsItem | undefined
         for (const key of runtime.desired) {
           const candidate = itemsByKeyRef.current.get(key)
-          if (candidate?.available && !candidate.track.coverThumbnail && !runtime.coverDone.has(key) && !runtime.coverQueued.has(key)) {
+          if (candidate?.available && !runtime.cache.has(key) && !runtime.coverQueued.has(key)) {
             item = candidate
             break
           }
@@ -113,12 +125,11 @@ export function useAllSongsWindow(items: readonly AllSongsItem[], panelRef: RefO
             const current = itemsByKeyRef.current.get(item.key)
             return runtime.mounted && runtime.desired.has(item.key)
               && current?.trackId === item.trackId && current.sourcePath === item.sourcePath
-              && !current.track.coverThumbnail
           }
           try {
             const coverGeneration = await coverReady
             if (coverGeneration == null) {
-              runtime.coverDone.add(item.key)
+              if (itemIsCurrent()) publish(item.key, { trackId: item.trackId, sourcePath: item.sourcePath, transientFailure: true })
               return
             }
             if (!itemIsCurrent()) return
@@ -139,12 +150,13 @@ export function useAllSongsWindow(items: readonly AllSongsItem[], panelRef: RefO
               if (!itemIsCurrent()) return
             }
             if (itemIsCurrent() && publish(item.key, { trackId: item.trackId, sourcePath: item.sourcePath, coverUrl })) {
-              runtime.coverDone.add(item.key)
               coverUrl = undefined
             }
           } catch {
             // Missing artwork leaves the prepared text and duration untouched.
-            if (runtime.mounted && runtime.desired.has(item.key)) runtime.coverDone.add(item.key)
+            // Terminal failures share the bounded cache with successful and
+            // missing artwork, and cannot suppress a replacement descriptor.
+            if (itemIsCurrent()) publish(item.key, { trackId: item.trackId, sourcePath: item.sourcePath, transientFailure: true })
           } finally {
             if (coverUrl) URL.revokeObjectURL(coverUrl)
             runtime.coverQueued.delete(item.key)
@@ -169,10 +181,11 @@ export function useAllSongsWindow(items: readonly AllSongsItem[], panelRef: RefO
     for (const item of items) {
       const cached = store.cache.get(item.key)
       if (!cached) continue
-      if (!item.track.coverThumbnail && cached.trackId === item.trackId && cached.sourcePath === item.sourcePath) continue
+      // Player thumbnails have a separate, shorter-lived owner. Their arrival
+      // must not discard this window's cover when the descriptor is unchanged.
+      if (cached.trackId === item.trackId && cached.sourcePath === item.sourcePath) continue
       if (cached.coverUrl) URL.revokeObjectURL(cached.coverUrl)
       store.cache.delete(item.key)
-      runtimeRef.current?.coverDone.delete(item.key)
       store.notify(item.key)
     }
     runtimeRef.current?.pump()

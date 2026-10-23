@@ -259,7 +259,7 @@ try{
   await check('hover tooltip cleanup, hidden focus and motion-off movement',async page=>{
     await expectOffset(page,0)
     await page.locator('.playlist-panel').focus()
-    await page.locator('.playlist-playback-nav-button').first().hover()
+    await page.getByRole('button',{name:'打开播放界面',exact:true}).hover()
     await page.locator('[data-slot="tooltip-content"]').waitFor()
     await page.keyboard.press('PageDown')
     const travel=(await snapshot(page)).travel

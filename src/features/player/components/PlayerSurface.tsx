@@ -2751,6 +2751,7 @@ export function PlayerSurface({
                 onDebugToolsOpenChange={devAudioTools?.onOpenChange}
                 librarySettings={librarySettings}
                 playlistOpen={playlist.isOpen}
+                libraryOverview={playlist.library?.route?.view === 'overview'}
                 compactPlaylist={compactPlaylist && playlist.library?.route?.view !== 'overview'}
                 librarySidebarOpen={librarySidebarOpen}
                 onOpenLibrarySidebar={() => setCompactSidebarOpen(true)}
@@ -2944,6 +2945,7 @@ export function PlayerSurface({
             {playlist.isOpen && playlist.library?.route?.view === 'overview' ? <MediaLibraryPanel key="media-library-overview" playlist={playlist} onOpenPlayer={() => requestPlaylistOpenChange(false)} /> : null}
             {playlist.isOpen && playlist.library?.isOpen && playlist.library.route?.view !== 'overview' ? (
               <PlaylistLibraryPanel
+                controllerMode={controllerMode}
                 allSongsCoverStore={allSongsCoverStore}
                 key={playlist.library?.route?.view === 'category' ? playlist.library.route.categoryId : 'playlist-management'}
                 playlist={playlist}

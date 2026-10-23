@@ -5,6 +5,7 @@ mod library_cover_warmup;
 mod library_folders;
 mod library_playlists;
 mod webview_memory;
+mod window_state;
 
 use std::sync::Once;
 
@@ -601,8 +602,34 @@ pub fn run() {
                 .build(),
         )
         .on_window_event(|window, event| {
-            if window.label() == "main" && matches!(event, tauri::WindowEvent::Focused(false)) {
-                global_shortcuts::restore_after_focus_loss(window.app_handle());
+            if window.label() == "main" {
+                match event {
+                    tauri::WindowEvent::Focused(false) => {
+                        global_shortcuts::restore_after_focus_loss(window.app_handle());
+                    }
+                    tauri::WindowEvent::Moved(_)
+                    | tauri::WindowEvent::Resized(_)
+                    | tauri::WindowEvent::ScaleFactorChanged { .. } => {
+                        let app_handle = window.app_handle();
+                        if let (Some(tracker), Some(webview)) = (
+                            app_handle.try_state::<window_state::WindowStateTracker>(),
+                            app_handle.get_webview_window("main"),
+                        ) {
+                            tracker.observe(&webview);
+                        }
+                    }
+                    tauri::WindowEvent::CloseRequested { .. } => {
+                        let app_handle = window.app_handle();
+                        if let (Some(paths), Some(tracker), Some(webview)) = (
+                            app_handle.try_state::<AppPaths>(),
+                            app_handle.try_state::<window_state::WindowStateTracker>(),
+                            app_handle.get_webview_window("main"),
+                        ) {
+                            tracker.save(&webview, &paths.config_dir);
+                        }
+                    }
+                    _ => {}
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -654,6 +681,31 @@ pub fn run() {
             global_shortcuts::GlobalShortcuts::initialize(app.handle(), &app_paths.config_dir);
             app.manage(LibraryFolderRegistry::new(&app_paths.data_dir));
             app.manage(LibraryPlaylistRegistry::new(&app_paths.data_dir));
+            let (window_state_tracker, main_window, restore_fullscreen) =
+                if let Some(window) = app.get_webview_window("main") {
+                    // The window is configured hidden, so its saved geometry is
+                    // applied before the frontend's first show() call.
+                    let restore_fullscreen = window_state::restore(&window, &app_paths.config_dir);
+                    (
+                        window_state::WindowStateTracker::from_window(&window),
+                        Some(window),
+                        restore_fullscreen,
+                    )
+                } else {
+                    (window_state::WindowStateTracker::default(), None, false)
+                };
+            app.manage(window_state_tracker);
+            if restore_fullscreen {
+                if let Some(window) = main_window {
+                    if let Err(error) = window.set_fullscreen(true) {
+                        tracing::warn!(
+                            operation = "window_state.restore",
+                            error = %error,
+                            "could not restore fullscreen state",
+                        );
+                    }
+                }
+            }
             app.manage(app_paths);
             app.manage(AudioController::new(app.handle().clone(), audio_cache_dir));
 

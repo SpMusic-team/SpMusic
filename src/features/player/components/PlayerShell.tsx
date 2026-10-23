@@ -53,7 +53,12 @@ export function PlayerShell() {
   }, [artworkDetailPath, setLibraryVisibleTrackIds])
   const ensurePlaylistSummaries = player.ensurePlaylistSummaries
   const displayScope = isBrowsingActive ? player.activePlaylistScope : browsedScope
-  const selectLibraryCategory = (categoryId: MediaLibraryCategoryId) => { setPlaylistArtworkSettled(false); setIsPlaylistOpen(true); setLibraryRoute({ view: 'category', categoryId }) }
+  const selectLibraryCategory = (categoryId: MediaLibraryCategoryId) => {
+    setPlaylistArtworkSettled(false)
+    setIsPlaylistOpen(true)
+    setLibraryRoute({ view: 'category', categoryId })
+    if (categoryId === 'songs') setPlaylistEntryPosition((previous) => ({ requestId: previous.requestId + 1, target: 'top' }))
+  }
   const openLibrary = () => selectLibraryCategory('playlists')
   const openLibraryOverview = () => { setPlaylistArtworkSettled(false); setIsPlaylistOpen(true); setLibraryRoute({ view: 'overview' }) }
   const browsePlaylist = (scope: string) => {
@@ -79,6 +84,7 @@ export function PlayerShell() {
     setPlaylistArtworkSettled(false)
     setIsPlaylistOpen(open)
     if (open && !isPlaylistOpen && player.track) {
+      setPlaylistEntryPosition((previous) => ({ requestId: previous.requestId + 1, target: 'current-track' }))
       if (player.playbackQueueKind === 'all-songs') {
         setLibraryRoute({ view: 'category', categoryId: 'songs' })
         setBrowsedScope(null)
@@ -86,7 +92,6 @@ export function PlayerShell() {
         setLibraryRoute({ view: 'tracks' })
         setBrowsedScope(librarySources.some((source) => playlistScope(source) === player.playbackSourceScope)
           ? player.playbackSourceScope : null)
-        setPlaylistEntryPosition((previous) => ({ requestId: previous.requestId + 1, target: 'current-track' }))
       }
     }
   }, [isPlaylistOpen, player.track, player.playbackQueueKind, player.playbackSourceScope, librarySources])

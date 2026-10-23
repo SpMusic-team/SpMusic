@@ -2,6 +2,7 @@
 // The real shell, UI, player hook and command parser run against a deterministic
 // native transport. Covers aggregation and interaction across imported sources.
 // SPMUSIC_ALL_SONGS_PLAYBACK_ONLY=1 runs only cover ownership during playback.
+// SPMUSIC_ALL_SONGS_NAVIGATION_ONLY=1 runs only overview/category motion parity.
 // Optional SPMUSIC_ALL_SONGS_PLAYBACK_BASELINE_REF compares a pre-fix Git ref;
 // the default always verifies the current source and remains valid after commit.
 import assert from 'node:assert/strict'
@@ -109,8 +110,8 @@ ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(
 const html = (await (await fetch(origin)).text()).replace(/src="\/src\/[^\"]+"/, 'src="/__all_songs_fixture.js"')
 const browser = await chromium.launch({ headless: true, channel: 'msedge' })
 
-async function open(width, { countLibraryRenders = false, baselineHook = false } = {}) {
-  const page = await browser.newPage({ viewport: { width, height: 1000 }, reducedMotion: 'reduce' })
+async function open(width, { countLibraryRenders = false, baselineHook = false, reducedMotion = 'reduce' } = {}) {
+  const page = await browser.newPage({ viewport: { width, height: 1000 }, reducedMotion })
   page.setDefaultTimeout(15000)
   const errors = []
   page.on('pageerror', error => errors.push(error.message))
@@ -125,7 +126,7 @@ async function open(width, { countLibraryRenders = false, baselineHook = false }
   await page.route('**/src/features/player/components/PlayerSurface.tsx*', route => route.fulfill({ contentType: 'text/javascript', body: surface }))
   if (countLibraryRenders) await page.route('**/src/features/player/components/PlaylistLibraryPanel.tsx*', route => route.fulfill({ contentType: 'text/javascript', body: countedLibraryPanel }))
   await page.route('**/__all_songs_real_surface.js', route => route.fulfill({ contentType: 'text/javascript', body: realSurface }))
-  await page.route('**/__all_songs_fixture.js', route => route.fulfill({ contentType: 'text/javascript', body: fixture }))
+  await page.route('**/__all_songs_fixture.js', route => route.fulfill({ contentType: 'text/javascript', body: process.env.SPMUSIC_NAVIGATION_PERF ? fixture.replace('length:50', 'length:1000') : fixture }))
   await page.route('**/__all_songs_test?*', route => route.fulfill({ contentType: 'text/html', body: html }))
   await page.goto(origin + '/__all_songs_test?width=' + width)
   await page.waitForFunction(() => Boolean(window.viewModel))
@@ -135,6 +136,58 @@ async function open(width, { countLibraryRenders = false, baselineHook = false }
 async function importChoice(page, choice) {
   await page.evaluate(choice => { window.choice = choice; if(choice==='c'||window.playlistImport)window.viewModel.playlist.library.onImportPlaylist();else window.viewModel.playlist.library.onSelectFolders() }, choice)
   await page.waitForFunction(() => !window.viewModel.playback.isAudioBusy && !window.viewModel.playback.isSelectionPending && !window.viewModel.playlist.library.isImportPending)
+}
+
+async function overviewCategoryContentMotion(page, categoryId, selector) {
+  await page.locator(`.media-library-category[data-category-id="${categoryId}"]`).click()
+  const entering = await page.locator(selector).evaluate(async node => {
+    await new Promise(requestAnimationFrame)
+    const style = getComputedStyle(node)
+    const matrix = new DOMMatrixReadOnly(style.transform)
+    return { opacity: Number(style.opacity), transform: style.transform, x: matrix.m41, scale: matrix.a }
+  })
+  await page.waitForFunction(selector => {
+    const node = document.querySelector(selector)
+    return node && getComputedStyle(node).opacity === '1' && getComputedStyle(node).transform === 'none'
+  }, selector)
+  await page.getByRole('button', { name: '返回媒体库', exact: true }).click()
+  const exiting = await page.locator(selector).evaluate(async node => {
+    await new Promise(requestAnimationFrame)
+    const style = getComputedStyle(node)
+    const matrix = new DOMMatrixReadOnly(style.transform)
+    return { opacity: Number(style.opacity), transform: style.transform, x: matrix.m41, scale: matrix.a }
+  })
+  await page.waitForFunction(() => document.querySelector('.media-library-overview') && !document.querySelector('.playlist-management'))
+  return { entering, exiting }
+}
+
+async function navigationMotionRegression() {
+  const { page, errors } = await open(1280, { reducedMotion: 'no-preference' })
+  await importChoice(page, 'many')
+  await importChoice(page, 'c')
+  await page.evaluate(() => window.viewModel.playlist.library.onOpenOverview())
+  await page.locator('.media-library-overview').waitFor()
+  const playlists = await overviewCategoryContentMotion(page, 'playlists', '.playlist-management-card')
+  const songs = await overviewCategoryContentMotion(page, 'songs', '.all-songs-list')
+  const isMoving = frame => frame.opacity < .99 && frame.transform !== 'none' && frame.x > 0 && frame.scale < 1
+  assert(isMoving(playlists.entering), 'playlist content establishes the overview entry baseline')
+  assert(isMoving(playlists.exiting), 'playlist content establishes the overview exit baseline')
+  assert(isMoving(songs.entering), 'all-songs content enters with the same directional fade/scale contract as playlists')
+  assert(isMoving(songs.exiting), 'all-songs content exits with the same directional fade/scale contract as playlists')
+  await page.evaluate(async () => {
+    for (let index = 0; index < 10; index++) {
+      if (index % 2 === 0) window.viewModel.playlist.library.onSelectCategory('songs')
+      else window.viewModel.playlist.library.onOpenOverview()
+      await new Promise(requestAnimationFrame)
+    }
+  })
+  await page.waitForFunction(() => document.querySelectorAll('.media-library-overview').length === 1
+    && !document.querySelector('.playlist-management'))
+  assert.equal(await page.locator('.playlist-management').count(), 0, 'rapid all-songs reversals retire every outgoing page')
+  assert.equal(await page.locator('.media-library-overview:not([inert])').count(), 1, 'rapid all-songs reversals leave one interactive overview')
+  assert.deepEqual(errors, [], 'overview/category motion regression has no browser errors')
+  await page.close()
+  console.log('all songs navigation: content entry and exit match playlist motion contract')
 }
 
 async function playbackCoverRegression(baselineHook = false, initialExternal = false) {
@@ -213,8 +266,61 @@ async function playbackCoverRegression(baselineHook = false, initialExternal = f
   await page.close()
 }
 
+async function navigationPerformance() {
+  for (const navigationBaseline of [false]) {
+    const { page, errors } = await open(1280, { reducedMotion: 'no-preference', navigationBaseline })
+    await importChoice(page, 'many')
+    await page.waitForFunction(() => window.viewModel.playlist.library.allSongsMetadataStatus !== 'loading')
+    await page.evaluate(() => window.viewModel.playlist.library.onOpenOverview())
+    await page.locator('.media-library-overview').waitFor()
+    const cdp = await page.context().newCDPSession(page)
+    await cdp.send('Performance.enable')
+    const before = await cdp.send('Performance.getMetrics')
+    await page.evaluate(() => {
+      window.navFrames = []; window.navSampling = true
+      let previous = performance.now()
+      function sample(now) { window.navFrames.push(now - previous); previous = now; if (window.navSampling) requestAnimationFrame(sample) }
+      requestAnimationFrame(sample)
+    })
+    for (let i = 0; i < 3; i++) {
+      await page.evaluate(() => window.viewModel.playlist.library.onSelectCategory('songs'))
+      await page.locator('.all-songs-list .playlist-card').first().waitFor()
+      await page.waitForTimeout(450)
+      await page.evaluate(() => window.viewModel.playlist.library.onOpenOverview())
+      await page.waitForFunction(() => !document.querySelector('.playlist-management'))
+    }
+    const after = await cdp.send('Performance.getMetrics')
+    const frames = await page.evaluate(() => { window.navSampling = false; return window.navFrames })
+    const sorted = frames.slice().sort((a,b) => a-b)
+    const delta = name => (after.metrics.find(x=>x.name===name).value - before.metrics.find(x=>x.name===name).value)*1000
+    console.log(JSON.stringify({ navigationBaseline, songs: 1000, frames: frames.length, p95: sorted[Math.floor(sorted.length*.95)], max: Math.max(...frames), over33: frames.filter(x=>x>33).length, taskMs: delta('TaskDuration'), layoutMs: delta('LayoutDuration'), styleMs: delta('RecalcStyleDuration') }))
+    await page.evaluate(() => window.viewModel.playlist.library.onSelectCategory('songs'))
+    await page.locator('.all-songs-list .playlist-card').first().waitFor()
+    assert(await page.locator('.all-songs-list .playlist-card').count() < 40, '1000 songs mount only a bounded render window')
+    await page.waitForTimeout(400)
+    const nextKey = await page.locator('.all-songs-list').evaluate(list => {
+      const row = list.lastElementChild
+      row.focus({ preventScroll: true })
+      const index = Number(row.dataset.songKey.match(/\/(\d+)\.flac$/)[1])
+      return index + 1
+    })
+    await page.keyboard.press('Tab')
+    await page.waitForFunction(index => document.activeElement?.dataset.songKey?.endsWith('/' + index + '.flac'), nextKey)
+    await page.getByRole('button', { name: '查找 Z 开头的歌曲' }).click()
+    await page.waitForFunction(() => [...document.querySelectorAll('.all-songs-list .playlist-card-title')].some(node => node.textContent === 'Z Song 25'))
+    await page.getByRole('button', { name: '返回列表顶部' }).click()
+    await page.waitForFunction(() => document.querySelector('.playlist-management-content').scrollTop === 0)
+    console.log('1000 songs: bounded DOM, keyboard window boundary, distant quick index and top passed')
+    assert.deepEqual(errors, [])
+    await page.close()
+  }
+}
+
 try {
+  if (process.env.SPMUSIC_NAVIGATION_PERF) { await navigationPerformance(); process.exit(0) }
   if (!process.env.SPMUSIC_ALL_SONGS_PLAYBACK_ONLY) {
+  await navigationMotionRegression()
+  if (!process.env.SPMUSIC_ALL_SONGS_NAVIGATION_ONLY) {
   for (const width of [640, 1440]) {
     const { page, errors } = await open(width)
     await importChoice(page, 'a')
@@ -502,9 +608,12 @@ try {
     console.log('all songs artwork: preloaded metadata and independently arriving covers passed')
   }
   }
-  if (baselineRef) await playbackCoverRegression(true)
-  await playbackCoverRegression()
-  await playbackCoverRegression(false, true)
+  }
+  if (!process.env.SPMUSIC_ALL_SONGS_NAVIGATION_ONLY) {
+    if (baselineRef) await playbackCoverRegression(true)
+    await playbackCoverRegression()
+    await playbackCoverRegression(false, true)
+  }
 } finally {
   await browser.close()
 }

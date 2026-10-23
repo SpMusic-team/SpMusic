@@ -71,7 +71,9 @@ export function ResponsivePlayerLayout({ children, nativeWindowState, windowBar 
         style={responsiveStyle}
       >
         {windowBar}
-        {children}
+        <div className="responsive-player-canvas">
+          {children}
+        </div>
       </div>
     </MotionConfig>
   )

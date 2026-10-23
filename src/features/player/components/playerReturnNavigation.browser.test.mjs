@@ -113,6 +113,7 @@ const routeSnapshot = page => page.evaluate(() => ({
   current: window.viewModel.playback.track?.id,
   queue: window.viewModel.queue.tracks.map(track => track.id),
   entry: window.viewModel.playlist.entryPosition.requestId,
+  entryTarget: window.viewModel.playlist.entryPosition.target,
 }))
 
 async function category(page, id) {
@@ -136,7 +137,8 @@ async function roundTrip(page, label) {
   assert.equal(after.current, before.current, label + ': navigation does not change the song')
   assert.deepEqual(after.queue, before.queue, label + ': navigation does not replace the queue')
   assert.equal(await page.evaluate(() => window.calls.filter(call => ['audio_load_file', 'audio_load_and_play'].includes(call.command)).length), loadCount, label + ': no audio reload')
-  assert.equal(after.entry, before.entry + Number(expectedRoute.view === 'tracks'), label + ': only source track lists request current-track positioning')
+  assert.equal(after.entry, before.entry + 1, label + ': every playback source return requests positioning once')
+  assert.equal(after.entryTarget, 'current-track', label + ': source return positions the current track')
   if (expectedRoute.view === 'tracks') await page.locator('.playlist-panel').waitFor({ state: 'visible' })
   else await page.locator('.playlist-management').waitFor({ state: 'visible' })
   report.push(label)

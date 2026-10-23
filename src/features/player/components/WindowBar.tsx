@@ -27,6 +27,7 @@ type WindowBarProps = {
     onClear: () => Promise<void>
   }
   playlistOpen?: boolean
+  libraryOverview?: boolean
   onTogglePlaylist?: () => void
   compactPlaylist?: boolean
   librarySidebarOpen?: boolean
@@ -47,6 +48,7 @@ export function WindowBar({
   onDebugToolsOpenChange,
   librarySettings,
   playlistOpen = false,
+  libraryOverview = false,
   onTogglePlaylist,
   compactPlaylist = false,
   librarySidebarOpen = false,
@@ -155,6 +157,8 @@ export function WindowBar({
             aria-haspopup="dialog"
             onClick={onOpenLibrarySidebar}
           />
+        ) : libraryOverview ? (
+          <IconButton icon={systemIcons.collapse} label="返回播放器" onClick={onTogglePlaylist} />
         ) : null : (
           <IconButton icon={systemIcons.collapse} label={appCopy.controls.playlistPage} onClick={onTogglePlaylist} />
         )}

@@ -19,12 +19,19 @@
   min-height: 0;
 }
 
+.responsive-player-canvas {
+  position: absolute;
+  inset: 0;
+  min-width: 0;
+  min-height: 0;
+}
+
 /* Tauri reports the web content viewport, which can be a few pixels smaller
    than the configured native minimum once the Windows frame is accounted for.
    In the resolver's bounded Compact fallback, lay out against the inverse-
    scaled virtual canvas and scale the complete composition back into the real
    viewport. */
-.responsive-player-layout[data-player-layout="compact"][data-player-layout-fallback="true"] {
+.responsive-player-layout[data-player-layout="compact"][data-player-layout-fallback="true"] .responsive-player-canvas {
   inset: auto;
   top: 0;
   left: 0;
@@ -1117,6 +1124,11 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
   max-height: 100%;
   align-self: center;
   justify-self: start;
+  transition: width var(--player-playback-transition-duration) var(--app-motion-easing);
+}
+
+.responsive-player-layout[data-player-layout="vertical"] .player-stage[data-playback-state="paused"] .cover-frame {
+  width: calc(var(--vertical-cover-size) - 30 * var(--player-layout-unit));
 }
 
 .responsive-player-layout[data-player-layout="vertical"] .track-card-deck {
@@ -1858,7 +1870,8 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
 
 .responsive-player-layout:is(
   [data-player-layout="vertical"],
-  [data-player-layout="quarter"]:not([data-player-short="true"])
+  [data-player-layout="quarter"]:not([data-player-short="true"]),
+  [data-player-layout="compact"]
 ) .progress-row {
   transition-property: font-size, line-height;
   transition-duration: var(--player-control-transition-duration);
@@ -2516,6 +2529,11 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
   align-self: center;
   justify-self: center;
   border-radius: 30px;
+  transition: width var(--player-playback-transition-duration) var(--app-motion-easing);
+}
+
+.responsive-player-layout[data-player-layout="compact"] .player-stage[data-playback-state="paused"] .cover-frame {
+  width: calc(var(--compact-cover-size) - 30px);
 }
 
 .responsive-player-layout[data-player-layout="compact"] .cover-column {
@@ -2717,6 +2735,45 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
   line-height: 20px;
 }
 
+.responsive-player-layout[data-player-layout="compact"] .playback-info-button {
+  interpolate-size: allow-keywords;
+  transition-property: width, height, border-radius, color;
+  transition-duration: var(--player-control-transition-duration);
+  transition-timing-function: var(--app-motion-easing);
+}
+
+.responsive-player-layout[data-player-layout="compact"] .playback-info-button-content {
+  transition: padding var(--player-control-transition-duration) var(--app-motion-easing);
+}
+
+.responsive-player-layout[data-player-layout="compact"] .playback-info-button-content > svg {
+  transition:
+    width var(--player-control-transition-duration) var(--app-motion-easing),
+    height var(--player-control-transition-duration) var(--app-motion-easing),
+    flex-basis var(--player-control-transition-duration) var(--app-motion-easing);
+}
+
+.responsive-player-layout[data-player-layout="compact"] .playback-info-button-text {
+  transition:
+    font-size var(--player-control-transition-duration) var(--app-motion-easing),
+    line-height var(--player-control-transition-duration) var(--app-motion-easing);
+}
+
+.responsive-player-layout[data-player-layout="compact"] .playback-info-button[data-playback-state="paused"] {
+  color: var(--player-blue-soft);
+}
+
+.responsive-player-layout[data-player-layout="compact"] .playback-info-button[data-playback-state="paused"] .playback-info-button-content > svg {
+  width: 14px;
+  height: 14px;
+  flex-basis: 14px;
+}
+
+.responsive-player-layout[data-player-layout="compact"] .playback-info-button[data-playback-state="paused"] .playback-info-button-text {
+  font-size: 12px;
+  line-height: 16px;
+}
+
 .responsive-player-layout[data-player-layout="compact"] .control-dock {
   position: relative;
   inset: auto;
@@ -2787,6 +2844,13 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
   display: flex;
   align-items: center;
   gap: 36px;
+  transition-property: gap;
+  transition-duration: var(--player-control-transition-duration);
+  transition-timing-function: var(--app-motion-easing);
+}
+
+.responsive-player-layout[data-player-layout="compact"] .control-primary[data-playback-state="paused"] .control-transport {
+  gap: 12px;
 }
 
 .responsive-player-layout[data-player-layout="compact"] .control-primary > .control-optional,
@@ -2820,6 +2884,9 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
   width: 64px;
   height: 64px;
   flex-basis: 64px;
+  transition-property: width, height, flex-basis;
+  transition-duration: var(--player-control-transition-duration);
+  transition-timing-function: var(--app-motion-easing);
 }
 
 .responsive-player-layout[data-player-layout="compact"] .control-primary[data-playback-state="paused"] .previous-button,
@@ -2833,6 +2900,9 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
   width: 76px;
   height: 76px;
   flex-basis: 76px;
+  transition-property: width, height, flex-basis;
+  transition-duration: var(--player-control-transition-duration);
+  transition-timing-function: var(--app-motion-easing);
 }
 
 .responsive-player-layout[data-player-layout="compact"] .control-primary[data-playback-state="paused"] .play-button {
@@ -2939,7 +3009,9 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
 @media (prefers-reduced-motion: reduce) {
   .responsive-player-layout[data-player-layout="full"] .cover-frame,
   .responsive-player-layout[data-player-layout="horizontal"] .cover-frame,
+  .responsive-player-layout[data-player-layout="vertical"] .cover-frame,
   .responsive-player-layout[data-player-layout="quarter"] .cover-frame,
+  .responsive-player-layout[data-player-layout="compact"] .cover-frame,
   .responsive-player-layout[data-player-layout="full"] .control-transport,
   .responsive-player-layout[data-player-layout="full"] .control-primary .previous-button,
   .responsive-player-layout[data-player-layout="full"] .control-primary .next-button,

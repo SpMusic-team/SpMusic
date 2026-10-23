@@ -3,8 +3,13 @@ import { memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMe
 import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from 'react'
 import { LibraryChromeTransitionContext } from '@/features/player/hooks/useLibraryChromeTransition'
 import { motion, useAnimationControls, useIsPresent } from 'motion/react'
-import { useLibraryDockBinding } from '@/features/player/hooks/useLibraryDockBinding'
+import { LibraryDockContext, useLibraryDockBinding } from '@/features/player/hooks/useLibraryDockBinding'
+import { usePlaylistControllerMotion } from '@/features/player/hooks/usePlaylistControllerMotion'
+import type { PlaylistControllerMode } from '@/features/player/model/playlistControllerMode'
+import { PlaylistActionButtons } from '@/features/player/components/PlaylistActionButtons'
 import { readLibraryLayoutRect } from '@/features/player/model/libraryNavigationGeometry'
+import { useAllSongsRenderWindow } from '@/features/player/hooks/useAllSongsRenderWindow'
+import { useAllSongsTileNavigation } from '@/features/player/hooks/useAllSongsTileNavigation'
 import { useCollectionLayout } from '@/features/player/hooks/useCollectionLayout'
 import { useAllSongsCoverUrl, useAllSongsWindow, type AllSongsCoverStore } from '@/features/player/hooks/useAllSongsWindow'
 import { compareByQuickIndex, quickIndexKey } from '@/features/player/model/quickIndex'
@@ -12,7 +17,7 @@ import { PlaylistCard } from '@/features/player/components/PlaylistCard'
 import { PlaylistMetadataLoading } from '@/features/player/components/PlaylistPanel'
 import { PLAYLIST_SONG_LAYOUTS, ALL_SONGS_LAYOUT_STORAGE_KEY, defaultAllSongsLevel } from '@/features/player/model/playlistSongLayouts'
 import { PLAYLIST_MANAGEMENT_LAYOUTS, PLAYLIST_MANAGEMENT_LAYOUT_STORAGE_KEY, defaultPlaylistManagementLevel } from '@/features/player/model/playlistManagementLayouts'
-import { useAppearanceMotion } from '@/features/appearance/hooks/useAppearance'
+import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty'
@@ -42,6 +47,7 @@ const QUICK_INDEX_KEYS = ['0', ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ', '#'] as const
 const QUICK_INDEX_COUNT = QUICK_INDEX_KEYS.length + 1
 
 type Props = {
+  controllerMode?: PlaylistControllerMode
   playlist: PlayerPlaylistViewModel
   allSongsCoverStore: AllSongsCoverStore
   librarySidebarOpen: boolean
@@ -87,8 +93,10 @@ const AllSongsCard = memo(function AllSongsCard({ item, index, store, current, c
     onActivate={onActivate} onToggleSelect={onToggleSelect} />
 })
 
-export function PlaylistLibraryPanel({ playlist, allSongsCoverStore, librarySidebarOpen, onLibrarySidebarOpenChange, searchRequestId = 0 }: Props) {
+export function PlaylistLibraryPanel({ playlist, allSongsCoverStore, librarySidebarOpen, onLibrarySidebarOpenChange, searchRequestId = 0, controllerMode = 'movable', timeline }: Props) {
   const appearanceMotion = useAppearanceMotion()
+  const systemIcons = useSystemIcons()
+  const MoreIcon = systemIcons.more
   const isPresent = useIsPresent()
   const chromeTransition = useContext(LibraryChromeTransitionContext)
   const atomicOverview = chromeTransition.overviewBoundary
@@ -130,9 +138,17 @@ export function PlaylistLibraryPanel({ playlist, allSongsCoverStore, librarySide
   const panelRef = useRef<HTMLElement | null>(null)
   const gridRef = useRef<HTMLDivElement | null>(null)
   const songsListRef = useRef<HTMLDivElement | null>(null)
+  const songsSpaceRef = useRef<HTMLDivElement | null>(null)
+  const pendingSongFocus = useRef<string | null>(null)
   const managementPanelRef = useRef<HTMLElement | null>(null)
   const [failedSongCovers, setFailedSongCovers] = useState<ReadonlySet<string>>(new Set())
   const headingRef = useRef<HTMLElement | null>(null)
+  const toolbarRef = useRef<HTMLDivElement | null>(null)
+  const controllerActionsRef = useRef<HTMLDivElement | null>(null)
+  const [toolbarPassed, setToolbarPassed] = useState(false)
+  const dockContext = useContext(LibraryDockContext)
+  const fallbackDockRef = useRef<HTMLElement | null>(null)
+  const dockRouteKey = `category:${categoryId}`
   const toolbarControls = useAnimationControls()
   const navigationMotion = appearanceMotion.libraryNavigation
   useLayoutEffect(() => {
@@ -196,8 +212,20 @@ export function PlaylistLibraryPanel({ playlist, allSongsCoverStore, librarySide
   const visibleSongs = useMemo(() => (library.allSongs ?? [])
     .filter((item) => `${item.track.title} ${item.track.artist} ${item.track.album}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
     .sort((left, right) => compareByQuickIndex(left.track.title, right.track.title)), [library.allSongs, query])
+  const songsWindow = useAllSongsRenderWindow(visibleSongs.length, songsLayout, panelRef, songsListRef, songsSpaceRef, library.allSongsMetadataStatus === 'loading')
+  const renderedSongs = useMemo(() => visibleSongs.slice(songsWindow.first, songsWindow.end), [visibleSongs, songsWindow.first, songsWindow.end])
+  useLayoutEffect(() => {
+    if (!pendingSongFocus.current) return
+    const target = Array.from(songsListRef.current?.querySelectorAll<HTMLElement>('[data-song-key]') ?? []).find(row => row.dataset.songKey === pendingSongFocus.current)
+    if (target) { target.focus({ preventScroll: true }); pendingSongFocus.current = null }
+  }, [renderedSongs])
+  const tileInitial = navigationMotion.cover.initial as { x: string; scale: number; opacity: number }
+  const tileEase = navigationMotion.transition.ease
+  useAllSongsTileNavigation(songsListRef, panelRef, isSongs && songsLayout.flow === 'tile' && atomicOverview && !appearanceMotion.disabled,
+    library.allSongsMetadataStatus !== 'loading', isPresent, `translateX(${tileInitial.x}) scale(${tileInitial.scale})`, tileInitial.opacity,
+    navigationMotion.transition.duration ?? 0, Array.isArray(tileEase) ? `cubic-bezier(${tileEase.join(',')})` : 'ease')
   const coverStore = useAllSongsWindow(visibleSongs, panelRef, songsListRef,
-    isSongs && songsLayout.showArtwork, library.allSongsMetadataStatus === 'loading', allSongsCoverStore)
+    isSongs && songsLayout.showArtwork, library.allSongsMetadataStatus === 'loading', allSongsCoverStore, 8, renderedSongs)
   const songsByKey = useMemo(() => new Map(visibleSongs.map((item) => [item.key, item])), [visibleSongs])
   const songActionsRef = useRef({ songsByKey, visibleSongs, onPlaySong: library.onPlaySong })
   useLayoutEffect(() => { songActionsRef.current = { songsByKey, visibleSongs, onPlaySong: library.onPlaySong } }, [songsByKey, visibleSongs, library.onPlaySong])
@@ -241,6 +269,42 @@ export function PlaylistLibraryPanel({ playlist, allSongsCoverStore, librarySide
     if (quickIndexPreviewTimer.current) clearTimeout(quickIndexPreviewTimer.current)
   }, [])
   const showSearch = hasDataSource && (searchOpen || searchRequestId > dismissedSearchRequestId)
+  const controllerActive = isSongs && isPresent && dockContext?.activeRouteKey === dockRouteKey
+  const controllerMotion = usePlaylistControllerMotion(panelRef, dockContext?.dockRef ?? fallbackDockRef,
+    controllerMode, timeline.interaction === 'seeking' || timeline.interaction === 'previewing',
+    `${songsLayout.level}:${query}:${visibleSongs.length}:${showSearch}:${selectMode}`,
+    toolbarPassed, appearanceMotion.layoutTransition, controllerActive)
+  const rebaseController = controllerMotion.rebase
+  useLayoutEffect(() => {
+    if (controllerActive && showSearch) rebaseController({ reveal: true })
+  }, [controllerActive, showSearch, rebaseController])
+  useLayoutEffect(() => {
+    const panel = panelRef.current, toolbar = toolbarRef.current
+    if (!controllerActive || !panel || !toolbar) return
+    const measure = () => {
+      const rect = toolbar.getBoundingClientRect()
+      const passed = rect.height > 0 && rect.bottom <= Math.max(0, panel.getBoundingClientRect().top)
+      if (!passed && controllerActionsRef.current?.contains(document.activeElement)) {
+        const buttons = [...controllerActionsRef.current.querySelectorAll('button')]
+        const index = buttons.indexOf(document.activeElement as HTMLButtonElement)
+        const target = index > 0 ? toolbar.querySelectorAll('button')[index - 1] : null
+        if (target && !target.disabled) target.focus({ preventScroll: true })
+        else panel.focus({ preventScroll: true })
+      }
+      setToolbarPassed(previous => previous === passed ? previous : passed)
+    }
+    measure()
+    const intersection = new IntersectionObserver(measure, { root: panel, threshold: 0 })
+    intersection.observe(toolbar)
+    const resize = new ResizeObserver(measure)
+    resize.observe(panel); resize.observe(toolbar)
+    panel.addEventListener('scroll', measure, { passive: true })
+    window.addEventListener('resize', measure)
+    return () => {
+      intersection.disconnect(); resize.disconnect()
+      panel.removeEventListener('scroll', measure); window.removeEventListener('resize', measure)
+    }
+  }, [controllerActive, songsLayout.level, showSearch, selectMode])
   const sidebarProps = {
     playlistName: '', trackCount: 0, totalClock: null,
     library: { ...library,
@@ -277,6 +341,10 @@ export function PlaylistLibraryPanel({ playlist, allSongsCoverStore, librarySide
       return
     }
     const index = quickIndexTargets.get(key)
+    if (isSongs && songsWindow.enabled && index !== undefined && songsSpaceRef.current) {
+      panel.scrollTop += songsSpaceRef.current.getBoundingClientRect().top - panel.getBoundingClientRect().top + Math.floor(index / songsLayout.columns) * songsWindow.stride
+      return
+    }
     const card = index === undefined ? null : (isSongs ? songsListRef.current : gridRef.current)?.children.item(index)
     if (!card) return
     panel.scrollTop += card.getBoundingClientRect().top - panel.getBoundingClientRect().top - 8
@@ -327,7 +395,37 @@ export function PlaylistLibraryPanel({ playlist, allSongsCoverStore, librarySide
     showQuickIndexPreview(key, rect.top + rect.height / 2, nav)
     hideQuickIndexPreview()
   }
-  useLibraryDockBinding(`category:${categoryId}`, { searchOpen: showSearch, onSearchToggle: hasDataSource ? toggleSearch : undefined })
+  const playSongs = useCallback((random = false) => {
+    const candidates = selectMode ? selectedSongs : playableSongs
+    const target = random ? candidates[Math.floor(Math.random() * candidates.length)] : candidates[0]
+    if (target) library.onPlaySong?.(target.scope, target.trackId,
+      candidates.map(({ scope, trackId }) => ({ scope, trackId })))
+  }, [selectMode, selectedSongs, playableSongs, library])
+  const playListsRandomly = useCallback(() => {
+    const candidates = selectMode ? selectedItems : visible
+    const target = candidates[Math.floor(Math.random() * candidates.length)]
+    if (target) library.onPlay(target.scope)
+  }, [selectMode, selectedItems, visible, library])
+  function toggleSelection() { setSelectMode(!selectMode); setSelected(new Set()) }
+  function openCreatePlaylist() { setPlaylistName(''); setCreateError(''); setCreateOpen(true) }
+  function renderMore(compact = false) {
+    return <DropdownMenu>
+      <DropdownMenuTrigger render={<Button className={compact ? 'playlist-hero-icon playlist-hero-more-button' : 'playlist-management-more'}
+        variant={compact ? 'ghost' : 'outline'} size={compact ? 'icon' : 'default'} aria-label="更多列表操作">
+        {compact ? <MoreIcon aria-hidden="true" /> : <img src={moreIcon} alt="" />}
+      </Button>} />
+      <DropdownMenuContent align="end"><DropdownMenuGroup>
+        <DropdownMenuItem disabled={library.isImportPending} onClick={library.onSelectFolders}>选择文件夹</DropdownMenuItem>
+        <DropdownMenuItem disabled={library.isImportPending} onClick={library.onImportPlaylist}>导入 M3U8 播放列表</DropdownMenuItem>
+        <DropdownMenuItem disabled={isSongs ? !visibleSongs.length : !visible.length} onClick={() => { setSelectMode(true); setSelected(new Set(isSongs ? visibleSongs.map((item) => item.key) : visible.map((item) => item.scope))) }}>选择全部可见{isSongs ? '歌曲' : '列表'}</DropdownMenuItem>
+        {isSongs ? <DropdownMenuItem disabled={!selectMode || !selected.size || !library.onCreatePlaylist} onClick={openCreatePlaylist}>新建播放列表</DropdownMenuItem> : null}
+      </DropdownMenuGroup></DropdownMenuContent>
+    </DropdownMenu>
+  }
+  useLibraryDockBinding(dockRouteKey, { searchOpen: showSearch, onSearchToggle: hasDataSource ? toggleSearch : undefined,
+    controllerOffsetY: isSongs ? controllerMotion.offsetY : undefined,
+    controllerHidden: isSongs ? controllerMotion.hidden : undefined,
+  })
   return <motion.div className="playlist-management" data-select-mode={selectMode || undefined}
     inert={!isPresent || undefined} aria-hidden={!isPresent || undefined}>
     <PlaylistLibrarySidebar {...sidebarProps} />
@@ -354,7 +452,7 @@ export function PlaylistLibraryPanel({ playlist, allSongsCoverStore, librarySide
         </form>
       </DialogContent>
     </Dialog>
-    <motion.section ref={(node) => { panelRef.current = node; managementPanelRef.current = isSongs ? null : node }} className="playlist-management-content" aria-label={`${category.label}管理`}
+    <motion.section ref={(node) => { panelRef.current = node; managementPanelRef.current = isSongs ? null : node }} className="playlist-management-content" tabIndex={-1} aria-label={`${category.label}管理`}
       data-metadata-loading={isSongs && library.allSongsMetadataStatus === 'loading' || undefined}
       variants={offscreenEntry ? navigationMotion.detailReturn.incoming : appearanceMotion.variants.backdrop}
       transition={offscreenEntry ? navigationMotion.transition : atomicOverview ? { duration: 0 } : returnTransition}
@@ -370,49 +468,54 @@ export function PlaylistLibraryPanel({ playlist, allSongsCoverStore, librarySide
         <motion.h2 key={`category-label:${projectionKey}`} layoutId={sharedProjection ? `library-category-label:${categoryId}` : undefined} layoutCrossfade={false}
           transition={{ layout: navigationMotion.transition }}>{isSongs ? '全部歌曲' : category.label}</motion.h2>
       </header>
-      <motion.div className="playlist-management-toolbar" custom={toolbarOffset} variants={navigationMotion.toolbar}
+      <motion.div ref={toolbarRef} className="playlist-management-toolbar" custom={toolbarOffset} variants={navigationMotion.toolbar}
         initial={false} animate={toolbarControls} exit={atomicOverview ? 'exit' : 'animate'} transition={navigationMotion.transition}>
         {hasDataSource ? <motion.div key={`actions:${projectionKey}`} className="playlist-management-actions"
           layout={sharedProjection ? 'position' : undefined}
           layoutId={sharedProjection && library.currentScope ? `playlist-library-actions:${library.currentScope}` : undefined}
           transition={{ layout: returnTransition }}>
-          <Button variant="outline" aria-label={`随机播放${category.label}`} data-playback-command-lock={playbackCommandLocked || undefined} disabled={isSongs ? !playableSongs.length || playlist.isOpenAudioDisabled : !playTarget || playlist.isOpenAudioDisabled} onClick={() => {
+          <Button variant="outline" aria-label={`随机播放${category.label}`} data-playback-command-lock={playbackCommandLocked || undefined} disabled={isSongs ? !songPlayTarget || !library.onPlaySong || playlist.isOpenAudioDisabled : !playTarget || playlist.isOpenAudioDisabled} onClick={() => {
             if (isSongs) {
-              const candidates = selectMode ? selectedSongs : playableSongs
-              const target = candidates[Math.floor(Math.random() * candidates.length)]
-              if (target) library.onPlaySong?.(target.scope, target.trackId)
+              playSongs(true)
               return
             }
-            const candidates = selectMode ? selectedItems : visible
-            const target = candidates[Math.floor(Math.random() * candidates.length)]
-            if (target) library.onPlay(target.scope)
+            playListsRandomly()
           }}><img src={shuffleIcon} alt="" /></Button>
-          <Button variant="outline" aria-label={`播放${category.label}`} data-playback-command-lock={playbackCommandLocked || undefined} disabled={isSongs ? !songPlayTarget || playlist.isOpenAudioDisabled : !playTarget || playlist.isOpenAudioDisabled} onClick={() => {
-            if (isSongs) { if (songPlayTarget) library.onPlaySong?.(songPlayTarget.scope, songPlayTarget.trackId) }
+          <Button variant="outline" aria-label={`播放${category.label}`} data-playback-command-lock={playbackCommandLocked || undefined} disabled={isSongs ? !songPlayTarget || !library.onPlaySong || playlist.isOpenAudioDisabled : !playTarget || playlist.isOpenAudioDisabled} onClick={() => {
+            if (isSongs) playSongs()
             else if (playTarget) library.onPlay(playTarget.scope)
           }}><img src={playIcon} alt="" /></Button>
           <Button variant="outline" aria-label={`搜索${category.label}`} aria-expanded={showSearch} onClick={() => { setSearchOpen(true); queueMicrotask(() => searchRef.current?.focus()) }}><img src={searchIcon} alt="" /></Button>
-          <Button variant="outline" aria-pressed={selectMode} disabled={isSongs ? !(library.allSongs?.length) : !categoryItems.length} onClick={() => { setSelectMode(!selectMode); setSelected(new Set()) }}>{selectMode ? '取消选择' : '选择'}</Button>
+          <Button variant="outline" aria-pressed={selectMode} disabled={isSongs ? !(library.allSongs?.length) : !categoryItems.length} onClick={toggleSelection}>{selectMode ? '取消选择' : '选择'}</Button>
           {selectMode ? <span role="status">已选择 {selected.size} 项</span> : null}
-          {isSongs && selectMode ? <Button variant="outline" disabled={!selected.size || !library.onCreatePlaylist} onClick={() => { setPlaylistName(''); setCreateError(''); setCreateOpen(true) }}>新建播放列表</Button> : null}
+          {isSongs && selectMode ? <Button variant="outline" disabled={!selected.size || !library.onCreatePlaylist} onClick={openCreatePlaylist}>新建播放列表</Button> : null}
         </motion.div> : <div />}
-        <DropdownMenu>
-          <DropdownMenuTrigger render={<Button className="playlist-management-more" variant="outline" aria-label="更多列表操作"><img src={moreIcon} alt="" /></Button>} />
-          <DropdownMenuContent align="end"><DropdownMenuGroup>
-            <DropdownMenuItem disabled={library.isImportPending} onClick={library.onSelectFolders}>选择文件夹</DropdownMenuItem>
-            <DropdownMenuItem disabled={library.isImportPending} onClick={library.onImportPlaylist}>导入 M3U8 播放列表</DropdownMenuItem>
-            <DropdownMenuItem disabled={isSongs ? !visibleSongs.length : !visible.length} onClick={() => { setSelectMode(true); setSelected(new Set(isSongs ? visibleSongs.map((item) => item.key) : visible.map((item) => item.scope))) }}>选择全部可见{isSongs ? '歌曲' : '列表'}</DropdownMenuItem>
-          </DropdownMenuGroup></DropdownMenuContent>
-        </DropdownMenu>
+        {renderMore()}
       </motion.div>
       {showSearch ? <motion.div className="playlist-management-search" variants={navigationMotion.chrome}
         initial={atomicOverview ? 'initial' : false} animate="animate" exit={atomicOverview ? 'exit' : 'animate'} transition={navigationMotion.transition}><Input ref={searchRef} type="search" aria-label={isSongs ? '搜索歌曲标题、艺术家或专辑' : `搜索${category.label}名称`} placeholder={isSongs ? '搜索歌曲' : `搜索${category.label}`} value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape') { setQuery(''); setSearchOpen(false); setDismissedSearchRequestId(searchRequestId) } }} /></motion.div> : null}
       <span className="sr-only" role="status" aria-live="polite">{isSongs ? songsAnnouncement : announcement}</span>
-      {isSongs ? (library.allSongsMetadataStatus === 'loading' ? <PlaylistMetadataLoading layout={songsLayout} trackCount={library.allSongs?.length ?? 0} /> : visibleSongs.length ? <div ref={songsListRef} className="playlist-grid all-songs-list" aria-label="全部歌曲列表"
+      {isSongs ? (library.allSongsMetadataStatus === 'loading' ? <PlaylistMetadataLoading layout={songsLayout} trackCount={library.allSongs?.length ?? 0} /> : visibleSongs.length ? <div ref={songsSpaceRef} style={songsWindow.spaceStyle}><motion.div ref={songsListRef} className="playlist-grid all-songs-list" aria-label="全部歌曲列表"
         data-layout-level={songsLayout.level} data-layout-flow={songsLayout.flow} data-layout-columns={songsLayout.columns}
-        data-content-window="full" data-cover-motion={appearanceMotion.disabled ? 'off' : undefined}
-        style={{ ...songsLayout.style, touchAction: 'pan-y' }}>
-        {visibleSongs.map((item, index) => <AllSongsCard key={item.key} item={item} index={index} store={coverStore}
+        data-content-window={songsWindow.enabled ? 'bounded' : 'full'} data-cover-motion={appearanceMotion.disabled ? 'off' : undefined}
+        variants={songsLayout.flow === 'tile' ? undefined : navigationMotion.cover} initial={atomicOverview && songsLayout.flow !== 'tile' ? 'initial' : false} animate="animate" exit={atomicOverview && songsLayout.flow !== 'tile' ? 'exit' : 'animate'} transition={navigationMotion.transition}
+        onKeyDown={(event) => {
+          if (!songsWindow.enabled || event.key !== 'Tab') return
+          const row = (event.target as HTMLElement).closest<HTMLElement>('[data-song-key]')
+          if (!row) return
+          const index = visibleSongs.findIndex(item => item.key === row.dataset.songKey)
+          const direction = event.shiftKey ? -1 : 1
+          let next = index + direction
+          while (next >= 0 && next < visibleSongs.length && !selectMode && (!visibleSongs[next].available || playlist.isOpenAudioDisabled)) next += direction
+          if (next < 0 || next >= visibleSongs.length || (next >= songsWindow.first && next < songsWindow.end)) return
+          event.preventDefault()
+          const panel = panelRef.current, space = songsSpaceRef.current
+          if (!panel || !space) return
+          pendingSongFocus.current = visibleSongs[next].key
+          panel.scrollTop += space.getBoundingClientRect().top - panel.getBoundingClientRect().top + Math.floor(next / songsLayout.columns) * songsWindow.stride
+        }}
+        style={{ ...songsLayout.style, touchAction: 'pan-y', transformOrigin: 'left top', ...songsWindow.gridStyle }}>
+        {renderedSongs.map((item, index) => <AllSongsCard key={item.key} item={item} index={songsWindow.first + index} store={coverStore}
             current={item.trackId === playlist.currentTrackId}
             canActivate={!playlist.isOpenAudioDisabled}
             selectMode={selectMode} selected={selected.has(item.key)}
@@ -421,7 +524,7 @@ export function PlaylistLibraryPanel({ playlist, allSongsCoverStore, librarySide
             onCoverFailed={handleSongCoverFailed}
             onActivate={handleSongActivate}
             onToggleSelect={handleSongToggleSelect} />)}
-      </div> : <MotionEmpty className="playlist-management-empty" variants={navigationMotion.chrome} initial={false} animate="animate"><EmptyHeader><EmptyTitle>{(library.allSongs?.length ?? 0) ? '没有匹配的歌曲' : '暂无歌曲'}</EmptyTitle><EmptyDescription>{(library.allSongs?.length ?? 0) ? '尝试其他名称，或清空搜索。' : '选择音乐文件夹后，这里会汇总其中及子文件夹内的歌曲；不会自动创建播放列表。下次启动会重新扫描。'}</EmptyDescription></EmptyHeader><Button disabled={library.isImportPending} onClick={(library.allSongs?.length ?? 0) ? () => setQuery('') : library.onSelectFolders}>{(library.allSongs?.length ?? 0) ? '清空搜索' : '选择文件夹'}</Button></MotionEmpty>) : categoryId === 'playlists' && library.isPlaylistRestorePending && !visible.length ? <Empty className="playlist-management-empty"><EmptyHeader><EmptyTitle>正在恢复播放列表</EmptyTitle><EmptyDescription>正在读取已保存的 M3U8 清单。</EmptyDescription></EmptyHeader></Empty> : visible.length ? <div ref={gridRef} className="playlist-management-grid"
+      </motion.div></div> : <MotionEmpty className="playlist-management-empty" variants={navigationMotion.chrome} initial={false} animate="animate"><EmptyHeader><EmptyTitle>{(library.allSongs?.length ?? 0) ? '没有匹配的歌曲' : '暂无歌曲'}</EmptyTitle><EmptyDescription>{(library.allSongs?.length ?? 0) ? '尝试其他名称，或清空搜索。' : '选择音乐文件夹后，这里会汇总其中及子文件夹内的歌曲；不会自动创建播放列表。下次启动会重新扫描。'}</EmptyDescription></EmptyHeader><Button disabled={library.isImportPending} onClick={(library.allSongs?.length ?? 0) ? () => setQuery('') : library.onSelectFolders}>{(library.allSongs?.length ?? 0) ? '清空搜索' : '选择文件夹'}</Button></MotionEmpty>) : categoryId === 'playlists' && library.isPlaylistRestorePending && !visible.length ? <Empty className="playlist-management-empty"><EmptyHeader><EmptyTitle>正在恢复播放列表</EmptyTitle><EmptyDescription>正在读取已保存的 M3U8 清单。</EmptyDescription></EmptyHeader></Empty> : visible.length ? <div ref={gridRef} className="playlist-management-grid"
         data-layout-level={layout.level} data-layout-flow={layout.flow} data-layout-artwork={layout.showArtwork}
         aria-label={layout.label} style={{ ...layout.style, touchAction: 'pan-y' }}>
         {visible.map((item) => <motion.div key={item.scope} className="playlist-management-card"
@@ -447,6 +550,21 @@ export function PlaylistLibraryPanel({ playlist, allSongsCoverStore, librarySide
         </motion.div>)}
       </div> : <MotionEmpty className="playlist-management-empty" variants={navigationMotion.chrome} initial={atomicOverview ? 'initial' : false} animate="animate" exit={atomicOverview ? 'exit' : 'animate'} transition={navigationMotion.transition}><EmptyHeader><EmptyTitle>{!hasDataSource ? `${category.label}尚未接入数据` : categoryItems.length ? `没有匹配的${category.label}` : `暂无${category.label}`}</EmptyTitle><EmptyDescription>{!hasDataSource ? '此分类的数据管理能力尚未接入。可返回媒体库浏览已导入的列表。' : categoryItems.length ? '尝试其他名称，或清空搜索。' : categoryId === 'folder' ? '导入本地音频文件夹后，可在这里浏览；下次启动会重新扫描。M3U8 列表显示在播放列表分类。' : '导入 M3U8 后会自动保存，重启可继续使用；从全部歌曲新建的播放列表仅在本次会话中保留。'}</EmptyDescription></EmptyHeader><Button disabled={library.isImportPending} onClick={!hasDataSource ? library.onOpen : categoryItems.length ? () => setQuery('') : categoryId === 'folder' ? library.onSelectFolders : library.onImportPlaylist}>{!hasDataSource ? '打开播放列表' : categoryItems.length ? '清空搜索' : categoryId === 'folder' ? '选择文件夹' : '导入 M3U8 播放列表'}</Button></MotionEmpty>}
     </motion.section>
+    {isSongs ? <motion.div ref={controllerActionsRef} className="playlist-hero-actions playlist-controller-actions"
+      role="group" aria-label="全部歌曲操作"
+      aria-hidden={!toolbarPassed || !controllerActive || undefined} inert={!toolbarPassed || !controllerActive || undefined}
+      data-actions-visible={String(toolbarPassed && controllerActive)}
+      variants={appearanceMotion.variants.controllerActions} initial="hidden"
+      animate={toolbarPassed && controllerActive ? 'visible' : 'hidden'}
+      transition={appearanceMotion.layoutTransition} style={{ y: controllerMotion.offsetY }}>
+      <PlaylistActionButtons compact onBack={library.onOpenOverview}
+        shuffle={{ icon: systemIcons.shuffle, label: '随机播放全部歌曲', pressed: false }}
+        onShuffle={() => playSongs(true)} shuffleDisabled={!songPlayTarget || !library.onPlaySong || playbackCommandLocked}
+        onPlay={() => playSongs()} playDisabled={!songPlayTarget || !library.onPlaySong || playbackCommandLocked} playbackLocked={playbackCommandLocked}
+        searchOpen={showSearch} onSearch={toggleSearch}
+        selectMode={selectMode} onSelect={toggleSelection} selectDisabled={!library.allSongs?.length}
+        more={renderMore(true)} />
+    </motion.div> : null}
     {(categoryId === 'playlists' || (isSongs && library.allSongsMetadataStatus !== 'loading')) ? <>
     {quickIndexPreview ? <div className="playlist-management-quick-index-preview" data-visible={quickIndexPreview.visible} style={{ top: quickIndexPreview.top }} aria-hidden="true">
       {quickIndexPreview.key === 'top' ? <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m2 7 6-6 6 6M2 14l6-6 6 6" /></svg> : quickIndexPreview.key}

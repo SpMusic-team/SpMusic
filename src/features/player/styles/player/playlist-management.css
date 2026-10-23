@@ -107,6 +107,22 @@
   padding: 8px 40px 48px 24px;
 }
 
+/* Row layouts have an explicit minimum height. Keep offscreen descendants out
+   of paint/layout without removing searchable rows or changing scroll ownership.
+   Tile heights depend on metadata and deliberately retain normal layout. */
+.all-songs-list:not([data-layout-flow='tile']) > .playlist-card {
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto var(--playlist-card-min-height);
+}
+
+/* A bounded window already limits layout work. Its overscan rows must retain
+   real heights: intrinsic estimates are shorter than cover + padding and
+   would change the measured scroll stride when entering the viewport. */
+.all-songs-list[data-content-window='bounded'] > .playlist-card {
+  content-visibility: visible;
+  contain-intrinsic-block-size: none;
+}
+
 @media (width <= 540px) {
   .all-songs-list.playlist-grid { padding-inline: 16px 28px; }
 }

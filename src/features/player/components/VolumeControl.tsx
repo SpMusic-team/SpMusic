@@ -223,19 +223,21 @@ export function VolumeControl({
         onPointerMoveCapture={handleSliderPointerMoveCapture}
         onPointerUpCapture={handleSliderPointerEndCapture}
       >
-        <Slider
-          className="volume-slider"
-          disabled={disabled}
-          getAriaLabel={() => appCopy.volume.label}
-          getAriaValueText={(_, value) => appCopy.volume.value(value)}
-          max={100}
-          min={0}
-          onValueChange={handleValueChange}
-          orientation="vertical"
-          step={1}
-          value={[volume]}
-        />
-        <output className="volume-value">{appCopy.volume.value(volume)}</output>
+        {panelOpen ? <>
+          <Slider
+            className="volume-slider"
+            disabled={disabled}
+            getAriaLabel={() => appCopy.volume.label}
+            getAriaValueText={(_, value) => appCopy.volume.value(value)}
+            max={100}
+            min={0}
+            onValueChange={handleValueChange}
+            orientation="vertical"
+            step={1}
+            value={[volume]}
+          />
+          <output className="volume-value">{appCopy.volume.value(volume)}</output>
+        </> : null}
       </div>
     </div>
   )

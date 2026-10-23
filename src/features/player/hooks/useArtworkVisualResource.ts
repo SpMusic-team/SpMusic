@@ -379,6 +379,7 @@ type UseArtworkVisualResourceResult = {
   slots: readonly [ArtworkVisualLayer | null, ArtworkVisualLayer | null, ArtworkVisualLayer | null]
   currentArtworkReady: boolean
   previewArtworkReady: boolean
+  previewArtworkEmpty: boolean
   markReady: (layerId: number) => void
   markLoadError: (layerId: number) => void
   markExitComplete: (layerId: number, consumer: ArtworkLayerConsumer) => void
@@ -478,9 +479,8 @@ async function fetchArtworkBlob(source: string, signal: AbortSignal): Promise<Bl
 const COVER_EDGE_BUCKETS: AudioLoadCoverPixelsInput['maxEdge'][] = [1024, 1536]
 const MAX_ARTWORK_BACKING_EDGE: AudioLoadCoverPixelsInput['maxEdge'] = 1536
 const ARTWORK_CANVAS_IDLE_RESET_MS = 2500
-// Load-shed only fully cold artwork during rapid selection. Without trailing debounce,
-// 10 selections at 80 ms drove foreground invokes from 2 to 12 and the final cover to
-// 4.47 s; the trailing strategy previously brought the final cover to about 2.55 s.
+// Only subsequent cold selections in a rapid burst need a trailing debounce.
+// A deliberate first cut must start its artwork I/O without a fixed delay.
 const COLD_ARTWORK_RAPID_SELECTION_DEBOUNCE_MS = 110
 const MAX_FOREGROUND_LOAD_ATTEMPTS = 2
 const MAX_STABLE_PREFETCH_RETRIES = 1
@@ -717,6 +717,7 @@ export function useArtworkVisualResource(
     transitionIntent: currentTransitionIntent,
   })
   const latestArtworkDetailsReadyRef = useRef(!detailsPending || Boolean(matchingPrefetchCandidate))
+  const lastColdSelectionAtRef = useRef(-Infinity)
 
   const scheduleStablePrefetchRetry = useCallback((identity: string) => {
     const retryCount = prefetchRetryCountsRef.current.get(identity) ?? 0
@@ -1333,6 +1334,20 @@ export function useArtworkVisualResource(
   }, [releaseLayerOwner, replaceLayers])
 
   const markLoadError = useCallback((layerId: number) => {
+    const failedPreview = layersRef.current.find(
+      (layer) => layer.id === layerId && layer.phase === 'preview' && layer.previewTokenId !== undefined,
+    )
+    if (failedPreview) {
+      registryDelete(failedPreview.identity, failedPreview.resource)
+      const replacement = createLayer(
+        failedPreview.track, failedPreview.requestedArtwork, failedPreview.identity,
+        createOwnedArtworkResource(), undefined, null, failedPreview.previewTokenId,
+      )
+      replaceLayers(layersRef.current.map((layer) => layer.id === layerId
+        ? { ...replacement, phase: 'preview', slot: failedPreview.slot } : layer))
+      releaseLayerOwner(failedPreview)
+      return
+    }
     const failedLayer = layersRef.current.find(
       (layer) => layer.id === layerId && layer.phase === 'incoming',
     )
@@ -1938,10 +1953,14 @@ export function useArtworkVisualResource(
         && !currentArtwork.coverImage
         && !currentArtwork.coverImageFallback
       if (!isPlaceholder) {
-        const isTrailingSelection = await waitForColdArtworkRapidSelection(controller.signal)
-        if (!isTrailingSelection || !coldRequestStillCurrent()) {
-          return
+        const selectedAt = performance.now()
+        const rapidSelection = selectedAt - lastColdSelectionAtRef.current < COLD_ARTWORK_RAPID_SELECTION_DEBOUNCE_MS
+        lastColdSelectionAtRef.current = selectedAt
+        if (rapidSelection) {
+          const isTrailingSelection = await waitForColdArtworkRapidSelection(controller.signal)
+          if (!isTrailingSelection) return
         }
+        if (!coldRequestStillCurrent()) return
       }
       for (let attempt = 0; attempt < MAX_FOREGROUND_LOAD_ATTEMPTS && isCurrent(); attempt += 1) {
         const loaded = await loadArtworkResource(currentArtwork, controller, 'foreground')
@@ -2028,10 +2047,16 @@ export function useArtworkVisualResource(
       && layer.previewTokenId === previewToken.id
       && Boolean(layer.resource.view)
     ))
+  const previewArtworkEmpty = previewToken !== null && layers.some((layer) => (
+    layer.phase === 'preview'
+    && layer.previewTokenId === previewToken.id
+    && !layer.resource.view
+  ))
   return {
     slots,
     currentArtworkReady,
     previewArtworkReady,
+    previewArtworkEmpty,
     markReady,
     markLoadError,
     markExitComplete,

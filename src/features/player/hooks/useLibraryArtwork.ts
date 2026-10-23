@@ -8,14 +8,17 @@ import {
   type ReadOnlyArtworkRow,
 } from '@/features/player/model/playlistArtworkFallback'
 import {
-  beginAudioPlaylistCoverWindow, loadAudioPlaylistCoverPixels, probeAudioPlaylistCover,
+  beginAudioPlaylistCoverWindow, probeAudioPlaylistCover,
   type AudioFolderPlaylist, type AudioFolderTrackRef,
 } from '@/features/player/services/audioCommands'
+import { schedulePlaylistCoverPixels } from '@/features/player/services/playlistCoverScheduler'
 
 type ArtworkRow = ReadOnlyArtworkRow
 type CacheEntry = { row: ArtworkRow; edge: number; trackId: string }
 type Runtime = {
   mounted: boolean
+  visible: boolean
+  controller: AbortController
   revision: number
   descriptors: Map<string, AudioFolderTrackRef>
   previews: Map<Element, string>
@@ -57,13 +60,13 @@ async function dataUrlThumbnail(dataUrl: string, maxEdge: number): Promise<Playl
 
 // The library owns only cover I/O. Its independent client/window never changes
 // the active player's descriptors, metadata, artwork leases or playback queue.
-export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detail: AudioFolderPlaylist | null) {
+export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detail: AudioFolderPlaylist | null, visible: boolean) {
   const runtimeRef = useRef<Runtime | null>(null)
   const [rows, setRows] = useState<ReadonlyMap<string, ArtworkRow>>(EMPTY_ROWS)
 
   useEffect(() => {
     const runtime: Runtime = {
-      mounted: true, revision: 0, descriptors: new Map(), previews: new Map(), desired: new Map(),
+      mounted: true, visible: false, controller: new AbortController(), revision: 0, descriptors: new Map(), previews: new Map(), desired: new Map(),
       pinned: new Set(),
       detail: null, detailPaths: new Map(), cache: new Map(), queued: new Set(), active: 0,
       pump: () => {}, refresh: () => {},
@@ -89,7 +92,7 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
       setRows(new Map([...runtime.cache].map(([key, entry]) => [key, entry.row])))
     }
     runtime.pump = () => {
-      if (!runtime.mounted) return
+      if (!runtime.mounted || !runtime.visible) return
       while (runtime.active < CONCURRENCY) {
         const next = [...runtime.desired].find(([key, edge]) => {
           const descriptor = runtime.descriptors.get(key)
@@ -100,7 +103,7 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
         const [key, edge] = next
         const descriptor = runtime.descriptors.get(key)!
         const revision = runtime.revision
-        const current = () => runtime.mounted && runtime.revision === revision && runtime.desired.has(key)
+        const current = () => runtime.mounted && runtime.visible && runtime.revision === revision && runtime.desired.has(key)
         runtime.queued.add(key)
         runtime.active += 1
         void (async () => {
@@ -115,7 +118,12 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
               throw new Error('媒体库封面与歌曲来源不一致')
             }
             if (cover.coverArt?.filePath) {
-              const pixels = await loadAudioPlaylistCoverPixels({ clientId, filePath: cover.coverArt.filePath, maxEdge: edge, windowGeneration: generation })
+              const pixels = await schedulePlaylistCoverPixels(
+                { clientId, filePath: cover.coverArt.filePath, maxEdge: edge, windowGeneration: generation },
+                { priority: runtime.detail?.tracks[0]?.sourcePath === descriptor.sourcePath ? 0 : 1,
+                  signal: runtime.controller.signal, isCurrent: current },
+              )
+              if (!pixels) return
               if (!current()) return
               thumbnail = playlistCoverImageFromPixels(pixels)
             } else if (cover.coverArt?.dataUrl) {
@@ -157,7 +165,7 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
       for (const key of runtime.previews.values()) {
         if (runtime.descriptors.get(key)?.available && !desired.has(key) && desired.size < MAX_RESIDENT) desired.set(key, 256)
       }
-      runtime.desired = desired
+      runtime.desired = runtime.visible ? desired : new Map()
       runtime.pump()
     }
     const observed = new Set<Element>()
@@ -205,6 +213,7 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
     mutations.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-library-cover-source'] })
     return () => {
       runtime.mounted = false
+      runtime.controller.abort()
       mutations.disconnect()
       observer.disconnect()
       for (const entry of runtime.cache.values()) if (entry.row.coverThumbnail) URL.revokeObjectURL(entry.row.coverThumbnail.src)
@@ -213,6 +222,16 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
       if (runtimeRef.current === runtime) runtimeRef.current = null
     }
   }, [])
+
+  useEffect(() => {
+    const runtime = runtimeRef.current
+    if (!runtime || runtime.visible === visible) return
+    runtime.visible = visible
+    runtime.revision += 1
+    if (!visible) runtime.controller.abort()
+    else runtime.controller = new AbortController()
+    runtime.refresh()
+  }, [visible])
 
   useEffect(() => {
     const runtime = runtimeRef.current

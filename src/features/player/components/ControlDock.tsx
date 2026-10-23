@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type FocusEvent, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react'
-import { AnimatePresence, motion } from 'motion/react'
+import { AnimatePresence, animate, motion, type Easing } from 'motion/react'
 import { Button } from '@/components/ui/button'
 import { Slider } from '@/components/ui/slider'
 import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
@@ -33,6 +33,7 @@ type ProgressControlProps = {
   isPlaying: boolean
   showTimes?: boolean
   className?: string
+  trackSwitchMotion?: { key: string; startRatio: number; durationSeconds: number; ease: Easing; disabled: boolean; ready: boolean }
 }
 
 function usePlaybackModeControls(playback: PlayerUiViewModel['playback']) {
@@ -86,6 +87,7 @@ export const ProgressControl = memo(function ProgressControl({
   isPlaying,
   showTimes = true,
   className,
+  trackSwitchMotion,
 }: ProgressControlProps) {
   const [semanticPosition, setSemanticPosition] = useState(timeline.positionSeconds)
   const pointerPreviewRef = useRef(false)
@@ -101,6 +103,17 @@ export const ProgressControl = memo(function ProgressControl({
   const progressTrackWidthRef = useRef(0)
   const progressThumbWidthRef = useRef(0)
   const lastVisualPixelRef = useRef<number | null>(null)
+  const switchVisualOwnerRef = useRef(Boolean(trackSwitchMotion && !trackSwitchMotion.disabled))
+  const switchVisualRatioRef = useRef<number | null>(trackSwitchMotion && !trackSwitchMotion.disabled ? trackSwitchMotion.startRatio : null)
+  const startSwitchAnimationRef = useRef<(() => void) | null>(null)
+  const completedSwitchKeyRef = useRef<string | null>(null)
+  const [switchVisualState, setSwitchVisualState] = useState({
+    key: trackSwitchMotion?.key ?? null,
+    active: Boolean(trackSwitchMotion && !trackSwitchMotion.disabled),
+  })
+  if (switchVisualState.key !== (trackSwitchMotion?.key ?? null)) {
+    setSwitchVisualState({ key: trackSwitchMotion?.key ?? null, active: Boolean(trackSwitchMotion && !trackSwitchMotion.disabled) })
+  }
   const pressedPointerIdRef = useRef<number | null>(null)
   const pressEndRef = useRef<{ pointerId: number; reason: ProgressPressEndReason } | null>(null)
   const cancelProgressPreviewRef = useRef(timeline.onCancelPreview)
@@ -110,17 +123,10 @@ export const ProgressControl = memo(function ProgressControl({
   const formattedDuration = formatDuration(timeline.durationSeconds)
   const hasHourTime = formattedPosition.split(':').length > 2 || formattedDuration.split(':').length > 2
 
-  const updateVisualProgress = useCallback(() => {
-    if (!timeline.visualClock || timelineInteractionRef.current !== 'following') return
-    const durationSeconds = timelineDurationRef.current
-    const positionSeconds = Math.min(
-      Math.max(timeline.visualClock.getPositionSeconds(), 0),
-      durationSeconds > 0 ? durationSeconds : 0,
-    )
+  const paintVisualRatio = useCallback((ratio: number) => {
     const trackWidth = progressTrackWidthRef.current
     const thumbWidth = progressThumbWidthRef.current
     if (trackWidth > 0 && progressRangeRef.current && progressThumbRef.current) {
-      const ratio = durationSeconds > 0 ? positionSeconds / durationSeconds : 0
       const travelWidth = Math.max(0, trackWidth - thumbWidth)
       const playedPixel = Math.round(travelWidth * ratio)
       if (playedPixel !== lastVisualPixelRef.current) {
@@ -131,12 +137,24 @@ export const ProgressControl = memo(function ProgressControl({
         progressRangeRef.current.style.setProperty('--player-range-scale', String(rangeScale))
         progressThumbRef.current.style.setProperty('--player-thumb-x', `${thumbWidth / 2 + playedPixel}px`)
       }
+      return true
     }
+    return false
+  }, [])
+
+  const updateVisualProgress = useCallback(() => {
+    if (!timeline.visualClock || timelineInteractionRef.current !== 'following' || switchVisualOwnerRef.current) return
+    const durationSeconds = timelineDurationRef.current
+    const positionSeconds = Math.min(
+      Math.max(timeline.visualClock.getPositionSeconds(), 0),
+      durationSeconds > 0 ? durationSeconds : 0,
+    )
+    paintVisualRatio(durationSeconds > 0 ? positionSeconds / durationSeconds : 0)
     const wholeSecond = Math.floor(positionSeconds)
     if (wholeSecond === lastVisualSecondRef.current) return
     lastVisualSecondRef.current = wholeSecond
     if (progressTimeRef.current) progressTimeRef.current.textContent = formatDuration(positionSeconds)
-  }, [timeline.visualClock])
+  }, [paintVisualRatio, timeline.visualClock])
 
   function readProgressValue(value: number | readonly number[]) {
     return Array.isArray(value) ? (value[0] ?? 0) : value as number
@@ -263,7 +281,10 @@ export const ProgressControl = memo(function ProgressControl({
       progressTrackWidthRef.current = track.getBoundingClientRect().width
       progressThumbWidthRef.current = thumb.getBoundingClientRect().width
       lastVisualPixelRef.current = null
-      updateVisualProgress()
+      if (switchVisualOwnerRef.current) {
+        paintVisualRatio(switchVisualRatioRef.current ?? trackSwitchMotion?.startRatio ?? 0)
+        startSwitchAnimationRef.current?.()
+      } else updateVisualProgress()
     }
     measure()
     const observer = new ResizeObserver(measure)
@@ -277,7 +298,58 @@ export const ProgressControl = memo(function ProgressControl({
       progressThumbWidthRef.current = 0
       lastVisualPixelRef.current = null
     }
-  }, [updateVisualProgress])
+  }, [paintVisualRatio, trackSwitchMotion?.startRatio, updateVisualProgress])
+
+  useLayoutEffect(() => {
+    const switchKey = trackSwitchMotion?.key
+    if (!switchKey || completedSwitchKeyRef.current === switchKey) return
+    if (trackSwitchMotion.disabled || timeline.interaction !== 'following') {
+      completedSwitchKeyRef.current = switchKey
+      switchVisualOwnerRef.current = false
+      switchVisualRatioRef.current = null
+      queueMicrotask(() => setSwitchVisualState((current) => current.key === switchKey ? { key: switchKey, active: false } : current))
+      updateVisualProgress()
+      return
+    }
+    switchVisualOwnerRef.current = true
+    const startRatio = trackSwitchMotion.startRatio
+    switchVisualRatioRef.current = startRatio
+    paintVisualRatio(startRatio)
+    let frame = 0
+    let animation: ReturnType<typeof animate> | undefined
+    const start = () => {
+      if (!trackSwitchMotion.ready || frame || animation || !paintVisualRatio(startRatio)) return
+      startSwitchAnimationRef.current = null
+      frame = window.requestAnimationFrame(() => {
+        frame = 0
+        animation = animate(startRatio, 0, {
+          duration: trackSwitchMotion.durationSeconds,
+          ease: trackSwitchMotion.ease,
+          onUpdate: (ratio) => {
+            switchVisualRatioRef.current = ratio
+            paintVisualRatio(ratio)
+          },
+          onComplete: () => {
+            completedSwitchKeyRef.current = switchKey
+            switchVisualOwnerRef.current = false
+            switchVisualRatioRef.current = null
+            updateVisualProgress()
+            setSwitchVisualState((current) => current.key === switchKey ? { key: switchKey, active: false } : current)
+          },
+        })
+      })
+    }
+    startSwitchAnimationRef.current = start
+    start()
+    return () => {
+      startSwitchAnimationRef.current = null
+      if (frame) window.cancelAnimationFrame(frame)
+      animation?.stop()
+      switchVisualOwnerRef.current = false
+      switchVisualRatioRef.current = null
+      updateVisualProgress()
+    }
+  }, [paintVisualRatio, timeline.interaction, trackSwitchMotion?.disabled, trackSwitchMotion?.durationSeconds, trackSwitchMotion?.ease, trackSwitchMotion?.key, trackSwitchMotion?.ready, trackSwitchMotion?.startRatio, updateVisualProgress])
 
   useEffect(() => {
     if (!timeline.visualClock) return
@@ -341,7 +413,7 @@ export const ProgressControl = memo(function ProgressControl({
       <Slider
         ref={progressSliderRef}
         className="control-progress-slider"
-        data-visual-clock={timeline.visualClock ? '' : undefined}
+        data-visual-clock={timeline.visualClock || switchVisualState.active ? '' : undefined}
         data-timeline-interaction={timeline.interaction}
         data-seeking={timeline.interaction === 'seeking' ? '' : undefined}
         data-duration-pending={timeline.durationSeconds <= 0 ? '' : undefined}

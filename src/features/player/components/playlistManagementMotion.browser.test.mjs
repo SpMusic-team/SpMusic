@@ -56,7 +56,7 @@ import {AppearanceProvider} from '/src/features/appearance/components/Appearance
 import {PlayerShell} from '/src/features/player/components/PlayerShell.tsx';
 import {useAudioPlayer} from '/src/features/player/hooks/useAudioPlayer.ts';
 import '/src/index.css';
-window.calls=[];window.config={scope:'a',count:3,sourceKind:'m3u8',sourcePath:null,failPath:null,gate:false,cancel:false};window.pending=[];
+window.calls=[];window.config={scope:'a',count:3,sourceKind:'m3u8',sourcePath:null,failPath:null,failAllLoads:false,gate:false,cancel:false};window.pending=[];
 const fixtureCover="data:image/svg+xml,"+encodeURIComponent("<svg xmlns='http://www.w3.org/2000/svg' width='800' height='500'><rect width='800' height='500' fill='#962aaa'/><circle cx='180' cy='200' r='140' fill='#20cdee'/><path d='M400 0L800 500H400Z' fill='#e9bc30'/></svg>");
 let state={phase:'idle',generation:null,currentTrackId:null,positionMs:0,durationMs:null,volume:.5,error:null,transportTransition:null,transportSettledRequestId:null},generation=0,currentTrack=null;
 const descriptor=(scope,i)=>({id:scope+'-'+i,sourcePath:'/audio/'+scope+'/'+i+'.flac',fileName:i+'.flac',available:true});
@@ -70,7 +70,7 @@ window.backendInvoke=async(command,args)=>{
  if(command==='audio_open_source'){if(window.config.cancel)throw {code:'USER_CANCELLED',message:'cancelled',recoverable:true};return {kind:'playlist',playlist:playlist()}}
  if(command==='audio_load_file'||command==='audio_load_and_play'){
   if(window.config.gate)await new Promise(resolve=>window.pending.push(resolve));
-  if(input.path===window.config.failPath)throw {code:'UNREADABLE_FILE',message:'injected unreadable file',recoverable:true};
+  if(window.config.failAllLoads||input.path===window.config.failPath)throw {code:'UNREADABLE_FILE',message:'injected unreadable file',recoverable:true};
   const result=track(input.path);currentTrack=result;state={...state,phase:command==='audio_load_and_play'?'playing':'ready',generation:++generation,currentTrackId:result.id,durationMs:180000,positionMs:0};
   if(command==='audio_load_file')return result;
   const response={requestId:input.requestId,generation,trackId:result.id,fileName:result.fileName,state:{...state}};
@@ -299,6 +299,146 @@ if(process.env.SPMUSIC_MOTION_TIMING_BASELINE==='1') {
     }
     writeFileSync(join(screenshotDirectory,'baseline-timing-summary.json'),JSON.stringify(report,null,2))
   } finally {await browser.close()}
+  process.exit(0)
+}
+
+if (process.env.SPMUSIC_PROGRESS_FOCUSED === '1') {
+  const { page, errors } = await open(1280, 900, 'shell', 'no-preference')
+  try {
+    await importSource(page, 'a')
+    await page.locator('.media-library-category[data-category-id="playlists"]').click()
+    await settled(page, '.playlist-management')
+    await page.getByRole('button', { name: '打开播放列表 Playlist a', exact: true }).click()
+    await settled(page, '.playlist-panel')
+    await page.locator('.playlist-playback-toggle').click()
+    await page.waitForFunction(() => window.viewModel.playback.isPlaying)
+    await page.evaluate(() => window.emitPosition(90000))
+    await page.waitForFunction(() => {
+      const slider = document.querySelector('.playlist-playback-progress .control-progress-slider')
+      const track = slider?.querySelector('[data-slot="slider-track"]')
+      const thumb = slider?.querySelector('[data-slot="slider-thumb"]')
+      return track && thumb && thumb.getBoundingClientRect().x - track.getBoundingClientRect().x > track.getBoundingClientRect().width * .4
+    })
+    const trace = () => page.evaluate(() => {
+      window.progressTrace = []
+      window.progressTraceRunning = true
+      function sample() {
+        if (!window.progressTraceRunning) return
+        const slider = document.querySelector('.playlist-playback-progress .control-progress-slider')
+        const track = slider?.querySelector('[data-slot="slider-track"]')
+        const thumb = slider?.querySelector('[data-slot="slider-thumb"]')
+        if (track && thumb) window.progressTrace.push({
+          id: window.viewModel.playback.track?.id,
+          sequence: window.viewModel.playback.selectionActivitySequence,
+          pending: window.viewModel.playback.isSelectionPending,
+          x: thumb.getBoundingClientRect().x - track.getBoundingClientRect().x,
+          width: track.getBoundingClientRect().width,
+          toggles: Array.from(document.querySelectorAll('.playlist-playback-dock .playlist-playback-toggle'))
+            .map(toggle => toggle.getAttribute('aria-label')),
+        })
+        requestAnimationFrame(sample)
+      }
+      requestAnimationFrame(sample)
+    })
+    const finishTrace = () => page.evaluate(() => { window.progressTraceRunning = false; return window.progressTrace })
+    const watchToggleIcons = () => page.evaluate(() => {
+      window.toggleIconMutations = []
+      window.toggleIconObserver?.disconnect()
+      window.toggleIconObserver = new MutationObserver(records => {
+        for (const record of records) {
+          const toggle = record.target
+          if (!toggle.matches?.('.playlist-playback-dock .playlist-playback-toggle')) continue
+          window.toggleIconMutations.push({ previous: record.oldValue, current: toggle.getAttribute('aria-label'), time: performance.now() })
+        }
+      })
+      window.toggleIconObserver.observe(document.body, { subtree: true, attributes: true, attributeFilter: ['aria-label'], attributeOldValue: true })
+    })
+    const finishToggleIcons = () => page.evaluate(() => {
+      window.toggleIconObserver?.disconnect()
+      return window.toggleIconMutations
+    })
+    const emitEnded = (duplicate = false) => page.evaluate(async duplicate => {
+      const state = await window.backendInvoke('audio_get_state')
+      const ended = { payload: { ...state, phase: 'ended', positionMs: 180000 } }
+      window.listeners?.audio_state_changed?.(ended)
+      if (duplicate) window.listeners?.audio_state_changed?.(ended)
+    }, duplicate)
+    await trace()
+    await page.evaluate(() => { window.config.gate = true })
+    await page.evaluate(() => window.viewModel.playback.onNext())
+    await page.waitForFunction(() => window.viewModel.playback.track?.id === 'a-1' && window.viewModel.playback.isSelectionPending)
+    await page.waitForTimeout(60)
+    const manualPending = await page.evaluate(() => window.progressTrace.filter(sample => sample.id === 'a-1' && sample.pending))
+    assert(manualPending.length >= 2 && manualPending[0].x > manualPending[0].width * .35
+      && manualPending[0].x < manualPending[0].width * .6, 'manual switch starts near outgoing 50% progress')
+    assert(manualPending.every(sample => sample.toggles.length > 0 && sample.toggles.every(label => label === '暂停')),
+      'all visible dock instances keep the playing icon during manual selection')
+    await page.evaluate(() => { window.config.gate = false; window.pending.splice(0).forEach(resolve => resolve()) })
+    await page.waitForFunction(() => window.viewModel.playback.track?.id === 'a-1' && !window.viewModel.playback.isSelectionPending)
+    await page.waitForTimeout(600)
+    const manual = (await finishTrace()).filter(sample => sample.id === 'a-1')
+    assert(manual.some(sample => sample.x > sample.width * .05 && sample.x < sample.width * .35), 'manual switch traverses from old progress toward left')
+    assert(manual.at(-1).x < 5, 'manual switch settles at new timeline origin')
+    assert(manual.every(sample => sample.toggles.every(label => label === '暂停')), 'manual switch never flashes a play icon')
+    await trace()
+    await watchToggleIcons()
+    await page.evaluate(() => { window.config.gate = true })
+    await emitEnded(true)
+    await page.waitForFunction(() => window.viewModel.playback.track?.id === 'a-2' && window.viewModel.playback.isSelectionPending)
+    const pending = await page.evaluate(() => window.progressTrace.filter(sample => sample.id === 'a-2' && sample.pending))
+    assert(pending.length >= 1 && pending.every(sample => sample.x > sample.width * .75), 'automatic next track holds right edge while backend is pending')
+    await page.evaluate(() => { window.config.gate = false; window.pending.splice(0).forEach(resolve => resolve()) })
+    await page.waitForFunction(() => window.viewModel.playback.track?.id === 'a-2' && !window.viewModel.playback.isSelectionPending)
+    await page.waitForTimeout(650)
+    const automaticTrace = await finishTrace()
+    const automatic = automaticTrace.filter(sample => sample.id === 'a-2')
+    const automaticIcons = await finishToggleIcons()
+    assert(automaticIcons.every(change => change.previous !== '播放' && change.current !== '播放'), 'automatic continuation never mutates pause icon to play')
+    assert(automaticTrace.every(sample => sample.toggles.every(label => label === '暂停')), 'automatic continuation keeps pause icon on every frame including ended old track')
+    assert(automatic[0].x > automatic[0].width * .75, 'natural end begins progress at right edge')
+    assert(automatic.some(sample => sample.x > sample.width * .2 && sample.x < sample.width * .8), 'natural end traverses intermediate progress')
+    assert(automatic.at(-1).x < 5, 'natural end settles at new timeline origin')
+    await page.evaluate(() => window.viewModel.playback.onRepeatCycle())
+    await page.waitForFunction(() => window.viewModel.playback.repeatMode === 'repeat-one')
+    const previousSequence = await page.evaluate(() => window.viewModel.playback.selectionActivitySequence)
+    await trace()
+    await watchToggleIcons()
+    await emitEnded()
+    await page.waitForFunction(previous => window.viewModel.playback.selectionActivitySequence > previous && !window.viewModel.playback.isSelectionPending, previousSequence)
+    await page.waitForTimeout(650)
+    const repeat = (await finishTrace()).filter(sample => sample.id === 'a-2' && sample.sequence > previousSequence)
+    const repeatIcons = await finishToggleIcons()
+    assert(repeatIcons.every(change => change.previous !== '播放' && change.current !== '播放'), 'repeat-one continuation never mutates pause icon to play')
+    assert(repeat.length >= 3 && repeat[0].x > repeat[0].width * .75, 'repeat-one restarts same ID from right edge')
+    assert(repeat.some(sample => sample.x > sample.width * .2 && sample.x < sample.width * .8), 'repeat-one traverses intermediate progress')
+    assert(repeat.at(-1).x < 5, 'repeat-one settles at timeline origin')
+    await page.evaluate(() => window.viewModel.playback.onRepeatCycle())
+    await page.waitForFunction(() => window.viewModel.playback.repeatMode === 'sequential')
+    const terminalSequence = await page.evaluate(() => window.viewModel.playback.selectionActivitySequence)
+    await watchToggleIcons()
+    await emitEnded()
+    await page.waitForFunction(() => !window.viewModel.playback.isPlaying)
+    const terminalIcons = await finishToggleIcons()
+    assert(terminalIcons.some(change => change.previous === '暂停' && change.current === '播放'), 'terminal sequential end changes pause icon to play')
+    assert.equal(await page.evaluate(() => window.viewModel.playback.selectionActivitySequence), terminalSequence, 'terminal sequential end does not select another track')
+    await page.evaluate(() => window.viewModel.playback.onRepeatCycle())
+    await page.waitForFunction(() => window.viewModel.playback.repeatMode === 'all-categories-until-stop')
+    await page.evaluate(() => window.viewModel.playback.onRepeatCycle())
+    await page.waitForFunction(() => window.viewModel.playback.repeatMode === 'list-loop')
+    await importSource(page, 'failure')
+    await page.locator('.playlist-playback-toggle').click()
+    await page.waitForFunction(() => window.viewModel.playback.isPlaying)
+    await page.evaluate(() => { window.config.failAllLoads = true })
+    await watchToggleIcons()
+    await emitEnded()
+    await page.waitForFunction(() => !window.viewModel.playback.isSelectionPending
+      && window.viewModel.playback.selectionVisualIntent === null)
+    const failedContinuationIcons = await finishToggleIcons()
+    assert(failedContinuationIcons.some(change => change.previous === '暂停' && change.current === '播放'), 'failed automatic continuation releases the playing icon')
+    assert.equal(await page.locator('.playlist-playback-toggle').first().getAttribute('aria-label'), '播放', 'failed automatic continuation shows the stopped icon')
+    assert.deepEqual(errors, [], 'no browser errors')
+    console.log('PASS manual switch, natural ended and repeat-one icon continuity/progress animation; sequential tail and failed continuation stop through real PlayerShell/useAudioPlayer')
+  } finally { await page.close(); await browser.close() }
   process.exit(0)
 }
 

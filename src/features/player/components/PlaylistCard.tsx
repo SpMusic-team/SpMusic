@@ -65,8 +65,8 @@ export const PlaylistCard = memo(function PlaylistCard({
   onToggleSelect,
 }: PlaylistCardProps) {
   const handleClick = () => {
-    if (selectMode) onToggleSelect(track.id)
-    else onActivate(track.id)
+    if (selectMode) onToggleSelect(songKey ?? track.id)
+    else onActivate(songKey ?? track.id)
   }
   const title = track.title
   const label = unavailable
@@ -116,14 +116,14 @@ export const PlaylistCard = memo(function PlaylistCard({
       aria-label={label}
       onClick={handleClick}
     >
-      {contentVisible ? <PlaylistCardContent track={track} coverUrl={coverUrl} artworkVisible={artworkVisible}
+      {contentVisible ? <PlaylistCardContent track={track} songKey={songKey} coverUrl={coverUrl} artworkVisible={artworkVisible}
         selectMode={selectMode} unavailable={unavailable} showExtendedMetadata={showExtendedMetadata}
         coverState={coverState} coverFailed={coverFailed} onCoverFailed={onCoverFailed} /> : null}
     </button>
   )
 })
 
-function PlaylistCardContent({ track, coverUrl, artworkVisible, selectMode, unavailable, showExtendedMetadata, coverState, coverFailed, onCoverFailed }: Pick<PlaylistCardProps, 'track' | 'coverUrl' | 'artworkVisible' | 'selectMode' | 'unavailable' | 'showExtendedMetadata' | 'coverFailed' | 'onCoverFailed'> & { coverState: PlaylistCardCoverState }) {
+function PlaylistCardContent({ track, songKey, coverUrl, artworkVisible, selectMode, unavailable, showExtendedMetadata, coverState, coverFailed, onCoverFailed }: Pick<PlaylistCardProps, 'track' | 'songKey' | 'coverUrl' | 'artworkVisible' | 'selectMode' | 'unavailable' | 'showExtendedMetadata' | 'coverFailed' | 'onCoverFailed'> & { coverState: PlaylistCardCoverState }) {
   const systemIcons = useSystemIcons()
   const coverSource = coverUrl ?? track.coverImage ?? track.coverImageFallback
   const coverMarkVisible = coverState === 'empty' || coverState === 'error'
@@ -145,7 +145,7 @@ function PlaylistCardContent({ track, coverUrl, artworkVisible, selectMode, unav
       image.src = fallback
     } else {
       image.hidden = true
-      if (coverSource) onCoverFailed(track.id, `${coverSource}\0${fallback ?? ''}`)
+      if (coverSource) onCoverFailed(songKey ?? track.id, `${coverSource}\0${fallback ?? ''}`)
     }
   }
   return <>

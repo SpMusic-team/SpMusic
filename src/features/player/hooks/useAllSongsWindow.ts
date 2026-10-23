@@ -1,14 +1,22 @@
-import { useEffect, useRef, useState, type RefObject } from 'react'
+import { useCallback, useEffect, useRef, useSyncExternalStore, type RefObject } from 'react'
 import { playlistCoverImageFromPixels } from '@/features/player/model/playlistCoverPixels'
+import { decodePlaylistCover } from '@/features/player/model/playlistCoverReadiness'
 import { normalizeAudioSourcePath } from '@/features/player/model/playlistTrackSummary'
 import type { AllSongsItem } from '@/features/player/model/playerUiViewModel'
-import { beginAudioPlaylistCoverWindow, loadAudioPlaylistCoverPixels, probeAudioPlaylistCover } from '@/features/player/services/audioCommands'
+import { beginAudioPlaylistCoverWindow, probeAudioPlaylistCover } from '@/features/player/services/audioCommands'
+import { schedulePlaylistCoverPixels } from '@/features/player/services/playlistCoverScheduler'
 
-type WindowRow = Readonly<{ coverUrl?: string }>
+type WindowRow = Readonly<{ trackId: string; sourcePath: string; coverUrl?: string }>
+export type AllSongsCoverStore = {
+  cache: Map<string, WindowRow>
+  listeners: Map<string, Set<() => void>>
+  notify: (key: string) => void
+}
 type WindowRuntime = {
   mounted: boolean
+  controller: AbortController
   desired: Set<string>
-  cache: Map<string, WindowRow>
+  cache: AllSongsCoverStore['cache']
   coverDone: Set<string>
   coverQueued: Set<string>
   coverActive: number
@@ -17,23 +25,50 @@ type WindowRuntime = {
 
 const WINDOW_CONCURRENCY = 2
 const CACHE_LIMIT = 60
-const EMPTY_ROWS: ReadonlyMap<string, WindowRow> = new Map()
 
-export function useAllSongsWindow(items: readonly AllSongsItem[], panelRef: RefObject<HTMLElement | null>, listRef: RefObject<HTMLDivElement | null>, enabled: boolean) {
-  const [resolved, setResolved] = useState<ReadonlyMap<string, WindowRow>>(EMPTY_ROWS)
+export function createAllSongsCoverStore(): AllSongsCoverStore {
+  const listeners = new Map<string, Set<() => void>>()
+  return { cache: new Map(), listeners, notify: (key) => {
+    for (const listener of listeners.get(key) ?? []) listener()
+  } }
+}
+
+export function disposeAllSongsCoverStore(store: AllSongsCoverStore): void {
+  for (const row of store.cache.values()) if (row.coverUrl) URL.revokeObjectURL(row.coverUrl)
+  const keys = [...store.cache.keys()]
+  store.cache.clear()
+  for (const key of keys) store.notify(key)
+}
+
+export function useAllSongsCoverUrl(store: AllSongsCoverStore, key: string, trackId: string, sourcePath: string): string | undefined {
+  const subscribe = useCallback((listener: () => void) => {
+    const listeners = store.listeners.get(key) ?? new Set<() => void>()
+    listeners.add(listener)
+    store.listeners.set(key, listeners)
+    return () => {
+      listeners.delete(listener)
+      if (!listeners.size) store.listeners.delete(key)
+    }
+  }, [store, key])
+  const getSnapshot = useCallback(() => {
+    const row = store.cache.get(key)
+    return row?.trackId === trackId && row.sourcePath === sourcePath ? row.coverUrl : undefined
+  }, [store, key, trackId, sourcePath])
+  return useSyncExternalStore(subscribe, getSnapshot, () => undefined)
+}
+
+export function useAllSongsWindow(items: readonly AllSongsItem[], panelRef: RefObject<HTMLElement | null>, listRef: RefObject<HTMLDivElement | null>, enabled: boolean, metadataLoading: boolean, store: AllSongsCoverStore) {
   const runtimeRef = useRef<WindowRuntime | null>(null)
-  const itemsRef = useRef(items)
+  const itemsByKeyRef = useRef<ReadonlyMap<string, AllSongsItem>>(new Map())
+  const metadataLoadingRef = useRef(false)
 
   useEffect(() => {
     if (!enabled) return
     const runtime: WindowRuntime = {
-      mounted: true, desired: new Set(), cache: new Map(), coverDone: new Set(),
+      mounted: true, controller: new AbortController(), desired: new Set(), cache: store.cache, coverDone: new Set(store.cache.keys()),
       coverQueued: new Set(), coverActive: 0, pump: () => {},
     }
     runtimeRef.current = runtime
-    queueMicrotask(() => {
-      if (runtime.mounted) setResolved(EMPTY_ROWS)
-    })
     const clientId = `all-songs-${globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)}`
     const coverReady = beginAudioPlaylistCoverWindow(clientId).catch(() => null)
 
@@ -50,44 +85,60 @@ export function useAllSongsWindow(items: readonly AllSongsItem[], panelRef: RefO
         if (evicted?.coverUrl) URL.revokeObjectURL(evicted.coverUrl)
         runtime.cache.delete(oldest)
         runtime.coverDone.delete(oldest)
+        store.notify(oldest)
       }
-      setResolved(new Map(runtime.cache))
+      store.notify(key)
       return true
     }
 
     const pump = () => {
       if (!runtime.mounted) return
-      // Text and durations are prepared before the scrollable list mounts.
-      // Only artwork remains windowed, so scrolling never starts audio hydration.
+      // Cover work is independent of the whole-library summary/duration pass.
+      // Keep a small first-screen demand alive while that pass hides the list.
       while (runtime.coverActive < WINDOW_CONCURRENCY) {
-        // Rows already carrying a player thumbnail are skipped: the visual
-        // pipeline has the same artwork, so reading it again here would only
-        // replace one image with another and flash the cover. Pump re-runs when
-        // `items` change, so a row becomes a candidate again if the thumbnail
-        // disappears.
-        const item = itemsRef.current.find((candidate) => runtime.desired.has(candidate.key) && candidate.available && !runtime.coverDone.has(candidate.key) && !runtime.coverQueued.has(candidate.key) && !candidate.track.coverThumbnail)
+        let item: AllSongsItem | undefined
+        for (const key of runtime.desired) {
+          const candidate = itemsByKeyRef.current.get(key)
+          if (candidate?.available && !candidate.track.coverThumbnail && !runtime.coverDone.has(key) && !runtime.coverQueued.has(key)) {
+            item = candidate
+            break
+          }
+        }
         if (!item) break
         runtime.coverQueued.add(item.key)
         runtime.coverActive += 1
         void (async () => {
           let coverUrl: string | undefined
+          const itemIsCurrent = () => {
+            const current = itemsByKeyRef.current.get(item.key)
+            return runtime.mounted && runtime.desired.has(item.key)
+              && current?.trackId === item.trackId && current.sourcePath === item.sourcePath
+              && !current.track.coverThumbnail
+          }
           try {
             const coverGeneration = await coverReady
             if (coverGeneration == null) {
               runtime.coverDone.add(item.key)
               return
             }
-            if (!runtime.mounted || !runtime.desired.has(item.key)) return
+            if (!itemIsCurrent()) return
             const cover = await probeAudioPlaylistCover(item.sourcePath)
             if (cover.id !== item.trackId || normalizeAudioSourcePath(cover.sourcePath) !== item.key) throw new Error('Cover does not match its folder descriptor')
-            if (!runtime.mounted || !runtime.desired.has(item.key)) return
+            if (!itemIsCurrent()) return
             if (cover.coverArt?.filePath) {
-              const pixels = await loadAudioPlaylistCoverPixels({ clientId, filePath: cover.coverArt.filePath, maxEdge: 128, windowGeneration: coverGeneration })
-              if (!runtime.mounted || !runtime.desired.has(item.key)) return
-              coverUrl = playlistCoverImageFromPixels(pixels).src
+              const pixels = await schedulePlaylistCoverPixels(
+                { clientId, filePath: cover.coverArt.filePath, maxEdge: 128, windowGeneration: coverGeneration },
+                { priority: 1, signal: runtime.controller.signal,
+                  isCurrent: itemIsCurrent },
+              )
+              if (!pixels) return
+              if (!itemIsCurrent()) return
+              const thumbnail = playlistCoverImageFromPixels(pixels)
+              coverUrl = thumbnail.src
+              await decodePlaylistCover(thumbnail)
+              if (!itemIsCurrent()) return
             }
-            const row = runtime.cache.get(item.key) ?? {}
-            if (publish(item.key, { ...row, coverUrl })) {
+            if (itemIsCurrent() && publish(item.key, { trackId: item.trackId, sourcePath: item.sourcePath, coverUrl })) {
               runtime.coverDone.add(item.key)
               coverUrl = undefined
             }
@@ -107,17 +158,40 @@ export function useAllSongsWindow(items: readonly AllSongsItem[], panelRef: RefO
     pump()
     return () => {
       runtime.mounted = false
+      runtime.controller.abort()
       runtime.desired.clear()
-      for (const row of runtime.cache.values()) if (row.coverUrl) URL.revokeObjectURL(row.coverUrl)
-      runtime.cache.clear()
       if (runtimeRef.current === runtime) runtimeRef.current = null
     }
-  }, [enabled])
+  }, [enabled, store])
 
   useEffect(() => {
-    itemsRef.current = items
+    itemsByKeyRef.current = new Map(items.map((item) => [item.key, item]))
+    for (const item of items) {
+      const cached = store.cache.get(item.key)
+      if (!cached) continue
+      if (!item.track.coverThumbnail && cached.trackId === item.trackId && cached.sourcePath === item.sourcePath) continue
+      if (cached.coverUrl) URL.revokeObjectURL(cached.coverUrl)
+      store.cache.delete(item.key)
+      runtimeRef.current?.coverDone.delete(item.key)
+      store.notify(item.key)
+    }
     runtimeRef.current?.pump()
-  }, [items])
+  }, [items, store])
+
+  useEffect(() => {
+    const runtime = runtimeRef.current
+    if (!enabled || !runtime) return
+    if (!metadataLoading && !metadataLoadingRef.current) return
+    const firstScreen = new Set(items.filter((item) => item.available).slice(0, 8).map((item) => item.key))
+    for (const key of runtime.desired) if (!firstScreen.has(key)) runtime.desired.delete(key)
+    for (const key of firstScreen) runtime.desired.add(key)
+    runtime.pump()
+    if (!metadataLoading) {
+      metadataLoadingRef.current = false
+      return
+    }
+    metadataLoadingRef.current = true
+  }, [enabled, items, metadataLoading])
 
   useEffect(() => {
     if (!enabled) return
@@ -141,7 +215,7 @@ export function useAllSongsWindow(items: readonly AllSongsItem[], panelRef: RefO
     // Retain visibility across list-summary updates. Clearing it dropped
     // in-flight covers and forced their full decode to run again.
     return () => observer.disconnect()
-  }, [items, panelRef, listRef, enabled])
+  }, [items, panelRef, listRef, enabled, metadataLoading])
 
-  return enabled ? resolved : EMPTY_ROWS
+  return store
 }

@@ -15,6 +15,8 @@ export type TrackSelectionVisualIntent = {
   targetTrackId: string
   direction: -1 | 1
   source: TrackSelectionVisualSource
+  progressStartRatio: number
+  preservePlayingVisual: boolean
   previewTokenId?: number
 }
 
@@ -35,6 +37,7 @@ export type PlayerPlaybackViewModel = {
   artworkPrefetchCandidates?: readonly TrackArtworkPrefetchCandidate[]
   selectionActivitySequence?: number
   selectionVisualIntent?: TrackSelectionVisualIntent | null
+  automaticContinuationVisual?: boolean
   detailsPending?: boolean
   contentState?: PlayerContentState
   isPlaying: boolean

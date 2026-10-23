@@ -1,12 +1,12 @@
 import { mediaLibraryCategories } from '@/features/player/model/mediaLibraryCategories'
-import { useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from 'react'
 import { LibraryChromeTransitionContext } from '@/features/player/hooks/useLibraryChromeTransition'
 import { motion, useAnimationControls, useIsPresent } from 'motion/react'
 import { useLibraryDockBinding } from '@/features/player/hooks/useLibraryDockBinding'
 import { readLibraryLayoutRect } from '@/features/player/model/libraryNavigationGeometry'
 import { useCollectionLayout } from '@/features/player/hooks/useCollectionLayout'
-import { useAllSongsWindow } from '@/features/player/hooks/useAllSongsWindow'
+import { useAllSongsCoverUrl, useAllSongsWindow, type AllSongsCoverStore } from '@/features/player/hooks/useAllSongsWindow'
 import { PlaylistCard } from '@/features/player/components/PlaylistCard'
 import { PlaylistMetadataLoading } from '@/features/player/components/PlaylistPanel'
 import { PLAYLIST_SONG_LAYOUTS, ALL_SONGS_LAYOUT_STORAGE_KEY, defaultAllSongsLevel } from '@/features/player/model/playlistSongLayouts'
@@ -19,7 +19,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Field, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { LibraryCover, PlaylistLibrarySidebar } from '@/features/player/components/PlaylistLibrarySidebar'
-import type { PlayerPlaybackViewModel, PlayerPlaylistViewModel, PlayerTimelineViewModel } from '@/features/player/model/playerUiViewModel'
+import type { AllSongsItem, PlayerPlaybackViewModel, PlayerPlaylistViewModel, PlayerTimelineViewModel } from '@/features/player/model/playerUiViewModel'
 import musicLarge from '@/assets/playlist-library/e5527.svg'
 import musicSmall from '@/assets/playlist-library/de6be.svg'
 import parentIcon from '@/assets/playlist-library/2d425.svg'
@@ -79,6 +79,7 @@ function compareByQuickIndex(left: string, right: string): number {
 
 type Props = {
   playlist: PlayerPlaylistViewModel
+  allSongsCoverStore: AllSongsCoverStore
   librarySidebarOpen: boolean
   onLibrarySidebarOpenChange: (open: boolean) => void
   searchRequestId?: number
@@ -90,7 +91,39 @@ type Props = {
   onOpenPlayer: () => void
 }
 
-export function PlaylistLibraryPanel({ playlist, librarySidebarOpen, onLibrarySidebarOpenChange, searchRequestId = 0 }: Props) {
+type AllSongsCardProps = {
+  item: AllSongsItem
+  index: number
+  store: AllSongsCoverStore
+  current: boolean
+  canActivate: boolean
+  selectMode: boolean
+  selected: boolean
+  artworkVisible: boolean
+  showExtendedMetadata: boolean
+  coverFailed: boolean
+  onCoverFailed: (key: string, source: string) => void
+  onActivate: (key: string) => void
+  onToggleSelect: (key: string) => void
+}
+
+const AllSongsCard = memo(function AllSongsCard({ item, index, store, current, canActivate, selectMode, selected,
+  artworkVisible, showExtendedMetadata, coverFailed, onCoverFailed, onActivate, onToggleSelect }: AllSongsCardProps) {
+  const coverUrl = useAllSongsCoverUrl(store, item.key, item.trackId, item.sourcePath)
+  const track = item.track
+  const bitDepth = track.audioFormat?.bitDepth
+  const hasFormat = Boolean((track.durationSeconds ?? 0) > 0 || track.fileExtension || (bitDepth != null && bitDepth >= 24))
+  const contentShape = Number(Boolean(track.title)) | (Number(Boolean(track.artist)) << 1)
+    | (Number(Boolean(track.artist || track.album)) << 2) | (Number(hasFormat) << 3)
+  return <PlaylistCard songKey={item.key} track={track} index={index} coverUrl={track.coverThumbnail ? undefined : coverUrl}
+    current={current} unavailable={!item.available} canSelectUnavailable canActivate={canActivate}
+    selectMode={selectMode} selected={selected} artworkVisible={artworkVisible}
+    showExtendedMetadata={showExtendedMetadata} contentVisible contentRepresentative={false}
+    contentShape={contentShape} coverFailed={coverFailed} onCoverFailed={onCoverFailed}
+    onActivate={onActivate} onToggleSelect={onToggleSelect} />
+})
+
+export function PlaylistLibraryPanel({ playlist, allSongsCoverStore, librarySidebarOpen, onLibrarySidebarOpenChange, searchRequestId = 0 }: Props) {
   const appearanceMotion = useAppearanceMotion()
   const isPresent = useIsPresent()
   const chromeTransition = useContext(LibraryChromeTransitionContext)
@@ -108,7 +141,7 @@ export function PlaylistLibraryPanel({ playlist, librarySidebarOpen, onLibrarySi
   const projectionKey = sharedProjection ? 'shared' : 'local'
   const entryControls = useAnimationControls()
   // Use a 250ms default, preserving theme scaling and the presence cleanup budget.
-  const returnTransition = { ...appearanceMotion.layoutTransition, duration: Math.min((appearanceMotion.layoutTransition.duration ?? 0) * (5 / 6), 0.65) }
+  const returnTransition = { ...appearanceMotion.layoutTransition, duration: Math.min((appearanceMotion.layoutTransition.duration ?? 0) * (5 / 6), 0.55) }
   const library = playlist.library!
   const categoryId = library.route?.view === 'category' ? library.route.categoryId : 'playlists'
   const category = mediaLibraryCategories.find((item) => item.id === categoryId)!
@@ -199,7 +232,28 @@ export function PlaylistLibraryPanel({ playlist, librarySidebarOpen, onLibrarySi
   const visibleSongs = useMemo(() => (library.allSongs ?? [])
     .filter((item) => `${item.track.title} ${item.track.artist} ${item.track.album}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
     .sort((left, right) => compareByQuickIndex(left.track.title, right.track.title)), [library.allSongs, query])
-  const windowRows = useAllSongsWindow(visibleSongs, panelRef, songsListRef, isSongs && library.allSongsMetadataStatus !== 'loading')
+  const coverStore = useAllSongsWindow(visibleSongs, panelRef, songsListRef,
+    isSongs && songsLayout.showArtwork, library.allSongsMetadataStatus === 'loading', allSongsCoverStore)
+  const songsByKey = useMemo(() => new Map(visibleSongs.map((item) => [item.key, item])), [visibleSongs])
+  const songActionsRef = useRef({ songsByKey, onPlaySong: library.onPlaySong })
+  useLayoutEffect(() => { songActionsRef.current = { songsByKey, onPlaySong: library.onPlaySong } }, [songsByKey, library.onPlaySong])
+  const handleSongActivate = useCallback((key: string) => {
+    const item = songActionsRef.current.songsByKey.get(key)
+    if (item) songActionsRef.current.onPlaySong?.(item.scope, item.trackId)
+  }, [])
+  const handleSongToggleSelect = useCallback((key: string) => {
+    setSelected((previous) => {
+      const next = new Set(previous)
+      if (next.has(key)) next.delete(key); else next.add(key)
+      return next
+    })
+  }, [])
+  const handleSongCoverFailed = useCallback((key: string) => {
+    setFailedSongCovers((previous) => {
+      if (previous.has(key)) return previous
+      return new Set(previous).add(key)
+    })
+  }, [])
   const quickIndexTargets = new Map<string, number>()
   ;(isSongs ? visibleSongs.map((item) => item.track.title) : visible.map((item) => item.name)).forEach((name, index) => {
     const key = quickIndexKey(name)
@@ -393,28 +447,15 @@ export function PlaylistLibraryPanel({ playlist, librarySidebarOpen, onLibrarySi
         data-layout-level={songsLayout.level} data-layout-flow={songsLayout.flow} data-layout-columns={songsLayout.columns}
         data-content-window="full" data-cover-motion={appearanceMotion.disabled ? 'off' : undefined}
         style={{ ...songsLayout.style, touchAction: 'pan-y' }}>
-        {visibleSongs.map((item, index) => {
-          const row = windowRows.get(item.key)
-          const track = item.track
-          const bitDepth = track.audioFormat?.bitDepth
-          const hasFormat = Boolean((track.durationSeconds ?? 0) > 0 || track.fileExtension || (bitDepth != null && bitDepth >= 24))
-          const contentShape = Number(Boolean(track.title)) | (Number(Boolean(track.artist)) << 1)
-            | (Number(Boolean(track.artist || track.album)) << 2) | (Number(hasFormat) << 3)
-          return <PlaylistCard key={item.key} songKey={item.key} track={track} index={index}
+        {visibleSongs.map((item, index) => <AllSongsCard key={item.key} item={item} index={index} store={coverStore}
             current={item.scope === library.activeScope && item.trackId === playlist.currentTrackId}
-            unavailable={!item.available} canSelectUnavailable canActivate={!playlist.isOpenAudioDisabled}
+            canActivate={!playlist.isOpenAudioDisabled}
             selectMode={selectMode} selected={selected.has(item.key)}
-            artworkVisible={songsLayout.showArtwork} coverUrl={row?.coverUrl}
-            showExtendedMetadata={songsLayout.flow !== 'tile'} contentVisible contentRepresentative={false}
-            contentShape={contentShape} coverFailed={failedSongCovers.has(item.key)}
-            onCoverFailed={() => setFailedSongCovers((previous) => new Set(previous).add(item.key))}
-            onActivate={() => library.onPlaySong?.(item.scope, item.trackId)}
-            onToggleSelect={() => setSelected((previous) => {
-              const next = new Set(previous)
-              if (next.has(item.key)) next.delete(item.key); else next.add(item.key)
-              return next
-            })} />
-        })}
+            artworkVisible={songsLayout.showArtwork} showExtendedMetadata={songsLayout.flow !== 'tile'}
+            coverFailed={failedSongCovers.has(item.key)}
+            onCoverFailed={handleSongCoverFailed}
+            onActivate={handleSongActivate}
+            onToggleSelect={handleSongToggleSelect} />)}
       </div> : <MotionEmpty className="playlist-management-empty" variants={navigationMotion.chrome} initial={false} animate="animate"><EmptyHeader><EmptyTitle>{(library.allSongs?.length ?? 0) ? '没有匹配的歌曲' : '暂无歌曲'}</EmptyTitle><EmptyDescription>{(library.allSongs?.length ?? 0) ? '尝试其他名称，或清空搜索。' : '选择音乐文件夹后，这里会汇总其中及子文件夹内的歌曲；不会自动创建播放列表。下次启动会重新扫描。'}</EmptyDescription></EmptyHeader><Button disabled={library.isImportPending} onClick={(library.allSongs?.length ?? 0) ? () => setQuery('') : library.onSelectFolders}>{(library.allSongs?.length ?? 0) ? '清空搜索' : '选择文件夹'}</Button></MotionEmpty>) : categoryId === 'playlists' && library.isPlaylistRestorePending && !visible.length ? <Empty className="playlist-management-empty"><EmptyHeader><EmptyTitle>正在恢复播放列表</EmptyTitle><EmptyDescription>正在读取已保存的 M3U8 清单。</EmptyDescription></EmptyHeader></Empty> : visible.length ? <div ref={gridRef} className="playlist-management-grid"
         data-layout-level={layout.level} data-layout-flow={layout.flow} data-layout-artwork={layout.showArtwork}
         aria-label={layout.label} style={{ ...layout.style, touchAction: 'pan-y' }}>

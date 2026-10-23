@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
-import { useAppearance, useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
+import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { getShuffleModePresentation, showPlaybackModeToast } from '@/features/player/components/playbackModePresentation'
 import { IconButton } from '@/features/player/components/IconButton'
 import { PlaylistCard } from '@/features/player/components/PlaylistCard'
@@ -14,7 +14,6 @@ import { PlaylistCoverImage } from '@/features/player/components/PlaylistCoverIm
 import { PlaylistPlaybackDock } from '@/features/player/components/PlaylistPlaybackDock'
 import { PlaylistLibrarySidebar } from '@/features/player/components/PlaylistLibrarySidebar'
 import { useCollectionLayout } from '@/features/player/hooks/useCollectionLayout'
-import { usePlaylistContentWindow } from '@/features/player/hooks/usePlaylistContentWindow'
 import { usePlaylistOverscroll } from '@/features/player/hooks/usePlaylistOverscroll'
 import { usePlaylistControllerMotion } from '@/features/player/hooks/usePlaylistControllerMotion'
 import { LibraryDockContext, useLibraryDockBinding } from '@/features/player/hooks/useLibraryDockBinding'
@@ -44,6 +43,7 @@ type PlaylistPanelProps = {
   onOpenAudio?: () => void
   onTrackSelect?: (trackId: string) => void
   onVisibleTrackIdsChange?: (trackIds: readonly string[], keepPersistentArtwork?: boolean, showArtwork?: boolean, demand?: PlaylistArtworkDemand) => void
+  onEntrySettled?: () => void
   playback: PlayerPlaybackViewModel
   timeline: PlayerTimelineViewModel
   visualIsPlaying: boolean
@@ -253,6 +253,7 @@ export function PlaylistPanel({
   onOpenAudio,
   onTrackSelect,
   onVisibleTrackIdsChange,
+  onEntrySettled,
   playback,
   timeline,
   visualIsPlaying,
@@ -264,7 +265,6 @@ export function PlaylistPanel({
   searchRequestId = 0,
 }: PlaylistPanelProps) {
   const systemIcons = useSystemIcons()
-  const { appearance } = useAppearance()
   const appearanceMotion = useAppearanceMotion()
   // Motion registers shared nodes at mount. Mode-specific keys below unmount
   // those nodes while their layoutId still identifies the old projection stack.
@@ -272,11 +272,25 @@ export function PlaylistPanel({
   const [isPresent, safeToRemove] = usePresence()
   const safeToRemoveRef = useRef(safeToRemove)
   useLayoutEffect(() => { safeToRemoveRef.current = safeToRemove }, [safeToRemove])
+  const onEntrySettledRef = useRef(onEntrySettled)
+  useLayoutEffect(() => { onEntrySettledRef.current = onEntrySettled }, [onEntrySettled])
+  const entryMotionSettledRef = useRef(false)
+  const entrySettledReportedRef = useRef(false)
+  const metadataStatusRef = useRef(metadataStatus)
+  useLayoutEffect(() => { metadataStatusRef.current = metadataStatus }, [metadataStatus])
+  const reportEntrySettled = useCallback(() => {
+    if (!entryMotionSettledRef.current || entrySettledReportedRef.current || metadataStatusRef.current === 'loading') return
+    entrySettledReportedRef.current = true
+    onEntrySettledRef.current?.()
+  }, [])
+  useEffect(() => {
+    if (isPresent && metadataStatus !== 'loading') reportEntrySettled()
+  }, [isPresent, metadataStatus, reportEntrySettled])
   const sectionControls = useAnimationControls()
   const chromeTransition = useContext(LibraryChromeTransitionContext)
   const publishDetailVisibility = chromeTransition.publishDetailVisibility
   // Use a 250ms default, preserving theme scaling and the presence cleanup budget.
-  const returnTransition = useMemo(() => ({ ...appearanceMotion.layoutTransition, duration: Math.min((appearanceMotion.layoutTransition.duration ?? 0) * (5 / 6), 0.65) }), [appearanceMotion.layoutTransition])
+  const returnTransition = useMemo(() => ({ ...appearanceMotion.layoutTransition, duration: Math.min((appearanceMotion.layoutTransition.duration ?? 0) * (5 / 6), 0.55) }), [appearanceMotion.layoutTransition])
   const sharedScope = appearanceMotion.disabled || heroOffscreen ? undefined : library?.currentScope
   const handledEntryPositionIdRef = useRef<number | undefined>(undefined)
   const [selectMode, setSelectMode] = useState(false)
@@ -333,33 +347,11 @@ export function PlaylistPanel({
   const filteredTrackIdsKey = useMemo(() => filteredTracks.map(track => track.id).join('\u0000'), [filteredTracks])
   const firstFilteredTrackId = filteredTracks[0]?.id
   const contentShapes = useMemo(() => new Map(filteredTracks.map(track => [track.id, playlistCardContentShape(track)])), [filteredTracks])
-  const contentRepresentatives = useMemo(() => {
-    const shapes = new Set<number>()
-    return new Set([...contentShapes].flatMap(([id, shape]) => {
-      if (shapes.has(shape)) return []
-      shapes.add(shape)
-      return [id]
-    }))
-  }, [contentShapes])
-  const hasCustomLayout = (appearance.metadata.tier !== 'standard' && Boolean(appearance.advanced.customCss.trim()))
-    || (appearance.metadata.tier === 'experimental' && Boolean(appearance.experimental.layoutCss.trim()))
-  const contentWindowEnabled = filteredTracks.length > 64 && !hasCustomLayout
-  const contentWindow = usePlaylistContentWindow({
-    // The loading branch has no grid. Re-activate when that grid mounts so its
-    // scroll/resize listeners cannot remain skipped after metadata resolves.
-    panelRef, gridRef, enabled: contentWindowEnabled, active: isPresent && metadataStatus !== 'loading',
-    representatives: contentRepresentatives, theme: appearance,
-    shapeKey: [...new Set(contentShapes.values())].sort((left, right) => left - right).join(','),
-    trackIdsKey: filteredTrackIdsKey,
-    entryTrackId: entryPosition?.target === 'current-track' ? currentTrackId : null,
-  })
-  const refreshContentWindow = contentWindow.refresh
   const { level: layoutLevel, layout, announcement: layoutAnnouncement } = useCollectionLayout({
     panelRef, gridRef, layouts: PLAYLIST_SONG_LAYOUTS, storageKey: PLAYLIST_LAYOUT_STORAGE_KEY,
     defaultLevel: defaultPlaylistSongLevel, selectors: DETAIL_LAYOUT_SELECTORS,
     announce: (nextLayout) => `歌曲视图已切换为${nextLayout.label}`,
     onBeforeTransition: (snapshot, grid) => {
-      contentWindow.hold(snapshot?.keys() ?? [])
       artworkHoldIdsRef.current = snapshot ? new Set(
         [...grid.querySelectorAll<HTMLElement>('[data-playlist-track-id]')].flatMap((card) => {
           const trackId = card.dataset.playlistTrackId
@@ -369,7 +361,7 @@ export function PlaylistPanel({
         }),
       ) : null
     },
-    onSettled: () => { contentWindow.release(); artworkHoldIdsRef.current = null; setArtworkWindowRevision((previous) => previous + 1) },
+    onSettled: () => { artworkHoldIdsRef.current = null; setArtworkWindowRevision((previous) => previous + 1) },
   })
 
   const unavailable = useMemo(
@@ -447,7 +439,11 @@ export function PlaylistPanel({
     let cancelled = false
     const resting = { opacity: 1, x: 0, y: 0, scale: 1 }
     if (isPresent) {
-      void sectionControls.start(resting, returnTransition)
+      void sectionControls.start(resting, returnTransition).then(() => {
+        if (cancelled) return
+        entryMotionSettledRef.current = true
+        reportEntrySettled()
+      })
     } else if (appearanceMotion.disabled) {
       sectionControls.set(resting)
       safeToRemoveRef.current?.()
@@ -467,7 +463,7 @@ export function PlaylistPanel({
       sectionControls.stop()
     }
   }, [isPresent, appearanceMotion.disabled, appearanceMotion.libraryNavigation.transition,
-    chromeTransition.offscreenReturn, returnTransition, sectionControls])
+    chromeTransition.offscreenReturn, reportEntrySettled, returnTransition, sectionControls])
 
   useLayoutEffect(() => {
     const panel = panelRef.current
@@ -478,7 +474,6 @@ export function PlaylistPanel({
       if (entryPosition.target === 'top') {
         panel.scrollTo({ top: 0, behavior: 'instant' })
         rebaseController({ reveal: true })
-        refreshContentWindow()
         initialPositionAppliedRef.current = true
         return
       }
@@ -493,9 +488,8 @@ export function PlaylistPanel({
     const cardRect = currentCard.getBoundingClientRect()
     panel.scrollTop += cardRect.top - panelRect.top - (panel.clientHeight - cardRect.height) / 2
     rebaseController({ reveal: true })
-    refreshContentWindow()
     initialPositionAppliedRef.current = true
-  }, [currentTrackId, filteredTrackIdsKey, entryPosition, metadataStatus, rebaseController, refreshContentWindow])
+  }, [currentTrackId, filteredTrackIdsKey, entryPosition, metadataStatus, rebaseController])
 
   useLayoutEffect(() => {
     if (!searchOpen || searchRequestId <= 0 || focusedSearchRequestIdRef.current === searchRequestId) return
@@ -509,8 +503,7 @@ export function PlaylistPanel({
     panel.scrollTo({ top: 0, behavior: 'instant' })
     input.focus({ preventScroll: true })
     rebaseController({ reveal: true })
-    refreshContentWindow()
-  }, [searchOpen, searchRequestId, rebaseController, refreshContentWindow])
+  }, [searchOpen, searchRequestId, rebaseController])
 
   useLayoutEffect(() => {
     rebaseController({ reveal: true })
@@ -779,7 +772,7 @@ export function PlaylistPanel({
       // Text and duration are prepared before this grid mounts. Keep them in
       // every card's first DOM frame; only the artwork window remains lazy.
       contentVisible
-      contentRepresentative={contentRepresentatives.has(track.id)}
+      contentRepresentative={false}
       contentShape={contentShapes.get(track.id)!}
       coverFailed={failedCoverSources.get(track.id) === `${track.coverImage ?? track.coverImageFallback}\0${track.coverImageFallback ?? ''}`}
       onCoverFailed={handleCoverFailed}
@@ -788,7 +781,7 @@ export function PlaylistPanel({
     />
   )), [filteredTracks, currentTrackId, unavailable, onTrackSelect, selectMode, selectedIds,
     artworkWindowIds, showExtendedMetadata, handleActivate, handleToggleSelect,
-    contentRepresentatives, contentShapes, failedCoverSources, handleCoverFailed])
+    contentShapes, failedCoverSources, handleCoverFailed])
 
   function renderPlaylistActions(compact = false) {
     const returning = compact && !isPresent && chromeTransition.offscreenReturn && controllerActionsVisible

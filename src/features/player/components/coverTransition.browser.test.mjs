@@ -100,6 +100,8 @@ function compile(input, delay) {
   })
   js = js.replace(/from ["']([^"']+)["']/g, (line, id) => {
     if (id === 'motion/react') return `from '${dependency('motion_react.js')}'`
+    if (id === '@tauri-apps/api/core') return `from '${dependency('@tauri-apps_api_core.js')}'`
+    if (id === '@tauri-apps/api/window') return `from '${dependency('@tauri-apps_api_window.js')}'`
     if (!id.startsWith('@/')) return line
     const path = '/src/' + id.slice(2)
     const ext = ['.tsx', '.ts', '.js', ''].find(ext => existsSync(resolve(path.slice(1) + ext)))

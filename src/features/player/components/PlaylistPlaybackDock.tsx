@@ -1,14 +1,16 @@
 import { DataHistogram24Filled, Grid24Filled } from '@fluentui/react-icons'
 import { Menu, Search } from 'lucide-react'
 import { AnimatePresence, animate, motion, useIsPresent, useMotionValue, type MotionValue } from 'motion/react'
-import { Fragment, useCallback, useContext, useLayoutEffect, useMemo, useRef, useSyncExternalStore, type ReactNode, type RefObject } from 'react'
+import { Fragment, useCallback, useContext, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from 'react'
 import { LibraryChromeTransitionContext } from '@/features/player/hooks/useLibraryChromeTransition'
 import { buttonVariants } from '@/components/ui/button'
 import { PressFeedbackButton } from '@/features/player/components/PressFeedbackButton'
-import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
+import { useAppearance, useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { ProgressControl } from '@/features/player/components/ControlDock'
 import { IconButton } from '@/features/player/components/IconButton'
 import { PlaylistPlaybackCoverImage } from '@/features/player/components/PlaylistPlaybackCoverImage'
+import { ArtworkCanvas } from '@/features/player/components/ArtworkCanvas'
+import { useArtworkResourceConsumer, type ArtworkVisualLayer } from '@/features/player/hooks/useArtworkVisualResource'
 import type { PlayerPlaybackViewModel, PlayerTimelineViewModel, PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
 import { usePlaylistControllerSwipe } from '@/features/player/hooks/usePlaylistControllerSwipe'
 import type { Track, TrackArtwork } from '@/features/player/model/playerTypes'
@@ -25,6 +27,13 @@ type PlaylistPlaybackDockProps = {
   playbackTransitionPending: boolean
   playlistTrack?: PlaylistTrackItemViewModel
   playlistTracks?: readonly PlaylistTrackItemViewModel[]
+  coverLayer?: ArtworkVisualLayer | null
+  previewCoverLayer?: ArtworkVisualLayer | null
+  previewCoverReady?: boolean
+  previewCoverEmpty?: boolean
+  requireCanvasPreview?: boolean
+  onPreviewCoverReady?: () => void
+  onPreviewCoverError?: () => void
   onPlayToggle: () => void
   searchOpen: boolean
   onSearchToggle?: () => void
@@ -64,6 +73,13 @@ export function PlaylistPlaybackDock({
   playbackTransitionPending,
   playlistTrack,
   playlistTracks,
+  coverLayer,
+  previewCoverLayer,
+  previewCoverReady = false,
+  previewCoverEmpty = false,
+  requireCanvasPreview = false,
+  onPreviewCoverReady,
+  onPreviewCoverError,
   onPlayToggle,
   searchOpen,
   onSearchToggle,
@@ -103,6 +119,7 @@ export function PlaylistPlaybackDock({
   const sharedPlayerLayout = !chromeTransition.playerVisible || ownsDock
   const keepStationaryContent = !chromeTransition.playerVisible
   const systemIcons = useSystemIcons()
+  const appearance = useAppearance().appearance
   const appearanceMotion = useAppearanceMotion()
   const layoutTransition = useMemo(() => ({ ...appearanceMotion.layoutTransition, duration: Math.min((appearanceMotion.layoutTransition.duration ?? 0) * (5 / 6), 0.65) }), [appearanceMotion.layoutTransition])
   // Keep one visual value when the route releases its controller binding.
@@ -123,6 +140,36 @@ export function PlaylistPlaybackDock({
   }, [controllerOffsetY, controllerVisualY, appearanceMotion.disabled, isPresent,
     chromeTransition.playerVisible, layoutTransition])
   const track = playback.track
+  const selectionIntent = playback.selectionVisualIntent
+  const selectionKey = selectionIntent
+    ? `${selectionIntent.sequence}:${selectionIntent.requestId}:${selectionIntent.targetTrackId}` : null
+  const [switchState, setSwitchState] = useState<{ observedKey: string | null; activeKey: string | null }>({
+    observedKey: selectionKey,
+    activeKey: null,
+  })
+  const intentOwnsSelection = Boolean(selectionIntent && selectionIntent.sequence === playback.selectionActivitySequence
+    && (playback.isSelectionPending || selectionIntent.targetTrackId === track?.id))
+  if (selectionKey && selectionKey !== switchState.observedKey && intentOwnsSelection) {
+    setSwitchState({ observedKey: selectionKey, activeKey: selectionKey })
+  }
+  const activeSwitchKey = intentOwnsSelection && switchState.activeKey === selectionKey ? selectionKey : null
+  const keepPlayingVisual = Boolean(selectionIntent?.preservePlayingVisual
+    && selectionIntent.sequence === playback.selectionActivitySequence
+    && playback.isSelectionPending)
+  const dockVisualIsPlaying = visualIsPlaying || playback.automaticContinuationVisual || keepPlayingVisual
+  const targetHasArtwork = Boolean(track?.coverImage || track?.coverFilePath
+    || playback.artwork?.coverImage || playback.artwork?.coverFilePath)
+  // A cold selection can commit before the decoded target canvas arrives.
+  // Keep the outgoing cover and its own metadata together until the target
+  // can paint; a genuinely empty target switches to its empty state at once.
+  const displayedTrack = coverLayer && targetHasArtwork ? coverLayer.track : track
+  const displayedArtwork = displayedTrack?.id === track?.id ? playback.artwork : coverLayer?.artwork
+  const displayedPlaylistTrack = displayedTrack?.id === track?.id
+    ? playlistTrack : playlistTracks?.find((item) => item.id === displayedTrack?.id)
+  const matchingCoverResource = coverLayer && displayedTrack && coverLayer.track.id === displayedTrack.id
+    ? coverLayer.resource : undefined
+  useArtworkResourceConsumer(matchingCoverResource)
+  useArtworkResourceConsumer(previewCoverLayer?.resource)
   const disabled = !track
   const commandBusy = playback.isAudioBusy
     || playback.isSelectionPending
@@ -130,7 +177,9 @@ export function PlaylistPlaybackDock({
     || playbackTransitionPending
     || playback.isTransportBusy
 
-  const { viewportRef: swipeViewportRef, x: swipeX, highlight: swipeHighlight, preview: swipePreview, active: swipeActive, pageStride: swipePageStride, onClickCapture: onSwipeClickCapture } = usePlaylistControllerSwipe(playback, disabled || commandBusy || controllerHidden || !isPresent)
+  const { viewportRef: swipeViewportRef, x: swipeX, highlight: swipeHighlight, preview: swipePreview, active: swipeActive, pageStride: swipePageStride, onClickCapture: onSwipeClickCapture } = usePlaylistControllerSwipe(playback, disabled || commandBusy || controllerHidden || !isPresent,
+    requireCanvasPreview ? (token) => !token.track.coverFilePath && !token.track.coverImage && !token.artwork.coverFilePath && !token.artwork.coverImage
+      || Boolean(previewCoverLayer?.previewTokenId === token.id && (previewCoverEmpty || previewCoverReady && previewCoverLayer.resource.view)) : undefined)
   function renderTrackRow(track: Track | null, artwork: TrackArtwork | null | undefined, playlistTrack: PlaylistTrackItemViewModel | undefined, neighbor = false) {
     const matchingArtwork = artwork?.id === track?.id ? artwork : undefined
     const matchingPlaylistTrack = playlistTrack?.id === track?.id ? playlistTrack : undefined
@@ -144,9 +193,13 @@ export function PlaylistPlaybackDock({
     const localArtwork = matchingPlaylistTrack?.hasLocalArtwork ?? Boolean(matchingArtwork?.coverFilePath ?? track?.coverFilePath)
     const coverThumbnail = matchingPlaylistTrack?.coverThumbnail
     const showImageSource = Boolean(imageSource)
+    const canvasSource = neighbor
+      ? previewCoverLayer && track && previewCoverLayer.track.id === track.id ? previewCoverLayer.resource.view : undefined
+      : matchingCoverResource?.view
     // Mirrors the playlist card language: a real cover, a still-loading local
     // artwork slot, or no artwork at all.
-    const coverState = coverThumbnail || showImageSource
+    const resolvedEmpty = !neighbor && Boolean(coverLayer && coverLayer.track.id === track?.id && !coverLayer.resource.view)
+    const coverState = resolvedEmpty ? 'empty' : canvasSource || coverThumbnail || showImageSource
       ? 'ready'
       : localArtwork ? 'loading' : 'empty'
     const coverLayoutId = neighbor || !sharedPlayerLayout ? undefined : playerViewTransitionLayoutId('cover', track?.id)
@@ -171,7 +224,9 @@ export function PlaylistPlaybackDock({
             transition={{ layout: layoutTransition }}
             aria-hidden="true"
           >
-            {track && (coverThumbnail || showImageSource) ? (
+            {canvasSource ? <ArtworkCanvas className="playlist-playback-cover-canvas" source={canvasSource} hidden
+              onReady={neighbor ? onPreviewCoverReady : undefined} onError={neighbor ? onPreviewCoverError : undefined} /> : null}
+            {!resolvedEmpty && !canvasSource && track && (coverThumbnail || showImageSource) ? (
               <PlaylistPlaybackCoverImage
                 key={track.id}
                 trackId={track.id}
@@ -201,12 +256,12 @@ export function PlaylistPlaybackDock({
           key={swipeActive ? 'swiping' : 'resting'}
           className={cn(buttonVariants({ size: 'icon-lg', variant: 'ghost' }), 'playlist-playback-toggle')}
           tone="surface-variant"
-          aria-label={visualIsPlaying ? '暂停' : '播放'}
-          aria-pressed={visualIsPlaying}
+          aria-label={dockVisualIsPlaying ? '暂停' : '播放'}
+          aria-pressed={dockVisualIsPlaying}
           disabled={neighbor || disabled || commandBusy}
           onClick={onPlayToggle}
         >
-          {visualIsPlaying ? <systemIcons.pause aria-hidden="true" /> : <systemIcons.play aria-hidden="true" />}
+          {dockVisualIsPlaying ? <systemIcons.pause aria-hidden="true" /> : <systemIcons.play aria-hidden="true" />}
         </PressFeedbackButton>
       </motion.div>
     )
@@ -288,17 +343,24 @@ export function PlaylistPlaybackDock({
         style={{ opacity: appearanceMotion.disabled ? 1 : 0 }}
       >
       <div ref={swipeViewportRef} className="playlist-controller-swipe-viewport" data-swipe-active={swipeActive ? 'true' : undefined} onClickCapture={onSwipeClickCapture} onDragStart={(event) => event.preventDefault()}>
-        {renderTrackRow(track, playback.artwork, playlistTrack)}
+        {renderTrackRow(displayedTrack, displayedArtwork, displayedPlaylistTrack)}
         {swipePreview ? renderTrackRow(swipePreview.track, swipePreview.artwork, playlistTracks?.find((item) => item.id === swipePreview?.targetTrackId), true) : null}
       </div>
 
       <ProgressControl
-        key={track?.id ?? 'playlist-empty'}
         className="playlist-playback-progress"
         timeline={timeline}
         disabled={disabled || commandBusy}
         isPlaying={playback.isPlaying}
         showTimes={false}
+        trackSwitchMotion={activeSwitchKey ? {
+          key: activeSwitchKey,
+          startRatio: selectionIntent?.progressStartRatio ?? 0,
+          durationSeconds: appearanceMotion.trackCardCommitDurationSeconds * appearance.motion.durationScale,
+          ease: appearanceMotion.trackCardCommitEase,
+          disabled: appearanceMotion.disabled,
+          ready: selectionIntent?.source !== 'automatic' || !playback.isSelectionPending,
+        } : undefined}
       />
 
       {/* Reset only the shortcut tooltips at the offscreen boundary. Keep the

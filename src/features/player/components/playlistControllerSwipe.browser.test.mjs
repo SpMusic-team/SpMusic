@@ -31,13 +31,21 @@ function Fixture(){
  const appearance=useAppearance();window.setMotionOff=()=>appearance.previewAppearance({...appearance.appearance,motion:{...appearance.appearance.motion,level:'off'}});
  const clock=React.useMemo(()=>createPlayerVisualTimelineClock(45),[]);
  const [state,setState]=React.useState({index:0,busy:false,sequence:0,intent:null,playing:false,mounted:true,position:45,duration:180});index=state.index;
- window.enableTimelineScenario=()=>{window.config.liveTimeline=true;clock.setPositionSeconds(45);setState(s=>({...s,playing:false,position:45,duration:180}))};
+ window.enableTimelineScenario=()=>{window.config.liveTimeline=true;clock.setPositionSeconds(45);setState(s=>({...s,playing:true,position:45,duration:180}))};
+ window.setTimelinePosition=position=>{clock.setPositionSeconds(position);setState(s=>({...s,position}))};
  window.updateFixture=patch=>setState(s=>({...s,...patch}));
+ window.automaticSelection=({same=false,fail=false}={})=>{
+  const origin=index;
+  window.automaticAt=performance.now();clock.setPositionSeconds(0);
+  setState(s=>{const target=same?s.index:(s.index+1)%tracks.length;return {...s,index:target,busy:true,position:0,duration:0,sequence:s.sequence+1,intent:{requestId:s.sequence+1,sequence:s.sequence+1,targetTrackId:tracks[target].id,direction:1,source:'automatic',progressStartRatio:1,preservePlayingVisual:false}}});
+  setTimeout(()=>{if(fail)clock.setPositionSeconds(45);setState(s=>fail?{...s,index:origin,busy:false,intent:null,position:45,duration:180}:{...s,busy:false,position:.2,duration:240})},100);
+ };
  const select=(target,token)=>{
+  const outgoingPosition=clock.getPositionSeconds();
+  setState(s=>({...s,index:target,busy:window.config.liveTimeline||window.config.busyOnCommit,...(window.config.liveTimeline?{position:0,duration:0,playing:false}:{}),sequence:s.sequence+1,intent:{requestId:s.sequence+1,sequence:s.sequence+1,targetTrackId:tracks[target].id,direction:token?.direction??1,source:'next',progressStartRatio:s.duration>0?(window.config.liveTimeline?outgoingPosition:s.position)/s.duration:0,preservePlayingVisual:s.playing,previewTokenId:token?.id}}));
   if(window.config.liveTimeline)clock.setPositionSeconds(0);
-  setState(s=>({...s,index:target,busy:window.config.liveTimeline||window.config.busyOnCommit,...(window.config.liveTimeline?{position:0,duration:0}:{}),sequence:s.sequence+1,intent:{requestId:s.sequence+1,sequence:s.sequence+1,targetTrackId:tracks[target].id,direction:token?.direction??1,source:'next',previewTokenId:token?.id}}));
   if(window.config.liveTimeline){
-   setTimeout(()=>setState(s=>({...s,busy:false})),40);
+   setTimeout(()=>setState(s=>({...s,busy:false,playing:true})),40);
    setTimeout(()=>{clock.setPositionSeconds(.2);setState(s=>({...s,duration:240,position:.2}))},120);
    setTimeout(()=>{clock.setPositionSeconds(.4);setState(s=>({...s,position:.4}))},180);
   }
@@ -57,7 +65,7 @@ function Fixture(){
  },[]);
  const discard=React.useCallback(id=>{window.calls.push({type:'discard',id,time:performance.now()});if(pending?.id===id)pending=null},[]);
  const playback={track:tracks[state.index],artwork:artworks[state.index],isPlaying:state.playing,shuffleMode:'none',repeatMode:'list-loop',selectionActivitySequence:state.sequence,selectionVisualIntent:state.intent,isAudioBusy:state.busy,isSelectionPending:state.busy,isTransportBusy:false,statusText:'',onOpenAudio:noop,onPrevious:()=>window.calls.push({type:'previous-fallback'}),onNext:()=>window.calls.push({type:'next-fallback'}),onPrepareTrackPreview:prepare,onCommitTrackPreview:commit,onDiscardTrackPreview:discard,onPlayToggle:async r=>({requestId:r.requestId,completed:true}),onShuffleCycle:noop,onRepeatCycle:noop};
- const timeline={positionSeconds:state.position,durationSeconds:state.duration,interaction:'following',visualClock:window.config.liveTimeline?clock:undefined,onPreviewStart:noop,onPreview:noop,onCommit:noop,onCancelPreview:noop};
+ const timeline={positionSeconds:state.position,durationSeconds:state.duration,interaction:state.interaction??'following',visualClock:window.config.liveTimeline?clock:undefined,onPreviewStart:noop,onPreview:noop,onCommit:noop,onCancelPreview:noop};
  return React.createElement('main',{className:'player-shell'},state.mounted&&React.createElement(PlaylistPanel,{controllerMode:'fixed',tracks,playlistName:'Swipe fixture',currentTrackId:tracks[state.index].id,shuffleMode:'none',onShuffleCycle:noop,onOpenAudio:noop,onTrackSelect:noop,playback,timeline,visualIsPlaying:state.playing,playbackTransitionPending:false,onPlayToggle:()=>{window.calls.push({type:'toggle'});setState(s=>({...s,playing:!s.playing}))},onClose:()=>window.calls.push({type:'close'})}));
 }
 const root=ReactDOM.createRoot(document.getElementById('root'));window.unmountFixture=()=>root.unmount();
@@ -112,6 +120,16 @@ async function start(page,{direction=1,button=false}={}){
 }
 async function move(page,point,fraction,direction=1){await page.mouse.move(point.x-direction*point.width*fraction,point.y,{steps:4});await frames(page)}
 async function drag(page,options={}){const point=await start(page,options);await move(page,point,options.fraction??.42,options.direction);await page.mouse.up();return point}
+async function beginProgressTrace(page){await page.evaluate(()=>{
+  window.progressTrace=[];window.progressTraceRunning=true
+  function sample(){
+    if(!window.progressTraceRunning)return
+    const slider=document.querySelector('.playlist-playback-progress .control-progress-slider'),track=slider?.querySelector('[data-slot="slider-track"]'),thumb=slider?.querySelector('[data-slot="slider-thumb"]')
+    if(track&&thumb)window.progressTrace.push({time:performance.now(),song:document.querySelector('.playlist-playback-track[data-swipe-plane="current"]')?.textContent,x:thumb.getBoundingClientRect().x-track.getBoundingClientRect().x,width:track.getBoundingClientRect().width})
+    requestAnimationFrame(sample)
+  }requestAnimationFrame(sample)
+})}
+async function endProgressTrace(page,song){return page.evaluate(song=>{window.progressTraceRunning=false;return window.progressTrace.filter(s=>s.song?.includes(song))},song)}
 function nearly(actual,expected,label){assert(Math.abs(actual-expected)<1,label+': '+actual+' vs '+expected)}
 async function releaseTrace(page,index,direction,stride){
   await page.evaluate(()=>{
@@ -245,22 +263,74 @@ try{
       const visible=el=>{if(!el)return {id:0,opacity:0,visibility:'missing',x:0,y:0,width:0,height:0,bg:''};const r=el.getBoundingClientRect(),style=getComputedStyle(el);let opacity=1;for(let p=el;p&&p!==document.body;p=p.parentElement)opacity*=Number(getComputedStyle(p).opacity);if(!ids.has(el))ids.set(el,++nextId);return {id:ids.get(el),opacity,visibility:style.visibility,x:r.x,y:r.y,width:r.width,height:r.height,bg:style.backgroundColor}}
       function sample(time){
         const slider=document.querySelector('.playlist-playback-progress .control-progress-slider'),track=slider?.querySelector('[data-slot="slider-track"]'),range=slider?.querySelector('[data-slot="slider-range"]'),thumb=slider?.querySelector('[data-slot="slider-thumb"]')
-        window.progressSamples.push({time,slider:visible(slider),track:visible(track),range:visible(range),thumb:visible(thumb),text:document.querySelector('.playlist-playback-track[data-swipe-plane="current"]')?.textContent,busy:document.querySelector('.playlist-playback-dock')?.hasAttribute('data-playback-command-busy'),max:slider?.querySelector('input')?.max})
+        window.progressSamples.push({time,slider:visible(slider),track:visible(track),range:visible(range),thumb:visible(thumb),text:document.querySelector('.playlist-playback-track[data-swipe-plane="current"]')?.textContent,busy:document.querySelector('.playlist-playback-dock')?.hasAttribute('data-playback-command-busy'),toggle:document.querySelector('.playlist-playback-toggle')?.getAttribute('aria-label'),max:slider?.querySelector('input')?.max})
         if(!window.stopProgressSamples)requestAnimationFrame(sample)
       }requestAnimationFrame(sample)
     })
-    await drag(page);await rest(page,1);await page.waitForTimeout(260)
+    await drag(page);await rest(page,1);await page.waitForTimeout(600)
     const samples=await page.evaluate(()=>{window.stopProgressSamples=true;return window.progressSamples})
     const after=samples.filter(s=>s.text?.includes('Song 1')),initial=samples[0]
     const metrics={frames:samples.length,afterFrames:after.length,sliderIds:[...new Set(samples.map(s=>s.slider.id))],thumbIds:[...new Set(samples.map(s=>s.thumb.id))],maxDomains:[...new Set(after.map(s=>s.max))],hiddenThumb:after.filter(s=>s.thumb.visibility!=='visible').length,hiddenRange:after.filter(s=>s.range.visibility!=='visible').length,minTrackOpacity:Math.min(...after.map(s=>s.track.opacity)),minThumbOpacity:Math.min(...after.map(s=>s.thumb.opacity)),maxThumbX:Math.max(...after.map(s=>s.thumb.x-s.track.x)),minTrackWidth:Math.min(...after.map(s=>s.track.width))}
     console.log('PROGRESS_SELECTION_SAMPLE',JSON.stringify(metrics))
     assert(after.length>=8,'sample loading, ready duration and resumed visual clock frames')
     assert(after.every(s=>s.track.visibility==='visible'&&s.thumb.visibility==='visible'&&s.range.visibility==='visible'),'track, range and thumb never become hidden after selection')
+    assert(after.every(s=>s.toggle==='暂停'),'playing manual switch keeps pause icon through transient backend loading frame')
     assert(after.every(s=>s.track.opacity>=initial.track.opacity-.01&&s.thumb.opacity>=initial.thumb.opacity-.01),'loading and disabled transitions do not flash half opacity')
     assert(after.every(s=>Math.abs(s.track.width-initial.track.width)<1&&s.track.bg===initial.track.bg),'full unplayed track keeps geometry and material')
     assert(after.every(s=>s.thumb.x>=s.track.x-1&&s.thumb.x+s.thumb.width<=s.track.x+s.track.width+1),'thumb remains inside actual track')
     assert(after.every(s=>s.thumb.width>=initial.thumb.width-.5&&s.thumb.height>=initial.thumb.height-.5),'thumb keeps painted size while duration changes')
-    assert(after.every(s=>s.thumb.x-s.track.x<5),'new-track thumb resets near origin without one-frame old-position flash')
+    const thumbTravel=after.map(s=>s.thumb.x-s.track.x)
+    assert(thumbTravel[0]>initial.track.width*.15&&thumbTravel[0]<initial.track.width*.35,'new-track thumb begins near previous 25% progress')
+    assert(thumbTravel.some(x=>x>initial.track.width*.05&&x<initial.track.width*.2),'thumb traverses intermediate positions')
+    assert(thumbTravel.at(-1)<5,'new-track thumb finishes near the left edge')
+    assert(after.slice(0,-1).every((s,i)=>thumbTravel[i+1]<=thumbTravel[i]+2),'thumb moves right to left without a visible rebound')
+  })
+  await check('reverse switch animates progress from current position and seeking interrupts it',async page=>{
+    await page.evaluate(()=>window.enableTimelineScenario());await frames(page,4)
+    await drag(page);await rest(page,1);await page.waitForTimeout(600)
+    await page.evaluate(()=>window.setTimelinePosition(90));await frames(page,4)
+    await beginProgressTrace(page)
+    await drag(page,{direction:-1});await rest(page,0);await page.waitForTimeout(100)
+    const beforeSeek=await page.evaluate(()=>window.progressTrace.filter(s=>s.song?.includes('Song 0')))
+    assert(beforeSeek[0]?.x>beforeSeek[0]?.width*.25&&beforeSeek[0]?.x<beforeSeek[0]?.width*.55,'reverse switch starts near previous 90/240 progress')
+    await page.evaluate(()=>window.updateFixture({interaction:'previewing'}));await frames(page,3)
+    await page.evaluate(()=>window.updateFixture({interaction:'following'}));await frames(page,4)
+    const samples=await endProgressTrace(page,'Song 0')
+    assert(samples.at(-1)?.x<5,'seek interruption returns progress to current visual clock')
+    assert(samples.some(s=>s.x<beforeSeek[0].x-20),'reverse progress moved before interruption')
+  })
+  await check('reduced motion switches progress directly to the new timeline',async page=>{
+    await page.evaluate(()=>window.enableTimelineScenario());await frames(page,4)
+    await beginProgressTrace(page);await drag(page);await rest(page,1);await frames(page,4)
+    const samples=await endProgressTrace(page,'Song 1')
+    assert(samples.length>0&&samples.every(s=>s.x<5),'reduced motion has no right-edge progress animation')
+  },{reduced:true})
+  await check('automatic selection holds right edge until delayed track geometry is ready',async page=>{
+    await page.evaluate(()=>window.enableTimelineScenario());await frames(page,4)
+    await page.evaluate(()=>{document.querySelector('.playlist-playback-progress .control-progress-slider').style.width='0px'})
+    await frames(page,3)
+    await beginProgressTrace(page)
+    await page.evaluate(()=>window.automaticSelection())
+    await page.waitForFunction(()=>document.querySelector('.playlist-playback-track[data-swipe-plane="current"]')?.textContent.includes('Song 1'))
+    await page.waitForFunction(()=>!document.querySelector('.playlist-playback-dock')?.hasAttribute('data-playback-command-busy'))
+    await page.evaluate(()=>{document.querySelector('.playlist-playback-progress .control-progress-slider').style.width=''})
+    await page.waitForTimeout(650)
+    const samples=(await endProgressTrace(page,'Song 1')).filter(s=>s.width>100)
+    assert(samples.length>=8&&samples.slice(0,2).some(s=>s.x>s.width*.75),'first painted frame starts at far right after geometry measurement')
+    assert(samples.some(s=>s.x>s.width*.2&&s.x<s.width*.8),'measured animation traverses track')
+    assert(samples.at(-1).x<5,'measured animation returns to new timeline')
+  })
+  await check('failed automatic selection releases pending right-edge hold',async page=>{
+    await page.evaluate(()=>window.enableTimelineScenario());await frames(page,4)
+    await beginProgressTrace(page)
+    await page.evaluate(()=>window.automaticSelection({fail:true}))
+    await page.waitForFunction(()=>document.querySelector('.playlist-playback-track[data-swipe-plane="current"]')?.textContent.includes('Song 1'))
+    const pending=await page.evaluate(()=>window.progressTrace.filter(s=>s.song?.includes('Song 1')))
+    assert(pending.length>0&&pending.every(s=>s.x>s.width*.75),'pending request holds the right edge')
+    await page.waitForFunction(()=>document.querySelector('.playlist-playback-track[data-swipe-plane="current"]')?.textContent.includes('Song 0')&&!document.querySelector('.playlist-playback-dock')?.hasAttribute('data-playback-command-busy'))
+    await frames(page,4)
+    const restored=await endProgressTrace(page,'Song 0')
+    assert(Math.abs(restored.at(-1).x/restored.at(-1).width-.25)<.03,'failed request restores previous visual clock')
   })
   for(const boundary of ['cancel','blur','escape','busy','external','unmount'])await check(boundary+' cancels prepared gesture and never commits',async page=>{
     const point=await start(page);await move(page,point,.35)

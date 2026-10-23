@@ -141,11 +141,12 @@ async function record(page, count, direction, readGeometry, iteration) {
       previous=now
     }
     collect(observer.takeRecords());observer.disconnect()
-    return {samples,longTasks,windowProbe:window.__windowProbe.map(event=>({...event,time:event.time-start})),workCounts:Object.fromEntries([...new Set(window.calls.filter(call=>call.time>=start).map(call=>call.command))].map(command=>[command,window.calls.filter(call=>call.command===command&&call.time>=start).length]))}
+    return {samples,longTasks,windowProbe:window.__windowProbe.map(event=>({...event,time:event.time-start})),
+      workCalls:window.calls.filter(call=>call.time>=start&&call.time-start<900).map(call=>({command:call.command,time:call.time-start,path:call.input?.path??null}))}
   },{direction,readGeometry})
   const {samples,longTasks}=observation
   const metricEnd=(await session.send('Performance.getMetrics')).metrics
-  const structure=direction==='grow'?await page.evaluate(()=>({buttons:document.querySelectorAll('.playlist-card').length,copies:document.querySelectorAll('.playlist-card-copy').length,covers:document.querySelectorAll('.playlist-card-cover').length,images:document.querySelectorAll('.playlist-card-cover-image').length,scrollHeight:document.querySelector('.playlist-panel')?.scrollHeight})):null
+  const structure=direction==='grow'?await page.evaluate(()=>{const heights=[...document.querySelectorAll('.playlist-card')].map(element=>element.getBoundingClientRect().height).sort((a,b)=>a-b);return {buttons:heights.length,copies:document.querySelectorAll('.playlist-card-copy').length,covers:document.querySelectorAll('.playlist-card-cover').length,images:document.querySelectorAll('.playlist-card-cover-image').length,scrollHeight:document.querySelector('.playlist-panel')?.scrollHeight,cardHeight:{min:heights[0],median:heights[Math.floor(heights.length/2)],max:heights.at(-1)}}}):null
   if(${process.env.SPMUSIC_PERF_PROFILE === '1'}){const {profile}=await session.send('Profiler.stop');writeFileSync(join(screenshotDirectory,'cpu-'+count+'-'+direction+'-'+readGeometry+'-'+iteration+'.json'),JSON.stringify(profile))}
   let events=[]
   if(tracing){
@@ -166,13 +167,24 @@ async function record(page, count, direction, readGeometry, iteration) {
   const targetCover=sample=>sample.covers.find(cover=>cover.kind===targetKind)
   const last=targetCover(samples.at(-1))
   const moving=last?samples.findLastIndex(sample=>{const cover=targetCover(sample);return !cover||['x','y','width','height'].some(key=>Math.abs(cover[key]-last[key])>.5)}):-1
+  const stableMs=moving>=0?samples[moving+1]?.time:null
+  const countCalls=(start,end)=>Object.fromEntries([...new Set(observation.workCalls.filter(call=>call.time>=start&&call.time<end).map(call=>call.command))]
+    .map(command=>[command,observation.workCalls.filter(call=>call.command===command&&call.time>=start&&call.time<end).length]))
+  const movingIntervals=samples.slice(1).filter(sample=>stableMs!==null&&sample.time<=stableMs).map(sample=>sample.delta).sort((a,b)=>a-b)
   const result={count,direction,readGeometry,iteration,tracing,baseline:${JSON.stringify(replacement || reverseFix)},
     longTasks,
-    windowProbe:observation.windowProbe,workCounts:observation.workCounts,
+    windowProbe:observation.windowProbe,workCounts:countCalls(0,900),
+    workPhases:{first350:countCalls(0,350),after350:countCalls(350,900),beforeStable:countCalls(0,stableMs??900),afterStable:countCalls(stableMs??900,900)},
+    firstWorkMs:Object.fromEntries(['audio_probe_playlist_cover','audio_load_playlist_cover_pixels'].map(command=>[command,observation.workCalls.find(call=>call.command===command)?.time??null])),
+    probedIndices:observation.workCalls.filter(call=>call.command==='audio_probe_playlist_cover').map(call=>Number.parseInt(call.path?.split('/').at(-1)??'',10)),
+    firstLaterProbeMs:observation.workCalls.find(call=>call.command==='audio_probe_playlist_cover'&&Number.parseInt(call.path?.split('/').at(-1)??'',10)>=10)?.time??null,
+    firstOffscreenProbeMs:observation.workCalls.find(call=>call.command==='audio_probe_playlist_cover'&&Number.parseInt(call.path?.split('/').at(-1)??'',10)>=20)?.time??null,
+    movingFrameP95Ms:movingIntervals.length?movingIntervals[Math.ceil(movingIntervals.length*.95)-1]:null,
+    longTaskPhases:{first350:longTasks.filter(task=>task.startMs<350),after350:longTasks.filter(task=>task.startMs>=350)},
     structure,expansion450:{maxIncludingFirstMs:Math.max(...expansion.map(sample=>sample.delta)),maxAfterFirstMs:Math.max(...postExpansion.map(sample=>sample.delta)),afterFirstOver16Ms:postExpansion.filter(sample=>sample.delta>16.7).length,afterFirstOver32Ms:postExpansion.filter(sample=>sample.delta>32).length,longTasks:longTasks.filter(task=>task.startMs<450)},
     presence:${presenceDiagnostic}?await page.evaluate(()=>window.__presence??[]):undefined,
     frames:samples.length,firstFrameMs:samples[0]?.time,frameP95Ms:intervals[Math.ceil(intervals.length*.95)-1],maxFrameMs:Math.max(...intervals),over32Ms:intervals.filter(n=>n>32).length,
-    stableMs:moving>=0?samples[moving+1]?.time:null,removedMs:samples.find(sample=>sample.pages===1)?.time,
+    stableMs,removedMs:samples.find(sample=>sample.pages===1)?.time,
     zeroVisibleCoverFrames:readGeometry?samples.filter(sample=>!sample.covers.some(cover=>cover.opacity>.1&&cover.width>0&&cover.height>0)).length:null,
     minCombinedCoverOpacity:readGeometry?Math.min(...samples.map(sample=>sample.covers.reduce((n,cover)=>n+cover.opacity,0))):null,
     fullCardCountObserved:direction==='grow'?Math.max(...samples.map(sample=>sample.cards)):null,
@@ -369,6 +381,44 @@ try {
     await settled(page,'.playlist-management')
     for(const readGeometry of ${JSON.stringify(process.env.SPMUSIC_PERF_GEOMETRY_OFF === '1' ? [false] : process.env.SPMUSIC_PERF_GEOMETRY_ONLY === '1' ? [true] : [true,false])})for(let iteration=0;iteration<${Number(process.env.SPMUSIC_PERF_ITERATIONS || 3)};iteration++){
       await record(page,count,'grow',readGeometry,iteration);await settled(page,'.playlist-panel')
+      if(${process.env.SPMUSIC_PERF_ASSERT_FAR_ROW === '1'}){
+        const far=await page.evaluate(async()=>{
+          const panel=document.querySelector('.playlist-panel'),cards=[...document.querySelectorAll('.playlist-card')],before=panel.scrollHeight
+          const target=cards.at(-2),targetTop=target.offsetTop
+          panel.scrollTop=targetTop
+          await new Promise(requestAnimationFrame)
+          const first={scrollHeight:panel.scrollHeight,scrollTop:panel.scrollTop,title:target.querySelector('.playlist-card-title')?.textContent,format:target.querySelector('.playlist-card-format')?.textContent,height:target.getBoundingClientRect().height,visible:target.checkVisibility({contentVisibilityAuto:true})}
+          await new Promise(requestAnimationFrame)
+          return {before,first,after:panel.scrollHeight,tailHeights:cards.slice(-4).map(card=>card.getBoundingClientRect().height)}
+        })
+        console.log('FAR_ROW',JSON.stringify(far))
+        assert.equal(far.first.scrollHeight,far.before,'scrolling to far row preserves total scroll height')
+        assert.equal(far.after,far.before,'far row layout remains stable after next paint')
+        assert(far.first.visible&&far.first.title?.trim(),'far row title visible on first paint')
+        assert.equal(far.first.format,undefined,'default tile layout intentionally omits extended metadata')
+        await page.keyboard.down('Control')
+        for(let level=1;level<=3;level++){
+          await page.waitForTimeout(175)
+          await page.locator('.playlist-grid').evaluate(grid=>grid.dispatchEvent(new WheelEvent('wheel',{bubbles:true,cancelable:true,ctrlKey:true,deltaY:120})))
+          await page.waitForFunction(level=>document.querySelector('.playlist-grid')?.dataset.layoutLevel===String(level),level)
+        }
+        await page.keyboard.up('Control')
+        const row=await page.evaluate(async()=>{
+          const panel=document.querySelector('.playlist-panel'),cards=[...document.querySelectorAll('.playlist-card')],target=cards.at(-2),before=panel.scrollHeight
+          panel.scrollTop=target.offsetTop
+          await new Promise(requestAnimationFrame)
+          return {before,after:panel.scrollHeight,scrollTop:panel.scrollTop,title:target.querySelector('.playlist-card-title')?.textContent,format:target.querySelector('.playlist-card-format')?.textContent,visible:target.checkVisibility({contentVisibilityAuto:true}),durationSeconds:window.viewModel.playlist.tracks.at(-2)?.durationSeconds}
+        })
+        console.log('FAR_ROW_EXTENDED',JSON.stringify(row))
+        assert(row.visible&&row.title?.trim(),'row title visible on first paint')
+        assert(row.format?.includes('3:00'),'row duration visible on first paint')
+        assert.equal(row.after,row.before,'row far jump preserves scroll height')
+      }
+      if(${process.env.SPMUSIC_PERF_ASSERT_WARMUP === '1'}){
+        await page.waitForFunction(()=>window.calls.some(call=>call.command==='audio_probe_playlist_cover'&&Number.parseInt(call.input?.path?.split('/').at(-1)??'',10)>=20),undefined,{timeout:10000})
+        const warmup=await page.evaluate(()=>({probeCount:window.calls.filter(call=>call.command==='audio_probe_playlist_cover').length,furthestIndex:Math.max(...window.calls.filter(call=>call.command==='audio_probe_playlist_cover').map(call=>Number.parseInt(call.input?.path?.split('/').at(-1)??'',10)))}))
+        console.log('WARMUP',JSON.stringify(warmup))
+      }
       assert.equal(await page.locator('.playlist-card').count(),count,'fixture actually renders requested track count')
       if(${process.env.SPMUSIC_PERF_GROW_ONLY === '1'})await page.locator('.playlist-hero-category').click()
       else await record(page,count,'shrink',readGeometry,iteration)

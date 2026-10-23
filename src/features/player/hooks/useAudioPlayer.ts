@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import {
   persistRepeatMode,
@@ -26,9 +26,16 @@ import {
   type ShuffleMode,
 } from '@/features/player/model/playbackModes'
 import { appCopy } from '@/features/player/model/playerCopy'
+import {
+  clearPlaybackSession,
+  persistPlaybackSession,
+  readPlaybackSession,
+  type SavedPlaybackSession,
+} from '@/features/player/model/playbackSessionStorage'
 import { createPlaylistArtworkGrace } from '@/features/player/model/playlistArtworkGrace'
 import { playlistCoverImageFromPixels } from '@/features/player/model/playlistCoverPixels'
 import { decodePlaylistCover } from '@/features/player/model/playlistCoverReadiness'
+import { schedulePlaylistCoverPixels } from '@/features/player/services/playlistCoverScheduler'
 import {
   chunkPlaylistSummaryPaths,
   pendingPlaylistTrackRow,
@@ -78,7 +85,6 @@ import {
   listenAudioStateChanged,
   loadAndPlayAudio,
   loadAudioFile,
-  loadAudioPlaylistCoverPixels,
   openAudioSource,
   pauseAudio,
   playAudio,
@@ -90,7 +96,6 @@ import {
   setAudioVolume,
   stopAudio,
   transitionAudioPlayback,
-  warmLibraryCoverThumbnails,
   type AudioCommandError,
   type AudioFolderPlaylist,
   type AudioFolderTrackRef,
@@ -140,6 +145,23 @@ type PlaylistVisualHydrationJob = {
   normalizedSourcePath: string
   maxEdge: 128 | 256 | 512
   attempt: number
+  optional: boolean
+}
+
+type OptionalIdleHandle = { kind: 'idle' | 'timer'; id: number }
+
+function scheduleOptionalArtworkIdle(run: () => void): OptionalIdleHandle {
+  if (typeof window.requestIdleCallback === 'function') {
+    return { kind: 'idle', id: window.requestIdleCallback(run) }
+  }
+  // WebViews without requestIdleCallback still yield two ordinary frames
+  // between optional probes; current/visible covers never use this lane.
+  return { kind: 'timer', id: window.setTimeout(run, 32) }
+}
+
+function cancelOptionalArtworkIdle(handle: OptionalIdleHandle): void {
+  if (handle.kind === 'idle' && typeof window.cancelIdleCallback === 'function') window.cancelIdleCallback(handle.id)
+  else window.clearTimeout(handle.id)
 }
 
 type PlaylistMetadataHydrationJob = Pick<
@@ -365,7 +387,7 @@ function audioStatusText(
   }
 }
 
-export function useAudioPlayer() {
+export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed = true) {
   const [queueTracks, setQueueTracks] = useState<TrackSummary[]>([])
   const [feedbackByTrackId, setFeedbackByTrackId] = useState<Record<string, TrackFeedback>>({})
   const [shuffleMode, setShuffleMode] = useState<ShuffleMode>(readShuffleMode)
@@ -380,6 +402,12 @@ export function useAudioPlayer() {
   }, [repeatMode])
   const [volume, setVolume] = useState(72)
   const [queueOpen, setQueueOpen] = useState(false)
+  const [savedSession] = useState<SavedPlaybackSession | null>(readPlaybackSession)
+  const savedSessionRef = useRef(savedSession)
+  const sessionRestorePendingRef = useRef(savedSession !== null)
+  const sessionRestoreStartedRef = useRef(false)
+  const startupRestoreTimedOutRef = useRef(false)
+  const [startupRestoreReady, setStartupRestoreReady] = useState(savedSession === null)
   const [audioState, setAudioState] = useState<AudioPlaybackState | null>(null)
   const [audioOutputInfo, setAudioOutputInfo] = useState<Awaited<ReturnType<typeof getAudioOutputInfo>>>(null)
   const [audioTrack, setAudioTrack] = useState<AudioTrackRef | null>(null)
@@ -391,6 +419,7 @@ export function useAudioPlayer() {
   const [artworkPrefetchCandidates, setArtworkPrefetchCandidates] = useState<readonly WindowedArtworkPrefetchCandidate[]>([])
   const [selectionActivitySequence, setSelectionActivitySequence] = useState(0)
   const [selectionVisualIntent, setSelectionVisualIntent] = useState<TrackSelectionVisualIntent | null>(null)
+  const [automaticContinuationVisual, setAutomaticContinuationVisual] = useState(false)
   const [detailsPending, setDetailsPending] = useState(false)
   const [contentState, setContentState] = useState<PlayerContentState>('empty')
   const [folderPlaylist, setFolderPlaylist] = useState<AudioFolderPlaylist | null>(null)
@@ -462,6 +491,9 @@ export function useAudioPlayer() {
   const playlistArtworkDemandRef = useRef<PlaylistArtworkDemand | undefined>(undefined)
   const keepPersistentPlaylistArtworkRef = useRef(false)
   const showPlaylistArtworkRef = useRef(true)
+  const libraryVisibleRef = useRef(libraryVisible)
+  const backgroundArtworkAllowedRef = useRef(backgroundArtworkAllowed)
+  useLayoutEffect(() => { backgroundArtworkAllowedRef.current = backgroundArtworkAllowed }, [backgroundArtworkAllowed])
   const playlistMetadataGenerationRef = useRef(0)
   const playlistMetadataWindowKeyRef = useRef<string | null>(null)
   const playlistTrackMetadataRef = useRef<Readonly<Record<string, PlaylistTrackMetadata>>>({})
@@ -475,6 +507,9 @@ export function useAudioPlayer() {
   const playlistVisualHydrationQueueRef = useRef<PlaylistVisualHydrationJob[]>([])
   const playlistVisualHydrationActiveRef = useRef(0)
   const playlistVisualHydrationActiveJobsRef = useRef(new Map<string, PlaylistVisualHydrationJob>())
+  const playlistVisualRequiredIdsRef = useRef<ReadonlySet<string>>(new Set())
+  const playlistOptionalIdleRef = useRef<OptionalIdleHandle | null>(null)
+  const playlistOptionalIdleReadyRef = useRef(false)
   const playlistCoverClientIdRef = useRef<string | null>(null)
   if (playlistCoverClientIdRef.current === null) {
     playlistCoverClientIdRef.current = createPlaylistCoverClientId()
@@ -509,9 +544,6 @@ export function useAudioPlayer() {
   const libraryEpochRef = useRef(0)
   const selectedFolderPathsRef = useRef<readonly string[]>([])
   const libraryMutationRef = useRef<Promise<void>>(Promise.resolve())
-  const libraryWarmPathsRef = useRef(new Set<string>())
-  const libraryWarmSourcesRef = useRef(new Map<string, string[]>())
-  const libraryWarmIdleRef = useRef<number | null>(null)
   const playlistSummaryRowsRef = useRef<Readonly<Record<string, Readonly<Record<string, PlaylistTrackRow>>>>>({})
   const playlistSummaryStatusRef = useRef<Readonly<Record<string, PlaylistSummaryStatus>>>({})
   const playlistSummaryRunRef = useRef(new Map<string, { runId: number; fingerprint: string }>())
@@ -568,6 +600,9 @@ export function useAudioPlayer() {
     playlistMetadataGenerationRef.current += 1
     playlistMetadataHydrationQueueRef.current = []
     playlistVisualHydrationQueueRef.current = []
+    if (playlistOptionalIdleRef.current !== null) cancelOptionalArtworkIdle(playlistOptionalIdleRef.current)
+    playlistOptionalIdleRef.current = null
+    playlistOptionalIdleReadyRef.current = false
     if (playlistCoverSessionRetryTimerRef.current) clearTimeout(playlistCoverSessionRetryTimerRef.current)
     playlistCoverSessionRetryTimerRef.current = null
     for (const timer of playlistVisualRetryTimersRef.current.values()) clearTimeout(timer)
@@ -621,6 +656,46 @@ export function useAudioPlayer() {
     () => new Set(folderPlaylist?.tracks.filter((candidate) => !candidate.available).map((candidate) => candidate.id)),
     [folderPlaylist],
   )
+
+  const persistCurrentSession = useCallback(() => {
+    if (sessionRestorePendingRef.current) return
+    const state = latestAudioStateRef.current
+    const current = audioTrackRef.current
+    const playlist = folderPlaylistRef.current
+    if (!state?.currentTrackId || !current || !playlist
+      || current.id !== state.currentTrackId
+      || !playlist.tracks.some((item) => item.id === current.id && item.sourcePath === current.sourcePath)) return
+    const positionSeconds = timelinePositionRef.current
+    persistPlaybackSession({
+      version: 1,
+      sourcePath: current.sourcePath,
+      playlist: playlist.sourceKind === 'custom'
+        ? { sourceKind: 'custom', sourcePath: playlist.sourcePath, customPlaylist: playlist }
+        : { sourceKind: playlist.sourceKind, sourcePath: playlist.sourcePath },
+      positionMs: Math.max(0, Math.min(state.durationMs ?? Number.POSITIVE_INFINITY,
+        Math.round(positionSeconds * 1000))),
+      wasPlaying: state.phase === 'playing',
+      wasPaused: state.phase === 'paused',
+      queueOpen,
+      volume,
+    })
+  }, [queueOpen, volume])
+
+  useEffect(() => {
+    persistCurrentSession()
+  }, [audioState, folderPlaylist, queueOpen, volume, persistCurrentSession])
+
+  useEffect(() => {
+    const checkpoint = window.setInterval(persistCurrentSession, 1000)
+    const flush = () => persistCurrentSession()
+    window.addEventListener('pagehide', flush)
+    window.addEventListener('beforeunload', flush)
+    return () => {
+      window.clearInterval(checkpoint)
+      window.removeEventListener('pagehide', flush)
+      window.removeEventListener('beforeunload', flush)
+    }
+  }, [persistCurrentSession])
 
   function transportOperationInProgress() {
     return transportCommandRunningRef.current
@@ -713,35 +788,9 @@ export function useAudioPlayer() {
     return active && playlistScope(active) === scope ? active : undefined
   }, [])
 
-  const scheduleLibraryWarmup = useCallback((epoch: number) => {
-    if (libraryEpochRef.current !== epoch || libraryWarmIdleRef.current !== null) return
-    const run = () => {
-      libraryWarmIdleRef.current = null
-      if (libraryEpochRef.current !== epoch) return
-      const paths = [...libraryWarmPathsRef.current].slice(0, 256)
-      if (paths.length === 0) return
-      void warmLibraryCoverThumbnails(paths).catch((error: unknown) => {
-        if (libraryEpochRef.current === epoch) console.warn('歌曲封面预热失败', error)
-      })
-    }
-    libraryWarmIdleRef.current = typeof window.requestIdleCallback === 'function'
-      ? window.requestIdleCallback(run)
-      : window.setTimeout(run, 500)
-  }, [])
-
   const rememberLibraryPlaylist = useCallback((playlist: AudioFolderPlaylist, epoch: number) => {
     if (libraryEpochRef.current !== epoch || playlist.sourceKind !== 'folder') return
     const scope = playlistScope(playlist)
-    libraryWarmSourcesRef.current.set(scope, playlist.tracks.filter((track) => track.available).map((track) => track.sourcePath))
-    const sources = [...libraryWarmSourcesRef.current.values()]
-    const paths = new Set<string>()
-    for (let index = 0; paths.size < 256 && sources.some((source) => index < source.length); index += 1) {
-      for (const source of sources) {
-        if (source[index]) paths.add(source[index])
-        if (paths.size >= 256) break
-      }
-    }
-    libraryWarmPathsRef.current = paths
     sessionPlaylistDescriptorsRef.current.set(scope, playlist)
     setLibraryFolderPlaylists((previous) => previous.some((item) => playlistScope(item) === scope)
       ? previous.map((item) => playlistScope(item) === scope ? playlist : item)
@@ -766,7 +815,6 @@ export function useAudioPlayer() {
         selectedFolderPathsRef.current = result.folders
         setSelectedFolderPaths(result.folders)
         rememberLibraryPlaylist(playlist, epoch)
-        scheduleLibraryWarmup(epoch)
         setLibraryStatus('ready')
       } catch (error) {
         if (libraryEpochRef.current !== epoch) return
@@ -778,26 +826,19 @@ export function useAudioPlayer() {
     })
     libraryMutationRef.current = mutation.catch(() => undefined)
     await mutation
-  }, [rememberLibraryPlaylist, scheduleLibraryWarmup])
+  }, [rememberLibraryPlaylist])
 
   const clearSelectedLibraryFolders = useCallback(async () => {
     const epoch = libraryEpochRef.current + 1
     libraryEpochRef.current = epoch
     const priorPaths = selectedFolderPathsRef.current
     selectedFolderPathsRef.current = []
-    if (libraryWarmIdleRef.current !== null) {
-      if (typeof window.cancelIdleCallback === 'function') window.cancelIdleCallback(libraryWarmIdleRef.current)
-      else window.clearTimeout(libraryWarmIdleRef.current)
-      libraryWarmIdleRef.current = null
-    }
     setLibraryStatus('clearing')
     setLibraryRestorePending(false)
     const mutation = libraryMutationRef.current.then(async () => {
       try {
         await clearLibraryFolders()
         if (libraryEpochRef.current !== epoch) return
-        libraryWarmPathsRef.current.clear()
-        libraryWarmSourcesRef.current.clear()
         try { await cancelLibraryCoverWarmup() } catch (error) { console.warn('取消歌曲封面预热失败', error) }
         const activeScope = folderPlaylistRef.current ? playlistScope(folderPlaylistRef.current) : null
         for (const [scope, playlist] of sessionPlaylistDescriptorsRef.current) {
@@ -860,7 +901,6 @@ export function useAudioPlayer() {
           }
         }
         await Promise.all([scanNext(), scanNext()])
-        if (!disposed && libraryEpochRef.current === epoch) scheduleLibraryWarmup(epoch)
       } catch (error) {
         if (disposed || libraryEpochRef.current !== epoch) return
         const message = error instanceof Error ? error.message : String(error)
@@ -873,14 +913,9 @@ export function useAudioPlayer() {
     return () => {
       disposed = true
       libraryEpochRef.current += 1
-      if (libraryWarmIdleRef.current !== null) {
-        if (typeof window.cancelIdleCallback === 'function') window.cancelIdleCallback(libraryWarmIdleRef.current)
-        else window.clearTimeout(libraryWarmIdleRef.current)
-        libraryWarmIdleRef.current = null
-      }
       void cancelLibraryCoverWarmup().catch(() => undefined)
     }
-  }, [rememberLibraryPlaylist, scheduleLibraryWarmup])
+  }, [rememberLibraryPlaylist])
 
   // Publish one batch of tag rows. Every guard below is load-bearing: a stale
   // pass must never write another scope, another descriptor set, or a list the
@@ -1306,17 +1341,33 @@ export function useAudioPlayer() {
         ? previousAudioTrack?.sourcePath ?? existingPending?.sourcePath ?? null
         : previousAudioTrack?.sourcePath ?? null
     const requestId = selectionRequestIdRef.current + 1
+    if (visualNavigation?.source !== 'automatic') setAutomaticContinuationVisual(false)
+    startupRestoreTimedOutRef.current = false
     selectionRequestIdRef.current = requestId
     const selectionSequence = targetTrackId
       ? recordAcceptedTrackSelectionActivity()
       : selectionActivitySequenceRef.current
     if (targetTrackId && visualNavigation) {
+      const outgoingState = latestAudioStateRef.current
+      const outgoingDurationSeconds = (outgoingState?.durationMs ?? 0) / 1000
+      const isDifferentTrack = Boolean(outgoingState?.currentTrackId
+        && outgoingState.currentTrackId !== targetTrackId)
+      const progressStartRatio = visualNavigation.source === 'automatic'
+        ? 1
+        : isDifferentTrack && outgoingDurationSeconds > 0
+          ? Math.min(1, Math.max(0, visualTimelineClock.getPositionSeconds() / outgoingDurationSeconds))
+          : 0
       setSelectionVisualIntent({
         requestId,
         sequence: selectionSequence,
         targetTrackId,
         direction: visualNavigation.direction,
         source: visualNavigation.source,
+        progressStartRatio,
+        preservePlayingVisual: Boolean(usesLoadAndPlay && (
+          isDifferentTrack && outgoingState?.phase === 'playing'
+          || visualNavigation.source === 'automatic' && outgoingState?.phase === 'ended'
+        )),
         previewTokenId: visualNavigation.previewTokenId,
       })
     }
@@ -1350,7 +1401,7 @@ export function useAudioPlayer() {
     setContentState('loading')
     commitDetailsPending(targetTrackId !== null)
     return requestId
-  }, [commitAudioError, commitDetailsPending, recordAcceptedTrackSelectionActivity])
+  }, [commitAudioError, commitDetailsPending, recordAcceptedTrackSelectionActivity, visualTimelineClock])
 
   const selectionIsCurrent = useCallback((requestId: number, targetTrackId?: string) => {
     const pending = pendingSelectionRef.current
@@ -1427,6 +1478,9 @@ export function useAudioPlayer() {
 
   const pumpPlaylistMetadataHydration = useCallback(() => {
     function pump(): void {
+      // Tag summaries and duration batches already cover every text row. The
+      // full per-file hydration lane is optional during navigation motion.
+      if (!backgroundArtworkAllowedRef.current) return
       while (
         playlistMetadataHydrationActiveRef.current < 2
         && playlistMetadataHydrationQueueRef.current.length > 0
@@ -1467,7 +1521,29 @@ export function useAudioPlayer() {
         playlistVisualHydrationActiveRef.current < 2
         && playlistVisualHydrationQueueRef.current.length > 0
       ) {
-        const job = playlistVisualHydrationQueueRef.current.shift()
+        const urgentIndex = playlistVisualHydrationQueueRef.current.findIndex((candidate) =>
+          !candidate.optional || playlistVisualRequiredIdsRef.current.has(candidate.trackId))
+        if (urgentIndex < 0) {
+          if (!backgroundArtworkAllowedRef.current || playlistVisualHydrationActiveRef.current > 0) return
+          if (!playlistOptionalIdleReadyRef.current) {
+            if (playlistOptionalIdleRef.current === null) {
+              playlistOptionalIdleRef.current = scheduleOptionalArtworkIdle(() => {
+                playlistOptionalIdleRef.current = null
+                playlistOptionalIdleReadyRef.current = true
+                pump()
+              })
+            }
+            return
+          }
+          playlistOptionalIdleReadyRef.current = false
+        } else {
+          playlistOptionalIdleReadyRef.current = false
+          if (playlistOptionalIdleRef.current !== null) {
+            cancelOptionalArtworkIdle(playlistOptionalIdleRef.current)
+            playlistOptionalIdleRef.current = null
+          }
+        }
+        const job = playlistVisualHydrationQueueRef.current.splice(urgentIndex < 0 ? 0 : urgentIndex, 1)[0]
         if (!job) break
         playlistVisualHydrationActiveRef.current += 1
         playlistVisualHydrationActiveJobsRef.current.set(job.trackId, job)
@@ -1496,12 +1572,20 @@ export function useAudioPlayer() {
             const coverFilePath = coverSource.coverArt?.filePath
             if (coverFilePath) {
               const firstPlaylistTrackId = folderPlaylistRef.current?.tracks[0]?.id
-              const pixels = await loadAudioPlaylistCoverPixels({
+              const currentTrackId = logicalCursorTrackIdRef.current
+                ?? presentationTrackRef.current?.id
+                ?? latestAudioStateRef.current?.currentTrackId
+              const pixels = await schedulePlaylistCoverPixels({
                 clientId: job.clientId,
                 filePath: coverFilePath,
                 maxEdge: job.trackId === firstPlaylistTrackId ? 512 : job.maxEdge,
                 windowGeneration: job.backendGeneration,
+              }, {
+                priority: job.trackId === currentTrackId ? 0
+                  : libraryVisibleRef.current && visiblePlaylistTrackIdsRef.current.includes(job.trackId) ? 1 : 2,
+                isCurrent: () => !jobIsStale(),
               })
+              if (!pixels) return
               if (jobIsStale()) return
               coverThumbnail = playlistCoverImageFromPixels(pixels)
               try {
@@ -1673,13 +1757,19 @@ export function useAudioPlayer() {
     }
     // Text rows hydrate metadata without requesting high-resolution artwork;
     // selected-list thumbnails continue as optional background work.
-    const foregroundArtworkIds = showArtwork ? orderedDesiredIds
-      : orderedDesiredIds.filter((id) => id === firstTrackId || id === dockTrackId)
+    const currentPlaybackTrackId = logicalCursorTrackIdRef.current
+      ?? presentationTrackRef.current?.id
+      ?? latestAudioStateRef.current?.currentTrackId
+    const foregroundArtworkIds = !libraryVisibleRef.current
+      ? currentPlaybackTrackId && playlist?.tracks.some((item) => item.id === currentPlaybackTrackId)
+        ? [currentPlaybackTrackId] : []
+      : showArtwork ? orderedDesiredIds
+        : orderedDesiredIds.filter((id) => id === firstTrackId || id === dockTrackId)
     const foregroundIds = new Set(foregroundArtworkIds)
     // Selection, rather than mounting the playlist page, starts cover work.
     // Every available track is eligible at thumbnail quality; viewport work
     // stays first and the existing byte ledger bounds background admission.
-    const artworkDesiredIds = [...foregroundArtworkIds, ...(playlist?.tracks ?? [])
+    const artworkDesiredIds = [...foregroundArtworkIds, ...(libraryVisibleRef.current && backgroundArtworkAllowedRef.current ? playlist?.tracks ?? [] : [])
       .filter((descriptor) => descriptor.available && !foregroundIds.has(descriptor.id))
       .map((descriptor) => descriptor.id)]
     const currentDemand = showArtwork ? playlistArtworkDemandRef.current : undefined
@@ -1728,6 +1818,7 @@ export function useAudioPlayer() {
       return [{ id, source, bytes: playlistImageBytes(visual.coverThumbnail) }]
     })
     const requiredIds = new Set(artworkDesiredIds.filter((id) => visibleIds.has(id) || heldIds.has(id) || id === firstTrackId || id === dockTrackId))
+    playlistVisualRequiredIdsRef.current = requiredIds
     // Reserve warm resources before optional cold prefetch. The final retain
     // below reconciles leases against the actual accepted worker demand.
     const reservedWarmIds = playlistArtworkGrace.retain(residents, requiredIds,
@@ -1823,6 +1914,7 @@ export function useAudioPlayer() {
           normalizedSourcePath: normalizeAudioSourcePath(descriptor.sourcePath),
           maxEdge: targetEdgeFor(descriptor.id, cardEdge),
           attempt: 0,
+          optional: !requiredIds.has(descriptor.id),
         })
       }
       playlistVisualHydrationQueueRef.current = jobs
@@ -1847,6 +1939,24 @@ export function useAudioPlayer() {
       playlistArtworkDemandRef.current,
     )
   }, [setVisiblePlaylistTrackIds])
+
+  useEffect(() => {
+    if (libraryVisibleRef.current === libraryVisible) return
+    libraryVisibleRef.current = libraryVisible
+    playlistVisualWindowKeyRef.current = null
+    refreshPlaylistVisualDemandRef.current()
+  }, [libraryVisible])
+
+  useEffect(() => {
+    if (!backgroundArtworkAllowed) {
+      if (playlistOptionalIdleRef.current !== null) cancelOptionalArtworkIdle(playlistOptionalIdleRef.current)
+      playlistOptionalIdleRef.current = null
+      playlistOptionalIdleReadyRef.current = false
+    }
+    playlistVisualWindowKeyRef.current = null
+    refreshPlaylistVisualDemandRef.current()
+    if (backgroundArtworkAllowed) pumpPlaylistMetadataHydration()
+  }, [backgroundArtworkAllowed, pumpPlaylistMetadataHydration])
 
   useEffect(() => {
     const retireLoadedReplacement = (src: string) => {
@@ -1959,6 +2069,7 @@ export function useAudioPlayer() {
       stagedTrackDetailsRef.current = null
     }
     pendingSelectionRef.current = null
+    setAutomaticContinuationVisual(false)
     setSelectionVisualIntent((current) => current?.requestId === requestId ? null : current)
     audioSelectionInProgressRef.current = false
     setSelectionPending(false)
@@ -2243,6 +2354,7 @@ export function useAudioPlayer() {
     acceptSeekPosition = false,
     fromEvent = false,
   ) => {
+    if (startupRestoreTimedOutRef.current) return
     const pendingSelection = pendingSelectionRef.current
     const activePlaybackTransition = activePlaybackTransitionRef.current
     const nextTransportTransition = nextAudioState.transportTransition ?? null
@@ -2332,6 +2444,18 @@ export function useAudioPlayer() {
     }
 
     latestAudioStateRef.current = nextAudioState
+    const playlist = folderPlaylistRef.current
+    const currentIndex = nextTrackId ? queueTrackIndexRef.current.get(nextTrackId) ?? 0 : 0
+    const stopsAtPlaylistEnd = (repeatMode === 'sequential' || repeatMode === 'all-categories-until-stop')
+      && currentIndex >= (playlist?.tracks.length ?? 0) - 1
+    // Claim the icon in the same commit as the first ended state. Once the
+    // selection starts, its visual intent carries this through native loading;
+    // repeated ended events must not revoke the claim before that handoff.
+    if (nextAudioState.phase !== 'ended') setAutomaticContinuationVisual(false)
+    else if (previousPhase !== 'ended' || previousTrackId !== nextTrackId || !isSamePlaybackGeneration) {
+      setAutomaticContinuationVisual(Boolean(nextTrackId && playlist?.tracks.length && !stopsAtPlaylistEnd
+        && endingTrackRef.current !== nextTrackId))
+    }
     if (!audioPlaybackUiStateEqual(previousAudioState, nextAudioState)) {
       setAudioState(nextAudioState)
     }
@@ -2444,6 +2568,7 @@ export function useAudioPlayer() {
     commitPresentationTrack,
     hydrateCurrentAudioTrack,
     patchPresentationDuration,
+    repeatMode,
     visualTimelineClock,
   ])
 
@@ -3031,6 +3156,142 @@ export function useAudioPlayer() {
     }
   }, [applyAudioState, commitAudioError])
 
+  useEffect(() => {
+    if (!savedSession) return
+    const watchdog = window.setTimeout(() => {
+      if (!sessionRestorePendingRef.current) return
+      // Fence the outstanding native request before exposing a stable error
+      // state. A late response must not repaint the startup placeholder.
+      startupRestoreTimedOutRef.current = true
+      sessionRestorePendingRef.current = false
+      clearPlaybackSession()
+      selectionRequestIdRef.current += 1
+      audioStateRequestGenerationRef.current += 1
+      pendingSelectionRef.current = null
+      audioSelectionInProgressRef.current = false
+      audioTrackRef.current = null
+      latestAudioStateRef.current = null
+      setAudioTrack(null)
+      setAudioState(null)
+      setFolderPlaylist(null)
+      setPendingDurationPlaylist(null)
+      setQueueTracks([])
+      setSelectionPending(false)
+      setAudioBusy(false)
+      clearPresentationTrack('error')
+      setStartupRestoreReady(true)
+      console.warn('恢复上次播放超时')
+    }, 15_000)
+    return () => window.clearTimeout(watchdog)
+  }, [clearPresentationTrack, savedSession])
+
+  useEffect(() => {
+    if (!sessionRestorePendingRef.current || sessionRestoreStartedRef.current) return
+    const saved = savedSessionRef.current
+    if (!saved) return
+    if (saved.playlist.sourceKind === 'm3u8' && playlistRestorePending) return
+    sessionRestoreStartedRef.current = true
+    if (selectionRequestIdRef.current !== 0) {
+      sessionRestorePendingRef.current = false
+      setStartupRestoreReady(true)
+      return
+    }
+    let disposed = false
+    const cancelled = () => disposed || startupRestoreTimedOutRef.current
+    let restoredPlaylist: AudioFolderPlaylist | null = null
+    let restoreSelectionId: number | null = null
+    void (async () => {
+      try {
+        // Let StrictMode's mount cleanup run before issuing a native command.
+        await Promise.resolve()
+        if (cancelled()) return
+        const playlist = saved.playlist.sourceKind === 'custom'
+          ? saved.playlist.customPlaylist ?? null
+          : saved.playlist.sourceKind === 'm3u8'
+            ? sessionPlaylistDescriptorsRef.current.get(`${saved.playlist.sourceKind}\u0000${normalizeAudioSourcePath(saved.playlist.sourcePath)}`) ?? null
+            : await listAudioFolderTracks(saved.playlist.sourcePath)
+        if (cancelled() || selectionRequestIdRef.current !== 0) return
+        const target = playlist?.tracks.find((item) => normalizeAudioSourcePath(item.sourcePath)
+          === normalizeAudioSourcePath(saved.sourcePath))
+        if (!playlist || playlist.sourceKind !== saved.playlist.sourceKind || !target?.available) {
+          clearPlaybackSession()
+          return
+        }
+        restoredPlaylist = playlist
+        audioStateRequestGenerationRef.current += 1
+        const loading = loadFolderAudioTrack(target, false, true, playlistScope(playlist))
+        restoreSelectionId = selectionRequestIdRef.current
+        const loaded = await loading
+        if (cancelled() || selectionRequestIdRef.current !== restoreSelectionId) return
+        if (!loaded || latestAudioStateRef.current?.currentTrackId !== target.id) {
+          throw new Error('上次播放的歌曲未能加载')
+        }
+        const positionMs = Math.min(saved.positionMs, latestAudioStateRef.current.durationMs ?? saved.positionMs)
+        const positioned = await seekAudio(positionMs)
+        if (cancelled() || selectionRequestIdRef.current !== restoreSelectionId
+          || positioned.currentTrackId !== target.id) return
+        applyAudioState(positioned, false, true)
+        if (saved.volume !== volumeScalarToPercent(positioned.volume)) {
+          const adjusted = await setAudioVolume(volumePercentToScalar(saved.volume))
+          if (cancelled() || selectionRequestIdRef.current !== restoreSelectionId) return
+          applyAudioState(adjusted)
+        }
+        // A saved transport state is historical. Startup always presents the
+        // restored position paused, including sessions saved while playing.
+        const pausedState = await pauseAudio()
+        if (cancelled() || selectionRequestIdRef.current !== restoreSelectionId
+          || pausedState.currentTrackId !== target.id) return
+        if (pausedState.phase !== 'paused' || Math.abs(pausedState.positionMs - positionMs) > 1000) {
+          throw new Error('上次播放的暂停状态或进度未能确认')
+        }
+        applyAudioState(pausedState)
+        if (cancelled() || selectionRequestIdRef.current !== restoreSelectionId) return
+        activatePlaylistScope(playlist)
+        setQueueOpen(saved.queueOpen)
+        setVolume(saved.volume)
+        confirmedVolumeRef.current = saved.volume
+      } catch (error) {
+        if (!cancelled() && selectionRequestIdRef.current === (restoreSelectionId ?? 0)) {
+          clearPlaybackSession()
+          console.warn('恢复上次播放失败', error)
+          // A partially restored native track must never become the first
+          // visible loading frame. If possible, expose its confirmed paused
+          // state; otherwise settle on the error view.
+          const currentTrackId = latestAudioStateRef.current?.currentTrackId
+          if (currentTrackId && restoredPlaylist) {
+            try {
+              const pausedState = await pauseAudio()
+              if (cancelled() || selectionRequestIdRef.current !== restoreSelectionId) return
+              if (pausedState.phase === 'paused' && pausedState.currentTrackId === currentTrackId) {
+                applyAudioState(pausedState)
+                activatePlaylistScope(restoredPlaylist)
+                return
+              }
+            } catch (pauseError) {
+              console.warn('恢复失败后暂停歌曲也失败', pauseError)
+            }
+          }
+          clearPresentationTrack('error')
+        }
+      } finally {
+        if (!cancelled()) {
+          sessionRestorePendingRef.current = false
+          setStartupRestoreReady(true)
+        }
+      }
+    })()
+    return () => {
+      disposed = true
+      if (sessionRestorePendingRef.current) sessionRestoreStartedRef.current = false
+    }
+  }, [
+    activatePlaylistScope,
+    applyAudioState,
+    clearPresentationTrack,
+    loadFolderAudioTrack,
+    playlistRestorePending,
+  ])
+
   useEffect(() => () => visualTimelineClock.dispose(), [visualTimelineClock])
 
   useEffect(() => {
@@ -3508,12 +3769,15 @@ export function useAudioPlayer() {
   }
 
   return {
+    startupRestoreReady,
+    hadSavedSession: savedSession !== null,
     track,
     artwork: presentationArtwork,
     artworkPrefetchCandidate: artworkPrefetchCandidates[0] ?? null,
     artworkPrefetchCandidates,
     selectionActivitySequence,
     selectionVisualIntent,
+    automaticContinuationVisual,
     detailsPending,
     contentState,
     queueTracks,

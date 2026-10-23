@@ -18,6 +18,10 @@ const service = (await (await fetch(origin + '/src/features/player/services/audi
   .replace(/import \{ listen \} from [^;]+;/, 'const listen=async(name,callback)=>{(window.listeners??={})[name]=callback;return ()=>{if(window.listeners[name]===callback)delete window.listeners[name]};};')
 assert(service.includes('window.backendInvoke'))
 const realSurface = await (await fetch(origin + '/src/features/player/components/PlayerSurface.tsx')).text()
+const realLibraryPanel = await (await fetch(origin + '/src/features/player/components/PlaylistLibraryPanel.tsx')).text()
+const countedLibraryPanel = realLibraryPanel.replace(/(export function PlaylistLibraryPanel\([^\n]+\) \{)/,
+  '$1 window.libraryRenderCount = (window.libraryRenderCount ?? 0) + 1; window.libraryLastRenderAt = performance.now();')
+assert.notEqual(countedLibraryPanel, realLibraryPanel, 'instrument the real library panel render')
 const surface = `
 import React from '${dependency('react.js')}';
 import {PlayerSurface as RealSurface} from '/__all_songs_real_surface.js';
@@ -29,7 +33,7 @@ import ReactDOM from '${dependency('react-dom_client.js')}';
 import {AppearanceProvider} from '/src/features/appearance/components/AppearanceProvider.tsx';
 import {PlayerShell} from '/src/features/player/components/PlayerShell.tsx';
 import '/src/index.css';
-window.calls=[];window.choice='a';window.summaryGate=false;window.pendingSummaries=[];window.pendingHydrations=[];window.coverPerfHydrateGate=false;window.coverPerfPixelGate=false;window.pendingPixelLoads=[];
+window.calls=[];window.choice='a';window.summaryGate=false;window.pendingSummaries=[];window.pendingHydrations=[];window.coverPerfHydrateGate=false;window.coverPerfPixelGate=false;window.pendingPixelLoads=[];window.reverseManyTitles=false;
 let state={phase:'idle',generation:null,currentTrackId:null,positionMs:0,durationMs:null,volume:.5,error:null,transportTransition:null,transportSettledRequestId:null},generation=0,currentTrack=null;
 const boundaryTitles=['#Lov3 #Ngẫu Hứng','#ТАМАДА (DJ Mexx & DJ Dikson Remix)','(What Is) Love?','+ERABY+E CONNEC+1ON'];
 const angleTitle='<<wr/d::maker>> ~Harmony in Re...';
@@ -48,7 +52,7 @@ const descriptor=([id,sourcePath])=>({id,sourcePath,fileName:sourcePath.split('/
 const playlist=()=>({directoryPath:'/audio/'+window.choice,directoryName:indexFolders[window.choice]??'Folder '+window.choice,sourceKind:window.choice==='c'||window.playlistImport?'m3u8':'folder',sourcePath:window.choice==='c'||window.playlistImport?'/lists/'+window.choice+'.m3u8':'/audio/'+window.choice,sourceName:window.playlistImport?(indexFolders[window.choice]??'List '+window.choice):'List '+window.choice,selectedIndex:0,tracks:descriptors[window.choice].map(descriptor)});
 const byPath=new Map(Object.values(descriptors).flat().map(pair=>[pair[1],descriptor(pair)]));
 const names={'a-0':'A Song','b-0':'B Song','c-0':'C Playlist Song',shared:'Shared Song'};
-const title=id=>names[id]??(id.startsWith('order-')?orderTitles[Number(id.slice(6))]:id.startsWith('many-')?(Number(id.slice(5))<25?'A Song ':'Z Song ')+id.slice(5):id);
+const title=id=>names[id]??(id.startsWith('order-')?orderTitles[Number(id.slice(6))]:id.startsWith('many-')?((Number(id.slice(5))<25)!==window.reverseManyTitles?'A Song ':'Z Song ')+id.slice(5):id);
 const track=path=>{const row=byPath.get(path);if(!row)throw Error('Unknown '+path);return {...row,durationMs:180000,metadata:{title:title(row.id),artist:'Artist '+row.id,album:'Album '+row.id,albumArtist:null,genre:null,year:null,trackNumber:null,discNumber:null,comment:null,lyrics:null,audioFormat:null,coverArt:null}}};
 window.backendInvoke=async(command,args)=>{
  const input=args?.input;window.calls.push({command,input});
@@ -99,13 +103,14 @@ ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(
 const html = (await (await fetch(origin)).text()).replace(/src="\/src\/[^\"]+"/, 'src="/__all_songs_fixture.js"')
 const browser = await chromium.launch({ headless: true, channel: 'msedge' })
 
-async function open(width) {
+async function open(width, { countLibraryRenders = false } = {}) {
   const page = await browser.newPage({ viewport: { width, height: 1000 }, reducedMotion: 'reduce' })
   page.setDefaultTimeout(15000)
   const errors = []
   page.on('pageerror', error => errors.push(error.message))
   await page.route('**/src/features/player/services/audioCommands.ts*', route => route.fulfill({ contentType: 'text/javascript', body: service }))
   await page.route('**/src/features/player/components/PlayerSurface.tsx*', route => route.fulfill({ contentType: 'text/javascript', body: surface }))
+  if (countLibraryRenders) await page.route('**/src/features/player/components/PlaylistLibraryPanel.tsx*', route => route.fulfill({ contentType: 'text/javascript', body: countedLibraryPanel }))
   await page.route('**/__all_songs_real_surface.js', route => route.fulfill({ contentType: 'text/javascript', body: realSurface }))
   await page.route('**/__all_songs_fixture.js', route => route.fulfill({ contentType: 'text/javascript', body: fixture }))
   await page.route('**/__all_songs_test?*', route => route.fulfill({ contentType: 'text/html', body: html }))
@@ -198,6 +203,57 @@ try {
     assert.deepEqual(errors, [], 'no browser errors during summary loading')
     await page.close()
     console.log('all songs summary loading: truthful pending row and resolved tag passed')
+  }
+  {
+    const { page, errors } = await open(640)
+    await page.evaluate(() => { window.summaryGate = true; window.reverseManyTitles = true })
+    await importChoice(page, 'many')
+    await page.evaluate(() => window.viewModel.playlist.library.onSelectCategory('songs'))
+    await page.getByRole('heading', { name: '全部歌曲' }).waitFor()
+    await page.waitForFunction(() => window.pendingSummaries.length > 0)
+    assert.equal(await page.locator('.all-songs-list .playlist-card').count(), 0, 'summary loading still hides unresolved rows')
+    await page.waitForFunction(() => window.calls.some(call => call.command === 'audio_load_playlist_cover_pixels' && call.input.filePath === '/covers/many-0.png'))
+    const pendingCoverCalls = await page.evaluate(() => window.calls.filter(call => call.command === 'audio_probe_playlist_cover' && call.input.path.startsWith('/audio/many/')).map(call => call.input.path))
+    assert(pendingCoverCalls.includes('/audio/many/0.flac'), 'first descriptor artwork starts before the whole-library summary resolves')
+    await page.evaluate(() => { window.summaryGate = false; window.pendingSummaries.splice(0).forEach(resolve => resolve()) })
+    await page.waitForFunction(() => document.querySelector('.all-songs-list .playlist-card-title')?.textContent === 'A Song 25')
+    await page.waitForFunction(() => {
+      const first = document.querySelector('.all-songs-list .playlist-card')
+      const image = first?.querySelector('.playlist-card-cover-image')
+      return image?.complete && image.naturalWidth > 0
+    })
+    const sortedCoverCalls = await page.evaluate(() => window.calls.filter(call => call.command === 'audio_probe_playlist_cover').map(call => call.input.path))
+    assert(sortedCoverCalls.includes('/audio/many/25.flac'), 'sorted first-screen artwork loads after descriptor prefetch targets differ')
+    assert.deepEqual(errors, [], 'no browser errors while prefetch hands off to the sorted visible window')
+    await page.close()
+    console.log('all songs pending summary prefetch and sorted first-screen handoff passed')
+  }
+  {
+    const { page, errors } = await open(640, { countLibraryRenders: true })
+    await importChoice(page, 'many')
+    await page.waitForFunction(() => window.viewModel.playlist.library.allSongsMetadataStatus === 'ready')
+    await page.evaluate(() => {
+      window.coverPerfPixelGate = true
+      window.viewModel.playlist.library.onSelectCategory('songs')
+    })
+    await page.getByRole('heading', { name: '全部歌曲' }).waitFor()
+    await page.waitForFunction(() => window.pendingPixelLoads.length === 1)
+    await page.waitForFunction(() => window.libraryRenderCount > 0 && performance.now() - window.libraryLastRenderAt >= 500)
+    const rendersBeforeCovers = await page.evaluate(() => window.libraryRenderCount)
+    await page.waitForTimeout(250)
+    assert.equal(await page.evaluate(() => window.libraryRenderCount), rendersBeforeCovers,
+      'idle control has no parent renders while pixel results are held')
+    for (let loaded = 1; loaded <= 4; loaded++) {
+      await page.waitForFunction(() => window.pendingPixelLoads.length === 1)
+      await page.evaluate(() => window.pendingPixelLoads.shift()())
+      await page.waitForFunction(expected => [...document.querySelectorAll('.all-songs-list .playlist-card-cover-image')]
+        .filter(image => image.complete && image.naturalWidth > 0).length >= expected, loaded)
+    }
+    const rendersAfterCovers = await page.evaluate(() => window.libraryRenderCount)
+    assert.equal(rendersAfterCovers, rendersBeforeCovers, 'publishing four cover URLs does not rerender the whole library panel')
+    assert.deepEqual(errors, [], 'local cover subscriptions do not cause browser errors')
+    await page.close()
+    console.log(`all songs local cover updates: four image publications, library renders ${rendersBeforeCovers} -> ${rendersAfterCovers}`)
   }
   {
     const { page, errors } = await open(640)
@@ -313,14 +369,31 @@ try {
     await page.waitForFunction(() => window.calls.some(call => call.command === 'audio_probe_playlist_cover' && call.input.path === '/audio/many/25.flac'))
     await page.locator('.all-songs-list .playlist-card').filter({ hasText: 'Z Song 25' }).locator('.playlist-card-cover-image').waitFor()
     await page.evaluate(() => window.viewModel.playlist.library.onSelectCategory('artist'))
-    await page.waitForFunction(url => window.coverObjectUrls.revoked.includes(url), visibleCoverUrl)
-    assert(await page.evaluate(url => window.coverObjectUrls.revoked.includes(url), visibleCoverUrl), 'leaving all songs revokes a published cover URL')
+    await page.getByRole('heading', { name: '艺术家' }).waitFor()
+    await page.waitForFunction(() => !document.querySelector('.all-songs-list'))
+    assert.equal(await page.evaluate(url => window.coverObjectUrls.revoked.includes(url), visibleCoverUrl), false,
+      'route switch retains a bounded decoded cover for immediate return')
     await page.evaluate(() => {
       window.coverPerfPixelGate = true
+      window.coverReentryFrames = []
+      const sample = () => {
+        const image = document.querySelector('.all-songs-list .playlist-card-cover-image')
+        if (image) window.coverReentryFrames.push({ src: image.src, complete: image.complete, width: image.naturalWidth })
+        else requestAnimationFrame(sample)
+      }
+      requestAnimationFrame(sample)
       window.viewModel.playlist.library.onSelectCategory('songs')
     })
+    await page.waitForFunction(() => window.coverReentryFrames.length > 0)
+    const firstReentryFrame = await page.evaluate(() => window.coverReentryFrames[0])
+    assert.equal(firstReentryFrame.src, visibleCoverUrl, 'first return frame reuses the retained cover URL')
+    assert(firstReentryFrame.complete && firstReentryFrame.width > 0, 'first return frame paints decoded artwork')
+    await page.evaluate(() => {
+      const panel = document.querySelector('.playlist-management-content')
+      panel.scrollTop = panel.scrollHeight
+    })
     await page.waitForFunction(() => window.pendingPixelLoads.length >= 1)
-    assert.equal(await page.evaluate(() => window.pendingPixelLoads.length), 2, 'artwork lane has at most two native pixel loads in flight')
+    assert.equal(await page.evaluate(() => window.pendingPixelLoads.length), 1, 'shared scheduler has one native pixel load in flight')
     await page.evaluate(() => window.viewModel.playlist.library.onSelectCategory('artist'))
     await page.getByRole('heading', { name: '艺术家' }).waitFor()
     const createdBeforeRelease = await page.evaluate(() => window.coverObjectUrls.created.length)

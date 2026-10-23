@@ -6,7 +6,8 @@ import type { PlayerPlaybackViewModel, TrackCardPreviewToken } from '@/features/
 
 // Only the locally owned preview token may be discarded: the audio player has
 // a single preview slot shared with the full-size player.
-export function usePlaylistControllerSwipe(playback: PlayerPlaybackViewModel, disabled: boolean) {
+export function usePlaylistControllerSwipe(playback: PlayerPlaybackViewModel, disabled: boolean,
+  isPreviewPaintReady?: (token: TrackCardPreviewToken) => boolean) {
   const { appearance, motion } = useAppearance()
   const settings = appearance.player.controllerSwipe
   const viewportRef = useRef<HTMLDivElement>(null)
@@ -17,7 +18,9 @@ export function usePlaylistControllerSwipe(playback: PlayerPlaybackViewModel, di
   const [active, setActive] = useState(false)
   const suppressClick = useRef(false)
   const latest = useRef(playback)
+  const latestPreviewReady = useRef(isPreviewPaintReady)
   useLayoutEffect(() => { latest.current = playback })
+  useLayoutEffect(() => { latestPreviewReady.current = isPreviewPaintReady })
 
   useLayoutEffect(() => {
     const viewport = viewportRef.current
@@ -170,6 +173,15 @@ export function usePlaylistControllerSwipe(playback: PlayerPlaybackViewModel, di
       const result = await pending
       if (disposed || releaseRevision !== revision || !settling) return
       if (!result) { void settleBack(); return }
+      // The playback commit changes the current row immediately. Keep the
+      // decoded preview as its entering cover instead of exposing an old canvas
+      // or an as-yet-unpainted target image for the first committed frame.
+      const readyDeadline = performance.now() + 5000
+      while (latestPreviewReady.current && !latestPreviewReady.current(result) && performance.now() < readyDeadline) {
+        await new Promise(requestAnimationFrame)
+        if (disposed || releaseRevision !== revision || !settling) return
+      }
+      if (latestPreviewReady.current && !latestPreviewReady.current(result)) { void settleBack(); return }
       viewport.dataset.swipePhase = 'settling'
       if (motion.disabled || settings.settleDurationMs * scale === 0) {
         // A zero-duration Motion timeline can flush its final transform after
@@ -177,7 +189,7 @@ export function usePlaylistControllerSwipe(playback: PlayerPlaybackViewModel, di
         // Direct manipulation has no outstanding timeline to repaint later.
         x.set(-direction * current.stride)
       } else {
-        slideAnimation = animate(x, -direction * current.stride, { duration: settings.settleDurationMs * scale / 1000, ease: appearanceEasingMap[settings.easing] })
+        slideAnimation = animate(x, -direction * current.stride, { duration: settings.settleDurationMs * scale / 1000, ease: motion.trackCardCommitEase })
         await slideAnimation
       }
       if (disposed || releaseRevision !== revision || !settling) return
@@ -216,7 +228,7 @@ export function usePlaylistControllerSwipe(playback: PlayerPlaybackViewModel, di
       window.removeEventListener('resize', cancel)
       document.removeEventListener('visibilitychange', visibility)
     }
-  }, [playback.track?.id, disabled, settings, appearance.motion.durationScale, motion.disabled, x, highlight])
+  }, [playback.track?.id, disabled, settings, appearance.motion.durationScale, motion.disabled, motion.trackCardCommitEase, x, highlight])
 
   return { viewportRef, x, highlight, preview, active, pageStride, onClickCapture: (event: React.MouseEvent) => {
     if (event.detail > 0 && suppressClick.current) { event.preventDefault(); event.stopPropagation(); suppressClick.current = false }

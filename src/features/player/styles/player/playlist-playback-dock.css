@@ -174,14 +174,9 @@
 
 .playlist-playback-cover-image {
   opacity: 0;
-  transition: opacity var(--app-motion-standard, 240ms) cubic-bezier(.2, 0, .2, 1);
 }
 
 .playlist-playback-cover-image[data-loaded="true"] { opacity: 1; }
-
-@media (prefers-reduced-motion: reduce) {
-  .playlist-playback-cover-image { transition: none; }
-}
 
 /* The dock states the same "fetching local artwork" case as the cards, so it
    pulses the same way (keyframes live in playlist-panel.css; both files ship

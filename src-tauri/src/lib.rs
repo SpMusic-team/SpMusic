@@ -10,6 +10,9 @@ use std::sync::Once;
 
 use app_paths::AppPaths;
 use audio::{
+    audio_error, current_output_info, import_m3u8_playlist, load_library_folder, AudioErrorCode,
+};
+use audio::{
     begin_playlist_cover_window, load_cover_pixels, load_playlist_cover_pixels,
     probe_playlist_cover, probe_playlist_durations, probe_playlist_track_summaries,
     shutdown_playlist_cover_cache, AudioBeginPlaylistCoverWindowInput, AudioCommandError,
@@ -21,7 +24,6 @@ use audio::{
     AudioProbePlaylistTrackSummariesInput, AudioSeekInput, AudioSetVolumeInput, AudioTrackRef,
     AudioTransitionPlaybackInput, CoverPixelsError,
 };
-use audio::{current_output_info, import_m3u8_playlist, load_library_folder};
 use global_shortcuts::{
     global_shortcuts_get_settings, global_shortcuts_set_suspended, global_shortcuts_update_settings,
 };
@@ -218,8 +220,114 @@ fn library_clear_folders(state: State<'_, LibraryFolderRegistry>) -> Result<(), 
 }
 
 #[tauri::command]
-fn library_scan_folder(path: String) -> Result<AudioFolderPlaylist, AudioCommandError> {
-    load_library_folder(std::path::Path::new(&path))
+async fn library_scan_folder(path: String) -> Result<AudioFolderPlaylist, AudioCommandError> {
+    scan_library_folder_in_worker(move || load_library_folder(std::path::Path::new(&path))).await
+}
+
+async fn scan_library_folder_in_worker<F>(work: F) -> Result<AudioFolderPlaylist, AudioCommandError>
+where
+    F: FnOnce() -> Result<AudioFolderPlaylist, AudioCommandError> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .map_err(|error| {
+            tracing::error!(
+                command = "library_scan_folder",
+                error = %error,
+                "library folder scan worker failed",
+            );
+            audio_error(
+                AudioErrorCode::InternalError,
+                "Library folder scan worker failed",
+                false,
+            )
+        })?
+}
+
+#[cfg(test)]
+mod library_scan_tests {
+    use std::{
+        fs,
+        sync::{mpsc, Arc, Condvar, Mutex},
+        time::Duration,
+    };
+
+    use super::*;
+
+    #[test]
+    fn scan_command_keeps_folder_result_and_file_errors() {
+        let root = std::env::temp_dir().join(format!(
+            "spmusic-scan-command-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("song.mp3"), b"fixture").unwrap();
+
+        let playlist = tauri::async_runtime::block_on(library_scan_folder(
+            root.to_string_lossy().into_owned(),
+        ))
+        .unwrap();
+        assert_eq!(playlist.tracks.len(), 1);
+        assert_eq!(playlist.tracks[0].file_name, "song.mp3");
+
+        fs::remove_dir_all(&root).unwrap();
+        let error = tauri::async_runtime::block_on(library_scan_folder(
+            root.to_string_lossy().into_owned(),
+        ))
+        .unwrap_err();
+        assert_eq!(error.code, AudioErrorCode::FileNotFound);
+        assert!(error.recoverable);
+    }
+
+    #[test]
+    fn two_blocking_scans_leave_the_async_runtime_responsive() {
+        let (started_tx, started_rx) = mpsc::channel();
+        let release = Arc::new((Mutex::new(false), Condvar::new()));
+        let mut scans = Vec::new();
+        for _ in 0..2 {
+            let started_tx = started_tx.clone();
+            let release = Arc::clone(&release);
+            scans.push(tauri::async_runtime::spawn(scan_library_folder_in_worker(
+                move || {
+                    started_tx.send(()).unwrap();
+                    let (lock, ready) = &*release;
+                    let mut released = lock.lock().unwrap();
+                    while !*released {
+                        released = ready.wait(released).unwrap();
+                    }
+                    Err(audio_error(
+                        AudioErrorCode::FileNotFound,
+                        "fixture error",
+                        true,
+                    ))
+                },
+            )));
+        }
+        let both_started = started_rx.recv_timeout(Duration::from_secs(5)).is_ok()
+            && started_rx.recv_timeout(Duration::from_secs(5)).is_ok();
+        let (ping_tx, ping_rx) = mpsc::channel();
+        tauri::async_runtime::spawn(async move { ping_tx.send(()).unwrap() });
+        let responsive = ping_rx.recv_timeout(Duration::from_secs(2)).is_ok();
+
+        let (lock, ready) = &*release;
+        *lock.lock().unwrap() = true;
+        ready.notify_all();
+        assert!(both_started, "both scan workers should start concurrently");
+        assert!(
+            responsive,
+            "light async work should run while scans are blocked"
+        );
+        for scan in scans {
+            let error = tauri::async_runtime::block_on(scan).unwrap().unwrap_err();
+            assert_eq!(error.code, AudioErrorCode::FileNotFound);
+            assert_eq!(error.message, "fixture error");
+            assert!(error.recoverable);
+        }
+    }
 }
 
 #[tauri::command]

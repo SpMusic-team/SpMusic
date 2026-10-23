@@ -12,6 +12,10 @@ function forgetSource(key: string) {
   if (source !== undefined && decodedSources.delete(key)) decodedSourceCharacters -= key.length + source.length
 }
 function rememberSource(trackId: string, requestedSource: string, successfulSource = requestedSource) {
+  // Blob URLs belong to the playlist artwork cache and can be revoked when its
+  // window moves. The decoded thumbnail object, not a remembered URL string,
+  // carries readiness for that resource.
+  if (requestedSource.startsWith('blob:') || successfulSource.startsWith('blob:')) return
   const key = sourceKey(trackId, requestedSource)
   forgetSource(key)
   decodedSources.set(key, successfulSource)

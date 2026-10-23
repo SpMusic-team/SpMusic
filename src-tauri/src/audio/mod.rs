@@ -36,7 +36,7 @@ pub use cover_pixels::{
 };
 pub(crate) use device::current_output_info;
 pub use error::AudioCommandError;
-pub(crate) use error::AudioErrorCode;
+pub(crate) use error::{audio_error, AudioErrorCode};
 pub(crate) use playlist::{import_m3u8_playlist, load_library_folder, restore_playlist_track};
 pub(crate) use playlist_cover::probe_playlist_cover;
 pub(crate) use playlist_cover::try_probe_playlist_cover_for_warmup;

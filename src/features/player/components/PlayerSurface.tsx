@@ -1,8 +1,11 @@
 import '@/features/player/styles/player.css'
+import { isTauri } from '@tauri-apps/api/core'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject, type TransitionEvent } from 'react'
 import { flushSync } from 'react-dom'
 import { AnimatePresence, LayoutGroup, animate, motion, useMotionValue, useReducedMotion, type Easing, type MotionValue } from 'motion/react'
 import { TooltipProvider } from '@/components/ui/tooltip'
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty'
 import { useAppearance, useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { CoverPanel } from '@/features/player/components/CoverPanel'
 import { ControlDock, ExternalPlaybackModeControls } from '@/features/player/components/ControlDock'
@@ -11,6 +14,7 @@ import { LyricsPanel } from '@/features/player/components/LyricsPanel'
 import { PlaybackInfoButton } from '@/features/player/components/PlaybackInfoButton'
 import { MediaLibraryPanel } from '@/features/player/components/MediaLibraryPanel'
 import { PlaylistLibraryPanel } from '@/features/player/components/PlaylistLibraryPanel'
+import { createAllSongsCoverStore, disposeAllSongsCoverStore } from '@/features/player/hooks/useAllSongsWindow'
 import { LibraryChromeTransitionContext, useLibraryChromeTransition } from '@/features/player/hooks/useLibraryChromeTransition'
 import { LibraryDockContext, type LibraryDockBinding } from '@/features/player/hooks/useLibraryDockBinding'
 import { PlaylistPlaybackDock } from '@/features/player/components/PlaylistPlaybackDock'
@@ -47,6 +51,9 @@ export type PlayerSurfaceDevAudioTools = {
 
 export type PlayerSurfaceProps = {
   viewModel: PlayerUiViewModel
+  onPlaylistNavigationSettled?: () => void
+  startupReady?: boolean
+  startupError?: boolean
   devAudioTools?: PlayerSurfaceDevAudioTools
   librarySettings?: {
     selectedFolderCount: number
@@ -606,9 +613,14 @@ let lastCoverDragGestureId = 0
 
 export function PlayerSurface({
   viewModel,
+  onPlaylistNavigationSettled,
+  startupReady = true,
+  startupError = false,
   devAudioTools,
   librarySettings,
 }: PlayerSurfaceProps) {
+  const [allSongsCoverStore] = useState(createAllSongsCoverStore)
+  useEffect(() => () => disposeAllSongsCoverStore(allSongsCoverStore), [allSongsCoverStore])
   const { playback, timeline, volume, queue, playlist, feedback } = viewModel
   const { appearance } = useAppearance()
   const appearanceMotion = useAppearanceMotion()
@@ -677,6 +689,7 @@ export function PlayerSurface({
   const coverInteractionPhaseRef = useRef<TrackCardInteractionPhase>('idle')
   const suppressCoverClickRef = useRef(false)
   const [trackCardPreviewToken, setTrackCardPreviewToken] = useState<TrackCardPreviewToken | null>(null)
+  const [dockPreviewToken, setDockPreviewToken] = useState<TrackCardPreviewToken | null>(null)
   const ownedPreviewCleanupRef = useRef({ discard: discardTrackPreview, tokenId: trackCardPreviewToken?.id })
   useLayoutEffect(() => {
     ownedPreviewCleanupRef.current = { discard: discardTrackPreview, tokenId: trackCardPreviewToken?.id }
@@ -748,6 +761,7 @@ export function PlayerSurface({
     slots: artworkSlots,
     currentArtworkReady,
     previewArtworkReady,
+    previewArtworkEmpty,
     markReady: markArtworkReady,
     markLoadError: markArtworkLoadError,
     markExitComplete: markArtworkExitComplete,
@@ -758,9 +772,81 @@ export function PlayerSurface({
     playback.artworkPrefetchCandidates ?? (playback.artworkPrefetchCandidate ? [playback.artworkPrefetchCandidate] : []),
     playback.selectionActivitySequence ?? 0,
     playback.selectionVisualIntent ?? null,
-    trackCardPreviewToken,
+    playlist.isOpen ? dockPreviewToken : trackCardPreviewToken,
   )
+  const [startupArtworkTimedOut, setStartupArtworkTimedOut] = useState(false)
+  const [startupSurfaceSettled, setStartupSurfaceSettled] = useState(false)
+  useEffect(() => {
+    if (!startupReady || currentArtworkReady || startupArtworkTimedOut || startupSurfaceSettled) return
+    const watchdog = window.setTimeout(() => setStartupArtworkTimedOut(true), 15_000)
+    return () => window.clearTimeout(watchdog)
+  }, [startupReady, currentArtworkReady, startupArtworkTimedOut, startupSurfaceSettled])
+  const firstSurfaceReady = startupSurfaceSettled || (startupReady && (startupError || currentArtworkReady || startupArtworkTimedOut))
+  useEffect(() => {
+    if (!firstSurfaceReady || startupSurfaceSettled) return
+    let cancelled = false
+    queueMicrotask(() => { if (!cancelled) setStartupSurfaceSettled(true) })
+    return () => { cancelled = true }
+  }, [firstSurfaceReady, startupSurfaceSettled])
+  const startupWindowShownRef = useRef(false)
+  useEffect(() => {
+    if (!firstSurfaceReady || startupWindowShownRef.current || !isTauri()) return
+    // Effects run after the complete player DOM has committed. The native
+    // window starts hidden, so intermediate restore renders cannot be seen.
+    startupWindowShownRef.current = true
+    let cancelled = false
+    const reveal = async () => {
+      for (let attempt = 0; attempt < 3 && !cancelled; attempt += 1) {
+        try {
+          await getCurrentWindow().show()
+          return
+        } catch (error) {
+          if (attempt === 2) console.error('无法显示播放器窗口', error)
+          else await new Promise<void>((resolve) => window.setTimeout(resolve, 150 * (attempt + 1)))
+        }
+      }
+    }
+    void reveal()
+    return () => {
+      cancelled = true
+      startupWindowShownRef.current = false
+    }
+  }, [firstSurfaceReady])
   const activeArtworkLayerId = artworkSlots.find((layer) => layer?.phase === 'active')?.id ?? null
+  // Keep the outgoing decoded layer until the current one can paint. The dock
+  // retains that layer's track identity together with its cover during a cut.
+  const dockArtworkLayer = artworkSlots.find((layer) => layer && layer.track.id === playback.track?.id && layer.phase === 'incoming')
+    ?? artworkSlots.find((layer) => layer && layer.track.id === playback.track?.id && layer.phase === 'active')
+    ?? artworkSlots.find((layer) => layer && layer.phase === 'active' && layer.resource.view)
+    ?? null
+  const dockPreviewLayer = dockPreviewToken
+    ? artworkSlots.find((layer) => layer?.previewTokenId === dockPreviewToken.id) ?? null
+    : null
+  const dockPlayback = {
+    ...playback,
+    onPrepareTrackPreview: playback.onPrepareTrackPreview
+      ? async (direction: -1 | 1) => {
+          const token = await playback.onPrepareTrackPreview?.(direction) ?? null
+          if (token) setDockPreviewToken(token)
+          return token
+        }
+      : undefined,
+    onDiscardTrackPreview: (tokenId: number) => {
+      setDockPreviewToken((current) => current?.id === tokenId ? null : current)
+      playback.onDiscardTrackPreview?.(tokenId)
+    },
+  }
+  useEffect(() => {
+    if (!dockPreviewToken) return
+    if (playback.selectionVisualIntent?.previewTokenId !== dockPreviewToken.id) return
+    if (!artworkSlots.some((layer) => layer?.previewTokenId === dockPreviewToken.id
+      && layer.track.id === playback.track?.id && layer.phase !== 'preview')) return
+    let cancelled = false
+    queueMicrotask(() => {
+      if (!cancelled) setDockPreviewToken((current) => current?.id === dockPreviewToken.id ? null : current)
+    })
+    return () => { cancelled = true }
+  }, [artworkSlots, dockPreviewToken, playback.selectionVisualIntent, playback.track?.id])
   const playerViewTransitionOwnerIds = useMemo(() => selectPlayerViewTransitionOwnerIds(
     artworkSlots.flatMap((layer) => layer ? [{
       id: layer.id,
@@ -2566,10 +2652,24 @@ export function PlayerSurface({
     && timeline.interaction !== 'seeking',
   )
 
+  if (startupError || startupArtworkTimedOut) return (
+    <main className="flex min-h-screen items-center justify-center bg-background" data-startup-ready="true">
+      <Empty>
+        <EmptyHeader>
+          <EmptyTitle>{startupError ? '播放列表加载失败' : '封面加载失败'}</EmptyTitle>
+          <EmptyDescription>播放器启动未完成，请重新打开应用。</EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    </main>
+  )
+
   return (
     <TooltipProvider>
       <main
         className="player-shell"
+        data-startup-ready={firstSurfaceReady}
+        style={firstSurfaceReady ? undefined : { visibility: 'hidden' }}
+        aria-hidden={!firstSurfaceReady || undefined}
         data-library-open={playlist.isOpen || undefined}
         data-library-overview={playlist.isOpen && playlist.library?.route?.view === 'overview' || undefined}
         data-content-state={contentState}
@@ -2786,8 +2886,15 @@ export function PlayerSurface({
               controllerRef={libraryDockRef}
               controllerOffsetY={dockBinding?.controllerOffsetY}
               controllerHidden={dockBinding?.controllerHidden}
-              playback={playback} timeline={timeline}
+              playback={dockPlayback} timeline={timeline}
               playlistTrack={playlist.playbackDockTrack} playlistTracks={playlist.tracks}
+              coverLayer={dockArtworkLayer}
+              previewCoverLayer={dockPreviewLayer}
+              previewCoverReady={previewArtworkReady}
+              previewCoverEmpty={previewArtworkEmpty}
+              requireCanvasPreview
+              onPreviewCoverReady={dockPreviewLayer ? () => markArtworkReady(dockPreviewLayer.id) : undefined}
+              onPreviewCoverError={dockPreviewLayer ? () => markArtworkLoadError(dockPreviewLayer.id) : undefined}
               visualIsPlaying={visualPlaybackState === 'playing'} playbackTransitionPending={playbackTransitionPending}
               onPlayToggle={handlePlayToggle}
               searchOpen={dockBinding?.searchOpen ?? false} onSearchToggle={dockBinding?.onSearchToggle}
@@ -2808,6 +2915,7 @@ export function PlayerSurface({
             {playlist.isOpen && playlist.library?.route?.view === 'overview' ? <MediaLibraryPanel key="media-library-overview" playlist={playlist} onOpenPlayer={() => requestPlaylistOpenChange(false)} /> : null}
             {playlist.isOpen && playlist.library?.isOpen && playlist.library.route?.view !== 'overview' ? (
               <PlaylistLibraryPanel
+                allSongsCoverStore={allSongsCoverStore}
                 key={playlist.library?.route?.view === 'category' ? playlist.library.route.categoryId : 'playlist-management'}
                 playlist={playlist}
                 playback={playback}
@@ -2823,6 +2931,7 @@ export function PlayerSurface({
             ) : null}
             {playlist.isOpen && !playlist.library?.isOpen ? (
               <OwnedPlaylistPanel
+              onEntrySettled={onPlaylistNavigationSettled}
               controllerMode={controllerMode}
               key={`${playlist.library?.currentScope ?? ''}:${playlist.playlistName ?? 'playlist'}:${playlist.tracks.length}:${playlist.tracks[0]?.id ?? ''}:${playlist.tracks[playlist.tracks.length - 1]?.id ?? ''}`}
               ownerStateRef={playlistWindowOwnersRef}

@@ -38,6 +38,8 @@ function withStore(run: (values: Map<string, string>) => void) {
 test('last song, position and playback state survive a new read', () => withStore((values) => {
   persistPlaybackSession(session)
   assert.deepEqual(readPlaybackSession(), session)
+  persistPlaybackSession({ ...session, playlist: { ...session.playlist, folderMode: 'library' } })
+  assert.equal(readPlaybackSession()?.playlist.folderMode, 'library')
   assert.equal(values.size, 1)
   clearPlaybackSession()
   assert.equal(readPlaybackSession(), null)
@@ -48,6 +50,8 @@ test('invalid snapshots cannot be restored', () => withStore((values) => {
     { version: 2 }, { sourcePath: '' }, { positionMs: -1 },
     { positionMs: Number.POSITIVE_INFINITY }, { wasPlaying: 'true' }, { wasPaused: true }, { volume: 101 },
     { playlist: { sourceKind: 'custom', sourcePath: 'custom:x' } },
+    { playlist: { sourceKind: 'folder', sourcePath: 'C:/Music', folderMode: 'unknown' } },
+    { playlist: { sourceKind: 'm3u8', sourcePath: 'C:/Music/list.m3u8', folderMode: 'library' } },
   ]) {
     values.set(key, JSON.stringify({ ...session, ...change }))
     assert.equal(readPlaybackSession(), null)

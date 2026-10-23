@@ -43,7 +43,8 @@ const observeVisible=()=>{
 };
 new MutationObserver(observeVisible).observe(root,{subtree:true,childList:true,attributes:true,characterData:true});
 let state={phase:'idle',generation:null,currentTrackId:null,positionMs:0,durationMs:null,volume:.5,error:null,transportTransition:null,transportSettledRequestId:null};
-const path='/music/song.flac';
+const path=new URLSearchParams(location.search).has('subdir')?'/music/sub/song.flac':'/music/song.flac';
+const selectAllSongs=new URLSearchParams(location.search).has('selectAllSongs');
 const descriptor={id:'song',sourcePath:path,fileName:'song.flac',available:true};
 const secondDescriptor={id:'second',sourcePath:'/music/second.flac',fileName:'second.flac',available:true};
 const playlist={directoryPath:'/music',directoryName:'Music',sourceKind:'folder',sourcePath:'/music',sourceName:'Music',selectedIndex:0,tracks:[descriptor]};
@@ -56,12 +57,22 @@ const hangDuration=new URLSearchParams(location.search).has('hangDuration');
 window.backendInvoke=async(command,args)=>{
  window.calls.push(command);
  if(command==='library_get_playlists')return [];
- if(command==='library_get_folders')return {folders:[]};
+ if(command==='library_get_folders')return {folders:selectAllSongs?['/music']:[]};
  if(command==='audio_get_state')return {...state};
  if(command==='audio_get_current_track')return state.currentTrackId?track:null;
  if(command==='audio_get_output_info')return null;
- if(command==='audio_list_folder_tracks'){await new Promise(resolve=>setTimeout(resolve,30));return invalidTrack?{...playlist,tracks:[{...descriptor,available:false}]}:hangDuration?{...playlist,tracks:[descriptor,secondDescriptor]}:playlist;}
+ if(command==='audio_list_folder_tracks'){
+  if(args.input.selectedPath==='/music')throw Error('INVALID_PATH: expected an audio file');
+  await new Promise(resolve=>setTimeout(resolve,30));
+  return invalidTrack?{...playlist,tracks:[{...descriptor,available:false}]}:hangDuration?{...playlist,tracks:[descriptor,secondDescriptor]}:playlist;
+ }
+ if(command==='library_scan_folder'){
+  if(args.path!=='/music')throw Error('INVALID_PATH: expected the library root');
+  await new Promise(resolve=>setTimeout(resolve,30));
+  return invalidTrack?{...playlist,tracks:[{...descriptor,available:false}]}:hangDuration?{...playlist,tracks:[descriptor,secondDescriptor]}:playlist;
+ }
  if(command==='audio_load_file'){if(hangLoad)return new Promise(()=>{});await new Promise(resolve=>setTimeout(resolve,30));state={...state,phase:'ready',generation:1,currentTrackId:'song',durationMs:180000,positionMs:0};return track}
+ if(command==='audio_load_and_play'){state={...state,phase:'playing',generation:1,currentTrackId:'song',durationMs:180000,positionMs:0};return {requestId:args.input.requestId,generation:1,trackId:'song',fileName:'song.flac',state:{...state}}}
  if(command==='audio_seek'){await new Promise(resolve=>setTimeout(resolve,30));if(seekError)throw Error('seek failed');state={...state,positionMs:args.input.positionMs};return {...state}}
  if(command==='audio_set_volume'){state={...state,volume:args.input.volume};return {...state}}
  if(command==='audio_play'){state={...state,phase:'playing'};return {...state}}
@@ -78,7 +89,48 @@ ReactDOM.createRoot(root).render(React.createElement(AppearanceProvider,null,Rea
 const html = (await (await fetch(origin)).text()).replace(/src="\/src\/[^\"]+"/, 'src="/__playback_session_fixture.js"')
 const browser = await chromium.launch({ headless: true, channel: 'msedge' })
 try {
-  for (const [wasPlaying, wasPaused] of [[true, false], [false, true]]) {
+  {
+    const page = await browser.newPage()
+    page.setDefaultTimeout(15000)
+    const errors = []
+    page.on('pageerror', error => errors.push(error.message))
+    await page.route('**/src/features/player/services/audioCommands.ts*', route => route.fulfill({ contentType: 'text/javascript', body: service }))
+    await page.route('**/src/features/player/components/PlayerSurface.tsx*', route => route.fulfill({ contentType: 'text/javascript', body: surface }))
+    await page.route('**/__playback_session_real_surface.js', route => route.fulfill({ contentType: 'text/javascript', body: realSurface }))
+    await page.route('**/__playback_session_fixture.js', route => route.fulfill({ contentType: 'text/javascript', body: fixture }))
+    await page.route('**/__playback_session_test?*', route => route.fulfill({ contentType: 'text/html', body: html }))
+    await page.goto(origin + '/__playback_session_test?selectAllSongs=1&subdir=1')
+    await page.waitForFunction(() => window.vm?.playlist.library.allSongs.some(row => row.trackId === 'song'))
+    await page.evaluate(() => window.vm.playlist.library.onSelectCategory('songs'))
+    await page.locator('.all-songs-list .playlist-card').first().click()
+    await page.waitForFunction(() => window.vm?.playback.track?.id === 'song'
+      && window.vm?.playback.isPlaying
+      && JSON.parse(localStorage.getItem('spmusic.player.session.v1') ?? 'null')?.playlist.folderMode === 'library')
+    await page.evaluate(() => { window.vm.timeline.onPreviewStart(); window.vm.timeline.onCommit(42.5) })
+    await page.waitForFunction(() => window.calls.includes('audio_seek')
+      && JSON.parse(localStorage.getItem('spmusic.player.session.v1') ?? 'null')?.positionMs >= 42_500)
+    const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('spmusic.player.session.v1')))
+    assert.equal(saved.sourcePath, '/music/sub/song.flac')
+    assert.deepEqual(saved.playlist, { sourceKind: 'folder', sourcePath: '/music', folderMode: 'library' })
+    assert.equal(saved.wasPlaying, true)
+    await page.reload()
+    await page.waitForFunction(() => window.visibleFrames?.length > 0)
+    const frames = await page.evaluate(() => window.visibleFrames)
+    assert.equal(frames[0].track, 'song')
+    assert(frames[0].position >= 42.5)
+    assert(frames.every(frame => frame.phase !== 'playing'))
+    assert(!(await page.evaluate(() => window.calls)).includes('audio_list_folder_tracks'))
+    assert.equal(await page.evaluate(() => window.vm.playback.isPlaying), false)
+    assert.deepEqual(errors, [])
+    await page.close()
+  }
+  for (const [wasPlaying, wasPaused, sourcePath, folderMode, registeredLibrary, expectedScan] of [
+    [true, false, '/music/song.flac', undefined, true, 'library_scan_folder'],
+    [false, true, '/music/song.flac', undefined, false, 'audio_list_folder_tracks'],
+    [false, true, '/music/song.flac', 'library', false, 'library_scan_folder'],
+    [true, false, '/music/sub/song.flac', 'library', false, 'library_scan_folder'],
+    [false, true, '/music/song.flac', 'file', false, 'audio_list_folder_tracks'],
+  ]) {
     const page = await browser.newPage()
     page.setDefaultTimeout(15000)
     const errors = []
@@ -89,11 +141,13 @@ try {
     await page.route('**/__playback_session_fixture.js', route => route.fulfill({ contentType: 'text/javascript', body: fixture }))
     await page.route('**/__playback_session_test?*', route => route.fulfill({ contentType: 'text/html', body: html }))
     await page.addInitScript(snapshot => localStorage.setItem('spmusic.player.session.v1', JSON.stringify(snapshot)), {
-      version: 1, sourcePath: '/music/song.flac',
-      playlist: { sourceKind: 'folder', sourcePath: '/music' },
+      version: 1, sourcePath,
+      playlist: { sourceKind: 'folder', sourcePath: '/music', ...(folderMode ? { folderMode } : {}) },
       positionMs: 42_500, wasPlaying, wasPaused, queueOpen: true, volume: 67,
     })
-    await page.goto(origin + '/__playback_session_test?run=' + Math.random())
+    await page.goto(origin + '/__playback_session_test?run=' + Math.random()
+      + (sourcePath.includes('/sub/') ? '&subdir=1' : '')
+      + (registeredLibrary ? '&selectAllSongs=1' : ''))
     try {
       await page.waitForFunction(() => window.vm?.playback.track?.id === 'song'
         && window.vm.timeline.positionSeconds >= 42.5
@@ -106,6 +160,8 @@ try {
       throw error
     }
     const calls = await page.evaluate(() => window.calls)
+    assert(calls.includes(expectedScan))
+    assert(!calls.includes(expectedScan === 'audio_list_folder_tracks' ? 'library_scan_folder' : 'audio_list_folder_tracks'))
     assert(calls.indexOf('audio_load_file') < calls.indexOf('audio_seek'))
     assert(calls.indexOf('audio_seek') < calls.indexOf('audio_pause'))
     assert(!calls.includes('audio_play'))
@@ -203,7 +259,7 @@ try {
       ? 'audio_probe_playlist_track_summaries' : 'audio_probe_playlist_durations'))
     await probePage.close()
   }
-  console.log('playback session: paused first frame; unavailable, absent, failed-seek, hung load and hung playlist probes settle without loading flash')
+  console.log('playback session: all-songs save/restore, paused first frame, and failure paths passed')
 } finally {
   await browser.close()
 }

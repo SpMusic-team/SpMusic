@@ -541,6 +541,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
   // Descriptor snapshots per scope, so a pass can be started for a list the user
   // only browsed and survive an unrelated activation.
   const sessionPlaylistDescriptorsRef = useRef(new Map<string, AudioFolderPlaylist>())
+  const libraryPlaylistObjectsRef = useRef(new WeakSet<AudioFolderPlaylist>())
   const libraryEpochRef = useRef(0)
   const selectedFolderPathsRef = useRef<readonly string[]>([])
   const libraryMutationRef = useRef<Promise<void>>(Promise.resolve())
@@ -671,7 +672,10 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       sourcePath: current.sourcePath,
       playlist: playlist.sourceKind === 'custom'
         ? { sourceKind: 'custom', sourcePath: playlist.sourcePath, customPlaylist: playlist }
-        : { sourceKind: playlist.sourceKind, sourcePath: playlist.sourcePath },
+        : playlist.sourceKind === 'folder'
+          ? { sourceKind: 'folder', sourcePath: playlist.sourcePath,
+            folderMode: libraryPlaylistObjectsRef.current.has(playlist) ? 'library' : 'file' }
+          : { sourceKind: playlist.sourceKind, sourcePath: playlist.sourcePath },
       positionMs: Math.max(0, Math.min(state.durationMs ?? Number.POSITIVE_INFINITY,
         Math.round(positionSeconds * 1000))),
       wasPlaying: state.phase === 'playing',
@@ -790,6 +794,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
 
   const rememberLibraryPlaylist = useCallback((playlist: AudioFolderPlaylist, epoch: number) => {
     if (libraryEpochRef.current !== epoch || playlist.sourceKind !== 'folder') return
+    libraryPlaylistObjectsRef.current.add(playlist)
     const scope = playlistScope(playlist)
     sessionPlaylistDescriptorsRef.current.set(scope, playlist)
     setLibraryFolderPlaylists((previous) => previous.some((item) => playlistScope(item) === scope)
@@ -3205,15 +3210,37 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
         // Let StrictMode's mount cleanup run before issuing a native command.
         await Promise.resolve()
         if (cancelled()) return
+        let folderMode = saved.playlist.folderMode
+        if (saved.playlist.sourceKind === 'folder' && !folderMode) {
+          // Older snapshots did not record whether this was a recursive library
+          // queue or the siblings of a file opened directly. The registered
+          // library roots disambiguate those existing sessions.
+          try {
+            const libraryFolders = await getLibraryFolders()
+            folderMode = libraryFolders.folders.some((path) => normalizeAudioSourcePath(path)
+              === normalizeAudioSourcePath(saved.playlist.sourcePath)) ? 'library' : 'file'
+          } catch {
+            // Prefer the recursive source when the registry cannot be read: it
+            // still contains a nested All Songs selection.
+            folderMode = 'library'
+          }
+        }
         const playlist = saved.playlist.sourceKind === 'custom'
           ? saved.playlist.customPlaylist ?? null
           : saved.playlist.sourceKind === 'm3u8'
             ? sessionPlaylistDescriptorsRef.current.get(`${saved.playlist.sourceKind}\u0000${normalizeAudioSourcePath(saved.playlist.sourcePath)}`) ?? null
-            : await listAudioFolderTracks(saved.playlist.sourcePath)
+            : folderMode === 'file'
+              ? await listAudioFolderTracks(saved.sourcePath)
+              : await scanLibraryFolder(saved.playlist.sourcePath)
         if (cancelled() || selectionRequestIdRef.current !== 0) return
+        if (playlist?.sourceKind === 'folder' && folderMode !== 'file') {
+          libraryPlaylistObjectsRef.current.add(playlist)
+        }
         const target = playlist?.tracks.find((item) => normalizeAudioSourcePath(item.sourcePath)
           === normalizeAudioSourcePath(saved.sourcePath))
-        if (!playlist || playlist.sourceKind !== saved.playlist.sourceKind || !target?.available) {
+        if (!playlist || playlist.sourceKind !== saved.playlist.sourceKind
+          || normalizeAudioSourcePath(playlist.sourcePath) !== normalizeAudioSourcePath(saved.playlist.sourcePath)
+          || !target?.available) {
           clearPlaybackSession()
           return
         }

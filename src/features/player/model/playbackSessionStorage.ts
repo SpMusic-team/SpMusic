@@ -7,6 +7,7 @@ export type SavedPlaybackSession = {
   sourcePath: string
   playlist: Pick<AudioFolderPlaylist, 'sourceKind' | 'sourcePath'> & {
     customPlaylist?: AudioFolderPlaylist
+    folderMode?: 'library' | 'file'
   }
   positionMs: number
   wasPlaying: boolean
@@ -36,6 +37,8 @@ export function readPlaybackSession(): SavedPlaybackSession | null {
           || typeof track.id !== 'string' || typeof track.sourcePath !== 'string'
           || typeof track.fileName !== 'string' || typeof track.available !== 'boolean')) return null
     }
+    if (playlist.folderMode !== undefined && (playlist.sourceKind !== 'folder'
+      || !['library', 'file'].includes(playlist.folderMode))) return null
     return session as SavedPlaybackSession
   } catch {
     return null

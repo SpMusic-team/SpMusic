@@ -98,7 +98,7 @@ window.backendInvoke=async(command,args)=>{
 const root=ReactDOM.createRoot(document.getElementById('root'));
 window.unmountFixture=()=>root.unmount();
 function Fixture(){
- const player=useAudioPlayer();const [open,setOpen]=React.useState(false);
+ const [open,setOpen]=React.useState(false);const player=useAudioPlayer(open);
  window.player=player;window.showFixture=()=>setOpen(true);window.hideFixture=()=>setOpen(false);
  window.readFixture=()=>({ids:player.queueTracks.map(t=>t.id),visualIds:Object.keys(player.playlistTrackVisuals),ready:Object.entries(player.playlistTrackVisuals).filter(([,v])=>v.coverThumbnail&&isPlaylistCoverDecoded(v.coverThumbnail)).map(([id])=>id),metadata:Object.keys(player.playlistTrackMetadata)});
  React.useLayoutEffect(()=>{if(open)window.trace.push({type:'paint',images:[...document.querySelectorAll('img')].map(e=>({src:e.src,loaded:e.dataset.loaded})),placeholders:document.querySelectorAll('[data-placeholder]').length,time:performance.now()})});
@@ -212,12 +212,12 @@ try {
     await select(fallbackUpgrade)
     await waitReady(fallbackUpgrade,12)
     const priorFallback=await fallbackUpgrade.evaluate(()=>window.player.playlistTrackVisuals['a-1'].coverThumbnail.src)
-    await fallbackUpgrade.evaluate(()=>{window.config.dataUrlOnly=[1];window.player.setVisiblePlaylistTrackIds(['a-1'],true,true,{visibleIds:['a-1'],prefetchIds:[],coverCssPixels:512,dpr:1})})
-    await fallbackUpgrade.waitForFunction(()=>window.calls.filter(call=>call.command==='audio_probe_playlist_cover'&&call.input.path==='/audio/a/1.flac').length===1)
+    await fallbackUpgrade.evaluate(()=>window.player.setVisiblePlaylistTrackIds(['a-1'],true,true,{visibleIds:['a-1'],prefetchIds:[],coverCssPixels:512,dpr:2}))
     await fallbackUpgrade.waitForTimeout(100)
-    assert.equal(await fallbackUpgrade.evaluate(()=>window.player.playlistTrackVisuals['a-1'].coverThumbnail.src),priorFallback,'unrenderable upgrade retains the previous owned URL')
+    assert.equal(await fallbackUpgrade.evaluate(()=>window.player.playlistTrackVisuals['a-1'].coverThumbnail.src),priorFallback,'high-DPR list cards reuse the persisted thumbnail URL')
+    assert.equal(await fallbackUpgrade.evaluate(()=>window.calls.filter(call=>call.command==='audio_probe_playlist_cover'&&call.input.path==='/audio/a/1.flac').length),0,'high-DPR cards skip original-cover probing')
     assert.deepEqual(fallbackUpgradeErrors,[])
-    report.push({case:'data URL-only upgrade retains previous thumbnail',retained:true})
+    report.push({case:'high-DPR list card reuses persisted thumbnail',retained:true})
     await fallbackUpgrade.close()
 
     const {page: mismatched,errors:mismatchedErrors}=await open()
@@ -234,6 +234,7 @@ try {
     await fast.evaluate(() => window.showFixture())
     await fast.waitForFunction(() => document.querySelectorAll('[data-placeholder]').length===12)
     assert.equal(await fast.locator('main').getAttribute('data-view'), 'playlist', 'early entry remains immediate')
+    await fast.evaluate(() => window.player.setVisiblePlaylistTrackIds(window.readFixture().ids,true,true,{visibleIds:window.readFixture().ids,prefetchIds:[],coverCssPixels:128,dpr:1}))
     await fast.evaluate(() => {window.config.pixelGate=false;window.pendingPixels.splice(0).forEach(resolve=>resolve())})
     await waitReady(fast, 12)
     await fast.waitForFunction(() => document.querySelectorAll('img[data-loaded="true"]').length===12)
@@ -273,48 +274,6 @@ try {
     assert.deepEqual(retryErrors,[])
     report.push({case:'recoverable pixel errors',...retries})
     await retry.close()
-
-    const {page: upgrade,errors:upgradeErrors}=await open()
-    await select(upgrade,{decodeGate:true})
-    await upgrade.evaluate(()=>window.player.setVisiblePlaylistTrackIds(['a-1'],true,true,{visibleIds:['a-1'],prefetchIds:[],coverCssPixels:256,dpr:1}))
-    await upgrade.waitForFunction(()=>window.pendingDecodes.length===2)
-    await upgrade.evaluate(()=>window.player.setVisiblePlaylistTrackIds(['a-1'],true,true,{visibleIds:['a-1'],prefetchIds:[],coverCssPixels:512,dpr:1}))
-    await upgrade.evaluate(()=>window.pendingDecodes.shift().resolve())
-    await upgrade.waitForFunction(()=>window.readFixture().ready.includes('a-0'))
-    await upgrade.waitForTimeout(100)
-    const inFlight=await upgrade.evaluate(()=>window.calls.filter(c=>c.command==='audio_load_track_thumbnail'&&c.input.sourcePath==='/audio/a/1.flac').map(c=>c.input.maxEdge))
-    assert.deepEqual(inFlight,[256],'viewport upgrade cannot duplicate the active thumbnail job')
-    await upgrade.evaluate(()=>{window.config.decodeGate=false;window.pendingDecodes.splice(0).forEach(p=>p.resolve())})
-    await upgrade.waitForFunction(()=>window.calls.some(c=>c.command==='audio_load_playlist_cover_pixels'&&c.input.filePath==='/covers/a/1.png'&&c.input.maxEdge===512))
-    await upgrade.waitForFunction(()=>window.player.playlistTrackVisuals['a-1']?.coverThumbnail?.width===512)
-    // The URL order is hero first, then the tested card; verify via captured input.
-    const events=await upgrade.evaluate(()=>({lowerSrc:window.created[1],trace:window.trace}))
-    const decoded=events.trace.find(e=>e.type==='decode-end'&&e.src===events.lowerSrc)
-    const upgradeStart=events.trace.find(e=>e.type==='pixels-start'&&e.input.filePath==='/covers/a/1.png'&&e.input.maxEdge===512)
-    assert(decoded&&upgradeStart&&decoded.time<=upgradeStart.time,'upgrade starts after fallback decoded')
-    assert.deepEqual(upgradeErrors,[])
-    report.push({case:'in-flight thumbnail then viewport upgrade',inFlight,ordered:true})
-    await upgrade.close()
-
-    const {page: failedUpgrade,errors:failedUpgradeErrors}=await open()
-    await select(failedUpgrade)
-    await waitReady(failedUpgrade,12)
-    const fallback=await failedUpgrade.evaluate(()=>window.player.playlistTrackVisuals['a-1'].coverThumbnail.src)
-    await failedUpgrade.evaluate(()=>{window.config.decodeFailures=100;window.player.setVisiblePlaylistTrackIds(['a-1'],true,true,{visibleIds:['a-1'],prefetchIds:[],coverCssPixels:512,dpr:1})})
-    await failedUpgrade.waitForFunction(()=>window.created.length===13&&window.revoked.includes(window.created[12]))
-    await failedUpgrade.evaluate(()=>window.player.setVisiblePlaylistTrackIds(['a-1','a-0'],true,true,{visibleIds:['a-1','a-0'],prefetchIds:[],coverCssPixels:512,dpr:1}))
-    await failedUpgrade.waitForTimeout(150)
-    assert.equal(await failedUpgrade.evaluate(()=>window.created.length),13,'demand refresh cannot bypass retry backoff')
-    await failedUpgrade.waitForFunction(()=>window.created.length===15&&window.revoked.includes(window.created[14]))
-    await failedUpgrade.waitForTimeout(1100)
-    const failed=await failedUpgrade.evaluate(()=>({created:window.created.length,src:window.player.playlistTrackVisuals['a-1'].coverThumbnail.src,width:window.player.playlistTrackVisuals['a-1'].coverThumbnail.width,failedReleased:window.created.slice(12).every(src=>window.revoked.includes(src))}))
-    assert.equal(failed.created,15,'decode retries terminate after three attempts')
-    assert.equal(failed.src,fallback)
-    assert.equal(failed.width,256)
-    assert.equal(failed.failedReleased,true)
-    assert.deepEqual(failedUpgradeErrors,[])
-    report.push({case:'failed viewport decode retains fallback and stops retry',attempts:failed.created-12,failedReleased:failed.failedReleased})
-    await failedUpgrade.close()
 
     const {page: bounded,errors:boundedErrors}=await open()
     await select(bounded,{count:1000})

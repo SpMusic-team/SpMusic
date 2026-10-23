@@ -296,14 +296,17 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
     const first = keepPersistentArtwork ? playlist.tracks[0] : undefined
     if (first?.available) paths.set(normalizeAudioSourcePath(first.sourcePath), 512)
     if (showArtwork) {
-      const pixels = (demand?.coverCssPixels ?? 128) * (demand?.dpr ?? 1)
-      const edge = pixels <= 128 ? 128 : pixels <= 256 ? 256 : 512
       const descriptors = new Map(playlist.tracks.map((descriptor) => [descriptor.id, descriptor]))
-      for (const id of trackIds.slice(0, MAX_DETAIL)) {
+      const prioritizedIds = demand?.visibleIds.length
+        ? [...new Set([...demand.visibleIds, ...trackIds])]
+        : trackIds
+      for (const id of prioritizedIds.slice(0, MAX_DETAIL)) {
         const descriptor = descriptors.get(id)
         if (descriptor?.available) {
           const key = normalizeAudioSourcePath(descriptor.sourcePath)
-          paths.set(key, Math.max(paths.get(key) ?? 0, edge) as 128 | 256 | 512)
+          // Detail cards share the persisted 256px thumbnail lane with All
+          // Songs. The pinned first-track hero keeps its 512px request.
+          paths.set(key, paths.get(key) ?? 256)
         }
       }
     }

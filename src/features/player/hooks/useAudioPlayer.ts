@@ -181,11 +181,6 @@ function playlistImageBytes(image: PlaylistCoverImage): number {
   return image.encodedBytes + image.width * image.height * 4
 }
 
-function playlistArtworkEdge(cssPixels: number, dpr: number): 128 | 256 | 512 {
-  const required = Math.max(1, cssPixels) * Math.max(1, dpr)
-  return required <= 128 ? 128 : required <= 256 ? 256 : 512
-}
-
 function playlistArtworkBytes(edge: number): number {
   return edge * edge * 7 + 54
 }
@@ -1869,7 +1864,8 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     const foregroundIds = new Set(foregroundArtworkIds)
     // On the player, the cover opens this list at the current track. Warm its
     // neighboring cards first; the existing byte ledger bounds the rest.
-    const backgroundDescriptors = backgroundArtworkAllowedRef.current ? playlist?.tracks ?? [] : []
+    const detailArtworkWindow = libraryVisibleRef.current && showArtwork
+    const backgroundDescriptors = !detailArtworkWindow && backgroundArtworkAllowedRef.current ? playlist?.tracks ?? [] : []
     const currentIndex = backgroundDescriptors.findIndex((item) => item.id === currentPlaybackTrackId)
     const backgroundIds: string[] = []
     if (currentIndex < 0 || libraryVisibleRef.current) {
@@ -1882,24 +1878,29 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
         if (previous) backgroundIds.push(previous.id)
       }
     }
-    const artworkDesiredIds = [...foregroundArtworkIds, ...backgroundIds.filter((id) =>
-      descriptorsById.get(id)?.available && !foregroundIds.has(id))]
+    // The library detail panel reports its visible rows and nearby overscan in
+    // priority order. Keep its thumbnail demand to that window so distant
+    // optional jobs cannot occupy the shared cover lane during a fast scroll.
+    const artworkDesiredIds = detailArtworkWindow
+      ? foregroundArtworkIds
+      : [...foregroundArtworkIds, ...backgroundIds.filter((id) =>
+        descriptorsById.get(id)?.available && !foregroundIds.has(id))]
     const currentDemand = showArtwork ? playlistArtworkDemandRef.current : undefined
     const visibleIds = new Set(showArtwork ? currentDemand?.visibleIds ?? trackIds : [])
     const heldIds = new Set(showArtwork ? currentDemand?.heldIds ?? [] : [])
-    let cardEdge = playlistArtworkEdge(currentDemand?.coverCssPixels ?? 128, currentDemand?.dpr ?? 1)
     const firstEdge = 512
     const heldOnly = (id: string) => heldIds.has(id) && !visibleIds.has(id) && id !== firstTrackId && id !== dockTrackId
-    const targetEdgeFor = (id: string, edge: 128 | 256 | 512): 128 | 256 | 512 => {
+    const targetEdgeFor = (id: string): 256 | 512 => {
       if (id === firstTrackId) return firstEdge
-      if (!foregroundIds.has(id)) return 256
-      return Math.max(256, heldOnly(id) ? playlistVisualEdgeRef.current.get(id) ?? edge : edge) as 256 | 512
+      // List cards use the persisted 256px thumbnail regardless of display
+      // scaling; only the first-track hero needs the original 512px lane.
+      return 256
     }
     // Reserve all screen items before offering spare bytes to prefetch. A dense
     // viewport can exceed the nominal cache target, but it never loses eligibility.
-    const requiredBytesAt = (edge: 128 | 256 | 512) => artworkDesiredIds.reduce((total, id) => {
+    const requiredBytes = artworkDesiredIds.reduce((total, id) => {
       if (!visibleIds.has(id) && !heldIds.has(id) && id !== firstTrackId && id !== dockTrackId) return total
-      const targetEdge = targetEdgeFor(id, edge)
+      const targetEdge = targetEdgeFor(id)
       const current = playlistTrackVisualsRef.current[id]?.coverThumbnail
       const currentEdge = playlistVisualEdgeRef.current.get(id) ?? 0
       const currentBytes = current ? playlistImageBytes(current) : 0
@@ -1908,8 +1909,6 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       return total + Math.max(playlistArtworkBytes(targetEdge), currentBytes)
         + (currentEdge < targetEdge ? currentBytes : 0)
     }, 0)
-    if (requiredBytesAt(cardEdge) + PLAYLIST_ARTWORK_INFLIGHT_BUDGET > PLAYLIST_ARTWORK_RESIDENT_BUDGET) cardEdge = 128
-    const requiredBytes = requiredBytesAt(cardEdge)
     const oldReplacementBytes = [...playlistPendingReplacementRef.current.values()]
       .reduce((total, pending) => total
         + (pending.previous.coverThumbnail ? playlistImageBytes(pending.previous.coverThumbnail) : 0)
@@ -1940,7 +1939,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       if (requiredIds.has(id)) return true
       const current = playlistTrackVisualsRef.current[id]?.coverThumbnail
       const reservedBytes = reservedWarmIds.has(id) && current ? playlistImageBytes(current) : 0
-      const bytes = Math.max(playlistArtworkBytes(targetEdgeFor(id, cardEdge)), current ? playlistImageBytes(current) : 0)
+      const bytes = Math.max(playlistArtworkBytes(targetEdgeFor(id)), current ? playlistImageBytes(current) : 0)
       if (committedBytes + reservedWarmBytes + bytes - reservedBytes + PLAYLIST_ARTWORK_INFLIGHT_BUDGET > PLAYLIST_ARTWORK_RESIDENT_BUDGET) return false
       reservedWarmBytes -= reservedBytes
       committedBytes += bytes
@@ -1950,11 +1949,11 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     const warmIds = playlistArtworkGrace.retain(residents, desiredIds,
       PLAYLIST_ARTWORK_RESIDENT_BUDGET - committedBytes - PLAYLIST_ARTWORK_INFLIGHT_BUDGET)
     const residentIds = new Set([...desiredIds, ...warmIds])
-    const windowKey = `${playlistScopeEpochRef.current}\u0000${scope}\u0000${keepPersistentArtwork}\u0000${cardEdge}\u0000${[...visibleIds].join('\u0000')}\u0001${[...heldIds].join('\u0000')}\u0002${budgetedIds.map((id) => `${id}:${normalizeAudioSourcePath(descriptorsById.get(id)?.sourcePath ?? '')}`).join('\u0000')}\u0003${[...warmIds].join('\u0000')}`
+    const windowKey = `${playlistScopeEpochRef.current}\u0000${scope}\u0000${keepPersistentArtwork}\u0000${[...visibleIds].join('\u0000')}\u0001${[...heldIds].join('\u0000')}\u0002${budgetedIds.map((id) => `${id}:${normalizeAudioSourcePath(descriptorsById.get(id)?.sourcePath ?? '')}`).join('\u0000')}\u0003${[...warmIds].join('\u0000')}`
     if (playlistVisualWindowKeyRef.current === windowKey) return
     playlistVisualWindowKeyRef.current = windowKey
     const generation = playlistVisualGenerationRef.current
-    playlistDesiredEdgeRef.current = new Map(budgetedIds.map((id) => [id, targetEdgeFor(id, cardEdge)]))
+    playlistDesiredEdgeRef.current = new Map(budgetedIds.map((id) => [id, targetEdgeFor(id)]))
     playlistVisualDesiredIdsRef.current = desiredIds
     playlistVisualHydrationQueueRef.current = []
     const retained = Object.fromEntries(
@@ -2011,7 +2010,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
           || playlistVisualFailedRef.current.get(descriptor.id) === normalizeAudioSourcePath(descriptor.sourcePath)
           || playlistVisualRetryTimersRef.current.has(descriptor.id)
           || (playlistTrackVisualsRef.current[descriptor.id]
-            && (playlistVisualEdgeRef.current.get(descriptor.id) ?? 0) >= targetEdgeFor(descriptor.id, cardEdge))
+            && (playlistVisualEdgeRef.current.get(descriptor.id) ?? 0) >= targetEdgeFor(descriptor.id))
           || (activeJob?.generation === generation
             && activeJob.normalizedSourcePath === normalizeAudioSourcePath(descriptor.sourcePath))
         ) continue
@@ -2024,7 +2023,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
           trackId: descriptor.id,
           sourcePath: descriptor.sourcePath,
           normalizedSourcePath: normalizeAudioSourcePath(descriptor.sourcePath),
-          maxEdge: targetEdgeFor(descriptor.id, cardEdge),
+          maxEdge: targetEdgeFor(descriptor.id),
           attempt: 0,
           optional: !requiredIds.has(descriptor.id),
         })

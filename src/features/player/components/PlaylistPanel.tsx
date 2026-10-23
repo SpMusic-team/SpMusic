@@ -1,13 +1,14 @@
 import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type SyntheticEvent } from 'react'
 import { PLAYLIST_SONG_LAYOUTS, PLAYLIST_LAYOUT_STORAGE_KEY, defaultPlaylistSongLevel, type PlaylistSongLayoutDescriptor } from '@/features/player/model/playlistSongLayouts'
 import { motion, useAnimationControls, usePresence } from 'motion/react'
-import { CornerLeftUp, Search } from 'lucide-react'
+import { CornerLeftUp } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { getShuffleModePresentation, showPlaybackModeToast } from '@/features/player/components/playbackModePresentation'
+import { PlaylistActionButtons } from '@/features/player/components/PlaylistActionButtons'
 import { IconButton } from '@/features/player/components/IconButton'
 import { PlaylistCard } from '@/features/player/components/PlaylistCard'
 import { PlaylistCoverImage } from '@/features/player/components/PlaylistCoverImage'
@@ -814,51 +815,15 @@ export function PlaylistPanel({
         transition={compact ? returning ? appearanceMotion.libraryNavigation.transition : appearanceMotion.layoutTransition : { layout: returnTransition }}
         style={compact ? { y: controllerMotion.offsetY } : undefined}
       >
-        {compact ? (
-          <IconButton
-            className="playlist-hero-icon playlist-controller-back-button"
-            icon={CornerLeftUp}
-            label="返回"
-            onClick={library?.onOpen ?? (() => panelRef.current?.focus({ preventScroll: true }))}
-          />
-        ) : null}
-        <IconButton
-          className="playlist-hero-icon playlist-hero-shuffle-button"
-          icon={shufflePresentation.icon}
-          label={shufflePresentation.label}
-          selected={shufflePresentation.pressed}
-          onClick={handleShuffle}
+        <PlaylistActionButtons
+          compact={compact}
+          onBack={compact ? library?.onOpen ?? (() => panelRef.current?.focus({ preventScroll: true })) : undefined}
+          shuffle={shufflePresentation} onShuffle={handleShuffle}
+          onPlay={handlePlay} playDisabled={!playableTrackId || !onTrackSelect} playbackLocked={isOpenAudioDisabled}
+          searchOpen={searchOpen} onSearch={handleSearchToggle}
+          selectMode={selectMode} onSelect={handleSelectModeToggle}
+          more={<IconButton className="playlist-hero-icon playlist-hero-more-button" icon={systemIcons.more} label={appCopy.playlistPage.more} data-playback-command-lock={isOpenAudioDisabled || undefined} disabled={isOpenAudioDisabled || !onOpenAudio} onClick={handleMore} />}
         />
-        <IconButton
-          className="playlist-hero-icon playlist-hero-play-button"
-          icon={systemIcons.play}
-          label={appCopy.playlistPage.play}
-          data-playback-command-lock={isOpenAudioDisabled || undefined}
-          disabled={!playableTrackId || !onTrackSelect}
-          pressFeedback={!compact}
-          pressFeedbackTone="surface-variant"
-          onClick={handlePlay}
-        />
-        <Button
-          className="playlist-search-button playlist-hero-icon"
-          aria-label={appCopy.playlistPage.search}
-          aria-pressed={searchOpen}
-          data-selected={searchOpen ? 'true' : undefined}
-          size="icon"
-          variant="ghost"
-          onClick={handleSearchToggle}
-        >
-          <Search aria-hidden="true" />
-        </Button>
-        <Button
-          className="playlist-select-toggle"
-          aria-pressed={selectMode}
-          data-selected={selectMode ? 'true' : undefined}
-          onClick={handleSelectModeToggle}
-        >
-          {selectMode ? appCopy.playlistPage.done : appCopy.playlistPage.select}
-        </Button>
-        <IconButton className="playlist-hero-icon playlist-hero-more-button" icon={systemIcons.more} label={appCopy.playlistPage.more} data-playback-command-lock={isOpenAudioDisabled || undefined} disabled={isOpenAudioDisabled || !onOpenAudio} onClick={handleMore} />
       </motion.div>
     )
   }

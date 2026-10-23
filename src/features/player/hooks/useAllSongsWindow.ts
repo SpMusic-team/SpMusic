@@ -55,7 +55,7 @@ export function useAllSongsCoverUrl(store: AllSongsCoverStore, key: string, trac
   return useSyncExternalStore(subscribe, getSnapshot, () => undefined)
 }
 
-export function useAllSongsWindow(items: readonly AllSongsItem[], panelRef: RefObject<HTMLElement | null>, listRef: RefObject<HTMLDivElement | null>, enabled: boolean, metadataLoading: boolean, store: AllSongsCoverStore, warmCount = 8) {
+export function useAllSongsWindow(items: readonly AllSongsItem[], panelRef: RefObject<HTMLElement | null>, listRef: RefObject<HTMLDivElement | null>, enabled: boolean, metadataLoading: boolean, store: AllSongsCoverStore, warmCount = 8, renderedItems: readonly AllSongsItem[] = items) {
   const runtimeRef = useRef<WindowRuntime | null>(null)
   const itemsByKeyRef = useRef<ReadonlyMap<string, AllSongsItem>>(new Map())
   const metadataLoadingRef = useRef(false)
@@ -207,10 +207,11 @@ export function useAllSongsWindow(items: readonly AllSongsItem[], panelRef: RefO
     const list = listRef.current
     const runtime = runtimeRef.current
     if (!panel || !list || !runtime) return
-    const keys = new Set(items.map((item) => item.key))
+    const keys = new Set(renderedItems.map((item) => item.key))
     for (const key of runtime.desired) if (!keys.has(key)) runtime.desired.delete(key)
+    let observing = true
     const observer = new IntersectionObserver((entries) => {
-      if (!runtime.mounted) return
+      if (!observing || !runtime.mounted) return
       for (const entry of entries) {
         const key = (entry.target as HTMLElement).dataset.songKey
         if (!key) continue
@@ -222,8 +223,8 @@ export function useAllSongsWindow(items: readonly AllSongsItem[], panelRef: RefO
     for (const row of list.querySelectorAll<HTMLElement>('[data-song-key]')) observer.observe(row)
     // Retain visibility across list-summary updates. Clearing it dropped
     // in-flight covers and forced their full decode to run again.
-    return () => observer.disconnect()
-  }, [items, panelRef, listRef, enabled, metadataLoading])
+    return () => { observing = false; observer.disconnect() }
+  }, [items, renderedItems, panelRef, listRef, enabled, metadataLoading])
 
   return store
 }

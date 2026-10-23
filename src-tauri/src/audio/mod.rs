@@ -28,18 +28,18 @@ mod types;
 mod source_tests;
 
 pub use controller::AudioController;
-pub(crate) use cover_pixels::try_warm_playlist_cover_pixels;
+pub(crate) use cover_pixels::try_warm_track_thumbnail;
 pub use cover_pixels::{
     begin_playlist_cover_window, load_cover_pixels, load_playlist_cover_pixels,
-    shutdown_playlist_cover_cache, AudioBeginPlaylistCoverWindowInput, AudioLoadCoverPixelsInput,
-    AudioLoadPlaylistCoverPixelsInput, CoverPixelsError,
+    load_track_thumbnail, shutdown_playlist_cover_cache, AudioBeginPlaylistCoverWindowInput,
+    AudioLoadCoverPixelsInput, AudioLoadPlaylistCoverPixelsInput, AudioLoadTrackThumbnailInput,
+    CoverPixelsError,
 };
 pub(crate) use device::current_output_info;
 pub use error::AudioCommandError;
 pub(crate) use error::{audio_error, AudioErrorCode};
 pub(crate) use playlist::{import_m3u8_playlist, load_library_folder, restore_playlist_track};
 pub(crate) use playlist_cover::probe_playlist_cover;
-pub(crate) use playlist_cover::try_probe_playlist_cover_for_warmup;
 pub use playlist_duration::probe_playlist_durations;
 pub use playlist_summary::probe_playlist_track_summaries;
 pub(crate) use types::AudioPlaylistSourceKind;

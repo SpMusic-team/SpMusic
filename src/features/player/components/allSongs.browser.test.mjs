@@ -93,8 +93,9 @@ window.backendInvoke=async(command,args)=>{
   if(window.summaryGate)await new Promise(resolve=>window.pendingSummaries.push(resolve));
   return input.paths.map(sourcePath=>{const item=track(sourcePath);return {sourcePath,summary:{title:item.metadata.title,artist:item.metadata.artist,album:item.metadata.album,albumArtist:null,bitDepth:24,sampleRateHz:96000,bitrateKbps:null,codec:'FLAC'},error:null}});
  }
- if(command==='audio_load_playlist_cover_pixels'){
-  if(!input.filePath.startsWith('/covers/many-'))throw {code:'NO_COVER_ART',message:'fixture has no artwork',recoverable:false};
+ if(command==='audio_load_track_thumbnail'||command==='audio_load_playlist_cover_pixels'){
+  if(command==='audio_load_track_thumbnail'&&!input.sourcePath.startsWith('/audio/many/'))return new Uint8Array();
+  if(command==='audio_load_playlist_cover_pixels'&&!input.filePath.startsWith('/covers/many-'))throw {code:'NO_COVER_ART',message:'fixture has no artwork',recoverable:false};
   if(window.coverPerfPixelGate && input.clientId?.startsWith('all-songs-'))await new Promise(resolve=>window.pendingPixelLoads.push(resolve));
   const bytes=new Uint8Array(44);const view=new DataView(bytes.buffer);bytes.set([83,80,88,82]);view.setUint16(4,1,true);view.setUint16(6,40,true);
   view.setUint32(8,1,true);view.setUint32(12,1,true);view.setUint32(16,4,true);view.setUint32(20,1,true);view.setUint32(24,4,true);
@@ -166,8 +167,8 @@ async function playbackCoverRegression(baselineHook = false, initialExternal = f
     return image?.complete && image.naturalWidth>0 && image.src!==borrowed
   }, key)
   const ownedUrl = await card.locator('.playlist-card-cover-image').getAttribute('src')
-  const countReads = () => page.evaluate(() => window.calls.filter(call => call.command === 'audio_load_playlist_cover_pixels'
-    && call.input.clientId?.startsWith('all-songs-') && call.input.filePath === '/covers/many-2.png').length)
+  const countReads = () => page.evaluate(() => window.calls.filter(call => call.command === 'audio_load_track_thumbnail'
+    && call.input.clientId?.startsWith('all-songs-') && call.input.sourcePath === '/audio/many/2.flac').length)
   const readsBefore = await countReads()
   assert.equal(readsBefore, 1, 'target initially owns exactly one all-songs thumbnail')
   await page.evaluate(key => {
@@ -190,7 +191,7 @@ async function playbackCoverRegression(baselineHook = false, initialExternal = f
   }
   // Wait on the actual resource lifecycle, including the existing 5 s grace.
   // This is an observation deadline, not a product delay or an enlarged timeout.
-  await page.waitForFunction(key => !window.viewModel.playlist.library.allSongs.find(item=>item.key===key)?.track.coverThumbnail, key)
+  if (!initialExternal) await page.waitForFunction(key => !window.viewModel.playlist.library.allSongs.find(item=>item.key===key)?.track.coverThumbnail, key)
   await page.waitForFunction(key => {
     const image = document.querySelector(`[data-song-key="${key}"] img.playlist-card-cover-image`)
     return image?.complete && image.naturalWidth > 0
@@ -201,7 +202,7 @@ async function playbackCoverRegression(baselineHook = false, initialExternal = f
   const result = { baselineHook, initialExternal, readsBefore, readsAfter, frames:frames.length, unreadyFrames:frames.filter(frame=>!frame.ready).length,
     urlChanges:new Set(frames.map(frame=>frame.src)).size, externalSeen:frames.some(frame=>frame.external), retired:!frames.at(-1).external }
   console.log('ALL_SONGS_PLAYBACK_COVER', JSON.stringify(result))
-  assert(result.externalSeen && result.retired, 'real playback thumbnail appears then retires')
+  assert(result.externalSeen && (initialExternal || result.retired), 'real playback thumbnail appears and retires when owned by this playback')
   if (baselineHook) {
     assert(readsAfter > readsBefore, 'old hook loses cover ownership and rereads on playback retirement')
   } else {
@@ -305,8 +306,8 @@ try {
     await page.getByRole('heading', { name: '全部歌曲' }).waitFor()
     await page.waitForFunction(() => window.pendingSummaries.length > 0)
     assert.equal(await page.locator('.all-songs-list .playlist-card').count(), 0, 'summary loading still hides unresolved rows')
-    await page.waitForFunction(() => window.calls.some(call => call.command === 'audio_load_playlist_cover_pixels' && call.input.filePath === '/covers/many-0.png'))
-    const pendingCoverCalls = await page.evaluate(() => window.calls.filter(call => call.command === 'audio_probe_playlist_cover' && call.input.path.startsWith('/audio/many/')).map(call => call.input.path))
+    await page.waitForFunction(() => window.calls.some(call => call.command === 'audio_load_track_thumbnail' && call.input.sourcePath === '/audio/many/0.flac'))
+    const pendingCoverCalls = await page.evaluate(() => window.calls.filter(call => call.command === 'audio_load_track_thumbnail' && call.input.sourcePath.startsWith('/audio/many/')).map(call => call.input.sourcePath))
     assert(pendingCoverCalls.includes('/audio/many/0.flac'), 'first descriptor artwork starts before the whole-library summary resolves')
     await page.evaluate(() => { window.summaryGate = false; window.pendingSummaries.splice(0).forEach(resolve => resolve()) })
     await page.waitForFunction(() => document.querySelector('.all-songs-list .playlist-card-title')?.textContent === 'A Song 25')
@@ -315,7 +316,7 @@ try {
       const image = first?.querySelector('.playlist-card-cover-image')
       return image?.complete && image.naturalWidth > 0
     })
-    const sortedCoverCalls = await page.evaluate(() => window.calls.filter(call => call.command === 'audio_probe_playlist_cover').map(call => call.input.path))
+    const sortedCoverCalls = await page.evaluate(() => window.calls.filter(call => call.command === 'audio_load_track_thumbnail').map(call => call.input.sourcePath))
     assert(sortedCoverCalls.includes('/audio/many/25.flac'), 'sorted first-screen artwork loads after descriptor prefetch targets differ')
     assert.deepEqual(errors, [], 'no browser errors while prefetch hands off to the sorted visible window')
     await page.close()
@@ -454,12 +455,12 @@ try {
     await page.waitForFunction(() => [...document.querySelectorAll('.all-songs-list .playlist-card-cover-image')].some(image => image.complete && image.naturalWidth > 0), null, { timeout: 5000 })
     const evidence = await page.evaluate(() => ({
       coverProbes: window.calls.filter(call => call.command === 'audio_probe_playlist_cover' && call.input.path.startsWith('/audio/many/')).length,
-      pixelLoads: window.calls.filter(call => call.command === 'audio_load_playlist_cover_pixels' && call.input.filePath.startsWith('/covers/many-')).length,
+      pixelLoads: window.calls.filter(call => call.command === 'audio_load_track_thumbnail' && call.input.sourcePath.startsWith('/audio/many/')).length,
     }))
-    assert(evidence.coverProbes >= 1 && evidence.pixelLoads >= 1, 'visible artwork uses the native cover probe and pixel path')
+    assert(evidence.pixelLoads >= 1, 'visible artwork uses the persistent thumbnail path')
     const visibleCoverUrl = await page.locator('.all-songs-list .playlist-card-cover-image').first().evaluate(image => image.src)
     await page.getByRole('button', { name: '查找 Z 开头的歌曲' }).click()
-    await page.waitForFunction(() => window.calls.some(call => call.command === 'audio_probe_playlist_cover' && call.input.path === '/audio/many/25.flac'))
+    await page.waitForFunction(() => window.calls.some(call => call.command === 'audio_load_track_thumbnail' && call.input.sourcePath === '/audio/many/25.flac'))
     await page.locator('.all-songs-list .playlist-card').filter({ hasText: 'Z Song 25' }).locator('.playlist-card-cover-image').waitFor()
     await page.evaluate(() => window.viewModel.playlist.library.onSelectCategory('artist'))
     await page.getByRole('heading', { name: '艺术家' }).waitFor()

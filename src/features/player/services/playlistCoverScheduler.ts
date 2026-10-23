@@ -1,7 +1,9 @@
 import {
   loadAudioPlaylistCoverPixels,
+  loadAudioTrackThumbnail,
   type AudioCoverPixels,
   type AudioLoadPlaylistCoverPixelsInput,
+  type AudioLoadTrackThumbnailInput,
 } from './audioCommands'
 
 export type PlaylistCoverPriority = 0 | 1 | 2
@@ -16,7 +18,8 @@ type Consumer = {
 
 type Job = {
   key: string
-  input: AudioLoadPlaylistCoverPixelsInput
+  input: AudioLoadPlaylistCoverPixelsInput | AudioLoadTrackThumbnailInput
+  trackThumbnail: boolean
   priority: PlaylistCoverPriority
   sequence: number
   consumers: Set<Consumer>
@@ -39,7 +42,7 @@ function currentConsumers(job: Job): Consumer[] {
   return [...job.consumers]
 }
 
-function finish(job: Job, pixels?: AudioCoverPixels, error?: unknown) {
+function finish(job: Job, pixels?: AudioCoverPixels | null, error?: unknown) {
   if (jobs.get(job.key) === job) jobs.delete(job.key)
   for (const consumer of currentConsumers(job)) {
     consumer.signal?.removeEventListener('abort', consumer.abort)
@@ -62,7 +65,10 @@ function pump() {
     }
     active = true
     job.active = true
-    void loadAudioPlaylistCoverPixels(job.input).then(
+    const load = job.trackThumbnail
+      ? loadAudioTrackThumbnail(job.input as AudioLoadTrackThumbnailInput)
+      : loadAudioPlaylistCoverPixels(job.input as AudioLoadPlaylistCoverPixelsInput)
+    void load.then(
       (pixels) => finish(job, pixels),
       (error: unknown) => finish(job, undefined, error),
     )
@@ -75,11 +81,27 @@ export function schedulePlaylistCoverPixels(
   input: AudioLoadPlaylistCoverPixelsInput,
   options: { priority: PlaylistCoverPriority; signal?: AbortSignal; isCurrent?: () => boolean },
 ): Promise<AudioCoverPixels | null> {
+  return scheduleCoverPixels(input, false, options)
+}
+
+/** Use the persisted song thumbnail lane for 128/256 pixel list artwork. */
+export function scheduleTrackThumbnail(
+  input: AudioLoadTrackThumbnailInput,
+  options: { priority: PlaylistCoverPriority; signal?: AbortSignal; isCurrent?: () => boolean },
+): Promise<AudioCoverPixels | null> {
+  return scheduleCoverPixels(input, true, options)
+}
+
+function scheduleCoverPixels(
+  input: AudioLoadPlaylistCoverPixelsInput | AudioLoadTrackThumbnailInput,
+  trackThumbnail: boolean,
+  options: { priority: PlaylistCoverPriority; signal?: AbortSignal; isCurrent?: () => boolean },
+): Promise<AudioCoverPixels | null> {
   if (options.signal?.aborted || (options.isCurrent && !options.isCurrent())) return Promise.resolve(null)
-  const key = `${input.clientId}\0${input.windowGeneration}\0${input.filePath}\0${input.maxEdge}`
+  const key = `${trackThumbnail ? 'track' : 'cover'}\0${input.clientId}\0${input.windowGeneration}\0${trackThumbnail ? (input as AudioLoadTrackThumbnailInput).sourcePath : (input as AudioLoadPlaylistCoverPixelsInput).filePath}\0${input.maxEdge}`
   let job = jobs.get(key)
   if (!job) {
-    job = { key, input, priority: options.priority, sequence: sequence++, consumers: new Set(), active: false }
+    job = { key, input, trackThumbnail, priority: options.priority, sequence: sequence++, consumers: new Set(), active: false }
     jobs.set(key, job)
     pending.push(job)
   } else if (options.priority < job.priority) {

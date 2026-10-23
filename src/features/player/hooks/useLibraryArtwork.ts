@@ -11,7 +11,7 @@ import {
   beginAudioPlaylistCoverWindow, probeAudioPlaylistCover,
   type AudioFolderPlaylist, type AudioFolderTrackRef,
 } from '@/features/player/services/audioCommands'
-import { schedulePlaylistCoverPixels } from '@/features/player/services/playlistCoverScheduler'
+import { schedulePlaylistCoverPixels, scheduleTrackThumbnail } from '@/features/player/services/playlistCoverScheduler'
 
 type ArtworkRow = ReadOnlyArtworkRow
 type CacheEntry = { row: ArtworkRow; edge: number; trackId: string }
@@ -112,22 +112,34 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
             const generation = await ready
             if (!current()) return
             if (generation === null) throw new Error('媒体库封面窗口不可用')
-            const cover = await probeAudioPlaylistCover(descriptor.sourcePath)
-            if (!current()) return
-            if (cover.id !== descriptor.id || normalizeAudioSourcePath(cover.sourcePath) !== key) {
-              throw new Error('媒体库封面与歌曲来源不一致')
-            }
-            if (cover.coverArt?.filePath) {
-              const pixels = await schedulePlaylistCoverPixels(
-                { clientId, filePath: cover.coverArt.filePath, maxEdge: edge, windowGeneration: generation },
-                { priority: runtime.detail?.tracks[0]?.sourcePath === descriptor.sourcePath ? 0 : 1,
-                  signal: runtime.controller.signal, isCurrent: current },
+            let hasLocalArtwork = false
+            if (edge <= 256) {
+              const pixels = await scheduleTrackThumbnail(
+                { clientId, sourcePath: descriptor.sourcePath, maxEdge: 256, windowGeneration: generation },
+                { priority: 1, signal: runtime.controller.signal, isCurrent: current },
               )
-              if (!pixels) return
               if (!current()) return
-              thumbnail = playlistCoverImageFromPixels(pixels)
-            } else if (cover.coverArt?.dataUrl) {
-              thumbnail = await dataUrlThumbnail(cover.coverArt.dataUrl, edge)
+              hasLocalArtwork = pixels !== null
+              if (pixels) thumbnail = playlistCoverImageFromPixels(pixels)
+            } else {
+              const cover = await probeAudioPlaylistCover(descriptor.sourcePath)
+              if (!current()) return
+              if (cover.id !== descriptor.id || normalizeAudioSourcePath(cover.sourcePath) !== key) {
+                throw new Error('媒体库封面与歌曲来源不一致')
+              }
+              hasLocalArtwork = cover.coverArt !== null
+              if (cover.coverArt?.filePath) {
+                const pixels = await schedulePlaylistCoverPixels(
+                  { clientId, filePath: cover.coverArt.filePath, maxEdge: edge, windowGeneration: generation },
+                  { priority: runtime.detail?.tracks[0]?.sourcePath === descriptor.sourcePath ? 0 : 1,
+                    signal: runtime.controller.signal, isCurrent: current },
+                )
+                if (!pixels) return
+                if (!current()) return
+                thumbnail = playlistCoverImageFromPixels(pixels)
+              } else if (cover.coverArt?.dataUrl) {
+                thumbnail = await dataUrlThumbnail(cover.coverArt.dataUrl, edge)
+              }
             }
             if (thumbnail) {
               await decodePlaylistCover(thumbnail)
@@ -135,8 +147,8 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
             }
             const previous = runtime.cache.get(key)
             runtime.cache.delete(key)
-            runtime.cache.set(key, { edge: cover.coverArt ? edge : 512, trackId: descriptor.id,
-              row: { hasLocalArtwork: Boolean(cover.coverArt), coverThumbnail: thumbnail } })
+            runtime.cache.set(key, { edge: hasLocalArtwork ? Math.max(edge, 256) : 512, trackId: descriptor.id,
+              row: { hasLocalArtwork, coverThumbnail: thumbnail } })
             if (previous?.row.coverThumbnail) URL.revokeObjectURL(previous.row.coverThumbnail.src)
             thumbnail = undefined
             publish()

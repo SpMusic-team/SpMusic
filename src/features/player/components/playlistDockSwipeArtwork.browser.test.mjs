@@ -20,9 +20,9 @@ const fixture = runInNewContext(fixtureLiteral[1], { dependency })
   .replace('filePath:fixtureCover,byteLen:1,dataUrl:fixtureCover',
     "filePath:'/covers/'+scope+'/'+i+'.png',byteLen:1,dataUrl:null")
   .replace('bytes.set(color,40+(y*width+x)*4)',
-    "bytes.set(input?.filePath?.endsWith('/1.png')?[20,180,40,255]:color,40+(y*width+x)*4)")
+    "bytes.set(input?.filePath?.endsWith('/1.png')||input?.sourcePath?.endsWith('/1.flac')?[20,180,40,255]:color,40+(y*width+x)*4)")
   .replace("if(command==='audio_load_playlist_cover_pixels'||command==='audio_load_cover_pixels'){",
-    "if(command==='audio_load_playlist_cover_pixels'||command==='audio_load_cover_pixels'){if(window.config.failCover && input?.filePath?.endsWith('/1.png'))throw {code:'NO_COVER_ART',message:'fixture cover failure',recoverable:false};")
+    "if(command==='audio_load_playlist_cover_pixels'||command==='audio_load_track_thumbnail'||command==='audio_load_cover_pixels'){if(window.config.failCover && (input?.filePath?.endsWith('/1.png')||input?.sourcePath?.endsWith('/1.flac')))throw {code:'NO_COVER_ART',message:'fixture cover failure',recoverable:false};")
 const service = (await (await fetch(origin + '/src/features/player/services/audioCommands.ts')).text())
   .replace(/import \{ convertFileSrc, invoke \} from [^;]+;/,
     'const invoke=(...args)=>window.backendInvoke(...args);const convertFileSrc=path=>path;')

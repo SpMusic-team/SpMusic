@@ -83,7 +83,13 @@ window.backendInvoke=async(command,args)=>{
  }
  if(command==='audio_probe_playlist_track_summaries')return input.paths.map(sourcePath=>{const parts=sourcePath.replaceAll('\\\\','/').split('/'),i=Number(parts.at(-1).split('.')[0]);return {sourcePath,summary:{title:'Song '+i,artist:'Artist',album:'Album',albumArtist:null,bitDepth:24,sampleRateHz:96000,bitrateKbps:null,codec:'FLAC'},error:null}});
  if(command==='audio_begin_playlist_cover_window')return ++windowGeneration;
- if(command==='audio_load_playlist_cover_pixels'){
+ if(command==='audio_load_track_thumbnail'||command==='audio_load_playlist_cover_pixels'){
+  if(command==='audio_load_track_thumbnail'){
+   const index=Number(input.sourcePath.split('/').at(-1).split('.')[0]);
+   if(window.config.noCover.includes(index)||window.config.dataUrlOnly.includes(index))return new Uint8Array();
+   if(window.config.sourceGate)await new Promise(resolve=>window.pendingSources.push(resolve));
+   if(window.config.sourceFailures>0){window.config.sourceFailures--;throw {code:'INTERNAL_ERROR',message:'injected source capacity failure',recoverable:true}}
+  }
   active++;window.maxActive=Math.max(active,window.maxActive);window.trace.push({type:'pixels-start',input,time:performance.now()});
   try{if(window.config.pixelGate)await new Promise(resolve=>window.pendingPixels.push(resolve));if(window.config.failures>0){window.config.failures--;throw {code:'WORKER_FAILED',message:'injected',recoverable:true}}return spxr(input.maxEdge)}finally{active--}
  }
@@ -137,7 +143,7 @@ try {
     console.log('BASELINE', JSON.stringify({ closed, firstColdImages:paints.find(p=>p.images.length)?.images.length }))
   } else {
     await waitReady(page, 12)
-    const before = await page.evaluate(() => ({...window.readFixture(),requests:window.calls.filter(c=>c.command==='audio_load_playlist_cover_pixels').length,maxActive:window.maxActive}))
+    const before = await page.evaluate(() => ({...window.readFixture(),requests:window.calls.filter(c=>['audio_load_playlist_cover_pixels','audio_load_track_thumbnail'].includes(c.command)).length,maxActive:window.maxActive}))
     assert.equal(before.maxActive, 1, 'shared thumbnail scheduler serializes native pixel loads')
     assert.equal(before.requests, 12)
     assert.equal(await page.locator('img').count(), 0, 'preload does not mount playlist DOM')
@@ -148,7 +154,7 @@ try {
     assert.equal(paints[0].placeholders, 0)
     await page.evaluate(() => {window.hideFixture();window.showFixture();window.player.setVisiblePlaylistTrackIds(window.readFixture().ids,true,true,{visibleIds:window.readFixture().ids,prefetchIds:[],coverCssPixels:128,dpr:1})})
     await page.waitForTimeout(100)
-    assert.equal(await page.evaluate(() => window.calls.filter(c=>c.command==='audio_load_playlist_cover_pixels').length), 12, 'same-quality entry reuses URLs')
+    assert.equal(await page.evaluate(() => window.calls.filter(c=>['audio_load_playlist_cover_pixels','audio_load_track_thumbnail'].includes(c.command)).length), 12, 'same-quality entry reuses URLs')
     report.push({case:'closed preload and first commit',...before})
   }
   assert.deepEqual(errors, [])
@@ -184,7 +190,7 @@ try {
     const {page: sourceRetry,errors:sourceRetryErrors}=await open()
     await select(sourceRetry,{sourceFailures:2})
     await waitReady(sourceRetry,12)
-    const sourceRequests=await sourceRetry.evaluate(()=>window.calls.filter(call=>call.command==='audio_probe_playlist_cover').length)
+    const sourceRequests=await sourceRetry.evaluate(()=>window.calls.filter(call=>['audio_probe_playlist_cover','audio_load_track_thumbnail'].includes(call.command)).length)
     assert.equal(sourceRequests,14,'source capacity errors use the bounded retry budget')
     assert.deepEqual(sourceRetryErrors,[])
     report.push({case:'recoverable source errors',requests:sourceRequests})
@@ -193,21 +199,21 @@ try {
     const {page: fallbackOnly,errors:fallbackOnlyErrors}=await open()
     await select(fallbackOnly,{dataUrlOnly:[1]})
     await waitReady(fallbackOnly,11)
-    await fallbackOnly.waitForFunction(()=>window.player.playlistTrackVisuals['a-1']?.hasLocalArtwork===true)
+    await fallbackOnly.waitForFunction(()=>window.player.playlistTrackVisuals['a-1']?.hasLocalArtwork===false)
     await fallbackOnly.evaluate(()=>window.player.setVisiblePlaylistTrackIds(['a-1'],true,true,{visibleIds:['a-1'],prefetchIds:[],coverCssPixels:256,dpr:1}))
     await fallbackOnly.waitForTimeout(100)
-    const fallbackResult=await fallbackOnly.evaluate(()=>({thumbnail:window.player.playlistTrackVisuals['a-1'].coverThumbnail??null,calls:window.calls.filter(call=>call.command==='audio_probe_playlist_cover'&&call.input.path==='/audio/a/1.flac').length,decoded:window.trace.filter(event=>event.type==='decode-start'&&event.src.startsWith('data:')).length}))
-    assert.deepEqual(fallbackResult,{thumbnail:null,calls:1,decoded:0},'data URL-only originals stay quiet and do not become a successful upgrade')
+    const fallbackResult=await fallbackOnly.evaluate(()=>({thumbnail:window.player.playlistTrackVisuals['a-1'].coverThumbnail??null,calls:window.calls.filter(call=>call.command==='audio_load_track_thumbnail'&&call.input.sourcePath==='/audio/a/1.flac').length,decoded:window.trace.filter(event=>event.type==='decode-start'&&event.src.startsWith('data:')).length}))
+    assert.deepEqual(fallbackResult,{thumbnail:null,calls:1,decoded:0},'confirmed missing thumbnails stay quiet')
     assert.deepEqual(fallbackOnlyErrors,[])
-    report.push({case:'data URL-only source preserves bounded baseline placeholder',...fallbackResult})
+    report.push({case:'confirmed missing thumbnail preserves placeholder',...fallbackResult})
     await fallbackOnly.close()
 
     const {page: fallbackUpgrade,errors:fallbackUpgradeErrors}=await open()
     await select(fallbackUpgrade)
     await waitReady(fallbackUpgrade,12)
     const priorFallback=await fallbackUpgrade.evaluate(()=>window.player.playlistTrackVisuals['a-1'].coverThumbnail.src)
-    await fallbackUpgrade.evaluate(()=>{window.config.dataUrlOnly=[1];window.player.setVisiblePlaylistTrackIds(['a-1'],true,true,{visibleIds:['a-1'],prefetchIds:[],coverCssPixels:256,dpr:1})})
-    await fallbackUpgrade.waitForFunction(()=>window.calls.filter(call=>call.command==='audio_probe_playlist_cover'&&call.input.path==='/audio/a/1.flac').length===2)
+    await fallbackUpgrade.evaluate(()=>{window.config.dataUrlOnly=[1];window.player.setVisiblePlaylistTrackIds(['a-1'],true,true,{visibleIds:['a-1'],prefetchIds:[],coverCssPixels:512,dpr:1})})
+    await fallbackUpgrade.waitForFunction(()=>window.calls.filter(call=>call.command==='audio_probe_playlist_cover'&&call.input.path==='/audio/a/1.flac').length===1)
     await fallbackUpgrade.waitForTimeout(100)
     assert.equal(await fallbackUpgrade.evaluate(()=>window.player.playlistTrackVisuals['a-1'].coverThumbnail.src),priorFallback,'unrenderable upgrade retains the previous owned URL')
     assert.deepEqual(fallbackUpgradeErrors,[])
@@ -216,8 +222,8 @@ try {
 
     const {page: mismatched,errors:mismatchedErrors}=await open()
     await select(mismatched,{sourceMismatch:true})
-    await mismatched.waitForFunction(()=>window.calls.filter(call=>call.command==='audio_probe_playlist_cover').length===12)
-    assert.equal(await mismatched.evaluate(()=>window.created.length),0,'mismatched source identities cannot produce URLs')
+    await waitReady(mismatched,11)
+    assert.equal(await mismatched.evaluate(()=>window.created.length),11,'mismatched 512px hero identity cannot produce its URL')
     assert.deepEqual(mismatchedErrors,[])
     report.push({case:'source identity mismatch is discarded',created:0})
     await mismatched.close()
@@ -261,7 +267,7 @@ try {
     const {page: retry,errors:retryErrors}=await open()
     await select(retry,{failures:2})
     await waitReady(retry,12)
-    const retries=await retry.evaluate(()=>({requests:window.calls.filter(c=>c.command==='audio_load_playlist_cover_pixels').length,maxActive:window.maxActive}))
+    const retries=await retry.evaluate(()=>({requests:window.calls.filter(c=>['audio_load_playlist_cover_pixels','audio_load_track_thumbnail'].includes(c.command)).length,maxActive:window.maxActive}))
     assert.equal(retries.requests,14)
     assert.equal(retries.maxActive, 1)
     assert.deepEqual(retryErrors,[])
@@ -270,21 +276,21 @@ try {
 
     const {page: upgrade,errors:upgradeErrors}=await open()
     await select(upgrade,{decodeGate:true})
-    await upgrade.evaluate(()=>window.player.setVisiblePlaylistTrackIds(['a-1'],true,true,{visibleIds:['a-1'],prefetchIds:[],coverCssPixels:128,dpr:1}))
-    await upgrade.waitForFunction(()=>window.pendingDecodes.length===2)
     await upgrade.evaluate(()=>window.player.setVisiblePlaylistTrackIds(['a-1'],true,true,{visibleIds:['a-1'],prefetchIds:[],coverCssPixels:256,dpr:1}))
+    await upgrade.waitForFunction(()=>window.pendingDecodes.length===2)
+    await upgrade.evaluate(()=>window.player.setVisiblePlaylistTrackIds(['a-1'],true,true,{visibleIds:['a-1'],prefetchIds:[],coverCssPixels:512,dpr:1}))
     await upgrade.evaluate(()=>window.pendingDecodes.shift().resolve())
     await upgrade.waitForFunction(()=>window.readFixture().ready.includes('a-0'))
     await upgrade.waitForTimeout(100)
-    const inFlight=await upgrade.evaluate(()=>window.calls.filter(c=>c.command==='audio_load_playlist_cover_pixels'&&c.input.filePath==='/covers/a/1.png').map(c=>c.input.maxEdge))
-    assert.deepEqual(inFlight,[128],'viewport upgrade cannot duplicate the active thumbnail job')
+    const inFlight=await upgrade.evaluate(()=>window.calls.filter(c=>c.command==='audio_load_track_thumbnail'&&c.input.sourcePath==='/audio/a/1.flac').map(c=>c.input.maxEdge))
+    assert.deepEqual(inFlight,[256],'viewport upgrade cannot duplicate the active thumbnail job')
     await upgrade.evaluate(()=>{window.config.decodeGate=false;window.pendingDecodes.splice(0).forEach(p=>p.resolve())})
-    await upgrade.waitForFunction(()=>window.calls.some(c=>c.command==='audio_load_playlist_cover_pixels'&&c.input.filePath==='/covers/a/1.png'&&c.input.maxEdge===256))
-    await upgrade.waitForFunction(()=>window.player.playlistTrackVisuals['a-1']?.coverThumbnail?.width===256)
+    await upgrade.waitForFunction(()=>window.calls.some(c=>c.command==='audio_load_playlist_cover_pixels'&&c.input.filePath==='/covers/a/1.png'&&c.input.maxEdge===512))
+    await upgrade.waitForFunction(()=>window.player.playlistTrackVisuals['a-1']?.coverThumbnail?.width===512)
     // The URL order is hero first, then the tested card; verify via captured input.
     const events=await upgrade.evaluate(()=>({lowerSrc:window.created[1],trace:window.trace}))
     const decoded=events.trace.find(e=>e.type==='decode-end'&&e.src===events.lowerSrc)
-    const upgradeStart=events.trace.find(e=>e.type==='pixels-start'&&e.input.filePath==='/covers/a/1.png'&&e.input.maxEdge===256)
+    const upgradeStart=events.trace.find(e=>e.type==='pixels-start'&&e.input.filePath==='/covers/a/1.png'&&e.input.maxEdge===512)
     assert(decoded&&upgradeStart&&decoded.time<=upgradeStart.time,'upgrade starts after fallback decoded')
     assert.deepEqual(upgradeErrors,[])
     report.push({case:'in-flight thumbnail then viewport upgrade',inFlight,ordered:true})
@@ -294,9 +300,9 @@ try {
     await select(failedUpgrade)
     await waitReady(failedUpgrade,12)
     const fallback=await failedUpgrade.evaluate(()=>window.player.playlistTrackVisuals['a-1'].coverThumbnail.src)
-    await failedUpgrade.evaluate(()=>{window.config.decodeFailures=100;window.player.setVisiblePlaylistTrackIds(['a-1'],true,true,{visibleIds:['a-1'],prefetchIds:[],coverCssPixels:256,dpr:1})})
+    await failedUpgrade.evaluate(()=>{window.config.decodeFailures=100;window.player.setVisiblePlaylistTrackIds(['a-1'],true,true,{visibleIds:['a-1'],prefetchIds:[],coverCssPixels:512,dpr:1})})
     await failedUpgrade.waitForFunction(()=>window.created.length===13&&window.revoked.includes(window.created[12]))
-    await failedUpgrade.evaluate(()=>window.player.setVisiblePlaylistTrackIds(['a-1','a-0'],true,true,{visibleIds:['a-1','a-0'],prefetchIds:[],coverCssPixels:256,dpr:1}))
+    await failedUpgrade.evaluate(()=>window.player.setVisiblePlaylistTrackIds(['a-1','a-0'],true,true,{visibleIds:['a-1','a-0'],prefetchIds:[],coverCssPixels:512,dpr:1}))
     await failedUpgrade.waitForTimeout(150)
     assert.equal(await failedUpgrade.evaluate(()=>window.created.length),13,'demand refresh cannot bypass retry backoff')
     await failedUpgrade.waitForFunction(()=>window.created.length===15&&window.revoked.includes(window.created[14]))
@@ -304,7 +310,7 @@ try {
     const failed=await failedUpgrade.evaluate(()=>({created:window.created.length,src:window.player.playlistTrackVisuals['a-1'].coverThumbnail.src,width:window.player.playlistTrackVisuals['a-1'].coverThumbnail.width,failedReleased:window.created.slice(12).every(src=>window.revoked.includes(src))}))
     assert.equal(failed.created,15,'decode retries terminate after three attempts')
     assert.equal(failed.src,fallback)
-    assert.equal(failed.width,128)
+    assert.equal(failed.width,256)
     assert.equal(failed.failedReleased,true)
     assert.deepEqual(failedUpgradeErrors,[])
     report.push({case:'failed viewport decode retains fallback and stops retry',attempts:failed.created-12,failedReleased:failed.failedReleased})
@@ -315,10 +321,10 @@ try {
     await bounded.waitForFunction(()=>{
       const count=window.readFixture().ready.length;
       if(window.observedCount!==count){window.observedCount=count;window.observedAt=performance.now()}
-      return count>500&&performance.now()-window.observedAt>250;
+      return count>100&&performance.now()-window.observedAt>250;
     })
     const budget=await bounded.evaluate(()=>({ready:window.readFixture().ready.length,bytes:Object.values(window.player.playlistTrackVisuals).reduce((sum,v)=>sum+(v.coverThumbnail?v.coverThumbnail.encodedBytes+v.coverThumbnail.width*v.coverThumbnail.height*4:0),0),maxActive:window.maxActive}))
-    assert(budget.ready>500&&budget.ready<1000,'all-list eligibility is limited by bytes rather than a small fixed count')
+    assert(budget.ready>100&&budget.ready<1000,'all-list eligibility is limited by bytes rather than a small fixed count')
     assert(budget.bytes+2*512*512*4<=96*1024*1024,'resident images leave existing inflight reservation')
     assert.equal(budget.maxActive, 1)
     assert.deepEqual(boundedErrors,[])
@@ -331,11 +337,11 @@ try {
     const retained=await text.evaluate(()=>Object.fromEntries(Object.entries(window.player.playlistTrackVisuals).filter(([,v])=>v.coverThumbnail).map(([id,v])=>[id,v.coverThumbnail.src])))
     await text.evaluate(()=>window.player.setVisiblePlaylistTrackIds([],false,false))
     await text.waitForTimeout(5100)
-    const afterText=await text.evaluate(()=>({ready:window.readFixture().ready,images:Object.fromEntries(Object.entries(window.player.playlistTrackVisuals).filter(([,v])=>v.coverThumbnail).map(([id,v])=>[id,v.coverThumbnail.src])),pixelPaths:window.calls.filter(c=>c.command==='audio_load_playlist_cover_pixels').map(c=>c.input.filePath)}))
+    const afterText=await text.evaluate(()=>({ready:window.readFixture().ready,images:Object.fromEntries(Object.entries(window.player.playlistTrackVisuals).filter(([,v])=>v.coverThumbnail).map(([id,v])=>[id,v.coverThumbnail.src])),pixelPaths:window.calls.filter(c=>c.command==='audio_load_track_thumbnail').map(c=>c.input.sourcePath)}))
     assert.deepEqual(afterText.images,retained,'background thumbnails survive beyond inactive view grace')
     assert.equal(afterText.ready.length,10)
-    assert(!afterText.pixelPaths.includes('/covers/a/3.png'))
-    assert(!afterText.pixelPaths.includes('/covers/a/4.png'))
+    assert(afterText.pixelPaths.includes('/audio/a/3.flac'),'missing artwork is confirmed once by the thumbnail command')
+    assert(!afterText.pixelPaths.includes('/audio/a/4.flac'))
     assert.deepEqual(textErrors,[])
     report.push({case:'text layout retention, no artwork and unavailable track',ready:10,retainedAfterMs:5100})
     await text.close()

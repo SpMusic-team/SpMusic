@@ -31,6 +31,7 @@ const fixture = baseFixture.replace("c:[['c-0','/audio/c/0.flac']],", "c:new URL
  .replace('coverArt:null}}};', "coverArt:window.returnWarmupArtwork&&['a','b','c','idxZ'].includes(row.id.split('-')[0])?{mimeType:'image/png',filePath:'/covers/'+row.id+'.png',dataUrl:null,byteLen:64}:null}}};")
  .replace("window.backendInvoke=async(command,args)=>{", "window.returnWarmupArtwork=new URLSearchParams(location.search).has('warmupArtwork');window.backendInvoke=async(command,args)=>{")
  .replace("input.path.startsWith('/audio/many/')?{mimeType:'image/png',filePath:'/covers/'+result.id+'.png',dataUrl:null,byteLen:64}:null", "window.returnWarmupArtwork?result.metadata.coverArt:input.path.startsWith('/audio/many/')?{mimeType:'image/png',filePath:'/covers/'+result.id+'.png',dataUrl:null,byteLen:64}:null")
+ .replace("if(command==='audio_load_track_thumbnail'&&!input.sourcePath.startsWith('/audio/many/'))", "if(command==='audio_load_track_thumbnail'&&!input.sourcePath.startsWith('/audio/many/')&&!window.returnWarmupArtwork)")
  .replace("if(!input.filePath.startsWith('/covers/many-'))", "if(!input.filePath.startsWith('/covers/many-')&&!window.returnWarmupArtwork)")
  .replace("ReactDOM.createRoot(document.getElementById('root'))", `
 const nativeInvoke=window.backendInvoke;
@@ -239,24 +240,23 @@ async function startupCoverWarmupChecks() {
       await restartReady(page, kind === 'all-songs' ? 'a-0' : 'c-0')
       const warmIds = kind === 'all-songs' ? ['idxZ'] : ['c-1', 'c-2']
       const warmPaths = kind === 'all-songs' ? ['/audio/idxZ/0.flac'] : ['/audio/c/1.flac', '/audio/c/2.flac']
-      const warmCovers = kind === 'all-songs' ? ['/covers/idxZ.png'] : ['/covers/c-1.png', '/covers/c-2.png']
       assert.equal((await routeSnapshot(page)).route.view, kind === 'all-songs' ? 'category' : 'tracks')
       assert.equal((await page.evaluate(() => window.viewModel.playlist.isOpen)), false, 'the source list stays closed during warmup')
       if (kind === 'all-songs') {
         await page.waitForFunction(() => window.viewModel.playlist.library.allSongs.some(item => item.trackId === 'idxZ'))
         assert.equal((await routeSnapshot(page)).queue.includes('idxZ'), false, 'source-only row is outside the restored queue')
       } else await page.waitForFunction(ids => ids.every(id => Boolean(window.viewModel.queue.tracks.find(track => track.id === id)?.coverThumbnail)), warmIds)
-      await page.waitForFunction(covers => covers.every(cover => window.calls.some(call => call.command === 'audio_load_playlist_cover_pixels' && call.input.filePath === cover)), warmCovers)
-      const before = await page.evaluate(({ paths, covers }) => ({
+      await page.waitForFunction(paths => paths.every(path => window.calls.some(call => call.command === 'audio_load_track_thumbnail' && call.input.sourcePath === path)), warmPaths)
+      const before = await page.evaluate(paths => ({
         sourceOpen: window.viewModel.playlist.isOpen,
         probes: window.calls.filter(call => call.command === 'audio_probe_playlist_cover' && paths.includes(call.input.path)).map(call => call.input.path),
-        pixels: window.calls.filter(call => call.command === 'audio_load_playlist_cover_pixels' && covers.includes(call.input.filePath)).map(call => call.input.filePath),
+        thumbnails: window.calls.filter(call => call.command === 'audio_load_track_thumbnail' && paths.includes(call.input.sourcePath)).map(call => call.input.sourcePath),
         queue: window.viewModel.queue.tracks.map(track => track.id),
         current: window.viewModel.playback.track?.id,
-      }), { paths: warmPaths, covers: warmCovers })
+      }), warmPaths)
       assert.equal(before.sourceOpen, false, 'non-current source covers warm before the source opens')
-      assert.equal(before.probes.length, warmPaths.length, 'each non-current source cover is probed before the cover click')
-      assert.equal(before.pixels.length, warmPaths.length, 'each non-current source cover has decoded pixels before the cover click')
+      assert.equal(before.probes.length, 0, 'list thumbnails do not issue the legacy source probe')
+      assert.equal(before.thumbnails.length, warmPaths.length, 'each non-current source cover has decoded pixels before the cover click')
       await page.evaluate(paths => {
         window.sourceCoverFrames = []
         const selectors = paths.map(path => path.includes('/idxZ/')
@@ -291,7 +291,7 @@ async function startupCoverWarmupChecks() {
         folders: JSON.parse(localStorage.getItem('spmusic.return-test.native-folders') ?? '[]'),
         allSongs: window.viewModel?.playlist.library.allSongs.map(item => ({ id: item.trackId, sourcePath: item.sourcePath })),
         queue: window.viewModel?.queue.tracks.map(track => track.id),
-        calls: window.calls?.filter(call => ['library_get_folders', 'library_scan_folder', 'audio_probe_playlist_cover', 'audio_load_playlist_cover_pixels'].includes(call.command)).map(call => ({ command: call.command, input: call.input })),
+        calls: window.calls?.filter(call => ['library_get_folders', 'library_scan_folder', 'audio_probe_playlist_cover', 'audio_load_playlist_cover_pixels', 'audio_load_track_thumbnail'].includes(call.command)).map(call => ({ command: call.command, input: call.input })),
       })) }))
       throw error
     } finally { await page.close() }
@@ -313,19 +313,19 @@ async function searchedSongCoverWarmupChecks() {
     await page.waitForFunction(() => window.viewModel.playback.track?.id === 'many-49' && !window.viewModel.playback.isSelectionPending && !window.viewModel.playback.isAudioBusy)
     await page.locator('.playlist-playback-dock .playlist-playback-track-button').click()
     await page.waitForFunction(() => !window.viewModel.playlist.isOpen)
-    const nearby = [47, 48].map(index => ({ id: `many-${index}`, path: `/audio/many/${index}.flac`, cover: `/covers/many-${index}.png` }))
-    await page.waitForFunction(rows => rows.every(row => window.calls.some(call => call.command === 'audio_load_playlist_cover_pixels' && call.input.filePath === row.cover)), nearby)
+    const nearby = [47, 48].map(index => ({ id: `many-${index}`, path: `/audio/many/${index}.flac` }))
+    await page.waitForFunction(rows => rows.every(row => window.calls.some(call => call.command === 'audio_load_track_thumbnail' && call.input.sourcePath === row.path)), nearby)
     const before = await page.evaluate(rows => ({
       sourceOpen: window.viewModel.playlist.isOpen,
       current: window.viewModel.playback.track?.id,
       queue: window.viewModel.queue.tracks.map(track => track.id),
       probes: rows.map(row => window.calls.filter(call => call.command === 'audio_probe_playlist_cover' && call.input.path === row.path).length),
-      pixels: rows.map(row => window.calls.filter(call => call.command === 'audio_load_playlist_cover_pixels' && call.input.filePath === row.cover).length),
+      thumbnails: rows.map(row => window.calls.filter(call => call.command === 'audio_load_track_thumbnail' && call.input.sourcePath === row.path).length),
     }), nearby)
     assert.equal(before.sourceOpen, false, 'nearby source art loads while the player remains in front')
     assert.deepEqual(before.queue, ['many-49'], 'the searched playback queue is only the matched song')
-    assert(before.probes.every(count => count > 0), 'source-only neighbors were probed before return')
-    assert(before.pixels.every(count => count > 0), 'source-only neighbors decoded before return')
+    assert(before.probes.every(count => count === 0), 'source-only neighbors skip the legacy probe')
+    assert(before.thumbnails.every(count => count > 0), 'source-only neighbors decoded before return')
     await page.evaluate(ids => {
       window.sourceCoverFrames = []
       const selectors = ids.map(id => `.playlist-grid:not(.all-songs-list) [data-playlist-track-id="${id}"]`)
@@ -364,19 +364,19 @@ async function searchedAllSongsCoverWarmupChecks() {
     await page.waitForFunction(() => window.viewModel.playback.track?.id === 'many-49' && !window.viewModel.playback.isSelectionPending && !window.viewModel.playback.isAudioBusy)
     await page.locator('.playlist-playback-dock .playlist-playback-track-button').click()
     await page.waitForFunction(() => !window.viewModel.playlist.isOpen)
-    const nearby = [47, 48].map(index => ({ id: `many-${index}`, path: `/audio/many/${index}.flac`, cover: `/covers/many-${index}.png` }))
-    await page.waitForFunction(rows => rows.every(row => window.calls.some(call => call.command === 'audio_load_playlist_cover_pixels' && call.input.filePath === row.cover)), nearby)
+    const nearby = [47, 48].map(index => ({ id: `many-${index}`, path: `/audio/many/${index}.flac` }))
+    await page.waitForFunction(rows => rows.every(row => window.calls.some(call => call.command === 'audio_load_track_thumbnail' && call.input.sourcePath === row.path)), nearby)
     const before = await page.evaluate(rows => ({
       sourceOpen: window.viewModel.playlist.isOpen,
       current: window.viewModel.playback.track?.id,
       queue: window.viewModel.queue.tracks.map(track => track.id),
       probes: rows.map(row => window.calls.filter(call => call.command === 'audio_probe_playlist_cover' && call.input.path === row.path).length),
-      pixels: rows.map(row => window.calls.filter(call => call.command === 'audio_load_playlist_cover_pixels' && call.input.filePath === row.cover).length),
+      thumbnails: rows.map(row => window.calls.filter(call => call.command === 'audio_load_track_thumbnail' && call.input.sourcePath === row.path).length),
     }), nearby)
     assert.equal(before.sourceOpen, false, 'source-only neighbors warm on the player')
     assert.deepEqual(before.queue, ['many-49'], 'search creates a one-song playback snapshot')
-    assert(before.probes.every(count => count > 0), 'far source neighbors were probed before cover return')
-    assert(before.pixels.every(count => count > 0), 'far source neighbors had decoded pixels before cover return')
+    assert(before.probes.every(count => count === 0), 'far source neighbors skip the legacy probe')
+    assert(before.thumbnails.every(count => count > 0), 'far source neighbors had decoded pixels before cover return')
     await page.evaluate(rows => {
       window.sourceCoverFrames = []
       const selectors = rows.map(row => `.all-songs-list [data-song-key="${row.path}"]`)

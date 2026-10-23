@@ -26,18 +26,32 @@ async function harness() {
     compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
   }).outputText
   const patched = compiled.replace(
-    /import\s*\{\s*loadAudioPlaylistCoverPixels\s*,?\s*\}\s*from\s*['"]\.\/audioCommands['"];?/,
-    'const loadAudioPlaylistCoverPixels = globalThis.__playlistCoverSchedulerBackend; ',
+    /import\s*\{\s*loadAudioPlaylistCoverPixels\s*,\s*loadAudioTrackThumbnail\s*,?\s*\}\s*from\s*['"]\.\/audioCommands['"];?/,
+    'const loadAudioPlaylistCoverPixels = globalThis.__playlistCoverSchedulerBackend; const loadAudioTrackThumbnail = globalThis.__playlistCoverSchedulerBackend; ',
   )
   assert.notEqual(patched, compiled, 'test substitutes only the native cover command boundary')
   const url = `data:text/javascript;base64,${Buffer.from(patched).toString('base64')}#${Math.random()}`
-  const { schedulePlaylistCoverPixels: schedule } = await import(url)
+  const { schedulePlaylistCoverPixels: schedule, scheduleTrackThumbnail } = await import(url)
   const input = (name, windowGeneration = 1) => ({
     clientId: 'test-client', filePath: `/covers/${name}.flac`, maxEdge: 256, windowGeneration,
   })
   const flush = async () => { await Promise.resolve(); await Promise.resolve() }
-  return { schedule, calls, pending, input, flush, get maximumActive() { return maximumActive } }
+  return { schedule, scheduleTrackThumbnail, calls, pending, input, flush, get maximumActive() { return maximumActive } }
 }
+
+test('track thumbnails share priority ordering and preserve confirmed missing artwork', async () => {
+  const h = await harness()
+  const active = h.schedule(h.input('active'), { priority: 2 })
+  const thumbnail = h.scheduleTrackThumbnail({ clientId: 'test-client', sourcePath: '/music/song.flac', maxEdge: 128, windowGeneration: 3 }, { priority: 0 })
+  h.pending.shift().resolve()
+  await h.flush()
+  assert.equal(h.calls.at(-1).sourcePath, '/music/song.flac')
+  assert.equal(h.calls.at(-1).windowGeneration, 3)
+  h.pending.shift().resolve(null)
+  assert.equal(await thumbnail, null)
+  await active
+  assert.equal(h.maximumActive, 1)
+})
 
 test('one native thumbnail invoke at a time, with foreground before queued library work', async () => {
   const h = await harness()

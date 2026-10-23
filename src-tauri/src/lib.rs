@@ -14,11 +14,12 @@ use audio::{
 };
 use audio::{
     begin_playlist_cover_window, load_cover_pixels, load_playlist_cover_pixels,
-    probe_playlist_cover, probe_playlist_durations, probe_playlist_track_summaries,
-    shutdown_playlist_cover_cache, AudioBeginPlaylistCoverWindowInput, AudioCommandError,
-    AudioController, AudioEmbedLyricsInput, AudioFolderPlaylist, AudioFolderPlaylistInput,
-    AudioLoadAndPlayInput, AudioLoadAndPlayResult, AudioLoadCoverPixelsInput, AudioLoadFileInput,
-    AudioLoadPlaylistCoverPixelsInput, AudioOpenFileInput, AudioOpenSourceResult, AudioOutputInfo,
+    load_track_thumbnail, probe_playlist_cover, probe_playlist_durations,
+    probe_playlist_track_summaries, shutdown_playlist_cover_cache,
+    AudioBeginPlaylistCoverWindowInput, AudioCommandError, AudioController, AudioEmbedLyricsInput,
+    AudioFolderPlaylist, AudioFolderPlaylistInput, AudioLoadAndPlayInput, AudioLoadAndPlayResult,
+    AudioLoadCoverPixelsInput, AudioLoadFileInput, AudioLoadPlaylistCoverPixelsInput,
+    AudioLoadTrackThumbnailInput, AudioOpenFileInput, AudioOpenSourceResult, AudioOutputInfo,
     AudioPlayInput, AudioPlaybackState, AudioPlaylistCoverSource, AudioPlaylistDurationItem,
     AudioPlaylistTrackSummaryItem, AudioProbePlaylistDurationsInput,
     AudioProbePlaylistTrackSummariesInput, AudioSeekInput, AudioSetVolumeInput, AudioTrackRef,
@@ -571,6 +572,15 @@ async fn audio_load_playlist_cover_pixels(
 }
 
 #[tauri::command]
+async fn audio_load_track_thumbnail(
+    state: State<'_, AppPaths>,
+    input: AudioLoadTrackThumbnailInput,
+) -> Result<Response, CoverPixelsError> {
+    let response = load_track_thumbnail(state.cache_dir.clone(), input).await?;
+    Ok(Response::new(response))
+}
+
+#[tauri::command]
 fn audio_begin_playlist_cover_window(
     input: AudioBeginPlaylistCoverWindowInput,
 ) -> Result<u64, CoverPixelsError> {
@@ -640,6 +650,7 @@ pub fn run() {
             audio_load_cover_pixels,
             audio_begin_playlist_cover_window,
             audio_load_playlist_cover_pixels,
+            audio_load_track_thumbnail,
         ])
         .setup(|app| {
             let app_paths = AppPaths::prepare()?;

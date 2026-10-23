@@ -142,7 +142,7 @@ async function record(page, count, direction, readGeometry, iteration) {
     }
     collect(observer.takeRecords());observer.disconnect()
     return {samples,longTasks,windowProbe:window.__windowProbe.map(event=>({...event,time:event.time-start})),
-      workCalls:window.calls.filter(call=>call.time>=start&&call.time-start<900).map(call=>({command:call.command,time:call.time-start,path:call.input?.path??null}))}
+      workCalls:window.calls.filter(call=>call.time>=start&&call.time-start<900).map(call=>({command:call.command,time:call.time-start,path:call.input?.sourcePath??call.input?.path??null}))}
   },{direction,readGeometry})
   const {samples,longTasks}=observation
   const metricEnd=(await session.send('Performance.getMetrics')).metrics
@@ -175,10 +175,10 @@ async function record(page, count, direction, readGeometry, iteration) {
     longTasks,
     windowProbe:observation.windowProbe,workCounts:countCalls(0,900),
     workPhases:{first350:countCalls(0,350),after350:countCalls(350,900),beforeStable:countCalls(0,stableMs??900),afterStable:countCalls(stableMs??900,900)},
-    firstWorkMs:Object.fromEntries(['audio_probe_playlist_cover','audio_load_playlist_cover_pixels'].map(command=>[command,observation.workCalls.find(call=>call.command===command)?.time??null])),
-    probedIndices:observation.workCalls.filter(call=>call.command==='audio_probe_playlist_cover').map(call=>Number.parseInt(call.path?.split('/').at(-1)??'',10)),
-    firstLaterProbeMs:observation.workCalls.find(call=>call.command==='audio_probe_playlist_cover'&&Number.parseInt(call.path?.split('/').at(-1)??'',10)>=10)?.time??null,
-    firstOffscreenProbeMs:observation.workCalls.find(call=>call.command==='audio_probe_playlist_cover'&&Number.parseInt(call.path?.split('/').at(-1)??'',10)>=20)?.time??null,
+    firstWorkMs:Object.fromEntries(['audio_probe_playlist_cover','audio_load_track_thumbnail','audio_load_playlist_cover_pixels'].map(command=>[command,observation.workCalls.find(call=>call.command===command)?.time??null])),
+    probedIndices:observation.workCalls.filter(call=>call.command==='audio_load_track_thumbnail').map(call=>Number.parseInt(call.path?.split('/').at(-1)??'',10)),
+    firstLaterProbeMs:observation.workCalls.find(call=>call.command==='audio_load_track_thumbnail'&&Number.parseInt(call.path?.split('/').at(-1)??'',10)>=10)?.time??null,
+    firstOffscreenProbeMs:observation.workCalls.find(call=>call.command==='audio_load_track_thumbnail'&&Number.parseInt(call.path?.split('/').at(-1)??'',10)>=20)?.time??null,
     movingFrameP95Ms:movingIntervals.length?movingIntervals[Math.ceil(movingIntervals.length*.95)-1]:null,
     longTaskPhases:{first350:longTasks.filter(task=>task.startMs<350),after350:longTasks.filter(task=>task.startMs>=350)},
     structure,expansion450:{maxIncludingFirstMs:Math.max(...expansion.map(sample=>sample.delta)),maxAfterFirstMs:Math.max(...postExpansion.map(sample=>sample.delta)),afterFirstOver16Ms:postExpansion.filter(sample=>sample.delta>16.7).length,afterFirstOver32Ms:postExpansion.filter(sample=>sample.delta>32).length,longTasks:longTasks.filter(task=>task.startMs<450)},
@@ -415,8 +415,8 @@ try {
         assert.equal(row.after,row.before,'row far jump preserves scroll height')
       }
       if(${process.env.SPMUSIC_PERF_ASSERT_WARMUP === '1'}){
-        await page.waitForFunction(()=>window.calls.some(call=>call.command==='audio_probe_playlist_cover'&&Number.parseInt(call.input?.path?.split('/').at(-1)??'',10)>=20),undefined,{timeout:10000})
-        const warmup=await page.evaluate(()=>({probeCount:window.calls.filter(call=>call.command==='audio_probe_playlist_cover').length,furthestIndex:Math.max(...window.calls.filter(call=>call.command==='audio_probe_playlist_cover').map(call=>Number.parseInt(call.input?.path?.split('/').at(-1)??'',10)))}))
+        await page.waitForFunction(()=>window.calls.some(call=>call.command==='audio_load_track_thumbnail'&&Number.parseInt(call.input?.sourcePath?.split('/').at(-1)??'',10)>=20),undefined,{timeout:10000})
+        const warmup=await page.evaluate(()=>({probeCount:window.calls.filter(call=>call.command==='audio_load_track_thumbnail').length,furthestIndex:Math.max(...window.calls.filter(call=>call.command==='audio_load_track_thumbnail').map(call=>Number.parseInt(call.input?.sourcePath?.split('/').at(-1)??'',10)))}))
         console.log('WARMUP',JSON.stringify(warmup))
       }
       assert.equal(await page.locator('.playlist-card').count(),count,'fixture actually renders requested track count')

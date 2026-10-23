@@ -36,7 +36,7 @@ import {
 import { createPlaylistArtworkGrace } from '@/features/player/model/playlistArtworkGrace'
 import { playlistCoverImageFromPixels } from '@/features/player/model/playlistCoverPixels'
 import { decodePlaylistCover } from '@/features/player/model/playlistCoverReadiness'
-import { schedulePlaylistCoverPixels } from '@/features/player/services/playlistCoverScheduler'
+import { schedulePlaylistCoverPixels, scheduleTrackThumbnail } from '@/features/player/services/playlistCoverScheduler'
 import {
   chunkPlaylistSummaryPaths,
   pendingPlaylistTrackRow,
@@ -97,6 +97,7 @@ import {
   setAudioVolume,
   stopAudio,
   transitionAudioPlayback,
+  warmLibraryCoverThumbnails,
   type AudioCommandError,
   type AudioFolderPlaylist,
   type AudioFolderTrackRef,
@@ -548,6 +549,8 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
   const sessionPlaylistDescriptorsRef = useRef(new Map<string, AudioFolderPlaylist>())
   const libraryPlaylistObjectsRef = useRef(new WeakSet<AudioFolderPlaylist>())
   const libraryEpochRef = useRef(0)
+  const coverWarmupQueueRef = useRef<Array<{ epoch: number; paths: string[] }>>([])
+  const coverWarmupRunningRef = useRef(false)
   const selectedFolderPathsRef = useRef<readonly string[]>([])
   const libraryMutationRef = useRef<Promise<void>>(Promise.resolve())
   const playlistSummaryRowsRef = useRef<Readonly<Record<string, Readonly<Record<string, PlaylistTrackRow>>>>>({})
@@ -797,6 +800,36 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     return active && playlistScope(active) === scope ? active : undefined
   }, [])
 
+  const enqueueCoverWarmup = useCallback((playlist: AudioFolderPlaylist) => {
+    const epoch = libraryEpochRef.current
+    const paths = [...new Set(playlist.tracks.filter((track) => track.available).map((track) => track.sourcePath))]
+    for (let index = 0; index < paths.length; index += 256) {
+      coverWarmupQueueRef.current.push({ epoch, paths: paths.slice(index, index + 256) })
+    }
+    if (coverWarmupRunningRef.current) return
+    coverWarmupRunningRef.current = true
+    void (async () => {
+      try {
+        while (coverWarmupQueueRef.current.length) {
+          const batch = coverWarmupQueueRef.current.shift()!
+          if (batch.epoch !== libraryEpochRef.current) continue
+          await new Promise<void>((resolve) => { window.setTimeout(resolve, 32) })
+          if (batch.epoch !== libraryEpochRef.current) continue
+          try {
+            const result = await warmLibraryCoverThumbnails(batch.paths)
+            if (result.cancelled && batch.epoch === libraryEpochRef.current) {
+              coverWarmupQueueRef.current = coverWarmupQueueRef.current.filter((pending) => pending.epoch !== batch.epoch)
+            }
+          } catch (error) {
+            console.warn('歌曲封面预热失败', { count: batch.paths.length, error })
+          }
+        }
+      } finally {
+        coverWarmupRunningRef.current = false
+      }
+    })()
+  }, [])
+
   const rememberLibraryPlaylist = useCallback((playlist: AudioFolderPlaylist, epoch: number) => {
     if (libraryEpochRef.current !== epoch || playlist.sourceKind !== 'folder') return
     libraryPlaylistObjectsRef.current.add(playlist)
@@ -841,6 +874,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
   const clearSelectedLibraryFolders = useCallback(async () => {
     const epoch = libraryEpochRef.current + 1
     libraryEpochRef.current = epoch
+    coverWarmupQueueRef.current = []
     const priorPaths = selectedFolderPathsRef.current
     selectedFolderPathsRef.current = []
     setLibraryStatus('clearing')
@@ -903,6 +937,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
               if (disposed || libraryEpochRef.current !== epoch) return
               if (playlist.sourceKind !== 'folder') throw new Error('返回的歌曲来源不是文件夹')
               rememberLibraryPlaylist(playlist, epoch)
+              enqueueCoverWarmup(playlist)
             } catch (error) {
               if (disposed || libraryEpochRef.current !== epoch) return
               const message = error instanceof Error ? error.message : String(error)
@@ -923,9 +958,10 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     return () => {
       disposed = true
       libraryEpochRef.current += 1
+      coverWarmupQueueRef.current = []
       void cancelLibraryCoverWarmup().catch(() => undefined)
     }
-  }, [rememberLibraryPlaylist])
+  }, [rememberLibraryPlaylist, enqueueCoverWarmup])
 
   // Publish one batch of tag rows. Every guard below is load-bearing: a stale
   // pass must never write another scope, another descriptor set, or a list the
@@ -1084,6 +1120,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
           sessionPlaylistDescriptorsRef.current.set(scope, playlist)
           restored.push(playlist)
           ensurePlaylistSummaries(scope, playlist)
+          enqueueCoverWarmup(playlist)
         }
         setSessionPlaylists((previous) => {
           const currentScopes = new Set(previous.map(playlistScope))
@@ -1096,7 +1133,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       }
     })()
     return () => { disposed = true }
-  }, [ensurePlaylistSummaries])
+  }, [ensurePlaylistSummaries, enqueueCoverWarmup])
 
   const selectFolders = useCallback(async () => {
     if (libraryImportPendingRef.current) return
@@ -1118,6 +1155,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
           if (source.sourceKind !== 'folder') throw new Error('返回的歌曲来源不是文件夹')
           await registerLibraryPlaylist(source, epoch)
           if (libraryEpochRef.current !== epoch) return
+          enqueueCoverWarmup(source)
           if (sessionPlaylistDescriptorsRef.current.get(playlistScope(source)) === source) {
             ensurePlaylistSummaries(playlistScope(source), source)
           }
@@ -1134,7 +1172,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       libraryImportPendingRef.current = false
       setLibraryImportPending(false)
     }
-  }, [ensurePlaylistSummaries, registerLibraryPlaylist])
+  }, [ensurePlaylistSummaries, registerLibraryPlaylist, enqueueCoverWarmup])
 
   const importPlaylist = useCallback(async () => {
     if (libraryImportPendingRef.current) return
@@ -1150,13 +1188,14 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
         ? previous.map((item) => playlistScope(item) === scope ? playlist : item)
         : [...previous, playlist])
       ensurePlaylistSummaries(scope, playlist)
+      enqueueCoverWarmup(playlist)
     } catch (error) {
       if (!playlistSummaryDisposedRef.current) toast.error(`无法导入播放列表：${commandError(error).message}`)
     } finally {
       libraryImportPendingRef.current = false
       setLibraryImportPending(false)
     }
-  }, [ensurePlaylistSummaries])
+  }, [ensurePlaylistSummaries, enqueueCoverWarmup])
 
   const createPlaylist = useCallback((name: string, songKeys: readonly string[]): string | null => {
     const title = name.trim()
@@ -1588,8 +1627,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
         playlistVisualHydrationActiveJobsRef.current.set(job.trackId, job)
         let published = false
         let loadingSource = true
-        void probeAudioPlaylistCover(job.sourcePath)
-          .then(async (coverSource) => {
+        void (async () => {
             const jobIsStale = () => {
               const activePlaylist = folderPlaylistRef.current
               const activeDescriptor = activePlaylist?.tracks.find((candidate) => candidate.id === job.trackId)
@@ -1601,38 +1639,62 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
                 || playlistScope(activePlaylist) !== job.scope
                 || activeDescriptor?.id !== job.trackId
                 || normalizeAudioSourcePath(activeDescriptor.sourcePath) !== job.normalizedSourcePath
-                || coverSource.id !== job.trackId
-                || normalizeAudioSourcePath(coverSource.sourcePath) !== job.normalizedSourcePath
             }
             if (jobIsStale()) return
 
-            loadingSource = false
             let coverThumbnail: PlaylistCoverImage | undefined
-            const coverFilePath = coverSource.coverArt?.filePath
-            if (coverFilePath) {
-              const firstPlaylistTrackId = folderPlaylistRef.current?.tracks[0]?.id
+            let hasLocalArtwork: boolean
+            let hasUnrenderableCover = false
+            const firstPlaylistTrackId = folderPlaylistRef.current?.tracks[0]?.id
+            const edge = job.trackId === firstPlaylistTrackId ? 512 : Math.max(256, job.maxEdge) as 256 | 512
+            if (edge <= 256) {
               const currentTrackId = logicalCursorTrackIdRef.current
                 ?? presentationTrackRef.current?.id
                 ?? latestAudioStateRef.current?.currentTrackId
-              const pixels = await schedulePlaylistCoverPixels({
+              loadingSource = false
+              const pixels = await scheduleTrackThumbnail({
                 clientId: job.clientId,
-                filePath: coverFilePath,
-                maxEdge: job.trackId === firstPlaylistTrackId ? 512 : job.maxEdge,
+                sourcePath: job.sourcePath,
+                maxEdge: 256,
                 windowGeneration: job.backendGeneration,
               }, {
                 priority: job.trackId === currentTrackId ? 0
                   : libraryVisibleRef.current && visiblePlaylistTrackIdsRef.current.includes(job.trackId) ? 1 : 2,
                 isCurrent: () => !jobIsStale(),
               })
-              if (!pixels) return
               if (jobIsStale()) return
-              coverThumbnail = playlistCoverImageFromPixels(pixels)
-              try {
-                await decodePlaylistCover(coverThumbnail)
-              } catch (error) {
-                URL.revokeObjectURL(coverThumbnail.src)
-                throw error
+              hasLocalArtwork = pixels !== null
+              if (pixels) coverThumbnail = playlistCoverImageFromPixels(pixels)
+            } else {
+              const coverSource = await probeAudioPlaylistCover(job.sourcePath)
+              if (jobIsStale()) return
+              if (coverSource.id !== job.trackId
+                || normalizeAudioSourcePath(coverSource.sourcePath) !== job.normalizedSourcePath) {
+                throw new Error('封面来源与播放列表歌曲不一致')
               }
+              loadingSource = false
+              hasLocalArtwork = coverSource.coverArt !== null
+              const coverFilePath = coverSource.coverArt?.filePath
+              hasUnrenderableCover = hasLocalArtwork && !coverFilePath
+              if (coverFilePath) {
+                const currentTrackId = logicalCursorTrackIdRef.current
+                  ?? presentationTrackRef.current?.id
+                  ?? latestAudioStateRef.current?.currentTrackId
+                const pixels = await schedulePlaylistCoverPixels({
+                  clientId: job.clientId, filePath: coverFilePath, maxEdge: edge,
+                  windowGeneration: job.backendGeneration,
+                }, {
+                  priority: job.trackId === currentTrackId ? 0
+                    : libraryVisibleRef.current && visiblePlaylistTrackIdsRef.current.includes(job.trackId) ? 1 : 2,
+                  isCurrent: () => !jobIsStale(),
+                })
+                if (!pixels || jobIsStale()) return
+                coverThumbnail = playlistCoverImageFromPixels(pixels)
+              }
+            }
+            if (coverThumbnail) {
+              try { await decodePlaylistCover(coverThumbnail) }
+              catch (error) { URL.revokeObjectURL(coverThumbnail.src); throw error }
             }
 
             if (
@@ -1646,7 +1708,6 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
             const previousVisual = playlistTrackVisualsRef.current[job.trackId]
             const previousThumbnail = previousVisual?.coverThumbnail
             const previousEdge = playlistVisualEdgeRef.current.get(job.trackId)
-            const hasUnrenderableCover = coverSource.coverArt !== null && !coverFilePath
             if (hasUnrenderableCover) {
               // Keep the baseline's quiet data-URL-only state. Do not decode an
               // unchecked full-size original or advertise a successful upgrade.
@@ -1654,14 +1715,14 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
               if (previousThumbnail) return
             }
             const visual: PlaylistTrackVisual = {
-              id: coverSource.id,
-              coverTone: coverToneForTrackId(coverSource.id),
-              hasLocalArtwork: coverSource.coverArt !== null,
+              id: job.trackId,
+              coverTone: coverToneForTrackId(job.trackId),
+              hasLocalArtwork,
               coverThumbnail,
             }
             const nextVisuals = { ...playlistTrackVisualsRef.current, [job.trackId]: visual }
             playlistTrackVisualsRef.current = nextVisuals
-            if (!hasUnrenderableCover) playlistVisualEdgeRef.current.set(job.trackId, job.maxEdge)
+            if (!hasUnrenderableCover) playlistVisualEdgeRef.current.set(job.trackId, edge)
             playlistVisualSourceRef.current.set(job.trackId, job.normalizedSourcePath)
             setPlaylistTrackVisuals(nextVisuals)
             published = !hasUnrenderableCover
@@ -1687,12 +1748,13 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
                 }
               })
             }
-          })
+          })()
           .catch((error: unknown) => {
             const code = isAudioCoverPixelsError(error) ? error.code : 'WORKER_FAILED'
             const retryable = loadingSource
               ? (isAudioCommandError(error) ? error.code === 'INTERNAL_ERROR' && error.recoverable : code === 'WORKER_FAILED')
               : ['WORKER_FAILED', 'ALLOCATION_FAILED', 'STALE_REQUEST'].includes(code)
+                || (isAudioCommandError(error) && error.code === 'INTERNAL_ERROR' && error.recoverable)
             if (
               job.attempt >= 2
               || !retryable
@@ -1830,8 +1892,8 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     const heldOnly = (id: string) => heldIds.has(id) && !visibleIds.has(id) && id !== firstTrackId && id !== dockTrackId
     const targetEdgeFor = (id: string, edge: 128 | 256 | 512): 128 | 256 | 512 => {
       if (id === firstTrackId) return firstEdge
-      if (!foregroundIds.has(id)) return 128
-      return heldOnly(id) ? playlistVisualEdgeRef.current.get(id) ?? edge : edge
+      if (!foregroundIds.has(id)) return 256
+      return Math.max(256, heldOnly(id) ? playlistVisualEdgeRef.current.get(id) ?? edge : edge) as 256 | 512
     }
     // Reserve all screen items before offering spare bytes to prefetch. A dense
     // viewport can exceed the nominal cache target, but it never loses eligibility.

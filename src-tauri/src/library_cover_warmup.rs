@@ -7,7 +7,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::audio::{try_probe_playlist_cover_for_warmup, try_warm_playlist_cover_pixels};
+use crate::audio::try_warm_track_thumbnail;
 use crate::library_folders::LibraryError;
 
 const MAX_WARMUP_PATHS: usize = 256;
@@ -88,44 +88,25 @@ pub async fn warm(
             continue;
         }
         result.attempted += 1;
-        let cover = loop {
-            if !is_current(generation) {
-                result.cancelled = true;
-                break None;
-            }
-            match try_probe_playlist_cover_for_warmup(cache_dir.clone(), path.clone()).await {
-                Ok(Some(source)) => break Some(source),
-                Ok(None) => wait_for_foreground().await,
-                Err(error) => {
-                    tracing::debug!(operation = "library.cover_warmup.probe", path = %path, error = %error.message, "cover probe failed");
-                    result.failed += 1;
-                    break None;
-                }
-            }
-        };
-        if result.cancelled {
-            break;
-        }
-        let Some(cover) = cover else { continue };
-        let Some(file_path) = cover.cover_art.and_then(|art| art.file_path) else {
-            result.skipped += 1;
-            continue;
-        };
-        let edges: &[u32] = if max_edge == 256 { &[128, 256] } else { &[128] };
+        let edges: &[u32] = if max_edge == 256 { &[256] } else { &[128] };
         for &edge in edges {
             loop {
                 if !is_current(generation) {
                     result.cancelled = true;
                     break;
                 }
-                match try_warm_playlist_cover_pixels(cache_dir.clone(), file_path.clone(), edge)
-                    .await
-                {
-                    Ok(Some(persisted)) => {
-                        result.computed += 1;
-                        result.warmed += 1;
-                        if persisted {
-                            result.persisted += 1;
+                match try_warm_track_thumbnail(cache_dir.clone(), path.clone(), edge).await {
+                    Ok(Some(outcome)) => {
+                        if outcome.has_cover {
+                            result.computed += 1;
+                            result.warmed += 1;
+                            if outcome.persisted {
+                                result.persisted += 1;
+                            } else {
+                                result.failed += 1;
+                            }
+                        } else if outcome.persisted {
+                            result.skipped += 1;
                         } else {
                             result.failed += 1;
                         }
@@ -133,7 +114,7 @@ pub async fn warm(
                     }
                     Ok(None) => wait_for_foreground().await,
                     Err(error) => {
-                        tracing::debug!(operation = "library.cover_warmup.decode", path = %path, edge, error = %error.message, "cover decode failed");
+                        tracing::debug!(operation = "library.cover_warmup.thumbnail", path = %path, edge, error = %error.message, "cover thumbnail generation failed");
                         result.failed += 1;
                         break;
                     }

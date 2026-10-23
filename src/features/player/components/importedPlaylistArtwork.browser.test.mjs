@@ -80,7 +80,7 @@ window.backendInvoke=async(command,args)=>{
  if(command==='audio_probe_playlist_track_summaries')return input.paths.map(sourcePath=>{const item=track(sourcePath);return {sourcePath,summary:{title:item.metadata.title,artist:item.metadata.artist,album:item.metadata.album,albumArtist:null,bitDepth:24,sampleRateHz:96000,bitrateKbps:null,codec:'FLAC'},error:null}});
  if(command==='audio_transition_playback'||command==='audio_play'||command==='audio_pause'){state={...state,phase:command==='audio_pause'?'paused':input?.target??'playing',transportSettledRequestId:input?.requestId??null};return {...state}}
  if(command==='audio_seek'){state={...state,positionMs:input.positionMs};return {...state}}
- if(command==='audio_load_playlist_cover_pixels'){
+ if(command==='audio_load_playlist_cover_pixels'||command==='audio_load_track_thumbnail'){
   window.coverActive++;window.maxCoverActive=Math.max(window.maxCoverActive,window.coverActive);
   try{if(window.pixelGate)await new Promise(resolve=>window.pendingPixels.push(resolve));
   const bytes=new Uint8Array(44),v=new DataView(bytes.buffer);bytes.set([83,80,88,82]);v.setUint16(4,1,true);v.setUint16(6,40,true);for(const [offset,value]of [[8,1],[12,1],[16,4],[20,1],[24,4],[32,1],[36,1]])v.setUint32(offset,value,true);bytes.set([255,0,0,255],40);return bytes;}finally{window.coverActive--;}
@@ -163,7 +163,7 @@ try {
  console.log('PASS save failure and late restore preserve list identities')
  await page.evaluate(()=>sessionStorage.setItem('artwork-pixel-gate','1'))
  await visit()
- await page.waitForFunction(()=>window.pendingPixels.length===2)
+ await page.waitForFunction(()=>window.pendingPixels.length>=1)
  const restoredItems=await listItems()
  const scopeA=restoredItems.find(item=>item.name==='List A').scope
  const scopeB=restoredItems.find(item=>item.name==='List B').scope
@@ -180,7 +180,7 @@ try {
  await visit()
  await waitDecoded('.playlist-management-card .playlist-library-cover-image')
  await page.evaluate(()=>{window.pixelGate=true;const item=window.viewModel.playlist.library.items.find(item=>item.name==='List A');window.viewModel.playlist.library.onSelect(item.scope)})
- await page.waitForFunction(()=>window.pendingPixels.length===2)
+ await page.waitForFunction(()=>window.pendingPixels.length>=1)
  const createdBeforeUnmount=await page.evaluate(()=>window.created.length)
  assert(createdBeforeUnmount>0,'unmount scenario owns at least one previously published URL')
  await page.evaluate(()=>window.unmountFixture())

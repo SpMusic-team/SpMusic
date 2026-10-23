@@ -96,8 +96,10 @@ window.backendInvoke = async (command, args) => {
   if (command === 'audio_begin_playlist_cover_window') return 1;
   if (command === 'audio_probe_playlist_durations') return input.paths.map((sourcePath) => ({ sourcePath, durationMs: 180000, error: null }));
   if (command === 'audio_probe_playlist_track_summaries') return input.paths.map((sourcePath) => { const item = trackFor(sourcePath); return { sourcePath, summary: { title: item.metadata.title, artist: item.metadata.artist, album: item.metadata.album, albumArtist: null, bitDepth: 24, sampleRateHz: 96000, bitrateKbps: null, codec: 'FLAC' }, error: null } });
-  if (command === 'audio_load_playlist_cover_pixels') {
-    const id = (input.filePath.split('/').at(-1) || '').replace('.png', '');
+  if (command === 'audio_load_playlist_cover_pixels' || command === 'audio_load_track_thumbnail') {
+    const id = command === 'audio_load_track_thumbnail'
+      ? byPath.get(input.sourcePath)?.id ?? ''
+      : (input.filePath.split('/').at(-1) || '').replace('.png', '');
     if (!byId.has(id)) throw { code: 'NO_COVER_ART', message: 'fixture has no artwork', recoverable: false };
     const size = 8, stride = size * 4, pixelLen = stride * size;
     const bytes = new Uint8Array(40 + pixelLen); const view = new DataView(bytes.buffer);
@@ -151,7 +153,7 @@ async function open() {
   const page = await context.newPage()
   page.setDefaultTimeout(20000)
   const errors = []
-  const isEnvNoise = (text) => /websocket|vite\] failed to connect|ERR_BLOCKED_BY_LOCAL_NETWORK_ACCESS_CHECKS/i.test(text)
+  const isEnvNoise = (text) => /websocket|vite\] failed to connect|Failed to send error to Vite server|ERR_BLOCKED_BY_LOCAL_NETWORK_ACCESS_CHECKS/i.test(text)
   page.on('pageerror', (error) => { if (!isEnvNoise(error.message)) errors.push(error.message) })
   page.on('console', (message) => { if (message.type() === 'error' && !isEnvNoise(message.text())) errors.push('console: ' + message.text()) })
   await page.route('**/src/features/player/services/audioCommands.ts*', (route) => route.fulfill({ contentType: 'text/javascript', body: service }))

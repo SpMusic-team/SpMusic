@@ -100,6 +100,13 @@ export type AudioLoadPlaylistCoverPixelsInput = {
   windowGeneration: number
 }
 
+export type AudioLoadTrackThumbnailInput = {
+  clientId: string
+  sourcePath: string
+  maxEdge: 128 | 256
+  windowGeneration: number
+}
+
 export type AudioCoverPixels = {
   width: number
   height: number
@@ -457,6 +464,12 @@ export async function loadAudioPlaylistCoverPixels(
   input: AudioLoadPlaylistCoverPixelsInput,
 ): Promise<AudioCoverPixels> {
   const response = await invoke<ArrayBuffer | Uint8Array>('audio_load_playlist_cover_pixels', { input })
+  return parseCoverPixels(response, input.maxEdge)
+}
+
+export async function loadAudioTrackThumbnail(input: AudioLoadTrackThumbnailInput): Promise<AudioCoverPixels | null> {
+  const response = await invoke<ArrayBuffer | Uint8Array>('audio_load_track_thumbnail', { input })
+  if (coverPixelBytes(response).byteLength === 0) return null
   return parseCoverPixels(response, input.maxEdge)
 }
 

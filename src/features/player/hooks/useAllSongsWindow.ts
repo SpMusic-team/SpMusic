@@ -56,7 +56,7 @@ export function useAllSongsCoverUrl(store: AllSongsCoverStore, key: string, trac
   return useSyncExternalStore(subscribe, getSnapshot, () => undefined)
 }
 
-export function useAllSongsWindow(items: readonly AllSongsItem[], panelRef: RefObject<HTMLElement | null>, listRef: RefObject<HTMLDivElement | null>, enabled: boolean, metadataLoading: boolean, store: AllSongsCoverStore) {
+export function useAllSongsWindow(items: readonly AllSongsItem[], panelRef: RefObject<HTMLElement | null>, listRef: RefObject<HTMLDivElement | null>, enabled: boolean, metadataLoading: boolean, store: AllSongsCoverStore, warmCount = 8) {
   const runtimeRef = useRef<WindowRuntime | null>(null)
   const itemsByKeyRef = useRef<ReadonlyMap<string, AllSongsItem>>(new Map())
   const metadataLoadingRef = useRef(false)
@@ -195,7 +195,7 @@ export function useAllSongsWindow(items: readonly AllSongsItem[], panelRef: RefO
     const runtime = runtimeRef.current
     if (!enabled || !runtime) return
     if (!metadataLoading && !metadataLoadingRef.current) return
-    const firstScreen = new Set(items.filter((item) => item.available).slice(0, 8).map((item) => item.key))
+    const firstScreen = new Set(items.filter((item) => item.available).slice(0, warmCount).map((item) => item.key))
     for (const key of runtime.desired) if (!firstScreen.has(key)) runtime.desired.delete(key)
     for (const key of firstScreen) runtime.desired.add(key)
     runtime.pump()
@@ -204,7 +204,7 @@ export function useAllSongsWindow(items: readonly AllSongsItem[], panelRef: RefO
       return
     }
     metadataLoadingRef.current = true
-  }, [enabled, items, metadataLoading])
+  }, [enabled, items, metadataLoading, warmCount])
 
   useEffect(() => {
     if (!enabled) return

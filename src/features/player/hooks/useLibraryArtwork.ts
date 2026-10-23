@@ -60,7 +60,7 @@ async function dataUrlThumbnail(dataUrl: string, maxEdge: number): Promise<Playl
 
 // The library owns only cover I/O. Its independent client/window never changes
 // the active player's descriptors, metadata, artwork leases or playback queue.
-export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detail: AudioFolderPlaylist | null, visible: boolean) {
+export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detail: AudioFolderPlaylist | null, visible: boolean, warmTrackId?: string) {
   const runtimeRef = useRef<Runtime | null>(null)
   const [rows, setRows] = useState<ReadonlyMap<string, ArtworkRow>>(EMPTY_ROWS)
 
@@ -254,10 +254,27 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
     for (const key of runtime.detailPaths.keys()) if (!detailPaths.has(key)) runtime.detailPaths.delete(key)
     // Keep the first row's hero available while the table is still loading.
     const first = detail?.tracks[0]
-    if (first?.available) runtime.detailPaths.set(normalizeAudioSourcePath(first.sourcePath), 512)
+    if (first?.available && first.id !== warmTrackId) runtime.detailPaths.set(normalizeAudioSourcePath(first.sourcePath), 512)
     runtime.refresh()
     setRows(new Map([...runtime.cache].map(([key, entry]) => [key, entry.row])))
-  }, [sources, detail])
+  }, [sources, detail, warmTrackId])
+
+  useEffect(() => {
+    const runtime = runtimeRef.current
+    if (!runtime || !detail || !warmTrackId) return
+    const available = detail.tracks.filter((descriptor) => descriptor.available)
+    const currentIndex = available.findIndex((descriptor) => descriptor.id === warmTrackId)
+    const paths = new Map<string, 128 | 256 | 512>()
+    const first = available[0]
+    if (first && first.id !== warmTrackId) paths.set(normalizeAudioSourcePath(first.sourcePath), 512)
+    for (let distance = 1; distance <= MAX_DETAIL && paths.size < MAX_DETAIL; distance += 1) {
+      for (const descriptor of [available[currentIndex + distance], available[currentIndex - distance]]) {
+        if (descriptor && descriptor.id !== warmTrackId) paths.set(normalizeAudioSourcePath(descriptor.sourcePath), 256)
+      }
+    }
+    runtime.detailPaths = paths
+    runtime.refresh()
+  }, [detail, warmTrackId])
 
   const setVisibleTrackIds = useCallback((scopePath: string, trackIds: readonly string[], keepPersistentArtwork = false, showArtwork = true, demand?: PlaylistArtworkDemand) => {
     const runtime = runtimeRef.current

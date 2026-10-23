@@ -29,9 +29,9 @@ export function PlayerShell() {
       ? { view: 'category', categoryId: 'songs' } : { view: 'tracks' }
   })
   const [playlistArtworkSettled, setPlaylistArtworkSettled] = useState(false)
-  // Only the visible playlist table may prefetch its entire queue. Overview,
-  // all-songs and the player keep just the current dock/hero demand alive.
-  const player = useAudioPlayer(isPlaylistOpen && libraryRoute.view === 'tracks', playlistArtworkSettled)
+  // While the player is in front, prepare its source list for the cover's
+  // return path. The existing artwork lane keeps this work optional and bounded.
+  const player = useAudioPlayer(isPlaylistOpen && libraryRoute.view === 'tracks', playlistArtworkSettled, !isPlaylistOpen)
   useGlobalShortcuts(player)
   const [isDevAudioToolsOpen, setIsDevAudioToolsOpen] = useState(false)
   const [selectedBrowsedScope, setBrowsedScope] = useState<string | null>(null)
@@ -41,9 +41,12 @@ export function PlayerShell() {
   const browsedPlaylist = librarySources.find((item) => playlistScope(item) === requestedBrowsedScope)
   const browsedScope = browsedPlaylist ? requestedBrowsedScope : null
   const isBrowsingActive = !browsedPlaylist || browsedScope === player.activePlaylistScope
+  const playbackSourcePlaylist = librarySources.find((item) => playlistScope(item) === player.playbackSourceScope)
+  const warmSource = !isPlaylistOpen && player.startupRestoreReady && player.playbackQueueKind !== 'all-songs'
+    && player.playbackSourceScope !== player.activePlaylistScope ? playbackSourcePlaylist ?? null : null
   const { rows: libraryArtwork, setVisibleTrackIds: setLibraryVisibleTrackIds, retainSourcePaths: retainLibrarySourcePaths } = useLibraryArtwork(librarySources,
-    isPlaylistOpen && libraryRoute.view === 'tracks' && !isBrowsingActive ? browsedPlaylist ?? null : null,
-    isPlaylistOpen)
+    isPlaylistOpen && libraryRoute.view === 'tracks' && !isBrowsingActive ? browsedPlaylist ?? null : warmSource,
+    isPlaylistOpen || Boolean(warmSource), warmSource ? player.track?.id : undefined)
   const artworkDetailPath = browsedPlaylist?.sourcePath
   const handleLibraryVisibleTrackIds = useCallback((trackIds: readonly string[], keepPersistentArtwork?: boolean, showArtwork?: boolean, demand?: PlaylistArtworkDemand) => {
     if (artworkDetailPath) setLibraryVisibleTrackIds(artworkDetailPath, trackIds, keepPersistentArtwork, showArtwork, demand)
@@ -464,6 +467,7 @@ export function PlayerShell() {
       {(isAvailable) => (
         <PlayerSurface
           viewModel={viewModel}
+          preloadAllSongs={Boolean(!isPlaylistOpen && player.startupRestoreReady && player.playbackQueueKind === 'all-songs')}
           onPlaylistNavigationSettled={() => setPlaylistArtworkSettled(true)}
           startupReady={player.startupRestoreReady && (startupRowsReady || startupRowsTimedOut)}
           startupError={startupRowsTimedOut}

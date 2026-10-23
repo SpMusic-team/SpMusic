@@ -28,6 +28,10 @@ const baseFixture = runInNewContext(literal[1], { dependency })
 // Preserve the original transport for existing cases. A reload represents a
 // fresh native player process while its registered library sources survive.
 const fixture = baseFixture.replace("c:[['c-0','/audio/c/0.flac']],", "c:new URLSearchParams(location.search).has('multiPlaylist')?[['c-0','/audio/c/0.flac'],['c-1','/audio/c/1.flac'],['c-2','/audio/c/2.flac']]:[['c-0','/audio/c/0.flac']],")
+ .replace('coverArt:null}}};', "coverArt:window.returnWarmupArtwork&&['a','b','c','idxZ'].includes(row.id.split('-')[0])?{mimeType:'image/png',filePath:'/covers/'+row.id+'.png',dataUrl:null,byteLen:64}:null}}};")
+ .replace("window.backendInvoke=async(command,args)=>{", "window.returnWarmupArtwork=new URLSearchParams(location.search).has('warmupArtwork');window.backendInvoke=async(command,args)=>{")
+ .replace("input.path.startsWith('/audio/many/')?{mimeType:'image/png',filePath:'/covers/'+result.id+'.png',dataUrl:null,byteLen:64}:null", "window.returnWarmupArtwork?result.metadata.coverArt:input.path.startsWith('/audio/many/')?{mimeType:'image/png',filePath:'/covers/'+result.id+'.png',dataUrl:null,byteLen:64}:null")
+ .replace("if(!input.filePath.startsWith('/covers/many-'))", "if(!input.filePath.startsWith('/covers/many-')&&!window.returnWarmupArtwork)")
  .replace("ReactDOM.createRoot(document.getElementById('root'))", `
 const nativeInvoke=window.backendInvoke;
 window.restoreLoadGate=sessionStorage.getItem('spmusic.return-test.restore-gate')==='1';
@@ -75,7 +79,7 @@ const browser = await chromium.launch({ headless: true, channel: 'msedge' })
 const categories = ['songs', 'folder', 'folders', 'album', 'artist', 'album-artist', 'genre', 'year', 'composer', 'playlists', 'streams', 'queue', 'bookmarks', 'most-played', 'highest-rated', 'lowest-rated', 'recent-played', 'recent-added', 'long-tracks']
 const report = []
 
-async function open(startup = 'media-library', width = 1440, { reduced = true, multiPlaylist = false } = {}) {
+async function open(startup = 'media-library', width = 1440, { reduced = true, multiPlaylist = false, warmupArtwork = false } = {}) {
   const page = await browser.newPage({ viewport: { width, height: 1000 }, reducedMotion: reduced ? 'reduce' : 'no-preference' })
   page.setDefaultTimeout(15000)
   const errors = []
@@ -87,7 +91,8 @@ async function open(startup = 'media-library', width = 1440, { reduced = true, m
   await page.route('**/__return_real_surface.js', route => route.fulfill({ contentType: 'text/javascript', body: realSurface }))
   await page.route('**/__return_fixture.js', route => route.fulfill({ contentType: 'text/javascript', body: fixture }))
   await page.route('**/__return_test*', route => route.fulfill({ contentType: 'text/html', body: html }))
-  await page.goto(origin + '/__return_test' + (multiPlaylist ? '?multiPlaylist=1' : ''))
+  const query = new URLSearchParams({ ...(multiPlaylist ? { multiPlaylist: '1' } : {}), ...(warmupArtwork ? { warmupArtwork: '1' } : {}) })
+  await page.goto(origin + '/__return_test' + (query.size ? '?' + query : ''))
   await page.waitForFunction(() => Boolean(window.viewModel))
   return { page, errors }
 }
@@ -218,6 +223,185 @@ async function restartChecks() {
   }
 }
 
+async function startupCoverWarmupChecks() {
+  for (const kind of ['all-songs', 'playlist']) {
+    if (process.env.SPMUSIC_RETURN_WARMUP_KIND && process.env.SPMUSIC_RETURN_WARMUP_KIND !== kind) continue
+    const { page, errors } = await open('player', 1440, { multiPlaylist: true, warmupArtwork: true })
+    try {
+      await prepareRestartSource(page, kind)
+      if (kind === 'all-songs') {
+        await page.evaluate(() => {
+          const folders = JSON.parse(localStorage.getItem('spmusic.return-test.native-folders') ?? '[]')
+          localStorage.setItem('spmusic.return-test.native-folders', JSON.stringify([...folders, '/audio/idxZ']))
+        })
+      }
+      await page.reload()
+      await restartReady(page, kind === 'all-songs' ? 'a-0' : 'c-0')
+      const warmIds = kind === 'all-songs' ? ['idxZ'] : ['c-1', 'c-2']
+      const warmPaths = kind === 'all-songs' ? ['/audio/idxZ/0.flac'] : ['/audio/c/1.flac', '/audio/c/2.flac']
+      const warmCovers = kind === 'all-songs' ? ['/covers/idxZ.png'] : ['/covers/c-1.png', '/covers/c-2.png']
+      assert.equal((await routeSnapshot(page)).route.view, kind === 'all-songs' ? 'category' : 'tracks')
+      assert.equal((await page.evaluate(() => window.viewModel.playlist.isOpen)), false, 'the source list stays closed during warmup')
+      if (kind === 'all-songs') {
+        await page.waitForFunction(() => window.viewModel.playlist.library.allSongs.some(item => item.trackId === 'idxZ'))
+        assert.equal((await routeSnapshot(page)).queue.includes('idxZ'), false, 'source-only row is outside the restored queue')
+      } else await page.waitForFunction(ids => ids.every(id => Boolean(window.viewModel.queue.tracks.find(track => track.id === id)?.coverThumbnail)), warmIds)
+      await page.waitForFunction(covers => covers.every(cover => window.calls.some(call => call.command === 'audio_load_playlist_cover_pixels' && call.input.filePath === cover)), warmCovers)
+      const before = await page.evaluate(({ paths, covers }) => ({
+        sourceOpen: window.viewModel.playlist.isOpen,
+        probes: window.calls.filter(call => call.command === 'audio_probe_playlist_cover' && paths.includes(call.input.path)).map(call => call.input.path),
+        pixels: window.calls.filter(call => call.command === 'audio_load_playlist_cover_pixels' && covers.includes(call.input.filePath)).map(call => call.input.filePath),
+        queue: window.viewModel.queue.tracks.map(track => track.id),
+        current: window.viewModel.playback.track?.id,
+      }), { paths: warmPaths, covers: warmCovers })
+      assert.equal(before.sourceOpen, false, 'non-current source covers warm before the source opens')
+      assert.equal(before.probes.length, warmPaths.length, 'each non-current source cover is probed before the cover click')
+      assert.equal(before.pixels.length, warmPaths.length, 'each non-current source cover has decoded pixels before the cover click')
+      await page.evaluate(paths => {
+        window.sourceCoverFrames = []
+        const selectors = paths.map(path => path.includes('/idxZ/')
+          ? `.all-songs-list [data-song-key="${path}"]`
+          : `.playlist-grid:not(.all-songs-list) [data-playlist-track-id="${path.split('/').slice(-2).join('-').replace('.flac', '')}"]`)
+        const sample = () => {
+          const cards = selectors.map(selector => document.querySelector(selector))
+          if (cards.every(Boolean)) window.sourceCoverFrames.push(cards.map(card => card.dataset.coverState))
+          if (window.sourceCoverFrames.length < 3) requestAnimationFrame(sample)
+        }
+        requestAnimationFrame(sample)
+      }, warmPaths)
+      await page.locator('.cover-collapse-button').first().click()
+      await page.waitForFunction(() => window.viewModel.playlist.isOpen)
+      await page.waitForFunction(() => window.sourceCoverFrames.length >= 1)
+      const firstFrame = await page.evaluate(() => window.sourceCoverFrames[0])
+      assert(firstFrame.every(state => state === 'ready'), 'the first painted source-list cards have decoded covers')
+      for (const [index, id] of warmIds.entries()) {
+        const card = kind === 'all-songs'
+          ? page.locator(`.all-songs-list [data-song-key="${warmPaths[index]}"]`)
+          : page.locator(`.playlist-grid:not(.all-songs-list) [data-playlist-track-id="${id}"]`)
+        await card.waitFor({ state: 'visible' })
+        assert.equal(await card.getAttribute('data-cover-state'), 'ready', id + ': first source entry has a real cover')
+      }
+      assert.equal((await routeSnapshot(page)).current, before.current, 'cover navigation keeps the playing song')
+      assert.deepEqual((await routeSnapshot(page)).queue, before.queue, 'cover navigation keeps the queue')
+      assert.deepEqual(errors, [])
+      report.push('startup '+kind+' source cover warmup before return')
+      console.log('PASS startup '+kind+' source cover warmup before return')
+    } catch (error) {
+      console.log('STARTUP_COVER_WARMUP_FAILURE', JSON.stringify({ kind, ...await page.evaluate(() => ({
+        folders: JSON.parse(localStorage.getItem('spmusic.return-test.native-folders') ?? '[]'),
+        allSongs: window.viewModel?.playlist.library.allSongs.map(item => ({ id: item.trackId, sourcePath: item.sourcePath })),
+        queue: window.viewModel?.queue.tracks.map(track => track.id),
+        calls: window.calls?.filter(call => ['library_get_folders', 'library_scan_folder', 'audio_probe_playlist_cover', 'audio_load_playlist_cover_pixels'].includes(call.command)).map(call => ({ command: call.command, input: call.input })),
+      })) }))
+      throw error
+    } finally { await page.close() }
+  }
+}
+
+async function searchedSongCoverWarmupChecks() {
+  const { page, errors } = await open('media-library')
+  try {
+    await importChoice(page, 'many')
+    const scope = await page.evaluate(() => window.viewModel.playlist.library.items.find(item => item.scope.includes('/audio/many'))?.scope)
+    assert(scope, 'long folder source is registered')
+    await page.evaluate(scope => window.viewModel.playlist.library.onSelect(scope), scope)
+    await page.waitForFunction(() => window.viewModel.playlist.library.route.view === 'tracks' && window.viewModel.playlist.tracks.length === 50)
+    await page.locator('.playlist-search-button:visible').first().click()
+    await page.locator('.playlist-filter-input').fill('many-49')
+    await page.waitForFunction(() => document.querySelectorAll('.playlist-grid:not(.all-songs-list) .playlist-card').length === 1)
+    await page.locator('.playlist-grid:not(.all-songs-list) [data-playlist-track-id="many-49"]').click()
+    await page.waitForFunction(() => window.viewModel.playback.track?.id === 'many-49' && !window.viewModel.playback.isSelectionPending && !window.viewModel.playback.isAudioBusy)
+    await page.locator('.playlist-playback-dock .playlist-playback-track-button').click()
+    await page.waitForFunction(() => !window.viewModel.playlist.isOpen)
+    const nearby = [47, 48].map(index => ({ id: `many-${index}`, path: `/audio/many/${index}.flac`, cover: `/covers/many-${index}.png` }))
+    await page.waitForFunction(rows => rows.every(row => window.calls.some(call => call.command === 'audio_load_playlist_cover_pixels' && call.input.filePath === row.cover)), nearby)
+    const before = await page.evaluate(rows => ({
+      sourceOpen: window.viewModel.playlist.isOpen,
+      current: window.viewModel.playback.track?.id,
+      queue: window.viewModel.queue.tracks.map(track => track.id),
+      probes: rows.map(row => window.calls.filter(call => call.command === 'audio_probe_playlist_cover' && call.input.path === row.path).length),
+      pixels: rows.map(row => window.calls.filter(call => call.command === 'audio_load_playlist_cover_pixels' && call.input.filePath === row.cover).length),
+    }), nearby)
+    assert.equal(before.sourceOpen, false, 'nearby source art loads while the player remains in front')
+    assert.deepEqual(before.queue, ['many-49'], 'the searched playback queue is only the matched song')
+    assert(before.probes.every(count => count > 0), 'source-only neighbors were probed before return')
+    assert(before.pixels.every(count => count > 0), 'source-only neighbors decoded before return')
+    await page.evaluate(ids => {
+      window.sourceCoverFrames = []
+      const selectors = ids.map(id => `.playlist-grid:not(.all-songs-list) [data-playlist-track-id="${id}"]`)
+      const sample = () => {
+        const cards = selectors.map(selector => document.querySelector(selector))
+        if (cards.every(Boolean)) window.sourceCoverFrames.push(cards.map(card => card.dataset.coverState))
+        if (window.sourceCoverFrames.length < 3) requestAnimationFrame(sample)
+      }
+      requestAnimationFrame(sample)
+    }, nearby.map(row => row.id))
+    await page.locator('.cover-collapse-button').first().click()
+    await page.waitForFunction(() => window.viewModel.playlist.isOpen && window.sourceCoverFrames.length > 0)
+    const firstFrame = await page.evaluate(() => window.sourceCoverFrames[0])
+    assert(firstFrame.every(state => state === 'ready'), 'the first source-list frame has decoded nearby covers')
+    const after = await routeSnapshot(page)
+    assert.equal(after.route.view, 'tracks')
+    assert.equal(after.ids.length, 50, 'cover returns to the complete source, beyond the one-song search queue')
+    assert.equal(after.current, before.current, 'cover navigation keeps the selected song')
+    assert.deepEqual(after.queue, before.queue, 'cover navigation keeps the filtered playback queue')
+    assert.deepEqual(errors, [])
+    report.push('searched far song warms nearby complete-source covers before return')
+    console.log('PASS searched far song warms nearby complete-source covers before return')
+  } finally { await page.close() }
+}
+
+async function searchedAllSongsCoverWarmupChecks() {
+  const { page, errors } = await open('media-library')
+  try {
+    await importChoice(page, 'many')
+    await category(page, 'songs')
+    await page.waitForFunction(() => window.viewModel.playlist.library.allSongs.length === 50)
+    await page.getByRole('button', { name: '搜索所有歌曲', exact: true }).click()
+    await page.getByRole('searchbox', { name: '搜索歌曲标题、艺术家或专辑' }).fill('many-49')
+    await page.waitForFunction(() => document.querySelectorAll('.all-songs-list .playlist-card').length === 1)
+    await page.locator('.all-songs-list [data-song-key="/audio/many/49.flac"]').click()
+    await page.waitForFunction(() => window.viewModel.playback.track?.id === 'many-49' && !window.viewModel.playback.isSelectionPending && !window.viewModel.playback.isAudioBusy)
+    await page.locator('.playlist-playback-dock .playlist-playback-track-button').click()
+    await page.waitForFunction(() => !window.viewModel.playlist.isOpen)
+    const nearby = [47, 48].map(index => ({ id: `many-${index}`, path: `/audio/many/${index}.flac`, cover: `/covers/many-${index}.png` }))
+    await page.waitForFunction(rows => rows.every(row => window.calls.some(call => call.command === 'audio_load_playlist_cover_pixels' && call.input.filePath === row.cover)), nearby)
+    const before = await page.evaluate(rows => ({
+      sourceOpen: window.viewModel.playlist.isOpen,
+      current: window.viewModel.playback.track?.id,
+      queue: window.viewModel.queue.tracks.map(track => track.id),
+      probes: rows.map(row => window.calls.filter(call => call.command === 'audio_probe_playlist_cover' && call.input.path === row.path).length),
+      pixels: rows.map(row => window.calls.filter(call => call.command === 'audio_load_playlist_cover_pixels' && call.input.filePath === row.cover).length),
+    }), nearby)
+    assert.equal(before.sourceOpen, false, 'source-only neighbors warm on the player')
+    assert.deepEqual(before.queue, ['many-49'], 'search creates a one-song playback snapshot')
+    assert(before.probes.every(count => count > 0), 'far source neighbors were probed before cover return')
+    assert(before.pixels.every(count => count > 0), 'far source neighbors had decoded pixels before cover return')
+    await page.evaluate(rows => {
+      window.sourceCoverFrames = []
+      const selectors = rows.map(row => `.all-songs-list [data-song-key="${row.path}"]`)
+      const sample = () => {
+        const cards = selectors.map(selector => document.querySelector(selector))
+        if (cards.every(Boolean)) window.sourceCoverFrames.push(cards.map(card => card.dataset.coverState))
+        if (window.sourceCoverFrames.length < 3) requestAnimationFrame(sample)
+      }
+      requestAnimationFrame(sample)
+    }, nearby)
+    await page.locator('.cover-collapse-button').first().click()
+    await page.waitForFunction(() => window.viewModel.playlist.isOpen && window.sourceCoverFrames.length > 0)
+    const firstFrame = await page.evaluate(() => window.sourceCoverFrames[0])
+    assert(firstFrame.every(state => state === 'ready'), 'the first full-source frame has decoded far-neighbor covers')
+    const after = await routeSnapshot(page)
+    assert.deepEqual(after.route, { view: 'category', categoryId: 'songs' })
+    assert.equal(await page.locator('.all-songs-list .playlist-card').count(), 50, 'return shows the complete source, not the filtered search result')
+    assert.equal(after.current, before.current)
+    assert.deepEqual(after.queue, before.queue)
+    assert.deepEqual(errors, [])
+    report.push('searched all-songs far source neighbors warm before return')
+    console.log('PASS searched all-songs far source neighbors warm before return')
+  } finally { await page.close() }
+}
+
 const startupNavigationState = page => page.evaluate(() => {
   const dock=document.querySelector('.control-dock'),next=dock?.querySelector('.next-button'),previous=dock?.querySelector('.previous-button')
   const playback=window.viewModel.playback
@@ -286,7 +470,12 @@ async function startupNavigationChecks() {
 }
 
 try {
-  if(process.env.SPMUSIC_RETURN_STARTUP_NAVIGATION_ONLY==='1')await startupNavigationChecks()
+  if(process.env.SPMUSIC_RETURN_WARMUP_ONLY==='1')await startupCoverWarmupChecks()
+  else if(process.env.SPMUSIC_RETURN_SEARCH_WARMUP_ONLY==='1') {
+    await searchedAllSongsCoverWarmupChecks()
+    await searchedSongCoverWarmupChecks()
+  }
+  else if(process.env.SPMUSIC_RETURN_STARTUP_NAVIGATION_ONLY==='1')await startupNavigationChecks()
   else {
   if(process.env.SPMUSIC_RETURN_RESTART_ONLY!=='1') {
   const { page, errors } = await open()
@@ -351,6 +540,8 @@ try {
   await compact.page.close()
   }
   await restartChecks()
+  await searchedAllSongsCoverWarmupChecks()
+  await searchedSongCoverWarmupChecks()
   }
   console.log(JSON.stringify({ passed: true, baselineRef: baselineRef ?? null, browser: browser.version(), report }, null, 2))
 } finally {

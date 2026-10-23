@@ -14,7 +14,8 @@ import { LyricsPanel } from '@/features/player/components/LyricsPanel'
 import { PlaybackInfoButton } from '@/features/player/components/PlaybackInfoButton'
 import { MediaLibraryPanel } from '@/features/player/components/MediaLibraryPanel'
 import { PlaylistLibraryPanel } from '@/features/player/components/PlaylistLibraryPanel'
-import { createAllSongsCoverStore, disposeAllSongsCoverStore } from '@/features/player/hooks/useAllSongsWindow'
+import { compareByQuickIndex } from '@/features/player/model/quickIndex'
+import { createAllSongsCoverStore, disposeAllSongsCoverStore, useAllSongsWindow } from '@/features/player/hooks/useAllSongsWindow'
 import { LibraryChromeTransitionContext, useLibraryChromeTransition } from '@/features/player/hooks/useLibraryChromeTransition'
 import { LibraryDockContext, type LibraryDockBinding } from '@/features/player/hooks/useLibraryDockBinding'
 import { PlaylistPlaybackDock } from '@/features/player/components/PlaylistPlaybackDock'
@@ -51,6 +52,7 @@ export type PlayerSurfaceDevAudioTools = {
 
 export type PlayerSurfaceProps = {
   viewModel: PlayerUiViewModel
+  preloadAllSongs?: boolean
   onPlaylistNavigationSettled?: () => void
   startupReady?: boolean
   startupError?: boolean
@@ -613,6 +615,7 @@ let lastCoverDragGestureId = 0
 
 export function PlayerSurface({
   viewModel,
+  preloadAllSongs = false,
   onPlaylistNavigationSettled,
   startupReady = true,
   startupError = false,
@@ -622,6 +625,32 @@ export function PlayerSurface({
   const [allSongsCoverStore] = useState(createAllSongsCoverStore)
   useEffect(() => () => disposeAllSongsCoverStore(allSongsCoverStore), [allSongsCoverStore])
   const { playback, timeline, volume, queue, playlist, feedback } = viewModel
+  const preloadPanelRef = useRef<HTMLElement | null>(null)
+  const preloadListRef = useRef<HTMLDivElement | null>(null)
+  const warmSongs = useMemo(() => {
+    // Search playback stores a filtered queue, but returning through the cover
+    // opens the full Songs source. Use that source's title order, not queue order.
+    const ordered = [...(playlist.library?.allSongs ?? [])]
+      .sort((left, right) => compareByQuickIndex(left.track.title, right.track.title))
+    const currentIndex = ordered.findIndex((item) => item.trackId === playlist.currentTrackId)
+    const nearby = [] as typeof ordered
+    if (currentIndex >= 0) {
+      // The Songs cards consume this separate store, including the current
+      // card, so its player cover cannot stand in for this prepared resource.
+      nearby.push(ordered[currentIndex])
+      for (let distance = 1; distance <= 4; distance += 1) {
+        if (ordered[currentIndex + distance]) nearby.push(ordered[currentIndex + distance])
+        if (ordered[currentIndex - distance]) nearby.push(ordered[currentIndex - distance])
+      }
+    }
+    const seen = new Set<string>()
+    return [...nearby, ...ordered.slice(0, 8)].filter((item) => {
+      if (seen.has(item.key)) return false
+      seen.add(item.key)
+      return true
+    }).slice(0, 16)
+  }, [playlist.library?.allSongs, playlist.currentTrackId])
+  useAllSongsWindow(warmSongs, preloadPanelRef, preloadListRef, preloadAllSongs, true, allSongsCoverStore, 16)
   const { appearance } = useAppearance()
   const appearanceMotion = useAppearanceMotion()
   const trackCardSettleDeadlineMs = useMemo(() => {

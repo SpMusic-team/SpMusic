@@ -388,7 +388,7 @@ function audioStatusText(
   }
 }
 
-export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed = true) {
+export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed = true, playerVisible = false) {
   const [queueTracks, setQueueTracks] = useState<TrackSummary[]>([])
   const [feedbackByTrackId, setFeedbackByTrackId] = useState<Record<string, TrackFeedback>>({})
   const [shuffleMode, setShuffleMode] = useState<ShuffleMode>(readShuffleMode)
@@ -424,6 +424,10 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
   const [detailsPending, setDetailsPending] = useState(false)
   const [contentState, setContentState] = useState<PlayerContentState>('empty')
   const [folderPlaylist, setFolderPlaylist] = useState<AudioFolderPlaylist | null>(null)
+  // Only a direct playlist owns the queue's artwork. Playback snapshots can
+  // differ from their source list, whose independent library cache warms it.
+  const sourceArtworkAllowed = backgroundArtworkAllowed || (playerVisible && startupRestoreReady
+    && folderPlaylist !== null && !playbackQueueOrigin(folderPlaylist))
   // Descriptors of a playlist whose first track is still loading. The duration
   // channel reads this so the whole list is measured in parallel with that load
   // instead of waiting for the full scope activation.
@@ -493,8 +497,8 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
   const keepPersistentPlaylistArtworkRef = useRef(false)
   const showPlaylistArtworkRef = useRef(true)
   const libraryVisibleRef = useRef(libraryVisible)
-  const backgroundArtworkAllowedRef = useRef(backgroundArtworkAllowed)
-  useLayoutEffect(() => { backgroundArtworkAllowedRef.current = backgroundArtworkAllowed }, [backgroundArtworkAllowed])
+  const backgroundArtworkAllowedRef = useRef(sourceArtworkAllowed)
+  useLayoutEffect(() => { backgroundArtworkAllowedRef.current = sourceArtworkAllowed }, [sourceArtworkAllowed])
   const playlistMetadataGenerationRef = useRef(0)
   const playlistMetadataWindowKeyRef = useRef<string | null>(null)
   const playlistTrackMetadataRef = useRef<Readonly<Record<string, PlaylistTrackMetadata>>>({})
@@ -1801,12 +1805,23 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       : showArtwork ? orderedDesiredIds
         : orderedDesiredIds.filter((id) => id === firstTrackId || id === dockTrackId)
     const foregroundIds = new Set(foregroundArtworkIds)
-    // Selection, rather than mounting the playlist page, starts cover work.
-    // Every available track is eligible at thumbnail quality; viewport work
-    // stays first and the existing byte ledger bounds background admission.
-    const artworkDesiredIds = [...foregroundArtworkIds, ...(libraryVisibleRef.current && backgroundArtworkAllowedRef.current ? playlist?.tracks ?? [] : [])
-      .filter((descriptor) => descriptor.available && !foregroundIds.has(descriptor.id))
-      .map((descriptor) => descriptor.id)]
+    // On the player, the cover opens this list at the current track. Warm its
+    // neighboring cards first; the existing byte ledger bounds the rest.
+    const backgroundDescriptors = backgroundArtworkAllowedRef.current ? playlist?.tracks ?? [] : []
+    const currentIndex = backgroundDescriptors.findIndex((item) => item.id === currentPlaybackTrackId)
+    const backgroundIds: string[] = []
+    if (currentIndex < 0 || libraryVisibleRef.current) {
+      for (const descriptor of backgroundDescriptors) backgroundIds.push(descriptor.id)
+    } else {
+      for (let distance = 1; distance < backgroundDescriptors.length; distance += 1) {
+        const next = backgroundDescriptors[currentIndex + distance]
+        const previous = backgroundDescriptors[currentIndex - distance]
+        if (next) backgroundIds.push(next.id)
+        if (previous) backgroundIds.push(previous.id)
+      }
+    }
+    const artworkDesiredIds = [...foregroundArtworkIds, ...backgroundIds.filter((id) =>
+      descriptorsById.get(id)?.available && !foregroundIds.has(id))]
     const currentDemand = showArtwork ? playlistArtworkDemandRef.current : undefined
     const visibleIds = new Set(showArtwork ? currentDemand?.visibleIds ?? trackIds : [])
     const heldIds = new Set(showArtwork ? currentDemand?.heldIds ?? [] : [])
@@ -1983,15 +1998,15 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
   }, [libraryVisible])
 
   useEffect(() => {
-    if (!backgroundArtworkAllowed) {
+    if (!sourceArtworkAllowed) {
       if (playlistOptionalIdleRef.current !== null) cancelOptionalArtworkIdle(playlistOptionalIdleRef.current)
       playlistOptionalIdleRef.current = null
       playlistOptionalIdleReadyRef.current = false
     }
     playlistVisualWindowKeyRef.current = null
     refreshPlaylistVisualDemandRef.current()
-    if (backgroundArtworkAllowed) pumpPlaylistMetadataHydration()
-  }, [backgroundArtworkAllowed, pumpPlaylistMetadataHydration])
+    if (sourceArtworkAllowed) pumpPlaylistMetadataHydration()
+  }, [sourceArtworkAllowed, pumpPlaylistMetadataHydration])
 
   useEffect(() => {
     const retireLoadedReplacement = (src: string) => {

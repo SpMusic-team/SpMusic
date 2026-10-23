@@ -170,8 +170,9 @@ try {
 
     const {page: sourceBlocked,errors:sourceBlockedErrors}=await open()
     await select(sourceBlocked,{sourceGate:true})
-    await sourceBlocked.waitForFunction(()=>window.pendingSources.length===2)
+    await sourceBlocked.waitForFunction(()=>window.pendingSources.length===1)
     await sourceBlocked.evaluate(()=>window.player.setVisiblePlaylistTrackIds(window.readFixture().ids,true,true,{visibleIds:window.readFixture().ids,prefetchIds:[],coverCssPixels:128,dpr:1}))
+    await sourceBlocked.waitForFunction(()=>window.pendingSources.length===2)
     await sourceBlocked.waitForFunction(()=>window.readFixture().metadata.length===12)
     assert.equal(await sourceBlocked.evaluate(()=>window.readFixture().ready.length),0,'metadata completion does not wait for cover source')
     await sourceBlocked.evaluate(()=>{window.config.sourceGate=false;window.pendingSources.splice(0).forEach(resolve=>resolve())})
@@ -236,6 +237,7 @@ try {
 
     const {page: stale, errors: staleErrors} = await open()
     await select(stale,{decodeGate:true})
+    await stale.evaluate(()=>window.player.setVisiblePlaylistTrackIds(window.readFixture().ids,true,true,{visibleIds:window.readFixture().ids,prefetchIds:[],coverCssPixels:128,dpr:1}))
     await stale.waitForFunction(() => window.pendingDecodes.length===2)
     const oldUrls=await stale.evaluate(() => [...window.created])
     assert.equal(oldUrls.length,2,'decode work is inside the bounded worker slots')
@@ -246,6 +248,7 @@ try {
     assert(replacement.visualIds.every(id=>id.startsWith('b-')))
     assert(oldUrls.every(src=>replacement.revoked.includes(src)))
     await select(stale,{scope:'c',decodeGate:true})
+    await stale.evaluate(()=>window.player.setVisiblePlaylistTrackIds(window.readFixture().ids,true,true,{visibleIds:window.readFixture().ids,prefetchIds:[],coverCssPixels:128,dpr:1}))
     await stale.waitForFunction(()=>window.pendingDecodes.length===2)
     await stale.evaluate(() => {window.unmountFixture();window.pendingDecodes.splice(0).forEach(p=>p.resolve())})
     await stale.waitForFunction(()=>window.created.every(src=>window.revoked.includes(src)))
@@ -267,6 +270,7 @@ try {
 
     const {page: upgrade,errors:upgradeErrors}=await open()
     await select(upgrade,{decodeGate:true})
+    await upgrade.evaluate(()=>window.player.setVisiblePlaylistTrackIds(['a-1'],true,true,{visibleIds:['a-1'],prefetchIds:[],coverCssPixels:128,dpr:1}))
     await upgrade.waitForFunction(()=>window.pendingDecodes.length===2)
     await upgrade.evaluate(()=>window.player.setVisiblePlaylistTrackIds(['a-1'],true,true,{visibleIds:['a-1'],prefetchIds:[],coverCssPixels:256,dpr:1}))
     await upgrade.evaluate(()=>window.pendingDecodes.shift().resolve())

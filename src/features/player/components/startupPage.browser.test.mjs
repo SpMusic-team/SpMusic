@@ -138,15 +138,22 @@ try {
   await navigation.page.getByRole('button', { name: '更多媒体库操作' }).click()
   await navigation.page.getByRole('menuitem', { name: '打开播放界面', exact: true }).click()
   await assertView(navigation.page, 'player')
+  // This header control collapses the player, so it restores the overview
+  // visited above. The dock's explicit active-list shortcut is tested separately
+  // in playerReturnNavigation.browser.test.mjs with a real active queue.
   await navigation.page.getByRole('button', { name: '播放列表', exact: true }).first().click()
-  await navigation.page.getByRole('button', { name: '返回播放列表管理', exact: true }).waitFor()
+  await assertView(navigation.page, 'media-library')
+  await navigation.page.locator('.media-library-category[data-category-id="playlists"]').click()
+  await navigation.page.locator('.playlist-management-heading h2').filter({ hasText: /^播放列表$/ }).waitFor()
+  await navigation.page.getByRole('button', { name: '返回媒体库', exact: true }).click()
+  await assertView(navigation.page, 'media-library')
   assert.equal(await stored(navigation.page), 'media-library')
   assert.deepEqual(await navigation.page.evaluate(() => window.startupTestWrites), [], 'ordinary navigation does not save startup preference')
   await navigation.page.reload()
   await assertView(navigation.page, 'media-library')
   assert.deepEqual(navigation.errors, [])
   await navigation.page.close()
-  report.push('media library → player → playlist navigation works and does not overwrite startup preference')
+  report.push('media library → player → overview restores the last page; explicit playlist category navigation does not overwrite startup preference')
 
   const blockedRead = await open('media-library', true)
   await assertView(blockedRead.page, 'player')

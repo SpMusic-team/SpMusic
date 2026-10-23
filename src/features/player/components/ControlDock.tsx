@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type F
 import { AnimatePresence, animate, motion, type Easing } from 'motion/react'
 import { Button } from '@/components/ui/button'
 import { Slider } from '@/components/ui/slider'
-import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
+import { useAppearance, useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { appCopy } from '@/features/player/model/playerCopy'
 import {
   nextRepeatMode,
@@ -358,6 +358,15 @@ export const ProgressControl = memo(function ProgressControl({
   }, [timeline.visualClock, updateVisualProgress])
 
   useLayoutEffect(() => {
+    // Selection can cancel a preview without unmounting this slider. Drop the
+    // old gesture before a delayed keyup/pointerup can seek the newly selected song.
+    if (timelineInteractionRef.current === 'previewing' && timeline.interaction === 'following') {
+      pointerPreviewRef.current = false
+      keyboardPreviewRef.current = false
+      pressedPointerIdRef.current = null
+      pressEndRef.current = null
+      progressSliderRef.current?.removeAttribute('data-thumb-pressed')
+    }
     timelineInteractionRef.current = timeline.interaction
     timelineDurationRef.current = timeline.durationSeconds
     if (timeline.interaction !== 'following') lastVisualSecondRef.current = Math.floor(timeline.positionSeconds)
@@ -457,7 +466,23 @@ export function ControlDock({
   onPlayToggle,
 }: ControlDockProps) {
   const systemIcons = useSystemIcons()
+  const { appearance } = useAppearance()
   const appearanceMotion = useAppearanceMotion()
+  const selectionIntent = playback.selectionVisualIntent
+  const selectionKey = selectionIntent
+    ? `${selectionIntent.sequence}:${selectionIntent.requestId}:${selectionIntent.targetTrackId}` : null
+  // Observe new requests rather than track IDs: repeat-one keeps the same ID,
+  // and mounting the player must not replay an old controller transition.
+  const [switchState, setSwitchState] = useState<{ observedKey: string | null; activeKey: string | null }>({
+    observedKey: selectionKey,
+    activeKey: null,
+  })
+  const intentOwnsSelection = Boolean(selectionIntent && selectionIntent.sequence === playback.selectionActivitySequence
+    && (playback.isSelectionPending || selectionIntent.targetTrackId === playback.track?.id))
+  if (selectionKey && selectionKey !== switchState.observedKey && intentOwnsSelection) {
+    setSwitchState({ observedKey: selectionKey, activeKey: selectionKey })
+  }
+  const activeSwitchKey = intentOwnsSelection && switchState.activeKey === selectionKey ? selectionKey : null
   const disabled = !playback.track
   const playbackCommandBusy = playback.isAudioBusy
     || playback.isTransportBusy
@@ -494,10 +519,17 @@ export function ControlDock({
       />
       <p className="audio-status" aria-live="polite">{playback.statusText}</p>
       <ProgressControl
-        key={playback.track?.id ?? 'empty'}
         timeline={timeline}
         disabled={commandBusy || disabled}
         isPlaying={playback.isPlaying}
+        trackSwitchMotion={activeSwitchKey ? {
+          key: activeSwitchKey,
+          startRatio: selectionIntent?.progressStartRatio ?? 0,
+          durationSeconds: appearanceMotion.trackCardCommitDurationSeconds * appearance.motion.durationScale,
+          ease: appearanceMotion.trackCardCommitEase,
+          disabled: appearanceMotion.disabled,
+          ready: selectionIntent?.source !== 'automatic' || !playback.isSelectionPending,
+        } : undefined}
       />
       <div className="control-row">
         <div className="control-auxiliary control-auxiliary-start"><IconButton icon={systemIcons.audioWave} label={appCopy.controls.openAudio} disabled={commandBusy} onClick={playback.onOpenAudio} /></div>

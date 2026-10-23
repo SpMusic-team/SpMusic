@@ -26,6 +26,7 @@ import {
   type ShuffleMode,
 } from '@/features/player/model/playbackModes'
 import { appCopy } from '@/features/player/model/playerCopy'
+import { playbackQueueOrigin, type PlaybackQueuePlaylist, type PlaybackQueueSelection } from '@/features/player/model/playbackQueue'
 import {
   clearPlaybackSession,
   persistPlaybackSession,
@@ -1174,10 +1175,34 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     return scope
   }, [libraryFolderPlaylists, ensurePlaylistSummaries])
 
-  const activatePlaylistScope = useCallback((playlist: AudioFolderPlaylist) => {
+  const activatePlaylistScope = useCallback((playlist: AudioFolderPlaylist, summarySeed?: Readonly<Record<string, PlaylistTrackRow>>) => {
     const nextScope = playlistScope(playlist)
+    const sourcePlaylist = playbackQueueOrigin(playlist)?.sourcePlaylist
+    if (sourcePlaylist && !sessionPlaylistDescriptorsRef.current.has(playlistScope(sourcePlaylist))) {
+      const sourceScope = playlistScope(sourcePlaylist)
+      sessionPlaylistDescriptorsRef.current.set(sourceScope, sourcePlaylist)
+      setSessionPlaylists((previous) => previous.some((item) => playlistScope(item) === sourceScope)
+        ? previous : [...previous, sourcePlaylist])
+      ensurePlaylistSummaries(sourceScope, sourcePlaylist)
+    }
+    // Snapshots only own the live playback queue. Keep source descriptors and
+    // user playlists intact, and retire the previous snapshot's metadata lane.
+    const previousPlaylist = folderPlaylistRef.current
+    const previousScope = previousPlaylist ? playlistScope(previousPlaylist) : null
+    if (previousScope && previousScope !== nextScope && playbackQueueOrigin(previousPlaylist)) {
+      sessionPlaylistDescriptorsRef.current.delete(previousScope)
+      playlistSummaryRunRef.current.delete(previousScope)
+      const nextRows = { ...playlistSummaryRowsRef.current }
+      const nextStatuses = { ...playlistSummaryStatusRef.current }
+      delete nextRows[previousScope]
+      delete nextStatuses[previousScope]
+      playlistSummaryRowsRef.current = nextRows
+      playlistSummaryStatusRef.current = nextStatuses
+      setPlaylistTrackSummariesByScope(nextRows)
+      setPlaylistSummaryStatusByScope(nextStatuses)
+    }
     // Store descriptors only; thumbnail object URLs belong to the active scope.
-    if (playlist.sourceKind !== 'folder') {
+    if (playlist.sourceKind !== 'folder' && !playbackQueueOrigin(playlist)) {
       setSessionPlaylists((previous) => previous.some((item) => playlistScope(item) === nextScope)
         ? previous.map((item) => playlistScope(item) === nextScope ? playlist : item)
         : [...previous, playlist])
@@ -1185,7 +1210,12 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     sessionPlaylistDescriptorsRef.current.set(nextScope, playlist)
     // Start the read-only tag pass with the list itself, so the table is already
     // populated when the user looks at it. Cached rows are not cleared here.
-    ensurePlaylistSummaries(nextScope)
+    if (summarySeed) {
+      playlistSummaryRowsRef.current = { ...playlistSummaryRowsRef.current, [nextScope]: summarySeed }
+      setPlaylistTrackSummariesByScope(playlistSummaryRowsRef.current)
+    }
+    if (summarySeed && playlist.tracks.every((item) => summarySeed[item.id])) commitPlaylistSummaryStatus(nextScope, 'ready')
+    else ensurePlaylistSummaries(nextScope)
     // The queue keeps neutral rows (filename title, unknown artist/album). The
     // tag rows reach both panels through the player view model, so `queueTracks`
     // is never rewritten by the summary pass.
@@ -1281,7 +1311,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     setFolderPlaylist(playlist)
     // The real activation owns the duration source now.
     setPendingDurationPlaylist(null)
-  }, [ensurePlaylistCoverSession, ensurePlaylistSummaries, playlistArtworkGrace])
+  }, [commitPlaylistSummaryStatus, ensurePlaylistCoverSession, ensurePlaylistSummaries, playlistArtworkGrace])
 
   const clearPresentationTrack = useCallback((nextContentState: Exclude<PlayerContentState, 'track'>) => {
     presentationTrackRef.current = null
@@ -3194,7 +3224,10 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     if (!sessionRestorePendingRef.current || sessionRestoreStartedRef.current) return
     const saved = savedSessionRef.current
     if (!saved) return
-    if (saved.playlist.sourceKind === 'm3u8' && playlistRestorePending) return
+    // This effect owns one restore transaction. Settle its registry dependency
+    // before issuing any native request, so a late registry result cannot run
+    // cleanup halfway through restoring another source and abandon its queue.
+    if (playlistRestorePending) return
     sessionRestoreStartedRef.current = true
     if (selectionRequestIdRef.current !== 0) {
       sessionRestorePendingRef.current = false
@@ -3746,6 +3779,50 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     return true
   }, [findPlaylistForScope, loadPlaylistTrackOrSkip, activatePlaylistScope, prefetchAdjacentPlaylistTracks])
 
+  const selectPlaybackQueueTrack = useCallback(async (selection: PlaybackQueueSelection, trackId: string) => {
+    if (audioSelectionInProgressRef.current || transportOperationInProgress()
+      || timelineInteractionRef.current === 'seeking') return false
+    const sources = new Map<string, Map<string, AudioFolderTrackRef>>()
+    const tracks: AudioFolderTrackRef[] = []
+    const summaries: Record<string, PlaylistTrackRow> = {}
+    for (const entry of selection.entries) {
+      let source = sources.get(entry.scope)
+      if (!source) {
+        const playlist = findPlaylistForScope(entry.scope)
+        if (!playlist) return false
+        source = new Map(playlist.tracks.map((item) => [item.id, item]))
+        sources.set(entry.scope, source)
+      }
+      const descriptor = source.get(entry.trackId)
+      // A stale UI snapshot must never silently become a different sequence.
+      if (!descriptor) return false
+      tracks.push({ ...descriptor })
+      const summary = playlistSummaryRowsRef.current[entry.scope]?.[entry.trackId]
+      if (summary) summaries[entry.trackId] = summary
+    }
+    const index = tracks.findIndex((item) => item.id === trackId)
+    if (index < 0) return false
+    const source = selection.sourceScope ? findPlaylistForScope(selection.sourceScope) : undefined
+    if (selection.kind === 'playlist' && !source) return false
+    const id = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
+    const name = selection.kind === 'all-songs' ? '所有歌曲' : playlistDisplayName(source!)
+    const playlist: PlaybackQueuePlaylist = {
+      sourceKind: 'custom', sourcePath: `queue:${selection.kind}:${id}`,
+      sourceName: name, directoryPath: '', directoryName: name, selectedIndex: index, tracks,
+      playbackQueue: selection.kind === 'all-songs' ? { kind: 'all-songs' }
+        : { kind: 'playlist', sourceScope: selection.sourceScope,
+          ...(source?.sourceKind === 'custom' && !playbackQueueOrigin(source)
+            ? { sourcePlaylist: { ...source, tracks: source.tracks.map((item) => ({ ...item })) } } : {}) },
+    }
+    const expectedRequestId = selectionRequestIdRef.current + 1
+    const loaded = await loadPlaylistTrackOrSkip(playlist, index, true, 1, false, false, false, 'queue')
+    if (!loaded || selectionRequestIdRef.current !== expectedRequestId
+      || latestAudioStateRef.current?.currentTrackId !== trackId) return false
+    activatePlaylistScope(playlist, summaries)
+    prefetchAdjacentPlaylistTracks(trackId)
+    return true
+  }, [findPlaylistForScope, loadPlaylistTrackOrSkip, activatePlaylistScope, prefetchAdjacentPlaylistTracks])
+
   function refreshAudioState() {
     if (
       audioSelectionInProgressRef.current
@@ -3825,6 +3902,10 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     createPlaylist,
     clearSelectedLibraryFolders,
     activePlaylistScope: folderPlaylist ? playlistScope(folderPlaylist) : null,
+    playbackSourceScope: playbackQueueOrigin(folderPlaylist)?.sourceScope
+      ?? (folderPlaylist && !playbackQueueOrigin(folderPlaylist) ? playlistScope(folderPlaylist) : null),
+    playbackQueueKind: playbackQueueOrigin(folderPlaylist)?.kind,
+    selectPlaybackQueueTrack,
     selectSessionPlaylistTrack,
     playlistDurationScope: folderPlaylist
       ? playlistScope(folderPlaylist)

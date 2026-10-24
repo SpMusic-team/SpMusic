@@ -47,10 +47,12 @@ const fixture = `
 import React from '${dependency('react.js')}';
 import ReactDOM from '${dependency('react-dom_client.js')}';
 import { useAudioPlayer } from '/src/features/player/hooks/useAudioPlayer.ts';
+import {usePlaylistLibraryDurations} from '/src/features/player/hooks/usePlaylistDuration.ts';
 import { PlaylistCoverImage } from '/src/features/player/components/PlaylistCoverImage.tsx';
 import { isPlaylistCoverDecoded } from '/src/features/player/model/playlistCoverReadiness.ts';
 window.trace=[];window.config={count:12,scope:'a',pixelGate:false,decodeGate:false,failures:0,decodeFailures:0,noCover:[],unavailable:[],hydrationGate:false,sourceGate:false,sourceFailures:0,dataUrlOnly:[],sourceMismatch:false};
 window.calls=[];window.pendingPixels=[];window.pendingDecodes=[];window.pendingHydrations=[];window.pendingSources=[];window.created=[];window.revoked=[];
+const EMPTY_TRACKS=[],EMPTY_LIBRARY=[],EMPTY_DURATIONS=new Map();
 let state={phase:'idle',generation:null,currentTrackId:null,positionMs:0,durationMs:null,volume:.5,error:null,transportTransition:null,transportSettledRequestId:null};
 let generation=0,windowGeneration=0,active=0;
 window.maxActive=0;window.liveListeners=0;
@@ -82,6 +84,7 @@ window.backendInvoke=async(command,args)=>{
   return {id:window.config.sourceMismatch?'wrong-source-id':result.id,sourcePath:result.sourcePath,coverArt:result.metadata.coverArt};
  }
  if(command==='audio_probe_playlist_track_summaries')return input.paths.map(sourcePath=>{const parts=sourcePath.replaceAll('\\\\','/').split('/'),i=Number(parts.at(-1).split('.')[0]);return {sourcePath,summary:{title:'Song '+i,artist:'Artist',album:'Album',albumArtist:null,bitDepth:24,sampleRateHz:96000,bitrateKbps:null,codec:'FLAC'},error:null}});
+ if(command==='audio_probe_playlist_durations')return input.paths.map(sourcePath=>({sourcePath,durationMs:180000,error:null}));
  if(command==='audio_begin_playlist_cover_window')return ++windowGeneration;
  if(command==='audio_load_track_thumbnail'||command==='audio_load_playlist_cover_pixels'){
   if(command==='audio_load_track_thumbnail'){
@@ -99,6 +102,7 @@ const root=ReactDOM.createRoot(document.getElementById('root'));
 window.unmountFixture=()=>root.unmount();
 function Fixture(){
  const [open,setOpen]=React.useState(false);const player=useAudioPlayer(open);
+ const durations=usePlaylistLibraryDurations(player.playlistDurationTracks??EMPTY_TRACKS,player.playlistDurationScope,EMPTY_LIBRARY,EMPTY_DURATIONS);window.durationData=durations;
  window.player=player;window.showFixture=()=>setOpen(true);window.hideFixture=()=>setOpen(false);
  window.readFixture=()=>({ids:player.queueTracks.map(t=>t.id),visualIds:Object.keys(player.playlistTrackVisuals),ready:Object.entries(player.playlistTrackVisuals).filter(([,v])=>v.coverThumbnail&&isPlaylistCoverDecoded(v.coverThumbnail)).map(([id])=>id),metadata:Object.keys(player.playlistTrackMetadata)});
  React.useLayoutEffect(()=>{if(open)window.trace.push({type:'paint',images:[...document.querySelectorAll('img')].map(e=>({src:e.src,loaded:e.dataset.loaded})),placeholders:document.querySelectorAll('[data-placeholder]').length,time:performance.now()})});
@@ -162,29 +166,32 @@ try {
   if (process.env.SPMUSIC_PRELOAD_BASELINE !== '1') {
     const {page: metadataBlocked,errors:metadataBlockedErrors}=await open()
     await select(metadataBlocked,{hydrationGate:true})
+    const metadataHydrationsBefore=await metadataBlocked.evaluate(()=>window.calls.filter(call=>call.command==='audio_hydrate_track').length)
     await metadataBlocked.evaluate(()=>window.player.setVisiblePlaylistTrackIds(window.readFixture().ids,true,true,{visibleIds:window.readFixture().ids,prefetchIds:[],coverCssPixels:128,dpr:1}))
-    await metadataBlocked.waitForFunction(()=>window.pendingHydrations.length>0)
     await waitReady(metadataBlocked,12)
-    assert((await metadataBlocked.evaluate(()=>window.readFixture().metadata.length))<12,'cover completion does not wait for metadata')
+    assert.equal(await metadataBlocked.evaluate(()=>window.calls.filter(call=>call.command==='audio_hydrate_track').length),metadataHydrationsBefore,'viewport artwork adds no full metadata reads beyond genuine player prefetch')
+    await metadataBlocked.waitForFunction(()=>Object.keys(window.player.playlistTrackSummariesByScope[window.player.activePlaylistScope]??{}).length===12&&window.durationData.durationsByScope.get(window.player.playlistDurationScope)?.size===12)
+    const preparedRows=await metadataBlocked.evaluate(()=>({summary:window.player.playlistTrackSummariesByScope[window.player.activePlaylistScope]['a-1'],duration:window.durationData.durationsByScope.get(window.player.playlistDurationScope).get('/audio/a/1.flac')}))
+    assert.equal(preparedRows.summary.title,'Song 1');assert.equal(preparedRows.summary.artist,'Artist');assert.equal(preparedRows.summary.album,'Album');assert.equal(preparedRows.duration,180000,'duration lane supplies the real per-song duration')
     const visualFields=await metadataBlocked.evaluate(()=>Object.keys(window.player.playlistTrackVisuals['a-1']).sort())
     assert.deepEqual(visualFields,['coverThumbnail','coverTone','hasLocalArtwork','id'],'visual results cannot overwrite text or duration')
-    await metadataBlocked.evaluate(()=>{window.config.hydrationGate=false;window.pendingHydrations.splice(0).forEach(resolve=>resolve())})
-    await metadataBlocked.waitForFunction(()=>window.readFixture().metadata.length===12)
     assert.deepEqual(metadataBlockedErrors,[])
-    report.push({case:'visual completion is independent of blocked metadata',ready:12,visualFields})
+    report.push({case:'summary/duration/artwork complete without full player hydration',ready:12,visualFields,preparedRows})
     await metadataBlocked.close()
 
     const {page: sourceBlocked,errors:sourceBlockedErrors}=await open()
     await select(sourceBlocked,{sourceGate:true})
     await sourceBlocked.waitForFunction(()=>window.pendingSources.length===1)
+    const sourceHydrationsBefore=await sourceBlocked.evaluate(()=>window.calls.filter(call=>call.command==='audio_hydrate_track').length)
     await sourceBlocked.evaluate(()=>window.player.setVisiblePlaylistTrackIds(window.readFixture().ids,true,true,{visibleIds:window.readFixture().ids,prefetchIds:[],coverCssPixels:128,dpr:1}))
     assert.equal(await sourceBlocked.evaluate(()=>window.pendingSources.length),1,'shared native lane waits behind the gated thumbnail')
-    await sourceBlocked.waitForFunction(()=>window.readFixture().metadata.length===12)
-    assert.equal(await sourceBlocked.evaluate(()=>window.readFixture().ready.length),0,'metadata completion does not wait for cover source')
+    await sourceBlocked.waitForFunction(()=>Object.keys(window.player.playlistTrackSummariesByScope[window.player.activePlaylistScope]??{}).length===12&&window.durationData.durationsByScope.get(window.player.playlistDurationScope)?.size===12)
+    assert.equal(await sourceBlocked.evaluate(()=>window.readFixture().ready.length),0,'summary/duration completion does not wait for cover source')
+    assert.equal(await sourceBlocked.evaluate(()=>window.calls.filter(call=>call.command==='audio_hydrate_track').length),sourceHydrationsBefore,'source blocking cannot add full player hydration through viewport registration')
     await sourceBlocked.evaluate(()=>{window.config.sourceGate=false;window.pendingSources.splice(0).forEach(resolve=>resolve())})
     await waitReady(sourceBlocked,12)
     assert.deepEqual(sourceBlockedErrors,[])
-    report.push({case:'metadata completion is independent of blocked source',metadata:12})
+    report.push({case:'summary/duration completion is independent of blocked source',rows:12})
     await sourceBlocked.close()
 
     const {page: sourceRetry,errors:sourceRetryErrors}=await open()

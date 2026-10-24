@@ -31,6 +31,8 @@ type PlaylistPanelProps = {
   entryPosition?: PlayerPlaylistViewModel['entryPosition']
   library?: PlaylistLibraryViewModel
   tracks: PlaylistTrackItemViewModel[]
+  artworkSource?: PlayerPlaylistViewModel['artworkSource']
+  fallbackArtworkSource?: PlayerPlaylistViewModel['fallbackArtworkSource']
   unavailableTrackIds?: ReadonlySet<string>
   playlistName?: string
   metadataStatus?: PlayerPlaylistViewModel['metadataStatus']
@@ -90,8 +92,10 @@ type PlaylistCardIndex = {
 
 // Build only when the DOM or layout changes. CSS can place more columns than
 // data-layout-columns says, so the actual card offsets define the rows.
+// Every layout uses the same validated grid geometry; irregular rows still
+// fall back to live measurements instead of assuming a fixed card height.
 function buildPlaylistCardIndex(grid: HTMLElement, panel: HTMLElement): PlaylistCardIndex | null {
-  if (grid.dataset.layoutLevel !== '0' || getComputedStyle(grid).display !== 'grid') return null
+  if (getComputedStyle(grid).display !== 'grid') return null
   const cards = [...grid.querySelectorAll<HTMLElement>('[data-playlist-track-id]')]
   if (cards.length === 0 || cards.length !== grid.children.length) return null
   const rows: PlaylistCardRow[] = []
@@ -254,6 +258,8 @@ export function PlaylistPanel({
   onOpenAudio,
   onTrackSelect,
   onVisibleTrackIdsChange,
+  artworkSource,
+  fallbackArtworkSource,
   onEntrySettled,
   playback,
   timeline,
@@ -346,6 +352,7 @@ export function PlaylistPanel({
       || track.artist.toLowerCase().includes(query) || track.album.toLowerCase().includes(query))
   }, [query, tracks])
   const filteredTrackIdsKey = useMemo(() => filteredTracks.map(track => track.id).join('\u0000'), [filteredTracks])
+  const orderedTrackIds = useMemo(() => filteredTrackIdsKey ? filteredTrackIdsKey.split('\u0000') : [], [filteredTrackIdsKey])
   const firstFilteredTrackId = filteredTracks[0]?.id
   const contentShapes = useMemo(() => new Map(filteredTracks.map(track => [track.id, playlistCardContentShape(track)])), [filteredTracks])
   const { level: layoutLevel, layout, announcement: layoutAnnouncement } = useCollectionLayout({
@@ -398,8 +405,8 @@ export function PlaylistPanel({
   // must not revoke its covers; playlist replacement/player disposal do that.
 
   const handleActivate = useCallback((trackId: string) => {
-    onTrackSelect?.(trackId, filteredTracks.map((track) => track.id))
-  }, [onTrackSelect, filteredTracks])
+    onTrackSelect?.(trackId, orderedTrackIds)
+  }, [onTrackSelect, orderedTrackIds])
 
   const handleToggleSelect = useCallback((trackId: string) => {
     setSelectedIds((previous) => {
@@ -608,10 +615,10 @@ export function PlaylistPanel({
         cardIndex = buildPlaylistCardIndex(grid, panel)
         indexDirty = false
       }
-      const candidates = layout.level === 0 && cardIndex && transformingCards.size === 0
+      const candidates = cardIndex && transformingCards.size === 0
         ? indexedPlaylistCandidates(cardIndex, grid, panel, panelRect.top - panelRect.height, viewportBottom + panelRect.height)
         : null
-      if (layout.level === 0 && cardIndex && !candidates && transformingCards.size === 0
+      if (cardIndex && !candidates && transformingCards.size === 0
         && !grid.querySelector('.playlist-card:active')) indexDirty = true
       const orderedEntries = (candidates ?? [...grid.querySelectorAll<HTMLElement>('[data-playlist-track-id]')]
         .map((card, domIndex) => ({ card, domIndex })))
@@ -765,6 +772,8 @@ export function PlaylistPanel({
     <PlaylistCard
       key={track.id}
       track={track}
+      artworkSource={artworkSource}
+      fallbackArtworkSource={fallbackArtworkSource}
       index={index}
       current={track.id === currentTrackId}
       unavailable={unavailable.has(track.id)}
@@ -783,7 +792,7 @@ export function PlaylistPanel({
       onActivate={handleActivate}
       onToggleSelect={handleToggleSelect}
     />
-  )), [filteredTracks, currentTrackId, unavailable, onTrackSelect, selectMode, selectedIds,
+  )), [filteredTracks, artworkSource, fallbackArtworkSource, currentTrackId, unavailable, onTrackSelect, selectMode, selectedIds,
     artworkWindowIds, showExtendedMetadata, handleActivate, handleToggleSelect,
     contentShapes, failedCoverSources, handleCoverFailed])
 

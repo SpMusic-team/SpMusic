@@ -1,4 +1,5 @@
 import type { MediaLibraryCategoryId, MediaLibraryRoute } from '@/features/player/model/mediaLibraryCategories'
+import type { PlaylistArtworkSource } from '@/features/player/model/playlistArtworkStore'
 import type { RepeatMode, ShuffleMode } from '@/features/player/model/playbackModes'
 import type { PlaylistDurationStatus } from '@/features/player/model/playlistDuration'
 import type { Track, TrackArtwork, TrackArtworkPrefetchCandidate, TrackFeedback, TrackSummary } from '@/features/player/model/playerTypes'
@@ -172,6 +173,8 @@ export type PlaylistLibraryViewModel = {
 }
 
 export type PlayerPlaylistViewModel = {
+  artworkSource?: PlaylistArtworkSource
+  fallbackArtworkSource?: PlaylistArtworkSource
   entryPosition?: Readonly<{ requestId: number; target: 'top' | 'current-track' }>
   library?: PlaylistLibraryViewModel
   playbackDockTrack?: PlaylistTrackItemViewModel

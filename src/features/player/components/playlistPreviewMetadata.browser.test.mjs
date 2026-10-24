@@ -1,6 +1,6 @@
 // Actual useAudioPlayer and audioCommands parser; reuse the existing native
-// transport fixture. The cache is evicted through public viewport hydration,
-// never by patching refs or injecting placeholder metadata into parent props.
+// transport fixture. Viewport movement must preserve prepared metadata without
+// invoking the full player-hydration lane or evicting it through scrolling.
 import assert from 'node:assert/strict'
 import {createRequire} from 'node:module'
 import {readFileSync,mkdirSync,writeFileSync} from 'node:fs'
@@ -67,34 +67,37 @@ function assertTagged(renders,id='a-1'){
  assert(target.every(r=>r.title==='Song '+scope+' '+index&&r.artist==='Artist '+scope&&r.album==='Album '+scope),'every same-target render retains hydrated metadata')
  assert(target.every(r=>r.sourcePath==='/audio/'+scope+'/'+index+'.flac'),'metadata remains bound to the exact source identity')
 }
-async function evictPreparedTrack(page){
+async function moveViewportAfterPrepare(page){
  await page.evaluate(async()=>{window.token=await window.playerApi.prepareTrackCardPreview(1);window.preparedAt=performance.now()})
  assert.equal(await page.evaluate(()=>window.token.track.title),'Song a 1','prepare returns actual hydrated tags')
+ const before=await page.evaluate(()=>window.calls.filter(c=>c.command==='audio_hydrate_track').length)
  await page.evaluate(()=>{
   window.playerApi.setVisiblePlaylistTrackIds(Array.from({length:11},(_,i)=>'a-'+(i+8)),false,false)
   window.config.hydrationGate=false;for(const job of window.hydrationPending.splice(0))job.resolve()
  })
- await page.waitForFunction(()=>Array.from({length:11},(_,i)=>'a-'+(i+8)).every(id=>window.playerApi.playlistTrackMetadata[id]))
- await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))))
+ await frames(page,5)
+ assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.command==='audio_hydrate_track').length),before,'viewport registration does not read full player metadata or churn its LRU')
+ assert.equal(await page.evaluate(()=>window.playerApi.playlistTrackMetadata['a-1']?.title),'Song a 1','real preview hydration publishes the correctly tagged row')
  const completions=await page.evaluate(()=>window.calls.filter(c=>c.command==='hydrate-complete'&&c.time>window.preparedAt).map(c=>c.path))
- assert(new Set(completions).size>=9,'at least nine other real hydrations write the eight-entry LRU after prepare')
+ // Previously queued genuine player artwork-prefetch hydration may complete
+ // here. The unchanged invocation count above proves the viewport added none.
  return completions
 }
 async function evidence(page,name){const data=await page.evaluate(()=>({token:window.token,preparedAt:window.preparedAt,calls:window.calls,renders:window.metadataRenders,accepted:window.commitAccepted}));writeFileSync(join(directory,label+'-'+name+'.json'),JSON.stringify(data,null,2));console.log('PREVIEW_METADATA_TRACE',JSON.stringify({name,preview:{title:data.token.track.title,artist:data.token.track.artist,album:data.token.track.album},accepted:data.accepted,tail:data.renders.slice(-4),hydrationsAfterPrepare:data.calls.filter(c=>c.command==='hydrate-complete'&&c.time>data.preparedAt).map(c=>c.path)}));return data}
 try{
- await check('hydrated preview survives actual LRU eviction and paused native load',async page=>{
-  await evictPreparedTrack(page)
+ await check('hydrated preview survives viewport movement and paused native load',async page=>{
+  await moveViewportAfterPrepare(page)
   await commitGated(page)
-  const data=await evidence(page,'lru-commit'),current=data.renders.at(-1)
+  const data=await evidence(page,'viewport-commit'),current=data.renders.at(-1)
   assert.equal(data.accepted,true,'same valid prepared token commits')
-  assert.equal(current.title,'Song a 1','LRU eviction cannot replace prepared tags with the filename')
+  assert.equal(current.title,'Song a 1','viewport movement cannot replace prepared tags with the filename')
   assert.equal(current.artist,'Artist a');assert.equal(current.album,'Album a')
   await finishLoad(page)
-  const confirmed=await evidence(page,'lru-confirmed');assertTagged(confirmed.renders)
+  const confirmed=await evidence(page,'viewport-confirmed');assertTagged(confirmed.renders)
   assert.equal(confirmed.renders.at(-1).currentAudioTitle,'Song a 1','confirmed native identity exposes the correct hydrated audio model')
  })
- await check('playing details error retains the prepared metadata after LRU eviction',async page=>{
-  await evictPreparedTrack(page);await page.evaluate(()=>window.config.deferDetails=true);await commitGated(page);await finishLoad(page)
+ await check('playing details error retains the prepared metadata after viewport movement',async page=>{
+  await moveViewportAfterPrepare(page);await page.evaluate(()=>window.config.deferDetails=true);await commitGated(page);await finishLoad(page)
   await page.waitForFunction(()=>window.detailEvents.length===1&&window.playerApi.detailsPending)
   await page.evaluate(()=>{const ready=window.detailEvents[0];window.listeners.audio_track_details_changed({payload:{kind:'error',requestId:ready.requestId,generation:ready.generation,trackId:ready.track.id,error:{code:'UNREADABLE_FILE',message:'injected metadata read failure',recoverable:true}}})})
   await page.waitForFunction(()=>!window.playerApi.detailsPending);await frames(page)
@@ -109,7 +112,7 @@ try{
   assert(target.length>0&&target.every(r=>r.title==='1'&&r.artist==='本地音频'&&r.album==='本地音频'),'cross-track initialization never borrows previous tags')
  },{noTagsIndex:1})
  await check('complete authoritative null tags replace a formerly tagged preview',async page=>{
-  await evictPreparedTrack(page);await commitGated(page)
+  await moveViewportAfterPrepare(page);await commitGated(page)
   assertTagged((await evidence(page,'before-authority')).renders)
   // A complete native response can legitimately report no tags (for example
   // after the source file changes). It remains authoritative over the seed.
@@ -118,7 +121,7 @@ try{
   assert.equal(last.id,'a-1');assert.equal(last.title,'1');assert.equal(last.artist,'本地音频');assert.equal(last.album,'本地音频')
  })
  await check('new scope rejects an old token and ignores late old-generation details',async page=>{
-  await evictPreparedTrack(page);await page.evaluate(()=>window.config.deferDetails=true);await commitGated(page);await finishLoad(page)
+  await moveViewportAfterPrepare(page);await page.evaluate(()=>window.config.deferDetails=true);await commitGated(page);await finishLoad(page)
   await page.waitForFunction(()=>window.detailEvents.length===1)
   await page.evaluate(async()=>{window.staleToken=await window.playerApi.prepareTrackCardPreview(1)})
   assert.equal(await page.evaluate(()=>window.staleToken.targetTrackId),'a-2','scope switch invalidates a still-prepared token, not an already consumed one')

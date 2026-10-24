@@ -1,11 +1,14 @@
-import { memo, type CSSProperties, type SyntheticEvent } from 'react'
+import { memo, useCallback, useLayoutEffect, useSyncExternalStore, type CSSProperties, type SyntheticEvent } from 'react'
 import { useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { PlaylistCoverImage } from '@/features/player/components/PlaylistCoverImage'
 import { appCopy } from '@/features/player/model/playerCopy'
 import type { PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
+import type { PlaylistArtworkSource } from '@/features/player/model/playlistArtworkStore'
 
 type PlaylistCardProps = {
   track: PlaylistTrackItemViewModel
+  artworkSource?: PlaylistArtworkSource
+  fallbackArtworkSource?: PlaylistArtworkSource
   songKey?: string
   coverUrl?: string
   index?: number
@@ -43,8 +46,18 @@ function formatTrackClock(durationSeconds?: number): string | null {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
 }
 
+function useCardArtwork(source: PlaylistArtworkSource | undefined, trackId: string) {
+  const key = source?.keyByTrackId.get(trackId)
+  const subscribe = useCallback((listener: () => void) => key && source
+    ? source.store.subscribe(key, listener) : () => {}, [key, source])
+  const snapshot = useCallback(() => key && source ? source.store.getSnapshot(key) : undefined, [key, source])
+  return useSyncExternalStore(subscribe, snapshot, () => undefined)
+}
+
 export const PlaylistCard = memo(function PlaylistCard({
-  track,
+  track: baseTrack,
+  artworkSource,
+  fallbackArtworkSource,
   songKey,
   coverUrl,
   index = 0,
@@ -64,6 +77,21 @@ export const PlaylistCard = memo(function PlaylistCard({
   onActivate,
   onToggleSelect,
 }: PlaylistCardProps) {
+  const visual = useCardArtwork(artworkSource, baseTrack.id)
+  const fallback = useCardArtwork(fallbackArtworkSource, baseTrack.id)
+  const fallbackKey = fallbackArtworkSource?.keyByTrackId.get(baseTrack.id)
+  useLayoutEffect(() => {
+    if (!contentVisible || !artworkVisible || visual?.coverThumbnail || !fallback?.coverThumbnail
+      || !fallbackKey || !fallbackArtworkSource) return
+    // A newly displayed fallback needs a lease before paint even when its
+    // owner deliberately skips a shell-wide render for this thumbnail.
+    return fallbackArtworkSource.store.retain(fallbackKey)
+  }, [contentVisible, artworkVisible, visual?.coverThumbnail, fallback, fallbackKey, fallbackArtworkSource])
+  const track = artworkSource ? { ...baseTrack,
+    coverTone: visual?.coverTone ?? baseTrack.coverTone,
+    coverThumbnail: visual?.coverThumbnail ?? fallback?.coverThumbnail,
+    hasLocalArtwork: visual?.hasLocalArtwork ?? baseTrack.hasLocalArtwork ?? fallback?.hasLocalArtwork,
+  } : baseTrack
   const handleClick = () => {
     if (selectMode) onToggleSelect(songKey ?? track.id)
     else onActivate(songKey ?? track.id)

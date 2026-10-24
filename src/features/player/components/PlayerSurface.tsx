@@ -2973,6 +2973,8 @@ export function PlayerSurface({
               librarySidebarOpen={librarySidebarOpen}
               onLibrarySidebarOpenChange={setCompactSidebarOpen}
               tracks={playlist.tracks}
+              artworkSource={playlist.artworkSource}
+              fallbackArtworkSource={playlist.fallbackArtworkSource}
               unavailableTrackIds={playlist.unavailableTrackIds}
               playlistName={playlist.playlistName}
               metadataStatus={playlist.metadataStatus}

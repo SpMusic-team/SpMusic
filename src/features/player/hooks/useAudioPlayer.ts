@@ -1640,8 +1640,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
             let coverThumbnail: PlaylistCoverImage | undefined
             let hasLocalArtwork: boolean
             let hasUnrenderableCover = false
-            const firstPlaylistTrackId = folderPlaylistRef.current?.tracks[0]?.id
-            const edge = job.trackId === firstPlaylistTrackId ? 512 : Math.max(256, job.maxEdge) as 256 | 512
+            const edge = job.maxEdge
             if (edge <= 256) {
               const currentTrackId = logicalCursorTrackIdRef.current
                 ?? presentationTrackRef.current?.id
@@ -1793,6 +1792,21 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
               playlistVisualWindowKeyRef.current = null
               refreshPlaylistVisualDemandRef.current()
             }
+            // The first song enters through the persisted 256px lane. Once the
+            // current viewport is settled, request its 512px hero replacement.
+            const firstId = folderPlaylistRef.current?.tracks[0]?.id
+            const firstVisual = firstId ? playlistTrackVisualsRef.current[firstId] : undefined
+            if (published && firstId && firstVisual?.coverThumbnail
+              && playlistVisualEdgeRef.current.get(firstId) === 256
+              && playlistDesiredEdgeRef.current.get(firstId) === 256
+              && (!libraryVisibleRef.current || (playlistArtworkDemandRef.current?.visibleIds ?? []).every((id) => {
+                const descriptor = folderPlaylistRef.current?.tracks.find((item) => item.id === id)
+                return !descriptor?.available || Boolean(playlistTrackVisualsRef.current[id])
+                  || playlistVisualFailedRef.current.has(id)
+              }))) {
+              playlistVisualWindowKeyRef.current = null
+              refreshPlaylistVisualDemandRef.current()
+            }
             pump()
           })
       }
@@ -1888,10 +1902,17 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     const currentDemand = showArtwork ? playlistArtworkDemandRef.current : undefined
     const visibleIds = new Set(showArtwork ? currentDemand?.visibleIds ?? trackIds : [])
     const heldIds = new Set(showArtwork ? currentDemand?.heldIds ?? [] : [])
-    const firstEdge = 512
+    const visibleArtworkSettled = !libraryVisibleRef.current || [...visibleIds].every((id) => {
+      const descriptor = descriptorsById.get(id)
+      return !descriptor?.available || Boolean(playlistTrackVisualsRef.current[id])
+        || playlistVisualFailedRef.current.has(id)
+    })
     const heldOnly = (id: string) => heldIds.has(id) && !visibleIds.has(id) && id !== firstTrackId && id !== dockTrackId
     const targetEdgeFor = (id: string): 256 | 512 => {
-      if (id === firstTrackId) return firstEdge
+      if (id === firstTrackId) {
+        const firstVisual = playlistTrackVisualsRef.current[id]
+        return firstVisual?.coverThumbnail && visibleArtworkSettled ? 512 : 256
+      }
       // List cards use the persisted 256px thumbnail regardless of display
       // scaling; only the first-track hero needs the original 512px lane.
       return 256

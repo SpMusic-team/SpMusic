@@ -31,11 +31,12 @@ import {AppearanceProvider} from '/src/features/appearance/components/Appearance
 import {PlayerShell} from '/src/features/player/components/PlayerShell.tsx';
 import '/src/index.css';
 window.pixelGate=sessionStorage.getItem('artwork-pixel-gate')==='1';window.pendingPixels=[];window.coverActive=0;window.maxCoverActive=0;window.created=[];window.revoked=[];window.listName='A';window.dataUrlOnly=sessionStorage.getItem('artwork-data-only')==='1';const dataCanvas=document.createElement('canvas');dataCanvas.width=1;dataCanvas.height=1;dataCanvas.getContext('2d').fillRect(0,0,1,1);window.coverDataUrl=dataCanvas.toDataURL('image/png');window.restoreGate=sessionStorage.getItem('playlist-restore-gate')==='1';window.pendingRestores=[];const create=URL.createObjectURL.bind(URL),revoke=URL.revokeObjectURL.bind(URL);URL.createObjectURL=blob=>{const url=create(blob);window.created.push(url);return url};URL.revokeObjectURL=url=>{window.revoked.push(url);return revoke(url)};window.calls=[];window.choice='a';window.folderSelection=['/audio/a'];window.importCancel=false;window.importMissing=false;window.importFail=false;window.scanGate=sessionStorage.getItem('library-test-scan-gate')==='1';window.pendingScans=[];window.registryGetGate=sessionStorage.getItem('library-test-get-gate')==='1';window.pendingGets=[];
+window.heroPixelGate=false;window.pendingHeroPixels=[];window.failNextHeroDecode=false;window.heroDecodeFailures=[];const originalDecode=HTMLImageElement.prototype.decode;HTMLImageElement.prototype.decode=function(){if(window.failNextHeroDecode){window.failNextHeroDecode=false;window.heroDecodeFailures.push(this.src);return Promise.reject(new Error('injected 512px decode failure'))}return originalDecode.call(this)};
 let state={phase:'idle',generation:null,currentTrackId:null,positionMs:0,durationMs:null,volume:.5,error:null,transportTransition:null,transportSettledRequestId:null},generation=0,currentTrack=null;
 const registryKey='spmusic-test-native-library-registry';
 const readRegistry=()=>JSON.parse(localStorage.getItem(registryKey)||'[]');
 const writeRegistry=folders=>localStorage.setItem(registryKey,JSON.stringify(folders));
-const entries={a:[['a-0','/audio/a/0.flac'],['shared','/audio/common/shared.flac']],b:[['b-0','/audio/b/0.flac'],['shared','/audio/common/shared.flac']],sidecar:[['sidecar-0','/audio/sidecar/0.flac']],m3u8:Array.from({length:24},(_,i)=>['list-'+i,'/audio/list/'+i+'.flac'])};
+const entries={a:[['a-0','/audio/a/0.flac'],['shared','/audio/common/shared.flac']],b:[['b-0','/audio/b/0.flac'],['shared','/audio/common/shared.flac']],sidecar:[['sidecar-0','/audio/sidecar/0.flac']],m3u8:Array.from({length:240},(_,i)=>['list-'+i,'/audio/list/'+i+'.flac'])};
 const descriptor=([id,sourcePath])=>({id,sourcePath,fileName:sourcePath.split('/').at(-1),available:true});
 const folder=(choice,sourceKind='folder')=>({directoryPath:'/audio/'+choice,directoryName:'Folder '+choice,sourceKind,sourcePath:sourceKind==='folder'?'/audio/'+choice:'/lists/'+choice+'.m3u8',sourceName:'List '+choice,selectedIndex:0,tracks:entries[choice].map(descriptor)});
 const all=new Map(Object.values(entries).flat().map(pair=>[pair[1],descriptor(pair)]));
@@ -82,7 +83,7 @@ window.backendInvoke=async(command,args)=>{
  if(command==='audio_seek'){state={...state,positionMs:input.positionMs};return {...state}}
  if(command==='audio_load_playlist_cover_pixels'||command==='audio_load_track_thumbnail'){
   window.coverActive++;window.maxCoverActive=Math.max(window.maxCoverActive,window.coverActive);
-  try{if(window.pixelGate)await new Promise(resolve=>window.pendingPixels.push(resolve));
+  try{if(window.pixelGate)await new Promise(resolve=>window.pendingPixels.push(resolve));if(command==='audio_load_playlist_cover_pixels'&&window.heroPixelGate)await new Promise(resolve=>window.pendingHeroPixels.push(resolve));
   const bytes=new Uint8Array(44),v=new DataView(bytes.buffer);bytes.set([83,80,88,82]);v.setUint16(4,1,true);v.setUint16(6,40,true);for(const [offset,value]of [[8,1],[12,1],[16,4],[20,1],[24,4],[32,1],[36,1]])v.setUint32(offset,value,true);bytes.set([255,0,0,255],40);return bytes;}finally{window.coverActive--;}
  }
  throw Error('Unexpected native command '+command);
@@ -121,14 +122,52 @@ const waitDecoded = selector => page.waitForFunction(selector=>{
 },selector,{timeout:5000})
 try {
  await visit()
+ await page.setViewportSize({width:2800,height:3000})
+ await page.evaluate(()=>{window.pixelGate=true})
  await page.locator('.playlist-management-empty').getByRole('button',{name:'导入 M3U8 播放列表',exact:true}).click()
  await page.waitForFunction(()=>!window.viewModel.playlist.library.isImportPending&&window.viewModel.playlist.library.items.some(item=>item.sourceKind==='m3u8'))
  await noPlayback()
- await waitDecoded('.playlist-management-card .playlist-library-cover-image')
- console.log('PASS cold import list artwork without playback')
+ const initialScope=(await listItems())[0].scope
+ await page.evaluate(scope=>window.viewModel.playlist.library.onSelect(scope),initialScope)
+ await page.locator('.playlist-grid').waitFor()
+ await page.waitForFunction(()=>window.pendingPixels.length>0)
+ await page.evaluate(()=>{window.pixelGate=false;window.pendingPixels.splice(0).forEach(resolve=>resolve())})
+ await waitDecoded('.playlist-library-list-cover .playlist-library-cover-image')
+ await page.waitForFunction(()=>{
+  const panel=document.querySelector('.playlist-grid')?.closest('.playlist-panel')
+  if(!panel)return false
+  const bounds=panel.getBoundingClientRect()
+  const visible=[...panel.querySelectorAll('.playlist-card')].filter(card=>{
+   const rect=card.getBoundingClientRect();return rect.bottom>bounds.top&&rect.top<bounds.bottom-100
+  })
+  return visible.length>40&&visible.every(card=>{
+   const image=card.querySelector('.playlist-card-cover-image');return image?.complete&&image.naturalWidth>0
+  })
+ },null,{timeout:20000})
+ const firstCoverOrder=await page.evaluate(()=>({
+  thumbnail:window.calls.findIndex(call=>call.command==='audio_load_track_thumbnail'&&call.input.sourcePath==='/audio/list/0.flac'),
+  hero:window.calls.findIndex(call=>call.command==='audio_load_playlist_cover_pixels'&&call.input.filePath==='/covers/list-0.png'),
+ }))
+ assert(firstCoverOrder.thumbnail>=0&&firstCoverOrder.hero>firstCoverOrder.thumbnail,'shared sidebar/hero source loads persisted 256px thumbnail before 512px upgrade')
+ for(const fraction of [0.85,0.15,0.95]){
+  await page.evaluate(fraction=>{const panel=document.querySelector('.playlist-grid').closest('.playlist-panel');panel.scrollTop=(panel.scrollHeight-panel.clientHeight)*fraction},fraction)
+  await page.waitForFunction(()=>{
+   const panel=document.querySelector('.playlist-grid')?.closest('.playlist-panel')
+   if(!panel)return false
+   const bounds=panel.getBoundingClientRect()
+   const visible=[...panel.querySelectorAll('.playlist-card')].filter(card=>{
+    const rect=card.getBoundingClientRect();return rect.bottom>bounds.top&&rect.top<bounds.bottom-100
+   })
+   return visible.length>40&&visible.every(card=>{
+    const image=card.querySelector('.playlist-card-cover-image');return image?.complete&&image.naturalWidth>0
+   })
+  },null,{timeout:20000})
+  await waitDecoded('.playlist-library-list-cover .playlist-library-cover-image')
+ }
+ await page.setViewportSize({width:640,height:1000})
+ console.log('PASS cold dense detail and rapid scroll settle every visible card and sidebar cover')
  assert.equal(await page.locator('.playlist-management-toolbar').getByRole('button',{name:/^(选择文件夹|导入 M3U8 播放列表)$/}).count(),0,'list toolbar has no duplicate import buttons')
- const scope=(await listItems())[0].scope
- await page.evaluate(scope=>window.viewModel.playlist.library.onSelect(scope),scope)
+ const scope=initialScope
  await page.locator('.playlist-grid').waitFor()
  await waitDecoded('.playlist-card .playlist-card-cover-image')
  assert(await page.locator('.playlist-card-cover-image').count()>0,'cold inactive detail has song artwork')
@@ -190,6 +229,23 @@ try {
  assert(await page.evaluate(()=>window.created.every(url=>window.revoked.includes(url))),'unmount revokes all published URLs')
  assert.deepEqual(errors,[],'no browser errors from stale work after unmount')
  console.log('PASS unmount cancels artwork publication and releases owned URLs')
+ await visit()
+ await page.evaluate(scope=>{window.heroPixelGate=true;window.viewModel.playlist.library.onSelect(scope)},scopeA)
+ await waitDecoded('.playlist-library-list-cover .playlist-library-cover-image')
+ await page.waitForFunction(()=>window.pendingHeroPixels.length>0)
+ const retainedThumbnail=await page.evaluate(()=>window.viewModel.playlist.library.items.find(item=>item.name==='List A').coverTrack.coverThumbnail.src)
+ await page.evaluate(()=>{window.failNextHeroDecode=true;window.heroPixelGate=false;window.pendingHeroPixels.splice(0).forEach(resolve=>resolve())})
+ await page.waitForFunction(()=>window.heroDecodeFailures.length===1)
+ await page.waitForFunction(src=>{
+  const item=window.viewModel.playlist.library.items.find(item=>item.name==='List A')
+  const image=document.querySelector('.playlist-library-list-cover .playlist-library-cover-image')
+  return item?.coverTrack?.coverThumbnail?.src===src&&image?.complete&&image.naturalWidth>0
+ },retainedThumbnail)
+ const failedHero=await page.evaluate(src=>({oldRevoked:window.revoked.includes(src),failedUrl:window.heroDecodeFailures[0],failedRevoked:window.revoked.includes(window.heroDecodeFailures[0])}),retainedThumbnail)
+ assert.equal(failedHero.oldRevoked,false,'failed 512px decode leaves the displayed 256px URL alive')
+ assert.equal(failedHero.failedRevoked,true,'failed 512px URL is released')
+ await noPlayback()
+ console.log('PASS failed 512px decode preserves the decoded sidebar thumbnail')
  await page.evaluate(()=>sessionStorage.setItem('artwork-data-only','1'))
  await visit()
  await waitDecoded('.playlist-management-card .playlist-library-cover-image')
@@ -200,6 +256,6 @@ try {
  assert.deepEqual(errors,[],'data URL fallback does not cause browser errors')
  console.log('PASS data-URL-only list and detail artwork without playback')
  }catch(error){
- console.log('ARTWORK_FAILURE_STATE',JSON.stringify(await page.evaluate(()=>({track:window.viewModel?.playback.track?.id??null,items:window.viewModel?.playlist.library.items.map(item=>({name:item.name,kind:item.sourceKind,hasCover:Boolean(item.coverTrack?.coverThumbnail||item.coverTrack?.coverImage)})),commands:window.calls.map(call=>call.command),images:[...document.querySelectorAll('.playlist-library-cover-image,.playlist-card-cover-image')].map(image=>({src:image.src,decoded:image.complete&&image.naturalWidth>0}))}))))
+ console.log('ARTWORK_FAILURE_STATE',JSON.stringify(await page.evaluate(()=>{const panel=document.querySelector('.playlist-grid')?.closest('.playlist-panel');const bounds=panel?.getBoundingClientRect();const visible=panel&&bounds?[...panel.querySelectorAll('.playlist-card')].filter(card=>{const rect=card.getBoundingClientRect();return rect.bottom>bounds.top&&rect.top<bounds.bottom-100}):[];return {track:window.viewModel?.playback.track?.id??null,items:window.viewModel?.playlist.library.items.map(item=>({name:item.name,kind:item.sourceKind,hasCover:Boolean(item.coverTrack?.coverThumbnail||item.coverTrack?.coverImage)})),commandCounts:Object.fromEntries([...new Set(window.calls.map(call=>call.command))].map(command=>[command,window.calls.filter(call=>call.command===command).length])),visibleCount:visible.length,visibleLoaded:visible.filter(card=>{const image=card.querySelector('.playlist-card-cover-image');return image?.complete&&image.naturalWidth>0}).length,images:document.querySelectorAll('.playlist-library-cover-image,.playlist-card-cover-image').length}})))
  throw error
 }finally{await browser.close()}

@@ -37,6 +37,7 @@ import {
 import { createPlaylistArtworkGrace } from '@/features/player/model/playlistArtworkGrace'
 import { playlistCoverImageFromPixels } from '@/features/player/model/playlistCoverPixels'
 import { decodePlaylistCover } from '@/features/player/model/playlistCoverReadiness'
+import { createPlaylistArtworkStore, playlistArtworkKey } from '@/features/player/model/playlistArtworkStore'
 import { schedulePlaylistCoverPixels, scheduleTrackThumbnail } from '@/features/player/services/playlistCoverScheduler'
 import {
   chunkPlaylistSummaryPaths,
@@ -166,11 +167,6 @@ function cancelOptionalArtworkIdle(handle: OptionalIdleHandle): void {
   if (handle.kind === 'idle' && typeof window.cancelIdleCallback === 'function') window.cancelIdleCallback(handle.id)
   else window.clearTimeout(handle.id)
 }
-
-type PlaylistMetadataHydrationJob = Pick<
-  PlaylistVisualHydrationJob,
-  'generation' | 'playlistEpoch' | 'scope' | 'trackId' | 'sourcePath' | 'normalizedSourcePath'
->
 
 const HYDRATED_TRACK_CACHE_CAPACITY = 8
 // Application-owned BMP URLs and in-flight RGBA buffers. Renderer/GPU memory
@@ -443,7 +439,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
   const [libraryImportPending, setLibraryImportPending] = useState(false)
   const [playlistRestorePending, setPlaylistRestorePending] = useState(true)
   const libraryImportPendingRef = useRef(false)
-  const [playlistTrackVisuals, setPlaylistTrackVisuals] = useState<Readonly<Record<string, PlaylistTrackVisual>>>({})
+  const [, setPlaylistTrackVisuals] = useState<Readonly<Record<string, PlaylistTrackVisual>>>({})
   const [playlistTrackMetadata, setPlaylistTrackMetadata] = useState<Readonly<Record<string, PlaylistTrackMetadata>>>({})
   // Read-only tag summaries, keyed by playlist scope. This is a third channel:
   // it never writes `playlistTrackMetadata` (first-write-wins would truncate the
@@ -501,15 +497,50 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
   const libraryVisibleRef = useRef(libraryVisible)
   const backgroundArtworkAllowedRef = useRef(sourceArtworkAllowed)
   useLayoutEffect(() => { backgroundArtworkAllowedRef.current = sourceArtworkAllowed }, [sourceArtworkAllowed])
-  const playlistMetadataGenerationRef = useRef(0)
-  const playlistMetadataWindowKeyRef = useRef<string | null>(null)
   const playlistTrackMetadataRef = useRef<Readonly<Record<string, PlaylistTrackMetadata>>>({})
-  const playlistMetadataHydrationQueueRef = useRef<PlaylistMetadataHydrationJob[]>([])
-  const playlistMetadataHydrationActiveRef = useRef(0)
   const playlistVisualWindowKeyRef = useRef<string | null>(null)
   const playlistTrackVisualsRef = useRef<Readonly<Record<string, PlaylistTrackVisual>>>({})
   const playlistVisualEdgeRef = useRef(new Map<string, 128 | 256 | 512>())
   const playlistVisualSourceRef = useRef(new Map<string, string>())
+  const [playlistArtworkStore] = useState(() => createPlaylistArtworkStore(() => undefined))
+  // The bridge keeps only committed identity primitives. It does not retain a
+  // mutable playback-source ref inside the externally subscribed reader.
+  const artworkOwnerIdentityRef = useRef<{ scope: string; firstId?: string; currentId?: string }>({ scope: '' })
+  useLayoutEffect(() => {
+    artworkOwnerIdentityRef.current = {
+      scope: folderPlaylist ? playlistScope(folderPlaylist) : '',
+      firstId: folderPlaylist?.tracks[0]?.id,
+      currentId: presentationTrack?.id,
+    }
+    playlistArtworkStore.notifyAll()
+  }, [folderPlaylist, presentationTrack?.id, playlistArtworkStore])
+  useLayoutEffect(() => { playlistArtworkStore.bind((key) => {
+    const [scope, id, path] = JSON.parse(key) as [string, string, string]
+    if (artworkOwnerIdentityRef.current.scope !== scope || playlistVisualSourceRef.current.get(id) !== path) return undefined
+    return playlistTrackVisualsRef.current[id]
+  }) }, [playlistArtworkStore])
+  const playlistArtworkSource = useMemo(() => ({ store: playlistArtworkStore,
+    keyByTrackId: new Map(folderPlaylist?.tracks.map(item => [item.id,
+      playlistArtworkKey(playlistScope(folderPlaylist), item.id, item.sourcePath)])),
+  }), [folderPlaylist, playlistArtworkStore])
+  const queueVisibleRef = useRef(queueOpen && playerVisible)
+  useLayoutEffect(() => { queueVisibleRef.current = queueOpen && playerVisible }, [queueOpen, playerVisible])
+  const persistentVisualsRef = useRef<{ first?: PlaylistTrackVisual; current?: PlaylistTrackVisual }>({})
+  const publishPlaylistVisuals = useCallback((next: Readonly<Record<string, PlaylistTrackVisual>>) => {
+    playlistTrackVisualsRef.current = next
+    playlistArtworkStore.notifyAll()
+    const { firstId, currentId } = artworkOwnerIdentityRef.current
+    // Persistent hero/dock/queue consumers keep their normal shell snapshots.
+    // Ordinary list thumbnails notify their own card instead of the whole shell.
+    const first = firstId ? next[firstId] : undefined
+    const current = currentId ? next[currentId] : undefined
+    const previous = persistentVisualsRef.current
+    persistentVisualsRef.current = { first, current }
+    if (queueVisibleRef.current || first !== previous.first || current !== previous.current) {
+      setPlaylistTrackVisuals(next)
+    }
+  }, [playlistArtworkStore])
+
   const playlistDesiredEdgeRef = useRef(new Map<string, 128 | 256 | 512>())
   const playlistVisualHydrationQueueRef = useRef<PlaylistVisualHydrationJob[]>([])
   const playlistVisualHydrationActiveRef = useRef(0)
@@ -621,8 +652,6 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     visiblePlaylistTrackIdsRef.current = []
     playlistArtworkDemandRef.current = undefined
     keepPersistentPlaylistArtworkRef.current = false
-    playlistMetadataGenerationRef.current += 1
-    playlistMetadataHydrationQueueRef.current = []
     playlistVisualHydrationQueueRef.current = []
     if (playlistOptionalIdleRef.current !== null) cancelOptionalArtworkIdle(playlistOptionalIdleRef.current)
     playlistOptionalIdleRef.current = null
@@ -646,7 +675,8 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     playlistVisualEdgeRef.current.clear()
     playlistVisualSourceRef.current.clear()
     playlistDesiredEdgeRef.current.clear()
-  }, [requestPlaylistCoverWindowGeneration, playlistArtworkGrace])
+    playlistArtworkStore.notifyAll()
+  }, [requestPlaylistCoverWindowGeneration, playlistArtworkGrace, playlistArtworkStore])
 
   // Summary caches are owned by scope, so they are only released on disposal.
   // The mount body resets the guard: a StrictMode remount must not leave every
@@ -1332,10 +1362,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     playlistArtworkDemandRef.current = undefined
     keepPersistentPlaylistArtworkRef.current = false
     showPlaylistArtworkRef.current = true
-    playlistMetadataGenerationRef.current += 1
-    playlistMetadataWindowKeyRef.current = null
     playlistTrackMetadataRef.current = {}
-    playlistMetadataHydrationQueueRef.current = []
     setPlaylistTrackMetadata({})
     playlistVisualWindowKeyRef.current = null
     releasePlaylistVisuals(playlistTrackVisualsRef.current)
@@ -1344,7 +1371,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     playlistVisualSourceRef.current.clear()
     playlistDesiredEdgeRef.current.clear()
     playlistVisualHydrationQueueRef.current = []
-    setPlaylistTrackVisuals({})
+    publishPlaylistVisuals({})
     preparedTrackCardPreviewRef.current = null
     artworkPrefetchGenerationRef.current += 1
     setArtworkPrefetchCandidates([])
@@ -1370,7 +1397,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     setFolderPlaylist(playlist)
     // The real activation owns the duration source now.
     setPendingDurationPlaylist(null)
-  }, [commitPlaylistSummaryStatus, ensurePlaylistCoverSession, ensurePlaylistSummaries, playlistArtworkGrace])
+  }, [commitPlaylistSummaryStatus, ensurePlaylistCoverSession, ensurePlaylistSummaries, playlistArtworkGrace, publishPlaylistVisuals])
 
   const clearPresentationTrack = useCallback((nextContentState: Exclude<PlayerContentState, 'track'>) => {
     presentationTrackRef.current = null
@@ -1520,39 +1547,10 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     return true
   }, [])
 
-  const requestHydratedAudioTrack = useCallback((
-    sourcePath: string,
-    requestedEpoch = playlistScopeEpochRef.current,
-  ) => {
-    if (requestedEpoch === playlistScopeEpochRef.current) {
-      const cached = hydratedCacheGet(hydratedAudioTrackCacheRef.current, sourcePath)
-      if (cached) return Promise.resolve(cached)
-
-      const inFlight = hydrationInFlightRef.current.get(sourcePath)
-      if (inFlight) return inFlight
-    }
-
-    const request = hydrateAudioTrack(sourcePath)
-      .then((hydratedTrack) => {
-        if (requestedEpoch === playlistScopeEpochRef.current) {
-          hydratedCacheSet(hydratedAudioTrackCacheRef.current, sourcePath, hydratedTrack)
-        }
-        return hydratedTrack
-      })
-      .finally(() => {
-        if (hydrationInFlightRef.current.get(sourcePath) === request) {
-          hydrationInFlightRef.current.delete(sourcePath)
-        }
-      })
-
-    if (requestedEpoch === playlistScopeEpochRef.current) {
-      hydrationInFlightRef.current.set(sourcePath, request)
-    }
-    return request
-  }, [])
-
   const commitPlaylistTrackMetadata = useCallback((hydratedTrack: AudioTrackRef) => {
-    if (playlistTrackMetadataRef.current[hydratedTrack.id]) return
+    const descriptor = folderPlaylistRef.current?.tracks.find(item => item.id === hydratedTrack.id)
+    if (!descriptor || normalizeAudioSourcePath(descriptor.sourcePath) !== normalizeAudioSourcePath(hydratedTrack.sourcePath)
+      || playlistTrackMetadataRef.current[hydratedTrack.id]) return
     const visual = audioTrackToPlaylistVisual(hydratedTrack)
     const metadata: PlaylistTrackMetadata = {
       id: visual.id,
@@ -1570,44 +1568,39 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     setPlaylistTrackMetadata(nextMetadata)
   }, [])
 
-  const pumpPlaylistMetadataHydration = useCallback(() => {
-    function pump(): void {
-      // Tag summaries and duration batches already cover every text row. The
-      // full per-file hydration lane is optional during navigation motion.
-      if (!backgroundArtworkAllowedRef.current) return
-      while (
-        playlistMetadataHydrationActiveRef.current < 2
-        && playlistMetadataHydrationQueueRef.current.length > 0
-      ) {
-        const job = playlistMetadataHydrationQueueRef.current.shift()
-        if (!job) break
-        playlistMetadataHydrationActiveRef.current += 1
-        void requestHydratedAudioTrack(job.sourcePath, job.playlistEpoch)
-          .then((hydratedTrack) => {
-            const activePlaylist = folderPlaylistRef.current
-            const activeDescriptor = activePlaylist?.tracks.find((candidate) => candidate.id === job.trackId)
-            if (
-              playlistMetadataGenerationRef.current !== job.generation
-              || playlistScopeEpochRef.current !== job.playlistEpoch
-              || playlistScopeRef.current !== job.scope
-              || !activePlaylist
-              || playlistScope(activePlaylist) !== job.scope
-              || activeDescriptor?.id !== job.trackId
-              || normalizeAudioSourcePath(activeDescriptor.sourcePath) !== job.normalizedSourcePath
-              || hydratedTrack.id !== job.trackId
-              || normalizeAudioSourcePath(hydratedTrack.sourcePath) !== job.normalizedSourcePath
-            ) return
-            commitPlaylistTrackMetadata(hydratedTrack)
-          })
-          .catch(() => undefined)
-          .finally(() => {
-            playlistMetadataHydrationActiveRef.current -= 1
-            pump()
-          })
-      }
+  const requestHydratedAudioTrack = useCallback((
+    sourcePath: string,
+    requestedEpoch = playlistScopeEpochRef.current,
+  ) => {
+    if (requestedEpoch === playlistScopeEpochRef.current) {
+      const cached = hydratedCacheGet(hydratedAudioTrackCacheRef.current, sourcePath)
+      if (cached) return Promise.resolve(cached)
+
+      const inFlight = hydrationInFlightRef.current.get(sourcePath)
+      if (inFlight) return inFlight
     }
-    pump()
-  }, [commitPlaylistTrackMetadata, requestHydratedAudioTrack])
+
+    const request = hydrateAudioTrack(sourcePath)
+      .then((hydratedTrack) => {
+        if (requestedEpoch === playlistScopeEpochRef.current) {
+          hydratedCacheSet(hydratedAudioTrackCacheRef.current, sourcePath, hydratedTrack)
+          if (normalizeAudioSourcePath(hydratedTrack.sourcePath) === normalizeAudioSourcePath(sourcePath)) {
+            commitPlaylistTrackMetadata(hydratedTrack)
+          }
+        }
+        return hydratedTrack
+      })
+      .finally(() => {
+        if (hydrationInFlightRef.current.get(sourcePath) === request) {
+          hydrationInFlightRef.current.delete(sourcePath)
+        }
+      })
+
+    if (requestedEpoch === playlistScopeEpochRef.current) {
+      hydrationInFlightRef.current.set(sourcePath, request)
+    }
+    return request
+  }, [commitPlaylistTrackMetadata])
 
   const pumpPlaylistVisualHydration = useCallback(() => {
     function pump(): void {
@@ -1618,8 +1611,12 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
         const urgentIndex = playlistVisualHydrationQueueRef.current.findIndex((candidate) =>
           !candidate.optional || playlistVisualRequiredIdsRef.current.has(candidate.trackId))
         if (urgentIndex < 0) {
-          if (!backgroundArtworkAllowedRef.current || playlistVisualHydrationActiveRef.current > 0) return
-          if (!playlistOptionalIdleReadyRef.current) {
+          // Nearby viewport overscan is bounded navigation demand. Waiting for
+          // idle between its covers leaves the next rows cold during a drag.
+          // Only optional warming of the whole playback source needs idle.
+          const detailPrefetch = libraryVisibleRef.current && showPlaylistArtworkRef.current
+          if (!detailPrefetch && (!backgroundArtworkAllowedRef.current || playlistVisualHydrationActiveRef.current > 0)) return
+          if (!detailPrefetch && !playlistOptionalIdleReadyRef.current) {
             if (playlistOptionalIdleRef.current === null) {
               playlistOptionalIdleRef.current = scheduleOptionalArtworkIdle(() => {
                 playlistOptionalIdleRef.current = null
@@ -1674,7 +1671,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
                 windowGeneration: job.backendGeneration,
               }, {
                 priority: job.trackId === currentTrackId ? 0
-                  : libraryVisibleRef.current && visiblePlaylistTrackIdsRef.current.includes(job.trackId) ? 1 : 2,
+                  : libraryVisibleRef.current && playlistVisualRequiredIdsRef.current.has(job.trackId) ? 1 : 2,
                 isCurrent: () => !jobIsStale(),
               })
               if (jobIsStale()) return
@@ -1700,7 +1697,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
                   windowGeneration: job.backendGeneration,
                 }, {
                   priority: job.trackId === currentTrackId ? 0
-                    : libraryVisibleRef.current && visiblePlaylistTrackIdsRef.current.includes(job.trackId) ? 1 : 2,
+                    : libraryVisibleRef.current && playlistVisualRequiredIdsRef.current.has(job.trackId) ? 1 : 2,
                   isCurrent: () => !jobIsStale(),
                 })
                 if (!pixels || jobIsStale()) return
@@ -1739,7 +1736,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
             playlistTrackVisualsRef.current = nextVisuals
             if (!hasUnrenderableCover) playlistVisualEdgeRef.current.set(job.trackId, edge)
             playlistVisualSourceRef.current.set(job.trackId, job.normalizedSourcePath)
-            setPlaylistTrackVisuals(nextVisuals)
+            publishPlaylistVisuals(nextVisuals)
             published = !hasUnrenderableCover
             if (previousThumbnail && previousVisual && previousEdge && coverThumbnail) {
               const pendingPrevious = playlistPendingReplacementRef.current.get(previousThumbnail.src)
@@ -1833,7 +1830,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       }
     }
     pump()
-  }, [])
+  }, [publishPlaylistVisuals])
 
   const setVisiblePlaylistTrackIds = useCallback((
     trackIds: readonly string[],
@@ -1865,29 +1862,9 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       orderedDesiredIds.push(trackId)
     }
     const scope = playlist ? playlistScope(playlist) : ''
-    const metadataWindowKey = `${playlistScopeEpochRef.current}\u0000${scope}\u0000${orderedDesiredIds.join('\u0000')}`
-    if (playlistMetadataWindowKeyRef.current !== metadataWindowKey) {
-      playlistMetadataWindowKeyRef.current = metadataWindowKey
-      playlistMetadataHydrationQueueRef.current = []
-      if (playlist) {
-        const playlistEpoch = playlistScopeEpochRef.current
-        playlistMetadataHydrationQueueRef.current = orderedDesiredIds.flatMap((trackId) => {
-          const descriptor = descriptorsById.get(trackId)
-          if (!descriptor?.available || playlistTrackMetadataRef.current[trackId]) return []
-          return [{
-            generation: playlistMetadataGenerationRef.current,
-            playlistEpoch,
-            scope,
-            trackId,
-            sourcePath: descriptor.sourcePath,
-            normalizedSourcePath: normalizeAudioSourcePath(descriptor.sourcePath),
-          }]
-        })
-        pumpPlaylistMetadataHydration()
-      }
-    }
-    // Text rows hydrate metadata without requesting high-resolution artwork;
-    // selected-list thumbnails continue as optional background work.
+    // Summary and duration batches already supply the list's complete text.
+    // Scrolling must not hydrate every file (lyrics/original artwork/decoder
+    // duration) through the synchronous native playback-detail command.
     const currentPlaybackTrackId = logicalCursorTrackIdRef.current
       ?? presentationTrackRef.current?.id
       ?? latestAudioStateRef.current?.currentTrackId
@@ -2026,7 +2003,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       ? currentVisuals
       : retained
     playlistTrackVisualsRef.current = nextVisuals
-    if (nextVisuals !== currentVisuals) setPlaylistTrackVisuals(nextVisuals)
+    if (nextVisuals !== currentVisuals) publishPlaylistVisuals(nextVisuals)
 
     const backendWindowGeneration = ensurePlaylistCoverSession()
     if (!playlist || desiredIds.size === 0) {
@@ -2082,7 +2059,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
         refreshPlaylistVisualDemandRef.current()
       }, 500 * playlistCoverSessionFailuresRef.current)
     })
-  }, [pumpPlaylistMetadataHydration, pumpPlaylistVisualHydration, ensurePlaylistCoverSession, playlistArtworkGrace])
+  }, [pumpPlaylistVisualHydration, ensurePlaylistCoverSession, playlistArtworkGrace, publishPlaylistVisuals])
 
   useEffect(() => {
     refreshPlaylistVisualDemandRef.current = () => setVisiblePlaylistTrackIds(
@@ -2091,7 +2068,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       showPlaylistArtworkRef.current,
       playlistArtworkDemandRef.current,
     )
-  }, [setVisiblePlaylistTrackIds])
+  }, [setVisiblePlaylistTrackIds, publishPlaylistVisuals])
 
   useEffect(() => {
     if (libraryVisibleRef.current === libraryVisible) return
@@ -2108,8 +2085,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     }
     playlistVisualWindowKeyRef.current = null
     refreshPlaylistVisualDemandRef.current()
-    if (sourceArtworkAllowed) pumpPlaylistMetadataHydration()
-  }, [sourceArtworkAllowed, pumpPlaylistMetadataHydration])
+  }, [sourceArtworkAllowed])
 
   useEffect(() => {
     const retireLoadedReplacement = (src: string) => {
@@ -2147,7 +2123,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
         const restored = { ...playlistTrackVisualsRef.current, [trackId]: pending.previous }
         playlistTrackVisualsRef.current = restored
         playlistVisualEdgeRef.current.set(trackId, pending.edge)
-        setPlaylistTrackVisuals(restored)
+        publishPlaylistVisuals(restored)
         const [nextFallback, ...remainingFallbacks] = pending.olderVisuals
         if (pending.previous.coverThumbnail && nextFallback?.visual.coverThumbnail) {
           playlistPendingReplacementRef.current.set(pending.previous.coverThumbnail.src, {
@@ -2167,7 +2143,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       playlistTrackVisualsRef.current = next
       playlistVisualEdgeRef.current.delete(trackId)
       playlistVisualSourceRef.current.delete(trackId)
-      setPlaylistTrackVisuals(next)
+      publishPlaylistVisuals(next)
       URL.revokeObjectURL(src)
       if (failures > 2) {
         const sourcePath = folderPlaylistRef.current?.tracks.find((track) => track.id === trackId)?.sourcePath
@@ -2190,7 +2166,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       window.removeEventListener('spmusic:playlist-cover-image-load', onImageLoad)
       window.removeEventListener('spmusic:playlist-cover-image-error', onImageError)
     }
-  }, [setVisiblePlaylistTrackIds])
+  }, [setVisiblePlaylistTrackIds, publishPlaylistVisuals])
 
   useEffect(() => {
     if (
@@ -4087,7 +4063,8 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       ? playlistScope(folderPlaylist)
       : pendingDurationPlaylist ? playlistScope(pendingDurationPlaylist) : currentAudioTrack?.sourcePath ?? '',
     playlistTrackMetadata,
-    playlistTrackVisuals,
+    get playlistTrackVisuals() { return playlistTrackVisualsRef.current },
+    playlistArtworkSource,
     playlistTrackSummariesByScope,
     playlistSummaryStatusByScope,
     ensurePlaylistSummaries,

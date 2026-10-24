@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { normalizeAudioSourcePath } from '@/features/player/model/playlistTrackSummary'
 import { playlistCoverImageFromPixels } from '@/features/player/model/playlistCoverPixels'
 import { decodePlaylistCover } from '@/features/player/model/playlistCoverReadiness'
+import { createPlaylistArtworkStore, playlistArtworkKey } from '@/features/player/model/playlistArtworkStore'
 import type { PlaylistArtworkDemand, PlaylistCoverImage } from '@/features/player/model/playerUiViewModel'
 import {
   selectArtworkEvictionKey,
@@ -24,6 +25,8 @@ type Runtime = {
   previews: Map<Element, string>
   desired: Map<string, 128 | 256 | 512>
   pinned: Set<string>
+  consumerPins: Map<string, number>
+  rows: ReadonlyMap<string, ArtworkRow>
   detail: AudioFolderPlaylist | null
   detailPaths: Map<string, 128 | 256 | 512>
   detailVisiblePaths: Set<string>
@@ -66,11 +69,34 @@ async function dataUrlThumbnail(dataUrl: string, maxEdge: number): Promise<Playl
 export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detail: AudioFolderPlaylist | null, visible: boolean, warmTrackId?: string) {
   const runtimeRef = useRef<Runtime | null>(null)
   const [rows, setRows] = useState<ReadonlyMap<string, ArtworkRow>>(EMPTY_ROWS)
+  const [artworkStore] = useState(() => createPlaylistArtworkStore(() => undefined))
+  useLayoutEffect(() => { artworkStore.bind((key) => {
+    const [, id, path] = JSON.parse(key) as [string, string, string]
+    const runtime = runtimeRef.current
+    const descriptor = runtime?.descriptors.get(path)
+    const entry = runtime?.cache.get(path)
+    return descriptor?.id === id && entry?.trackId === id ? entry.row : undefined
+  }, (key) => {
+    const [, , path] = JSON.parse(key) as [string, string, string]
+    const runtime = runtimeRef.current
+    if (!runtime?.mounted) return () => {}
+    runtime.consumerPins.set(path, (runtime.consumerPins.get(path) ?? 0) + 1)
+    return () => {
+      const count = runtime.consumerPins.get(path) ?? 0
+      if (count <= 1) runtime.consumerPins.delete(path)
+      else runtime.consumerPins.set(path, count - 1)
+    }
+  }) }, [artworkStore])
+  const artworkSource = useMemo(() => ({ store: artworkStore,
+    keyByTrackId: new Map(sources.flatMap(source => source.tracks.map(item => [item.id,
+      playlistArtworkKey(`${source.sourceKind}\u0000${normalizeAudioSourcePath(source.sourcePath)}`, item.id, item.sourcePath)] as const))),
+  }), [sources, artworkStore])
+
 
   useEffect(() => {
     const runtime: Runtime = {
       mounted: true, visible: false, controller: new AbortController(), revision: 0, descriptors: new Map(), previews: new Map(), desired: new Map(),
-      pinned: new Set(),
+      pinned: new Set(), consumerPins: new Map(), rows: EMPTY_ROWS,
       detail: null, detailPaths: new Map(), detailVisiblePaths: new Set(), cache: new Map(), pendingReplacements: new Map(), failedUpgrades: new Set(), queued: new Set(), active: 0,
       pump: () => {}, refresh: () => {},
     }
@@ -85,7 +111,7 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
       while (runtime.cache.size > MAX_RESIDENT) {
         // The cap applies to optional residents. Dense viewports may need more
         // than 80 live thumbnails; evicting one would leave a visible blank.
-        const protectedPaths = new Set([...runtime.detailVisiblePaths, ...runtime.previews.values(), ...runtime.pinned])
+        const protectedPaths = new Set([...runtime.detailVisiblePaths, ...runtime.previews.values(), ...runtime.pinned, ...runtime.consumerPins.keys()])
         const candidates = [...runtime.cache.keys()].filter((key) => !protectedPaths.has(key))
         const key = selectArtworkEvictionKey(candidates, desired, runtime.pinned)
         if (key === undefined) break
@@ -99,7 +125,13 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
           runtime.pendingReplacements.delete(src)
         }
       }
-      setRows(new Map([...runtime.cache].map(([key, entry]) => [key, entry.row])))
+      const nextRows = new Map([...runtime.cache].map(([key, entry]) => [key, entry.row]))
+      runtime.rows = nextRows
+      artworkStore.notifyAll()
+      const persistent = new Set([...runtime.previews.values()])
+      const first = runtime.detail?.tracks[0]
+      if (first) persistent.add(normalizeAudioSourcePath(first.sourcePath))
+      setRows(previous => [...persistent].some(key => previous.get(key) !== nextRows.get(key)) ? nextRows : previous)
     }
     runtime.pump = () => {
       if (!runtime.mounted || !runtime.visible) return
@@ -315,12 +347,15 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
         for (const older of pending.older) if (older.row.coverThumbnail) URL.revokeObjectURL(older.row.coverThumbnail.src)
       }
       runtime.cache.clear()
+      runtime.rows = EMPTY_ROWS
+      artworkStore.notifyAll()
+      runtime.consumerPins.clear()
       runtime.pendingReplacements.clear()
       runtime.failedUpgrades.clear()
       runtime.previews.clear()
       if (runtimeRef.current === runtime) runtimeRef.current = null
     }
-  }, [])
+  }, [artworkStore])
 
   useEffect(() => {
     const runtime = runtimeRef.current
@@ -366,8 +401,10 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
     const first = detail?.tracks[0]
     if (first?.available && first.id !== warmTrackId) runtime.detailPaths.set(normalizeAudioSourcePath(first.sourcePath), 512)
     runtime.refresh()
-    setRows(new Map([...runtime.cache].map(([key, entry]) => [key, entry.row])))
-  }, [sources, detail, warmTrackId])
+    runtime.rows = new Map([...runtime.cache].map(([key, entry]) => [key, entry.row]))
+    artworkStore.notifyAll()
+    setRows(runtime.rows)
+  }, [sources, detail, warmTrackId, artworkStore])
 
   useEffect(() => {
     const runtime = runtimeRef.current
@@ -437,5 +474,5 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
     runtime.pinned = new Set(sourcePaths)
   }, [])
 
-  return { rows, setVisibleTrackIds, retainSourcePaths }
+  return { get rows() { return runtimeRef.current?.rows ?? rows }, artworkSource, setVisibleTrackIds, retainSourcePaths }
 }

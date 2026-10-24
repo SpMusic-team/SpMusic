@@ -13,7 +13,7 @@ import { useGlobalShortcuts } from '@/features/shortcuts/hooks/useGlobalShortcut
 import type { AllSongsItem, DevAudioToolsViewModel, PlayerUiViewModel, PlaylistArtworkDemand, PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
 import { readStartupPage } from '@/features/player/model/startupPageStorage'
 import { readPlaybackSession } from '@/features/player/model/playbackSessionStorage'
-import { playbackQueueOrigin } from '@/features/player/model/playbackQueue'
+import { playbackQueueOrigin, type PlaybackQueueOrigin } from '@/features/player/model/playbackQueue'
 
 const EMPTY_KNOWN_DURATIONS: ReadonlyMap<string, number> = new Map()
 const EMPTY_FALLBACK_SOURCE_PATHS: ReadonlySet<string> = new Set()
@@ -310,6 +310,12 @@ export function PlayerShell() {
   }, [currentTrackId, toggleTrackFeedback])
   const handleDevAudioToolsClose = useCallback(() => setIsDevAudioToolsOpen(false), [])
 
+  const pageOrigin: PlaybackQueueOrigin = {
+    kind: isBrowsingActive && player.playbackQueueKind === 'all-songs' ? 'all-songs' : 'playlist',
+    sourceScope: isBrowsingActive && player.playbackQueueKind === 'all-songs' ? undefined
+      : isBrowsingActive ? player.playbackSourceScope ?? displayScope ?? undefined : displayScope ?? undefined,
+  }
+
   const viewModel: PlayerUiViewModel = {
     playback: {
       track: player.track,
@@ -410,6 +416,7 @@ export function PlayerShell() {
         },
         onPlaySong: (scope, trackId, orderedSongs) => { void player.selectPlaybackQueueTrack({ kind: 'all-songs',
           entries: orderedSongs ?? [{ scope, trackId }] }, trackId) },
+        onShufflePlay: (entries) => player.shufflePlaybackQueue({ kind: 'all-songs', entries }),
         onSelectFolders: () => { void player.selectFolders() },
         onImportPlaylist: () => { void player.importPlaylist() },
         isImportPending: player.libraryImportPending || player.libraryStatus === 'clearing',
@@ -431,6 +438,10 @@ export function PlayerShell() {
       currentTrackId: player.track?.id ?? null,
       shuffleMode: player.shuffleMode,
       onShuffleCycle: player.cycleShuffleMode,
+      onShufflePlay: displayScope ? (orderedTrackIds) => player.shufflePlaybackQueue({
+        ...pageOrigin,
+        entries: orderedTrackIds.map((trackId) => ({ scope: displayScope, trackId })),
+      }) : undefined,
       onTrackSelect: player.audioBusy || player.transportBusy || player.timelineInteraction === 'seeking'
         ? undefined
         : (trackId, orderedTrackIds) => {

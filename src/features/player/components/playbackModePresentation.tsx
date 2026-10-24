@@ -11,6 +11,8 @@ export type PlaybackModePresentation = {
 }
 
 const playbackModeToastId = 'player-playback-mode'
+let pagePlaybackToastSequence = 0
+let pagePlaybackToastId: string | undefined
 
 export function getShuffleModePresentation(
   mode: ShuffleMode,
@@ -25,7 +27,13 @@ export function getShuffleModePresentation(
   return presentations[mode]
 }
 
-export function showPlaybackModeToast({ icon: ModeIcon, label }: PlaybackModePresentation) {
+export function showPlaybackModeToast({ icon: ModeIcon, label }: PlaybackModePresentation, options?: { replay?: boolean }) {
+  let id = playbackModeToastId
+  if (options?.replay) {
+    if (pagePlaybackToastId) toast.dismiss(pagePlaybackToastId)
+    id = `player-page-shuffle-${++pagePlaybackToastSequence}`
+    pagePlaybackToastId = id
+  }
   toast.custom(
     () => (
       <div className="playback-mode-toast">
@@ -34,7 +42,7 @@ export function showPlaybackModeToast({ icon: ModeIcon, label }: PlaybackModePre
       </div>
     ),
     {
-      id: playbackModeToastId,
+      id,
       className: 'playback-mode-toast-shell',
       duration: 2500,
       position: 'top-center',

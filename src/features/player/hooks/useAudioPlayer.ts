@@ -27,6 +27,7 @@ import {
 } from '@/features/player/model/playbackModes'
 import { appCopy } from '@/features/player/model/playerCopy'
 import { playbackQueueOrigin, type PlaybackQueuePlaylist, type PlaybackQueueSelection } from '@/features/player/model/playbackQueue'
+import { createPageShuffleOrder, resolvePageShuffleTarget, type PageShuffleSession } from '@/features/player/model/pageShuffleSession'
 import {
   clearPlaybackSession,
   persistPlaybackSession,
@@ -260,7 +261,12 @@ function resolveAvailablePlaylistTarget(
   originTrackId: string,
   direction: Direction,
   shuffleMode: ShuffleMode,
+  pageSession?: PageShuffleSession | null,
 ): { index: number; track: AudioFolderTrackRef } | null {
+  if (pageSession && pageSession.scope === playlistScope(playlist)) {
+    const index = resolvePageShuffleTarget(pageSession, playlist.tracks, originTrackId, direction)
+    return index === null ? null : { index, track: playlist.tracks[index] }
+  }
   let targetIndex = resolveNextTrackIndex(tracks, originIndex, direction, shuffleMode)
   const step = direction < 0 ? -1 : 1
   for (let attempts = 0; attempts < playlist.tracks.length; attempts += 1) {
@@ -564,6 +570,20 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
   const latestAudioStateRef = useRef<AudioPlaybackState | null>(null)
   const audioErrorRef = useRef<AudioCommandError | null>(null)
   const folderPlaylistRef = useRef<AudioFolderPlaylist | null>(null)
+  const pageShuffleSessionRef = useRef<PageShuffleSession | null>(null)
+  const getPageShuffleSession = useCallback((playlist: AudioFolderPlaylist, currentId: string): PageShuffleSession | null => {
+    if (shuffleMode !== 'shuffle-all' || repeatMode !== 'all-categories-until-stop') return null
+    const scope = playlistScope(playlist)
+    const existing = pageShuffleSessionRef.current
+    if (existing?.scope === scope) return existing
+    if (!playbackQueueOrigin(playlist) || !playlist.tracks.some((track) => track.id === currentId)) return null
+    // The traversal is runtime-only. A restored snapshot starts a fresh plan
+    // at its current song rather than claiming to restore unsaved history.
+    const order = [currentId, ...createPageShuffleOrder(playlist.tracks.filter((track) => track.id !== currentId))]
+    const session = { scope, order }
+    pageShuffleSessionRef.current = session
+    return session
+  }, [repeatMode, shuffleMode])
   const queueTrackIndexRef = useRef(new Map<string, number>())
   const trackDetailsHandlerRef = useRef<(details: AudioTrackDetailsChanged) => void>(() => undefined)
   const trackDetailsUnlistenRef = useRef<(() => void) | null>(null)
@@ -1215,6 +1235,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
 
   const activatePlaylistScope = useCallback((playlist: AudioFolderPlaylist, summarySeed?: Readonly<Record<string, PlaylistTrackRow>>) => {
     const nextScope = playlistScope(playlist)
+    pageShuffleSessionRef.current = null
     const sourcePlaylist = playbackQueueOrigin(playlist)?.sourcePlaylist
     if (sourcePlaylist && !sessionPlaylistDescriptorsRef.current.has(playlistScope(sourcePlaylist))) {
       const sourceScope = playlistScope(sourcePlaylist)
@@ -2578,8 +2599,11 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     latestAudioStateRef.current = nextAudioState
     const playlist = folderPlaylistRef.current
     const currentIndex = nextTrackId ? queueTrackIndexRef.current.get(nextTrackId) ?? 0 : 0
-    const stopsAtPlaylistEnd = (repeatMode === 'sequential' || repeatMode === 'all-categories-until-stop')
-      && currentIndex >= (playlist?.tracks.length ?? 0) - 1
+    const pageSession = playlist && nextTrackId ? getPageShuffleSession(playlist, nextTrackId) : null
+    const stopsAtPlaylistEnd = pageSession && playlist && nextTrackId && pageSession.scope === playlistScope(playlist)
+      ? resolvePageShuffleTarget(pageSession, playlist.tracks, nextTrackId, 1) === null
+      : (repeatMode === 'sequential' || repeatMode === 'all-categories-until-stop')
+        && currentIndex >= (playlist?.tracks.length ?? 0) - 1
     // Claim the icon in the same commit as the first ended state. Once the
     // selection starts, its visual intent carries this through native loading;
     // repeated ended events must not revoke the claim before that handoff.
@@ -2699,6 +2723,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     commitAudioError,
     commitPresentationTrack,
     hydrateCurrentAudioTrack,
+    getPageShuffleSession,
     patchPresentationDuration,
     repeatMode,
     visualTimelineClock,
@@ -2934,6 +2959,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       originTrackId,
       direction,
       shuffleMode,
+      getPageShuffleSession(playlist, originTrackId),
     )
     if (!resolved) return Promise.resolve(null)
     const { index: targetIndex, track: target } = resolved
@@ -2980,7 +3006,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       }
       return null
     })
-  }, [primeTrackArtwork, queueTracks, requestHydratedAudioTrack, shuffleMode])
+  }, [getPageShuffleSession, primeTrackArtwork, queueTracks, requestHydratedAudioTrack, shuffleMode])
 
   const commitTrackCardPreview = useCallback((tokenId: number) => {
     const token = preparedTrackCardPreviewRef.current
@@ -3096,6 +3122,24 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       ?? latestAudioStateRef.current?.currentTrackId
       ?? audioTrackRef.current?.id
     const currentIndex = activeTrackId ? queueTrackIndexRef.current.get(activeTrackId) ?? 0 : 0
+    const pageSession = activeTrackId ? getPageShuffleSession(playlist, activeTrackId) : null
+    if (pageSession && pageSession.scope === playlistScope(playlist) && activeTrackId) {
+      const autoplay = automatic || latestAudioStateRef.current?.phase === 'playing'
+      let originId = activeTrackId
+      for (let attempts = 0; attempts < pageSession.order.length; attempts += 1) {
+        const targetIndex = resolvePageShuffleTarget(pageSession, playlist.tracks, originId, direction)
+        if (targetIndex === null) return
+        const target = playlist.tracks[targetIndex]
+        const expectedRequestId = selectionRequestIdRef.current + 1
+        const loaded = await loadPlaylistTrackOrSkip(playlist, targetIndex,
+          autoplay, direction, false, false, false,
+          automatic ? 'automatic' : direction < 0 ? 'previous' : 'next')
+        if (loaded || selectionRequestIdRef.current !== expectedRequestId
+          || pageShuffleSessionRef.current !== pageSession) return
+        originId = target.id
+      }
+      return
+    }
     if (
       automatic
       && (repeatMode === 'sequential' || repeatMode === 'all-categories-until-stop')
@@ -3122,7 +3166,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       false,
       visualSource,
     )
-  }, [loadPlaylistTrackOrSkip, queueTracks, repeatMode, shuffleMode])
+  }, [getPageShuffleSession, loadPlaylistTrackOrSkip, queueTracks, repeatMode, shuffleMode])
 
   function applyOptimisticTransportPhase(phase: TransportIntentPhase) {
     transportIntentRef.current = phase
@@ -3876,7 +3920,8 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     return true
   }, [findPlaylistForScope, loadPlaylistTrackOrSkip, activatePlaylistScope, prefetchAdjacentPlaylistTracks])
 
-  const selectPlaybackQueueTrack = useCallback(async (selection: PlaybackQueueSelection, trackId: string) => {
+  const selectPlaybackQueueTrack = useCallback(async (selection: PlaybackQueueSelection, trackId: string,
+    options?: { shuffleMode: 'shuffle-all'; repeatMode: RepeatMode; shuffleOrder: readonly string[] }) => {
     if (audioSelectionInProgressRef.current || transportOperationInProgress()
       || timelineInteractionRef.current === 'seeking') return false
     const sources = new Map<string, Map<string, AudioFolderTrackRef>>()
@@ -3916,9 +3961,42 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     if (!loaded || selectionRequestIdRef.current !== expectedRequestId
       || latestAudioStateRef.current?.currentTrackId !== trackId) return false
     activatePlaylistScope(playlist, summaries)
-    prefetchAdjacentPlaylistTracks(trackId)
+    if (options) {
+      trackCardPreviewIdRef.current += 1
+      preparedTrackCardPreviewRef.current = null
+      artworkPrefetchGenerationRef.current += 1
+      setArtworkPrefetchCandidates([])
+      setShuffleMode(options.shuffleMode)
+      setRepeatMode(options.repeatMode)
+      pageShuffleSessionRef.current = { scope: playlistScope(playlist), order: options.shuffleOrder }
+    } else prefetchAdjacentPlaylistTracks(trackId)
     return true
   }, [findPlaylistForScope, loadPlaylistTrackOrSkip, activatePlaylistScope, prefetchAdjacentPlaylistTracks])
+
+  const shufflePlaybackQueue = useCallback(async (selection: PlaybackQueueSelection) => {
+    if (audioSelectionInProgressRef.current || transportOperationInProgress()
+      || timelineInteractionRef.current === 'seeking') return false
+    const candidates: AudioFolderTrackRef[] = []
+    const sources = new Map<string, Map<string, AudioFolderTrackRef>>()
+    for (const entry of selection.entries) {
+      let source = sources.get(entry.scope)
+      if (!source) {
+        const playlist = findPlaylistForScope(entry.scope)
+        if (!playlist) return false
+        source = new Map(playlist.tracks.map((item) => [item.id, item]))
+        sources.set(entry.scope, source)
+      }
+      const descriptor = source.get(entry.trackId)
+      // Reject stale page snapshots instead of falling back to the old queue.
+      if (!descriptor) return false
+      if (descriptor.available) candidates.push(descriptor)
+    }
+    if (!candidates.length) return false
+    const order = createPageShuffleOrder(candidates, audioTrackRef.current?.sourcePath)
+    return selectPlaybackQueueTrack(selection, order[0], {
+      shuffleMode: 'shuffle-all', repeatMode: 'all-categories-until-stop', shuffleOrder: order,
+    })
+  }, [findPlaylistForScope, selectPlaybackQueueTrack])
 
   function refreshAudioState() {
     if (
@@ -4003,6 +4081,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       ?? (folderPlaylist && !playbackQueueOrigin(folderPlaylist) ? playlistScope(folderPlaylist) : null),
     playbackQueueKind: playbackQueueOrigin(folderPlaylist)?.kind,
     selectPlaybackQueueTrack,
+    shufflePlaybackQueue,
     selectSessionPlaylistTrack,
     playlistDurationScope: folderPlaylist
       ? playlistScope(folderPlaylist)
@@ -4049,8 +4128,22 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     discardTrackCardPreview,
     togglePlayback,
     transitionPlayback,
-    cycleShuffleMode: () => setShuffleMode((value) => nextShuffleMode[value]),
-    cycleRepeatMode: () => setRepeatMode((value) => nextRepeatMode[value]),
+    cycleShuffleMode: () => {
+      pageShuffleSessionRef.current = null
+      trackCardPreviewIdRef.current += 1
+      preparedTrackCardPreviewRef.current = null
+      artworkPrefetchGenerationRef.current += 1
+      setArtworkPrefetchCandidates([])
+      setShuffleMode((value) => nextShuffleMode[value])
+    },
+    cycleRepeatMode: () => {
+      pageShuffleSessionRef.current = null
+      trackCardPreviewIdRef.current += 1
+      preparedTrackCardPreviewRef.current = null
+      artworkPrefetchGenerationRef.current += 1
+      setArtworkPrefetchCandidates([])
+      setRepeatMode((value) => nextRepeatMode[value])
+    },
     toggleTrackFeedback,
     changeVolume,
     toggleQueue: () => setQueueOpen((value) => !value),

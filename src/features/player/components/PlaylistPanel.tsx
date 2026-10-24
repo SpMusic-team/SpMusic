@@ -22,7 +22,7 @@ import { LibraryChromeTransitionContext } from '@/features/player/hooks/useLibra
 import { readLibraryLayoutRect } from '@/features/player/model/libraryNavigationGeometry'
 import type { PlaylistControllerMode } from '@/features/player/model/playlistControllerMode'
 import { appCopy } from '@/features/player/model/playerCopy'
-import { nextShuffleMode, type ShuffleMode } from '@/features/player/model/playbackModes'
+import type { ShuffleMode } from '@/features/player/model/playbackModes'
 import { formatPlaylistDurationLabel, type PlaylistDurationStatus } from '@/features/player/model/playlistDuration'
 import type { PlayerPlaybackViewModel, PlayerTimelineViewModel, PlayerPlaylistViewModel, PlaylistLibraryViewModel, PlaylistArtworkDemand, PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
 
@@ -40,6 +40,7 @@ type PlaylistPanelProps = {
   totalDurationDetail?: string
   shuffleMode: ShuffleMode
   onShuffleCycle: () => void
+  onShufflePlay?: PlayerPlaylistViewModel['onShufflePlay']
   isOpenAudioDisabled?: boolean
   onOpenAudio?: () => void
   onTrackSelect?: (trackId: string, orderedTrackIds?: readonly string[]) => void
@@ -248,8 +249,7 @@ export function PlaylistPanel({
   totalDurationSeconds,
   totalDurationStatus,
   totalDurationDetail,
-  shuffleMode,
-  onShuffleCycle,
+  onShufflePlay,
   isOpenAudioDisabled,
   onOpenAudio,
   onTrackSelect,
@@ -732,14 +732,17 @@ export function PlaylistPanel({
   }, [filteredTrackIdsKey, firstFilteredTrackId, layout.level, layout.showArtwork, metadataStatus, onVisibleTrackIdsChange, artworkWindowRevision, clearArtworkWindow])
 
   const playableTrackId = filteredTracks.find((track) => !unavailable.has(track.id))?.id
+  const shuffleTracks = useMemo(() => filteredTracks.filter((track) => !unavailable.has(track.id)
+    && (!selectMode || selectedIds.has(track.id))), [filteredTracks, unavailable, selectMode, selectedIds])
 
-  const handleShuffle = useCallback(() => {
-    const nextMode = nextShuffleMode[shuffleMode]
-    onShuffleCycle()
-    showPlaybackModeToast(getShuffleModePresentation(nextMode, systemIcons))
-  }, [onShuffleCycle, shuffleMode, systemIcons])
+  const handleShuffle = useCallback(async () => {
+    if (isOpenAudioDisabled || metadataStatus === 'loading' || !onShufflePlay || !shuffleTracks.length) return
+    const succeeded = await onShufflePlay(shuffleTracks.map((track) => track.id))
+    if (succeeded) showPlaybackModeToast({ ...getShuffleModePresentation('shuffle-all', systemIcons),
+      label: `${appCopy.controls.shuffle} · ${appCopy.controls.playAllCategories}` }, { replay: true })
+  }, [onShufflePlay, systemIcons, shuffleTracks, isOpenAudioDisabled, metadataStatus])
 
-  const shufflePresentation = getShuffleModePresentation(shuffleMode, systemIcons)
+  const shufflePresentation = getShuffleModePresentation('shuffle-all', systemIcons)
 
   const handleMore = useCallback(() => {
     onOpenAudio?.()
@@ -819,6 +822,7 @@ export function PlaylistPanel({
           compact={compact}
           onBack={compact ? library?.onOpen ?? (() => panelRef.current?.focus({ preventScroll: true })) : undefined}
           shuffle={shufflePresentation} onShuffle={handleShuffle}
+          shuffleDisabled={!shuffleTracks.length || !onShufflePlay || isOpenAudioDisabled || metadataStatus === 'loading'}
           onPlay={handlePlay} playDisabled={!playableTrackId || !onTrackSelect} playbackLocked={isOpenAudioDisabled}
           searchOpen={searchOpen} onSearch={handleSearchToggle}
           selectMode={selectMode} onSelect={handleSelectModeToggle}

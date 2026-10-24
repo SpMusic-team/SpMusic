@@ -14,6 +14,9 @@ import type { PlayerUiViewModel } from '@/features/player/model/playerUiViewMode
 import type { TrackFeedback } from '@/features/player/model/playerTypes'
 import type { AudioTransportTransition } from '@/features/player/services/audioCommands'
 import { demoTracks } from './demoTracks'
+import { createPageShuffleOrder, resolvePageShuffleTarget, type PageShuffleSession } from '@/features/player/model/pageShuffleSession'
+
+const demoPlaylistEntries = fakePlaylistTracks.map((track) => ({ id: track.id, sourcePath: track.id, available: true }))
 
 export function DemoPlayerPage() {
   const [currentTrackId, setCurrentTrackId] = useState(demoTracks[0]?.id ?? null)
@@ -30,6 +33,7 @@ export function DemoPlayerPage() {
   const [feedbackByTrackId, setFeedbackByTrackId] = useState<Record<string, TrackFeedback>>({})
   const lastFrameRef = useRef<number | null>(null)
   const endingTrackRef = useRef<string | null>(null)
+  const pageShuffleSessionRef = useRef<PageShuffleSession | null>(null)
   const previewStartProgressRef = useRef(0)
   const transportTimerRef = useRef<number | null>(null)
   const transportEnvelopeRef = useRef({ source: 0, target: 0, startedAt: 0, durationMs: 0 })
@@ -43,6 +47,19 @@ export function DemoPlayerPage() {
   const changeTrack = useCallback((direction: Direction, automatic = false) => {
     if (!demoTracks.length) return
     endingTrackRef.current = null
+    const session = pageShuffleSessionRef.current
+    if (session) {
+      const index = resolvePageShuffleTarget(session, demoPlaylistEntries, currentPlaylistTrackId, direction)
+      if (index === null) {
+        if (automatic) setPlaying(false)
+        return
+      }
+      const mappedTrack = demoTracks[index % demoTracks.length]
+      setCurrentPlaylistTrackId(demoPlaylistEntries[index].id)
+      setCurrentTrackId(mappedTrack.id)
+      setProgress(0)
+      return
+    }
     const currentIndex = Math.max(0, demoTracks.findIndex((candidate) => candidate.id === currentTrackId))
     if (automatic && repeatMode === 'repeat-one') {
       setProgress(0)
@@ -62,13 +79,14 @@ export function DemoPlayerPage() {
     const nextIndex = resolveNextTrackIndex(demoTracks, currentIndex, direction, shuffleMode)
     setCurrentTrackId(demoTracks[nextIndex]?.id ?? null)
     setProgress(0)
-  }, [currentTrackId, repeatMode, shuffleMode])
+  }, [currentPlaylistTrackId, currentTrackId, repeatMode, shuffleMode])
 
   const selectPlaylistTrack = useCallback((trackId: string) => {
     const playlistIndex = fakePlaylistTracks.findIndex((candidate) => candidate.id === trackId)
     if (playlistIndex < 0 || demoTracks.length === 0) return
     const mappedTrack = demoTracks[playlistIndex % demoTracks.length]
     if (!mappedTrack) return
+    pageShuffleSessionRef.current = null
     endingTrackRef.current = null
     setCurrentPlaylistTrackId(trackId)
     setCurrentTrackId(mappedTrack.id)
@@ -168,8 +186,14 @@ export function DemoPlayerPage() {
         }, actualDurationMs)
         return Promise.resolve({ requestId: request.requestId, completed: false })
       },
-      onShuffleCycle: () => setShuffleMode((value) => nextShuffleMode[value]),
-      onRepeatCycle: () => setRepeatMode((value) => nextRepeatMode[value]),
+      onShuffleCycle: () => {
+        pageShuffleSessionRef.current = null
+        setShuffleMode((value) => nextShuffleMode[value])
+      },
+      onRepeatCycle: () => {
+        pageShuffleSessionRef.current = null
+        setRepeatMode((value) => nextRepeatMode[value])
+      },
     },
     timeline: {
       positionSeconds: Math.min(progress, duration),
@@ -214,8 +238,21 @@ export function DemoPlayerPage() {
       totalDurationSeconds: fakePlaylistTotalSeconds,
       currentTrackId: currentPlaylistTrackId,
       shuffleMode,
-      onShuffleCycle: () => setShuffleMode((value) => nextShuffleMode[value]),
+      onShuffleCycle: () => {
+        pageShuffleSessionRef.current = null
+        setShuffleMode((value) => nextShuffleMode[value])
+      },
       onTrackSelect: selectPlaylistTrack,
+      onShufflePlay: (orderedIds) => {
+        if (!orderedIds.length) return false
+        const entries = orderedIds.map((id) => ({ id, sourcePath: id, available: true }))
+        const order = createPageShuffleOrder(entries, currentPlaylistTrackId)
+        selectPlaylistTrack(order[0])
+        pageShuffleSessionRef.current = { scope: 'demo', order }
+        setShuffleMode('shuffle-all')
+        setRepeatMode('all-categories-until-stop')
+        return true
+      },
     },
     feedback: {
       value: track ? feedbackByTrackId[track.id] : undefined,

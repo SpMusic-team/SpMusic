@@ -29,7 +29,7 @@ function Fixture(){
  window.navigate=setRoute;window.setBusy=setBusy;window.setMetadata=setMetadata;
  const library={route,isOpen:route.view!=='tracks',currentScope:'source-A',activeScope:'source-A',items:[{scope:'source-A',name:'Source A',trackCount:100,sourceKind:'m3u8'}],allSongs,allSongsMetadataStatus:metadata,
  onOpenOverview:()=>setRoute({view:'overview'}),onSelectCategory:categoryId=>setRoute({view:'category',categoryId}),onOpen:()=>setRoute({view:'category',categoryId:'playlists'}),onSelect:()=>setRoute({view:'tracks'}),
- onPlay:scope=>window.calls.push({type:'source-play',scope}),onPlaySong:(scope,id,ordered)=>window.calls.push({type:'song-play',scope,id,ordered}),
+ onPlay:scope=>window.calls.push({type:'source-play',scope}),onPlaySong:(scope,id,ordered)=>window.calls.push({type:'song-play',scope,id,ordered}),onShufflePlay:async(ordered)=>{const target=ordered[1]??ordered[0];window.calls.push({type:'song-play',scope:target.scope,id:target.trackId,ordered});return true},
  onSelectFolders:()=>window.calls.push({type:'folders'}),onImportPlaylist:()=>window.calls.push({type:'import'}),onCreatePlaylist:()=>null};
  const viewModel={playback:{track:tracks[0],contentState:'track',isPlaying:false,shuffleMode:'none',repeatMode:'list-loop',isAudioBusy:busy,isTransportBusy:false,statusText:'',onOpenAudio:noop,onPrevious:noop,onNext:noop,onPlayToggle:async r=>({requestId:r.requestId,completed:true}),onShuffleCycle:()=>window.calls.push({type:'shuffle-mode'}),onRepeatCycle:noop},
  timeline:{positionSeconds:45,durationSeconds:180,interaction:'following',onPreviewStart:noop,onPreview:noop,onCommit:noop,onCancelPreview:noop},volume:{valuePercent:50,isBusy:false,isDisabled:false,onChange:noop},queue:{tracks,isOpen:false,onToggle:noop},

@@ -7,6 +7,8 @@ import { LibraryDockContext, useLibraryDockBinding } from '@/features/player/hoo
 import { usePlaylistControllerMotion } from '@/features/player/hooks/usePlaylistControllerMotion'
 import type { PlaylistControllerMode } from '@/features/player/model/playlistControllerMode'
 import { PlaylistActionButtons } from '@/features/player/components/PlaylistActionButtons'
+import { getShuffleModePresentation, showPlaybackModeToast } from '@/features/player/components/playbackModePresentation'
+import { appCopy } from '@/features/player/model/playerCopy'
 import { readLibraryLayoutRect } from '@/features/player/model/libraryNavigationGeometry'
 import { useAllSongsRenderWindow } from '@/features/player/hooks/useAllSongsRenderWindow'
 import { useAllSongsTileNavigation } from '@/features/player/hooks/useAllSongsTileNavigation'
@@ -450,12 +452,21 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
     showQuickIndexPreview(key, rect.top + rect.height / 2, nav)
     hideQuickIndexPreview()
   }
-  const playSongs = useCallback((random = false) => {
+  const playSongs = useCallback(() => {
     const candidates = selectMode ? selectedSongs : playableSongs
-    const target = random ? candidates[Math.floor(Math.random() * candidates.length)] : candidates[0]
+    const target = candidates[0]
     if (target) library.onPlaySong?.(target.scope, target.trackId,
       candidates.map(({ scope, trackId }) => ({ scope, trackId })))
   }, [selectMode, selectedSongs, playableSongs, library])
+  const shufflePresentation = getShuffleModePresentation('shuffle-all', systemIcons)
+  const shuffleSongs = useCallback(async () => {
+    if (playbackCommandLocked || library.allSongsMetadataStatus === 'loading' || !library.onShufflePlay) return
+    const candidates = selectMode ? selectedSongs : playableSongs
+    if (!candidates.length) return
+    const succeeded = await library.onShufflePlay(candidates.map(({ scope, trackId }) => ({ scope, trackId })))
+    if (succeeded) showPlaybackModeToast({ ...getShuffleModePresentation('shuffle-all', systemIcons),
+      label: `${appCopy.controls.shuffle} · ${appCopy.controls.playAllCategories}` }, { replay: true })
+  }, [playbackCommandLocked, library, selectMode, selectedSongs, playableSongs, systemIcons])
   const playListsRandomly = useCallback(() => {
     const candidates = selectMode ? selectedItems : visible
     const target = candidates[Math.floor(Math.random() * candidates.length)]
@@ -529,9 +540,9 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
           layout={sharedProjection ? 'position' : undefined}
           layoutId={sharedProjection && library.currentScope ? `playlist-library-actions:${library.currentScope}` : undefined}
           transition={{ layout: returnTransition }}>
-          <Button variant="outline" aria-label={`随机播放${category.label}`} data-playback-command-lock={playbackCommandLocked || undefined} disabled={isSongs ? !songPlayTarget || !library.onPlaySong || playlist.isOpenAudioDisabled : !playTarget || playlist.isOpenAudioDisabled} onClick={() => {
+          <Button variant="outline" aria-label={`随机播放${category.label}`} data-playback-command-lock={playbackCommandLocked || undefined} disabled={isSongs ? !songPlayTarget || !library.onShufflePlay || playlist.isOpenAudioDisabled || library.allSongsMetadataStatus === 'loading' : !playTarget || playlist.isOpenAudioDisabled} onClick={() => {
             if (isSongs) {
-              playSongs(true)
+              void shuffleSongs()
               return
             }
             playListsRandomly()
@@ -613,8 +624,8 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
       animate={toolbarPassed && controllerActive ? 'visible' : 'hidden'}
       transition={appearanceMotion.layoutTransition} style={{ y: controllerMotion.offsetY }}>
       <PlaylistActionButtons compact onBack={library.onOpenOverview}
-        shuffle={{ icon: systemIcons.shuffle, label: '随机播放全部歌曲', pressed: false }}
-        onShuffle={() => playSongs(true)} shuffleDisabled={!songPlayTarget || !library.onPlaySong || playbackCommandLocked}
+        shuffle={{ ...shufflePresentation, label: '随机播放全部歌曲' }}
+        onShuffle={() => { void shuffleSongs() }} shuffleDisabled={!songPlayTarget || !library.onShufflePlay || playbackCommandLocked || library.allSongsMetadataStatus === 'loading'}
         onPlay={() => playSongs()} playDisabled={!songPlayTarget || !library.onPlaySong || playbackCommandLocked} playbackLocked={playbackCommandLocked}
         searchOpen={showSearch} onSearch={toggleSearch}
         selectMode={selectMode} onSelect={toggleSelection} selectDisabled={!library.allSongs?.length}

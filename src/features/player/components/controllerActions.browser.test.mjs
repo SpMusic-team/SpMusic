@@ -29,7 +29,7 @@ function Fixture(){
  const [shuffle,setShuffle]=React.useState('none'),[searchRequestId,setSearchRequestId]=React.useState(0),[managed,setManaged]=React.useState(false);
  window.requestSearch=()=>setSearchRequestId(n=>n+1);
  const currentTrackId=new URLSearchParams(location.search).has('far')?'song-83':'song-0';
- const props={controllerMode:'fixed',tracks,playlistName:'Controller actions',currentTrackId,shuffleMode:shuffle,onShuffleCycle:()=>{window.calls.push('shuffle');setShuffle(s=>s==='none'?'shuffle-all':'none')},onOpenAudio:()=>window.calls.push('open'),onTrackSelect:id=>window.calls.push('select:'+id),
+ const props={controllerMode:'fixed',tracks,playlistName:'Controller actions',currentTrackId,shuffleMode:shuffle,onShufflePlay:async()=>{window.calls.push('shuffle');setShuffle('shuffle-all');return true},onOpenAudio:()=>window.calls.push('open'),onTrackSelect:id=>window.calls.push('select:'+id),
  library:{isOpen:false,items:[],onOpen:()=>{window.calls.push('back');setManaged(true)},onSelect:noop,onPlay:noop},
  playback:{track:tracks[0],isPlaying:false,shuffleMode:shuffle,repeatMode:'list-loop',isAudioBusy:false,isTransportBusy:false,statusText:'',onOpenAudio:noop,onPrevious:noop,onNext:noop,onPlayToggle:async r=>({requestId:r.requestId,completed:true}),onShuffleCycle:noop,onRepeatCycle:noop},
  timeline:{positionSeconds:45,durationSeconds:180,interaction:'following',onPreviewStart:noop,onPreview:noop,onCommit:noop,onCancelPreview:noop},visualIsPlaying:false,playbackTransitionPending:false,onPlayToggle:()=>window.calls.push('toggle'),onClose:noop,searchRequestId};

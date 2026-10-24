@@ -30,7 +30,7 @@ export function PlaylistActionButtons({ onBack, shuffle, onShuffle, shuffleDisab
   const icons = useSystemIcons()
   return <>
     {onBack ? <IconButton className="playlist-hero-icon playlist-controller-back-button" icon={CornerLeftUp} label="返回" onClick={onBack} /> : null}
-    <IconButton className="playlist-hero-icon playlist-hero-shuffle-button" icon={shuffle.icon} label={shuffle.label} selected={shuffle.pressed} disabled={shuffleDisabled} onClick={onShuffle} />
+    <IconButton className="playlist-hero-icon playlist-hero-shuffle-button" icon={shuffle.icon} label={shuffle.label} aria-pressed={undefined} data-selected={undefined} data-playback-command-lock={playbackLocked || undefined} disabled={shuffleDisabled} onClick={onShuffle} />
     <IconButton className="playlist-hero-icon playlist-hero-play-button" icon={icons.play} label={appCopy.playlistPage.play}
       data-playback-command-lock={playbackLocked || undefined} disabled={playDisabled} pressFeedback={!compact} pressFeedbackTone="surface-variant" onClick={onPlay} />
     <Button className="playlist-search-button playlist-hero-icon" aria-label={appCopy.playlistPage.search} aria-pressed={searchOpen}

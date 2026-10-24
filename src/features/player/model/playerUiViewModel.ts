@@ -163,6 +163,7 @@ export type PlaylistLibraryViewModel = {
   onSelect: (scope: string) => void
   onPlay: (scope: string) => void
   onPlaySong?: (scope: string, trackId: string, orderedSongs?: readonly PlaybackQueueEntry[]) => void
+  onShufflePlay?: (orderedSongs: readonly PlaybackQueueEntry[]) => Promise<boolean> | boolean
   onSelectFolders?: () => void
   onImportPlaylist?: () => void
   isImportPending?: boolean
@@ -195,6 +196,7 @@ export type PlayerPlaylistViewModel = {
   shuffleMode: ShuffleMode
   onShuffleCycle: () => void
   onTrackSelect?: (trackId: string, orderedTrackIds?: readonly string[]) => void
+  onShufflePlay?: (orderedTrackIds: readonly string[]) => Promise<boolean> | boolean
   onVisibleTrackIdsChange?: (trackIds: readonly string[], keepPersistentArtwork?: boolean, showArtwork?: boolean, demand?: PlaylistArtworkDemand) => void
 }
 

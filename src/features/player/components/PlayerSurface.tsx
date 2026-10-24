@@ -2982,6 +2982,7 @@ export function PlayerSurface({
               totalDurationDetail={playlist.totalDurationDetail}
               shuffleMode={playlist.shuffleMode}
               onShuffleCycle={playlist.onShuffleCycle}
+              onShufflePlay={playlist.onShufflePlay}
               isOpenAudioDisabled={playlist.isOpenAudioDisabled}
               onOpenAudio={playlist.onOpenAudio}
               onTrackSelect={playlist.onTrackSelect}

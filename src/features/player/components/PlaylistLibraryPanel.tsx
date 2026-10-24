@@ -48,6 +48,7 @@ const QUICK_INDEX_COUNT = QUICK_INDEX_KEYS.length + 1
 
 type Props = {
   controllerMode?: PlaylistControllerMode
+  entryPosition?: PlayerPlaylistViewModel['entryPosition']
   playlist: PlayerPlaylistViewModel
   allSongsCoverStore: AllSongsCoverStore
   librarySidebarOpen: boolean
@@ -93,7 +94,7 @@ const AllSongsCard = memo(function AllSongsCard({ item, index, store, current, c
     onActivate={onActivate} onToggleSelect={onToggleSelect} />
 })
 
-export function PlaylistLibraryPanel({ playlist, allSongsCoverStore, librarySidebarOpen, onLibrarySidebarOpenChange, searchRequestId = 0, controllerMode = 'movable', timeline }: Props) {
+export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverStore, librarySidebarOpen, onLibrarySidebarOpenChange, searchRequestId = 0, controllerMode = 'movable', timeline }: Props) {
   const appearanceMotion = useAppearanceMotion()
   const systemIcons = useSystemIcons()
   const MoreIcon = systemIcons.more
@@ -140,6 +141,8 @@ export function PlaylistLibraryPanel({ playlist, allSongsCoverStore, librarySide
   const songsListRef = useRef<HTMLDivElement | null>(null)
   const songsSpaceRef = useRef<HTMLDivElement | null>(null)
   const pendingSongFocus = useRef<string | null>(null)
+  const handledEntryPositionId = useRef<number | null>(null)
+  const pendingEntryPosition = useRef<{ requestId: number; cancelled: boolean } | null>(null)
   const managementPanelRef = useRef<HTMLElement | null>(null)
   const [failedSongCovers, setFailedSongCovers] = useState<ReadonlySet<string>>(new Set())
   const headingRef = useRef<HTMLElement | null>(null)
@@ -215,6 +218,55 @@ export function PlaylistLibraryPanel({ playlist, allSongsCoverStore, librarySide
   const songsWindow = useAllSongsRenderWindow(visibleSongs.length, songsLayout, panelRef, songsListRef, songsSpaceRef, library.allSongsMetadataStatus === 'loading')
   const renderedSongs = useMemo(() => visibleSongs.slice(songsWindow.first, songsWindow.end), [visibleSongs, songsWindow.first, songsWindow.end])
   useLayoutEffect(() => {
+    if (!isSongs || !entryPosition || !isPresent) return
+    const panel = panelRef.current
+    if (!panel) return
+    if (handledEntryPositionId.current !== entryPosition.requestId) {
+      handledEntryPositionId.current = entryPosition.requestId
+      pendingEntryPosition.current = { requestId: entryPosition.requestId, cancelled: false }
+    }
+    const pending = pendingEntryPosition.current
+    if (!pending || pending.cancelled || pending.requestId !== entryPosition.requestId) return
+    if (entryPosition.target === 'top') {
+      panel.scrollTo({ top: 0, behavior: 'instant' })
+      pendingEntryPosition.current = null
+      return
+    }
+    if (library.allSongsMetadataStatus === 'loading') return
+    const index = visibleSongs.findIndex(item => item.trackId === playlist.currentTrackId)
+    if (index < 0) { pendingEntryPosition.current = null; return }
+    const card = [...(songsListRef.current?.querySelectorAll<HTMLElement>('[data-playlist-track-id]') ?? [])]
+      .find(item => item.dataset.playlistTrackId === playlist.currentTrackId)
+    if (!card) {
+      const space = songsSpaceRef.current
+      if (songsWindow.enabled && space) {
+        panel.scrollTop += space.getBoundingClientRect().top - panel.getBoundingClientRect().top
+          + Math.floor(index / songsLayout.columns) * songsWindow.stride
+      }
+      return
+    }
+    const panelRect = panel.getBoundingClientRect()
+    const cardRect = card.getBoundingClientRect()
+    panel.scrollTop += cardRect.top - panelRect.top - (panel.clientHeight - cardRect.height) / 2
+    pendingEntryPosition.current = null
+  }, [entryPosition, isPresent, isSongs, library.allSongsMetadataStatus, playlist.currentTrackId,
+    visibleSongs, songsWindow.enabled, songsWindow.first, songsWindow.end, songsWindow.stride, songsLayout.columns])
+  useEffect(() => {
+    const panel = panelRef.current
+    if (!isSongs || !panel) return
+    const cancel = () => { if (pendingEntryPosition.current) pendingEntryPosition.current.cancelled = true }
+    panel.addEventListener('wheel', cancel, { passive: true })
+    panel.addEventListener('pointerdown', cancel, { passive: true })
+    panel.addEventListener('touchstart', cancel, { passive: true })
+    panel.addEventListener('keydown', cancel)
+    return () => {
+      panel.removeEventListener('wheel', cancel)
+      panel.removeEventListener('pointerdown', cancel)
+      panel.removeEventListener('touchstart', cancel)
+      panel.removeEventListener('keydown', cancel)
+    }
+  }, [isSongs])
+  useLayoutEffect(() => {
     if (!pendingSongFocus.current) return
     const target = Array.from(songsListRef.current?.querySelectorAll<HTMLElement>('[data-song-key]') ?? []).find(row => row.dataset.songKey === pendingSongFocus.current)
     if (target) { target.focus({ preventScroll: true }); pendingSongFocus.current = null }
@@ -261,6 +313,7 @@ export function PlaylistLibraryPanel({ playlist, allSongsCoverStore, librarySide
   const playbackCommandLocked = Boolean(playlist.isOpenAudioDisabled)
   useEffect(() => {
     if (searchRequestId > 0) {
+      if (pendingEntryPosition.current) pendingEntryPosition.current.cancelled = true
       // Focus after the input has mounted, with no timing-dependent delay.
       searchRef.current?.focus()
     }
@@ -323,6 +376,7 @@ export function PlaylistLibraryPanel({ playlist, allSongsCoverStore, librarySide
     })
   }
   function toggleSearch() {
+    if (pendingEntryPosition.current) pendingEntryPosition.current.cancelled = true
     if (showSearch) {
       setQuery('')
       setSearchOpen(false)
@@ -333,6 +387,7 @@ export function PlaylistLibraryPanel({ playlist, allSongsCoverStore, librarySide
     }
   }
   function jumpToIndex(key: string) {
+    if (pendingEntryPosition.current) pendingEntryPosition.current.cancelled = true
     setActiveQuickIndex(key)
     const panel = panelRef.current
     if (!panel) return
@@ -485,7 +540,7 @@ export function PlaylistLibraryPanel({ playlist, allSongsCoverStore, librarySide
             if (isSongs) playSongs()
             else if (playTarget) library.onPlay(playTarget.scope)
           }}><img src={playIcon} alt="" /></Button>
-          <Button variant="outline" aria-label={`搜索${category.label}`} aria-expanded={showSearch} onClick={() => { setSearchOpen(true); queueMicrotask(() => searchRef.current?.focus()) }}><img src={searchIcon} alt="" /></Button>
+          <Button variant="outline" aria-label={`搜索${category.label}`} aria-expanded={showSearch} onClick={() => { if (pendingEntryPosition.current) pendingEntryPosition.current.cancelled = true; setSearchOpen(true); queueMicrotask(() => searchRef.current?.focus()) }}><img src={searchIcon} alt="" /></Button>
           <Button variant="outline" aria-pressed={selectMode} disabled={isSongs ? !(library.allSongs?.length) : !categoryItems.length} onClick={toggleSelection}>{selectMode ? '取消选择' : '选择'}</Button>
           {selectMode ? <span role="status">已选择 {selected.size} 项</span> : null}
           {isSongs && selectMode ? <Button variant="outline" disabled={!selected.size || !library.onCreatePlaylist} onClick={openCreatePlaylist}>新建播放列表</Button> : null}
@@ -493,7 +548,7 @@ export function PlaylistLibraryPanel({ playlist, allSongsCoverStore, librarySide
         {renderMore()}
       </motion.div>
       {showSearch ? <motion.div className="playlist-management-search" variants={navigationMotion.chrome}
-        initial={atomicOverview ? 'initial' : false} animate="animate" exit={atomicOverview ? 'exit' : 'animate'} transition={navigationMotion.transition}><Input ref={searchRef} type="search" aria-label={isSongs ? '搜索歌曲标题、艺术家或专辑' : `搜索${category.label}名称`} placeholder={isSongs ? '搜索歌曲' : `搜索${category.label}`} value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape') { setQuery(''); setSearchOpen(false); setDismissedSearchRequestId(searchRequestId) } }} /></motion.div> : null}
+        initial={atomicOverview ? 'initial' : false} animate="animate" exit={atomicOverview ? 'exit' : 'animate'} transition={navigationMotion.transition}><Input ref={searchRef} type="search" aria-label={isSongs ? '搜索歌曲标题、艺术家或专辑' : `搜索${category.label}名称`} placeholder={isSongs ? '搜索歌曲' : `搜索${category.label}`} value={query} onChange={(event) => { if (pendingEntryPosition.current) pendingEntryPosition.current.cancelled = true; setQuery(event.target.value) }} onKeyDown={(event) => { if (event.key === 'Escape') { setQuery(''); setSearchOpen(false); setDismissedSearchRequestId(searchRequestId) } }} /></motion.div> : null}
       <span className="sr-only" role="status" aria-live="polite">{isSongs ? songsAnnouncement : announcement}</span>
       {isSongs ? (library.allSongsMetadataStatus === 'loading' ? <PlaylistMetadataLoading layout={songsLayout} trackCount={library.allSongs?.length ?? 0} /> : visibleSongs.length ? <div ref={songsSpaceRef} style={songsWindow.spaceStyle}><motion.div ref={songsListRef} className="playlist-grid all-songs-list" aria-label="全部歌曲列表"
         data-layout-level={songsLayout.level} data-layout-flow={songsLayout.flow} data-layout-columns={songsLayout.columns}

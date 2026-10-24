@@ -40,19 +40,15 @@ async function harness(count = 100) {
     useCallback: callback => callback,
     useSyncExternalStore: () => {},
     beginAudioPlaylistCoverWindow: async () => { if (beginFailure) throw new Error('window unavailable'); return 1 },
-    probeAudioPlaylistCover: path => {
-      calls.push(path)
-      return new Promise((resolve, reject) => pending.push({ path, item: items.find(item => item.sourcePath === path), resolve, reject }))
-    },
-    schedulePlaylistCoverPixels: async (input, options) => {
+    scheduleTrackThumbnail: (input, options) => {
       pixelCalls.push({ input, options })
-      return options.signal.aborted || !options.isCurrent() ? null : {}
+      calls.push(input.sourcePath)
+      return new Promise((resolve, reject) => pending.push({ path: input.sourcePath, resolve, reject }))
     },
     playlistCoverImageFromPixels: () => ({ src: `blob:cover-${++nextUrl}` }),
     decodePlaylistCover: async () => {
       if (holdDecode) await new Promise(resolve => decodePending.push(resolve))
     },
-    normalizeAudioSourcePath: path => path,
     URL: { revokeObjectURL: url => revoked.push(url) },
     IntersectionObserver: class {
       constructor(callback) { observer = callback }
@@ -64,7 +60,7 @@ async function harness(count = 100) {
     compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
   }).outputText
   const imports = compiled.match(/^import .+;$/gm)
-  assert.equal(imports.length, 6, 'all runtime boundaries are explicitly mocked')
+  assert.equal(imports.length, 5, 'all runtime boundaries are explicitly mocked')
   const bindings = Object.keys(globalThis.__allSongsWindowTest).join(', ')
   const patched = `const { ${bindings} } = globalThis.__allSongsWindowTest;\n${compiled.replace(/^import .+;$/gm, '')}`
   const module = await import(`data:text/javascript;base64,${Buffer.from(patched).toString('base64')}#${Math.random()}`)
@@ -86,10 +82,9 @@ async function harness(count = 100) {
     await flush()
   }
   const finish = async (request = pending.shift(), mode = 'cover') => {
-    assert(request, 'a native probe is pending')
-    const item = request.item
+    assert(request, 'a native thumbnail is pending')
     if (mode === 'error') request.reject(new Error('unreadable artwork'))
-    else request.resolve({ id: item.trackId, sourcePath: item.sourcePath, coverArt: mode === 'missing' ? null : { filePath: `/covers/${item.trackId}` } })
+    else request.resolve(mode === 'missing' ? null : {})
     await flush()
   }
   const drain = async (limit = count, mode = 'cover') => {
@@ -117,7 +112,7 @@ test('more than 60 demanded covers converge without evicting or reloading visibl
     assert.equal(h.store.cache.size, 90)
     assert.equal(h.revoked.length, 0, 'every displayed object URL remains owned')
     assert.equal(h.pending.length, 0)
-    assert(h.pixelCalls.every(({ input }) => input.maxEdge === 128))
+    assert(h.pixelCalls.every(({ input }) => input.maxEdge === 256))
   } finally { h.dispose() }
 })
 

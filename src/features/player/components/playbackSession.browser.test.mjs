@@ -79,6 +79,7 @@ window.backendInvoke=async(command,args)=>{
  if(command==='audio_pause'){await new Promise(resolve=>setTimeout(resolve,30));state={...state,phase:'paused'};return {...state}}
  if(command==='audio_begin_playlist_cover_window')return 1;
  if(command==='audio_probe_playlist_cover')return {id:'song',sourcePath:path,coverArt:null};
+ if(command==='audio_load_track_thumbnail')return new Uint8Array(0);
  if(command==='audio_probe_playlist_durations'){if(hangDuration)return new Promise(()=>{});return args.input.paths.map(sourcePath=>({sourcePath,durationMs:180000,error:null}));}
  if(command==='audio_probe_playlist_track_summaries'){if(hangSummary)return new Promise(()=>{});return args.input.paths.map(sourcePath=>({sourcePath,summary:{title:'Song',artist:'Artist',album:'Album',albumArtist:null,bitDepth:24,sampleRateHz:96000,bitrateKbps:null,codec:'FLAC'},error:null}));}
  if(command==='audio_hydrate_track')return args.input.path===secondDescriptor.sourcePath?{...track,...secondDescriptor}:track;

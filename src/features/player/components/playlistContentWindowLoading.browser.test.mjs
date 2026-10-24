@@ -30,7 +30,7 @@ const realSurface = await (await fetch(origin + '/src/features/player/components
 const surface = `import React from '${dependency('react.js')}';import {PlayerSurface as Surface} from '/__content_window_surface.js';export function PlayerSurface(props){window.viewModel=props.viewModel;return React.createElement(Surface,props)}`
 const html = (await (await fetch(origin)).text()).replace(/src="\/src\/[^\"]+"/, 'src="/__content_window_fixture.js"')
 const browser = await chromium.launch({ headless: true, channel: 'msedge' })
-const page = await browser.newPage({ viewport: { width: 1600, height: 1000 }, reducedMotion: 'reduce' })
+const page = await browser.newPage({ viewport: { width: 1600, height: 1000 }, deviceScaleFactor: 2, reducedMotion: 'reduce' })
 page.setDefaultTimeout(8000)
 const errors = []
 page.on('pageerror', error => { errors.push(error.message); console.error('PAGEERROR', error.message) })
@@ -73,6 +73,11 @@ try {
       return visible.length > 0 && visible.every(card => card.dataset.contentVisible === 'true' && card.querySelector('img')?.complete && card.querySelector('img')?.naturalWidth > 0)
     })
   }
+  const thumbnailCalls = await page.evaluate(() => window.calls.filter(call => call.command === 'audio_load_track_thumbnail'))
+  const heroCalls = await page.evaluate(() => window.calls.filter(call => call.command === 'audio_load_playlist_cover_pixels'))
+  assert(heroCalls.some(call => call.input.maxEdge === 512), 'first-track hero keeps 512px artwork')
+  assert(thumbnailCalls.some(call => call.input.sourcePath !== '/audio/a/0.flac'), 'scrolled cards request thumbnails')
+  assert(thumbnailCalls.every(call => call.input.sourcePath === '/audio/a/0.flac' || call.input.maxEdge === 256), 'high-DPR playlist cards use persisted 256px thumbnails')
   assert.deepEqual(errors, [])
   console.log(JSON.stringify({ case: 'metadata loading -> ready binds content-window scroll listeners', tracks: 200, positions: [0.5, 0.9, 0.2], passed: true }))
 } finally {

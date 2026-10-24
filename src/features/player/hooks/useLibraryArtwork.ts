@@ -11,7 +11,7 @@ import {
   beginAudioPlaylistCoverWindow, probeAudioPlaylistCover,
   type AudioFolderPlaylist, type AudioFolderTrackRef,
 } from '@/features/player/services/audioCommands'
-import { schedulePlaylistCoverPixels } from '@/features/player/services/playlistCoverScheduler'
+import { schedulePlaylistCoverPixels, scheduleTrackThumbnail } from '@/features/player/services/playlistCoverScheduler'
 
 type ArtworkRow = ReadOnlyArtworkRow
 type CacheEntry = { row: ArtworkRow; edge: number; trackId: string }
@@ -26,7 +26,10 @@ type Runtime = {
   pinned: Set<string>
   detail: AudioFolderPlaylist | null
   detailPaths: Map<string, 128 | 256 | 512>
+  detailVisiblePaths: Set<string>
   cache: Map<string, CacheEntry>
+  pendingReplacements: Map<string, { key: string; previous: CacheEntry; older: CacheEntry[] }>
+  failedUpgrades: Set<string>
   queued: Set<string>
   active: number
   pump: () => void
@@ -68,7 +71,7 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
     const runtime: Runtime = {
       mounted: true, visible: false, controller: new AbortController(), revision: 0, descriptors: new Map(), previews: new Map(), desired: new Map(),
       pinned: new Set(),
-      detail: null, detailPaths: new Map(), cache: new Map(), queued: new Set(), active: 0,
+      detail: null, detailPaths: new Map(), detailVisiblePaths: new Set(), cache: new Map(), pendingReplacements: new Map(), failedUpgrades: new Set(), queued: new Set(), active: 0,
       pump: () => {}, refresh: () => {},
     }
     runtimeRef.current = runtime
@@ -80,14 +83,21 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
     const publish = () => {
       const desired = new Set(runtime.desired.keys())
       while (runtime.cache.size > MAX_RESIDENT) {
-        // Covers that are still on screen through a fallback layer are pinned by
-        // their consumer and are not eviction candidates; when every other entry
-        // is demanded, the bounded cache still drops its oldest resident.
-        const key = selectArtworkEvictionKey([...runtime.cache.keys()], desired, runtime.pinned)
+        // The cap applies to optional residents. Dense viewports may need more
+        // than 80 live thumbnails; evicting one would leave a visible blank.
+        const protectedPaths = new Set([...runtime.detailVisiblePaths, ...runtime.previews.values(), ...runtime.pinned])
+        const candidates = [...runtime.cache.keys()].filter((key) => !protectedPaths.has(key))
+        const key = selectArtworkEvictionKey(candidates, desired, runtime.pinned)
         if (key === undefined) break
         const entry = runtime.cache.get(key)
         if (entry?.row.coverThumbnail) URL.revokeObjectURL(entry.row.coverThumbnail.src)
         runtime.cache.delete(key)
+        for (const [src, pending] of runtime.pendingReplacements) {
+          if (pending.key !== key) continue
+          if (pending.previous.row.coverThumbnail) URL.revokeObjectURL(pending.previous.row.coverThumbnail.src)
+          for (const older of pending.older) if (older.row.coverThumbnail) URL.revokeObjectURL(older.row.coverThumbnail.src)
+          runtime.pendingReplacements.delete(src)
+        }
       }
       setRows(new Map([...runtime.cache].map(([key, entry]) => [key, entry.row])))
     }
@@ -112,22 +122,36 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
             const generation = await ready
             if (!current()) return
             if (generation === null) throw new Error('媒体库封面窗口不可用')
-            const cover = await probeAudioPlaylistCover(descriptor.sourcePath)
-            if (!current()) return
-            if (cover.id !== descriptor.id || normalizeAudioSourcePath(cover.sourcePath) !== key) {
-              throw new Error('媒体库封面与歌曲来源不一致')
-            }
-            if (cover.coverArt?.filePath) {
-              const pixels = await schedulePlaylistCoverPixels(
-                { clientId, filePath: cover.coverArt.filePath, maxEdge: edge, windowGeneration: generation },
-                { priority: runtime.detail?.tracks[0]?.sourcePath === descriptor.sourcePath ? 0 : 1,
+            let hasLocalArtwork = false
+            if (edge <= 256) {
+              const pixels = await scheduleTrackThumbnail(
+                { clientId, sourcePath: descriptor.sourcePath, maxEdge: 256, windowGeneration: generation },
+                { priority: [...runtime.previews.values()].includes(key) ? 0
+                  : runtime.detailVisiblePaths.has(key) ? 1 : 2,
                   signal: runtime.controller.signal, isCurrent: current },
               )
-              if (!pixels) return
               if (!current()) return
-              thumbnail = playlistCoverImageFromPixels(pixels)
-            } else if (cover.coverArt?.dataUrl) {
-              thumbnail = await dataUrlThumbnail(cover.coverArt.dataUrl, edge)
+              hasLocalArtwork = pixels !== null
+              if (pixels) thumbnail = playlistCoverImageFromPixels(pixels)
+            } else {
+              const cover = await probeAudioPlaylistCover(descriptor.sourcePath)
+              if (!current()) return
+              if (cover.id !== descriptor.id || normalizeAudioSourcePath(cover.sourcePath) !== key) {
+                throw new Error('媒体库封面与歌曲来源不一致')
+              }
+              hasLocalArtwork = cover.coverArt !== null
+              if (cover.coverArt?.filePath) {
+                const pixels = await schedulePlaylistCoverPixels(
+                  { clientId, filePath: cover.coverArt.filePath, maxEdge: edge, windowGeneration: generation },
+                  { priority: 2,
+                    signal: runtime.controller.signal, isCurrent: current },
+                )
+                if (!pixels) return
+                if (!current()) return
+                thumbnail = playlistCoverImageFromPixels(pixels)
+              } else if (cover.coverArt?.dataUrl) {
+                thumbnail = await dataUrlThumbnail(cover.coverArt.dataUrl, edge)
+              }
             }
             if (thumbnail) {
               await decodePlaylistCover(thumbnail)
@@ -135,11 +159,22 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
             }
             const previous = runtime.cache.get(key)
             runtime.cache.delete(key)
-            runtime.cache.set(key, { edge: cover.coverArt ? edge : 512, trackId: descriptor.id,
-              row: { hasLocalArtwork: Boolean(cover.coverArt), coverThumbnail: thumbnail } })
-            if (previous?.row.coverThumbnail) URL.revokeObjectURL(previous.row.coverThumbnail.src)
+            runtime.cache.set(key, { edge: hasLocalArtwork ? Math.max(edge, 256) : 512, trackId: descriptor.id,
+              row: { hasLocalArtwork, coverThumbnail: thumbnail } })
+            if (previous?.row.coverThumbnail) {
+              if (thumbnail) {
+                const older = runtime.pendingReplacements.get(previous.row.coverThumbnail.src)
+                runtime.pendingReplacements.delete(previous.row.coverThumbnail.src)
+                runtime.pendingReplacements.set(thumbnail.src, {
+                  key, previous, older: older ? [older.previous, ...older.older] : [],
+                })
+              } else URL.revokeObjectURL(previous.row.coverThumbnail.src)
+            }
             thumbnail = undefined
             publish()
+            // The sidebar and hero share the first source. Publish its 256px
+            // thumbnail before admitting the optional 512px hero upgrade.
+            runtime.refresh()
           } catch (error) {
             if (current()) {
               // Settle this descriptor/window without claiming absent artwork
@@ -160,10 +195,26 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
     }
     runtime.refresh = () => {
       const desired = new Map<string, 128 | 256 | 512>()
-      // Detail hero and on-screen rows have priority over list previews.
-      for (const [key, edge] of runtime.detailPaths) desired.set(key, edge)
+      const hero = runtime.detail?.tracks[0]
+      const heroKey = hero ? normalizeAudioSourcePath(hero.sourcePath) : undefined
+      const heroReady = heroKey ? Boolean(runtime.cache.get(heroKey)?.row.coverThumbnail) : false
+      const heroUpgradeReady = heroReady && !runtime.failedUpgrades.has(heroKey ?? '') && (runtime.detail?.tracks.length === 1
+        || (runtime.detailVisiblePaths.size > 1 && [...runtime.detailVisiblePaths].every((key) =>
+          key === heroKey || runtime.cache.has(key))))
+      // First load the persisted thumbnail even when the same source also
+      // needs a 512px hero. Admit every visible card and sidebar tile before
+      // the hero upgrade and offscreen prefetch.
+      for (const [key, edge] of runtime.detailPaths) {
+        if ((runtime.detailVisiblePaths.has(key) || key === heroKey) && (key !== heroKey || !heroUpgradeReady)) {
+          desired.set(key, key === heroKey ? 256 : edge)
+        }
+      }
       for (const key of runtime.previews.values()) {
-        if (runtime.descriptors.get(key)?.available && !desired.has(key) && desired.size < MAX_RESIDENT) desired.set(key, 256)
+        if (runtime.descriptors.get(key)?.available && !desired.has(key) && desired.size < MAX_RESIDENT
+          && !(key === heroKey && heroUpgradeReady)) desired.set(key, 256)
+      }
+      for (const [key, edge] of runtime.detailPaths) {
+        if (!desired.has(key)) desired.set(key, edge)
       }
       runtime.desired = runtime.visible ? desired : new Map()
       runtime.pump()
@@ -211,13 +262,61 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
       }
     })
     mutations.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-library-cover-source'] })
+    const retireReplacement = (src: string) => {
+      const pending = runtime.pendingReplacements.get(src)
+      if (!pending) return
+      const images = [...document.querySelectorAll<HTMLImageElement>('img')]
+      const consumers = images.filter((image) => image.src === src)
+      if (consumers.some((image) => !image.complete || image.naturalWidth === 0)) return
+      const oldSources = [pending.previous, ...pending.older]
+        .map((entry) => entry.row.coverThumbnail?.src).filter((url): url is string => Boolean(url))
+      if (images.some((image) => oldSources.includes(image.src))) return
+      runtime.pendingReplacements.delete(src)
+      for (const oldSource of oldSources) URL.revokeObjectURL(oldSource)
+    }
+    const onImageLoad = (event: Event) => {
+      const src = (event as CustomEvent<unknown>).detail
+      if (typeof src === 'string') retireReplacement(src)
+    }
+    const onImageError = (event: Event) => {
+      const src = (event as CustomEvent<unknown>).detail
+      if (typeof src !== 'string') return
+      const pending = runtime.pendingReplacements.get(src)
+      if (!pending || runtime.cache.get(pending.key)?.row.coverThumbnail?.src !== src) return
+      runtime.pendingReplacements.delete(src)
+      runtime.failedUpgrades.add(pending.key)
+      runtime.cache.set(pending.key, pending.previous)
+      if (pending.older.length && pending.previous.row.coverThumbnail) {
+        runtime.pendingReplacements.set(pending.previous.row.coverThumbnail.src, {
+          key: pending.key, previous: pending.older[0]!, older: pending.older.slice(1),
+        })
+      }
+      URL.revokeObjectURL(src)
+      publish()
+      runtime.refresh()
+    }
+    const replacementObserver = new MutationObserver(() => {
+      for (const src of runtime.pendingReplacements.keys()) retireReplacement(src)
+    })
+    replacementObserver.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['src'] })
+    window.addEventListener('spmusic:playlist-cover-image-load', onImageLoad)
+    window.addEventListener('spmusic:playlist-cover-image-error', onImageError)
     return () => {
       runtime.mounted = false
       runtime.controller.abort()
       mutations.disconnect()
       observer.disconnect()
+      replacementObserver.disconnect()
+      window.removeEventListener('spmusic:playlist-cover-image-load', onImageLoad)
+      window.removeEventListener('spmusic:playlist-cover-image-error', onImageError)
       for (const entry of runtime.cache.values()) if (entry.row.coverThumbnail) URL.revokeObjectURL(entry.row.coverThumbnail.src)
+      for (const pending of runtime.pendingReplacements.values()) {
+        if (pending.previous.row.coverThumbnail) URL.revokeObjectURL(pending.previous.row.coverThumbnail.src)
+        for (const older of pending.older) if (older.row.coverThumbnail) URL.revokeObjectURL(older.row.coverThumbnail.src)
+      }
       runtime.cache.clear()
+      runtime.pendingReplacements.clear()
+      runtime.failedUpgrades.clear()
       runtime.previews.clear()
       if (runtimeRef.current === runtime) runtimeRef.current = null
     }
@@ -247,11 +346,22 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
       if (descriptor?.available && descriptor.id === entry.trackId) continue
       if (entry.row.coverThumbnail) URL.revokeObjectURL(entry.row.coverThumbnail.src)
       runtime.cache.delete(key)
+      runtime.failedUpgrades.delete(key)
+      for (const [src, pending] of runtime.pendingReplacements) {
+        if (pending.key !== key) continue
+        if (pending.previous.row.coverThumbnail) URL.revokeObjectURL(pending.previous.row.coverThumbnail.src)
+        for (const older of pending.older) if (older.row.coverThumbnail) URL.revokeObjectURL(older.row.coverThumbnail.src)
+        runtime.pendingReplacements.delete(src)
+      }
     }
-    if (runtime.detail?.sourcePath !== detail?.sourcePath) runtime.detailPaths.clear()
+    if (runtime.detail?.sourcePath !== detail?.sourcePath) {
+      runtime.detailPaths.clear()
+      runtime.detailVisiblePaths.clear()
+    }
     runtime.detail = detail
     const detailPaths = new Set(detail?.tracks.map((descriptor) => normalizeAudioSourcePath(descriptor.sourcePath)))
     for (const key of runtime.detailPaths.keys()) if (!detailPaths.has(key)) runtime.detailPaths.delete(key)
+    for (const key of runtime.detailVisiblePaths) if (!detailPaths.has(key)) runtime.detailVisiblePaths.delete(key)
     // Keep the first row's hero available while the table is still loading.
     const first = detail?.tracks[0]
     if (first?.available && first.id !== warmTrackId) runtime.detailPaths.set(normalizeAudioSourcePath(first.sourcePath), 512)
@@ -273,6 +383,7 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
       }
     }
     runtime.detailPaths = paths
+    runtime.detailVisiblePaths = new Set()
     runtime.refresh()
   }, [detail, warmTrackId])
 
@@ -281,21 +392,39 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
     const playlist = runtime?.detail
     if (!runtime || !playlist || playlist.sourcePath !== scopePath) return
     const paths = new Map<string, 128 | 256 | 512>()
+    const visiblePaths = new Set<string>()
     const first = keepPersistentArtwork ? playlist.tracks[0] : undefined
-    if (first?.available) paths.set(normalizeAudioSourcePath(first.sourcePath), 512)
+    if (first?.available) {
+      const key = normalizeAudioSourcePath(first.sourcePath)
+      paths.set(key, 512)
+      visiblePaths.add(key)
+    }
     if (showArtwork) {
-      const pixels = (demand?.coverCssPixels ?? 128) * (demand?.dpr ?? 1)
-      const edge = pixels <= 128 ? 128 : pixels <= 256 ? 256 : 512
       const descriptors = new Map(playlist.tracks.map((descriptor) => [descriptor.id, descriptor]))
-      for (const id of trackIds.slice(0, MAX_DETAIL)) {
+      const visibleIds = demand?.visibleIds ?? trackIds
+      for (const id of visibleIds) {
         const descriptor = descriptors.get(id)
         if (descriptor?.available) {
           const key = normalizeAudioSourcePath(descriptor.sourcePath)
-          paths.set(key, Math.max(paths.get(key) ?? 0, edge) as 128 | 256 | 512)
+          // Detail cards share the persisted 256px thumbnail lane with All
+          // Songs. The pinned first-track hero keeps its 512px request.
+          paths.set(key, paths.get(key) ?? 256)
+          visiblePaths.add(key)
         }
+      }
+      let prefetchCount = 0
+      for (const id of trackIds) {
+        if (prefetchCount >= MAX_DETAIL) break
+        const descriptor = descriptors.get(id)
+        if (!descriptor?.available) continue
+        const key = normalizeAudioSourcePath(descriptor.sourcePath)
+        if (paths.has(key)) continue
+        paths.set(key, 256)
+        prefetchCount += 1
       }
     }
     runtime.detailPaths = paths
+    runtime.detailVisiblePaths = visiblePaths
     runtime.refresh()
   }, [])
 

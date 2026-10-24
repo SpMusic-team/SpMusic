@@ -2946,6 +2946,7 @@ export function PlayerSurface({
             {playlist.isOpen && playlist.library?.isOpen && playlist.library.route?.view !== 'overview' ? (
               <PlaylistLibraryPanel
                 controllerMode={controllerMode}
+                entryPosition={playlist.entryPosition}
                 allSongsCoverStore={allSongsCoverStore}
                 key={playlist.library?.route?.view === 'category' ? playlist.library.route.categoryId : 'playlist-management'}
                 playlist={playlist}

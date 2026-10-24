@@ -106,7 +106,7 @@ window.backendInvoke=async(command,args)=>{
  if(command==='audio_begin_playlist_cover_window')return 1;
  if(command==='audio_probe_playlist_durations')return input.paths.map(sourcePath=>({sourcePath,durationMs:180000,error:null}));
  if(command==='audio_probe_playlist_track_summaries')return input.paths.map(sourcePath=>{const parts=sourcePath.replaceAll('\\\\','/').split('/'),scope=parts.at(-2),i=Number(parts.at(-1).split('.')[0]);return {sourcePath,summary:{title:'Song '+scope+' '+i,artist:'Artist '+scope,album:'Album '+scope,albumArtist:null,bitDepth:24,sampleRateHz:96000,bitrateKbps:null,codec:'FLAC'},error:null}});
- if(command==='audio_load_playlist_cover_pixels'||command==='audio_load_cover_pixels'){
+ if(command==='audio_load_playlist_cover_pixels'||command==='audio_load_track_thumbnail'||command==='audio_load_cover_pixels'){
   const width=80,height=50,bytes=new Uint8Array(40+width*height*4),view=new DataView(bytes.buffer);
   bytes.set([0x53,0x50,0x58,0x52]);view.setUint16(4,1,true);view.setUint16(6,40,true);
   for(const [offset,value] of [[8,width],[12,height],[16,width*4],[20,1],[24,width*height*4],[28,0],[32,800],[36,500]])view.setUint32(offset,value,true);

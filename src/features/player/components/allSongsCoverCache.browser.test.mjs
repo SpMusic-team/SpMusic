@@ -49,7 +49,11 @@ window.backendInvoke=async(command,args)=>{
   if(window.fail.has(input.path))throw Error('fixture artwork read failed');
   return {id:input.path.split('/').at(-1),sourcePath:input.path,coverArt:{mimeType:'image/png',filePath:input.path+'.png',dataUrl:null,byteLen:44}};
  }
- if(command==='audio_load_playlist_cover_pixels'){
+ if(command==='audio_load_track_thumbnail'){
+  window.events.probes.push(input.sourcePath);
+  if(window.fail.has(input.sourcePath))throw Error('fixture artwork read failed');
+ }
+ if(command==='audio_load_playlist_cover_pixels'||command==='audio_load_track_thumbnail'){
   window.events.pixels.push(input);window.events.active++;window.events.maxActive=Math.max(window.events.maxActive,window.events.active);
   if(window.hold)await new Promise(resolve=>window.release.push(resolve));
   const bytes=new Uint8Array(44),view=new DataView(bytes.buffer);bytes.set([83,80,88,82]);view.setUint16(4,1,true);view.setUint16(6,40,true);
@@ -133,7 +137,7 @@ try {
     assert.deepEqual(shrunk.missing, [])
     assert.deepEqual(shrunk.revokedDesired, [])
     assert.equal(shrunk.maxActive, 1, 'shared scheduler admits one native pixel request')
-    assert(await page.evaluate(() => window.events.pixels.every(input=>input.maxEdge===128)))
+    assert(await page.evaluate(() => window.events.pixels.every(input=>input.maxEdge===256)))
     await page.evaluate(() => window.dispose())
     const disposed = await evidence(page)
     assert.equal(disposed.cache, 0)

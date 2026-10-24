@@ -15,12 +15,15 @@ const dependency = name => {
 const existing=readFileSync(new URL('./allSongs.browser.test.mjs',import.meta.url),'utf8')
 const literal=existing.match(/const fixture = (`[\s\S]*?`)\r?\nconst html/)
 assert(literal)
-const fixture=runInNewContext(literal[1],{dependency})
+const fixture=runInNewContext(literal[1],{dependency}).replace('length:50',process.env.SPMUSIC_TEST_FAR?'length:800':'length:50')
 const service=(await(await fetch(origin+'/src/features/player/services/audioCommands.ts')).text())
   .replace(/import \{ convertFileSrc, invoke \} from [^;]+;/,'const invoke=(...args)=>window.backendInvoke(...args);const convertFileSrc=path=>path;')
   .replace(/import \{ listen \} from [^;]+;/,'const listen=async(name,callback)=>{(window.listeners??={})[name]=callback;return ()=>{if(window.listeners[name]===callback)delete window.listeners[name]};};')
 assert(service.includes('window.backendInvoke'))
-const realSurface=await(await fetch(origin+'/src/features/player/components/PlayerSurface.tsx')).text()
+const fetchedSurface=await(await fetch(origin+'/src/features/player/components/PlayerSurface.tsx')).text()
+const realSurface=process.env.SPMUSIC_RETURN_POSITION_BASELINE
+  ? fetchedSurface.replace('entryPosition: playlist.entryPosition,','') : fetchedSurface
+if(process.env.SPMUSIC_RETURN_POSITION_BASELINE)assert.notEqual(realSurface,fetchedSurface,'baseline removes the library entry request')
 const surface=`import React from '${dependency('react.js')}';import {PlayerSurface as Surface} from '/__source_position_surface.js';export function PlayerSurface(props){window.vm=props.viewModel;return React.createElement(Surface,props)}`
 const html=(await(await fetch(origin)).text()).replace(/src="\/src\/[^\"]+"/,'src="/__source_position_fixture.js"')
 const browser=await chromium.launch({headless:true,channel:process.env.SPMUSIC_BROWSER_CHANNEL||'msedge'})
@@ -88,10 +91,10 @@ async function manualTop(page,kind,id){
   const panel=page.locator(panelSelector(kind)),rect=await panel.boundingBox()
   const polls=await page.evaluate(()=>window.calls.filter(call=>call.command==='audio_get_state').length)
   await page.mouse.move(rect.x+rect.width*.55,rect.y+Math.min(180,rect.height/2))
-  await page.mouse.wheel(0,-10000)
+  await page.mouse.wheel(0,-100000)
   await page.waitForFunction(selector=>document.querySelector(selector).scrollTop<2,panelSelector(kind))
   await page.waitForFunction(count=>window.calls.filter(call=>call.command==='audio_get_state').length>count,polls)
-  assert((await geometry(page,kind,id)).scrollTop<2,'manual scrolling survives a real playback-state publication')
+  assert((await panel.evaluate(node=>node.scrollTop))<2,'manual scrolling survives a real playback-state publication')
 }
 async function check(name,kind,width,level,run){
   if(process.env.SPMUSIC_TEST_FILTER&&!name.includes(process.env.SPMUSIC_TEST_FILTER))return
@@ -140,6 +143,25 @@ async function delayedMetadata(cancel=false){
   }finally{await page.close()}
 }
 try{
+  if(process.env.SPMUSIC_TEST_FAR) {
+    const {page,errors}=await open(640,7)
+    try{
+      await source(page,'all-songs')
+      assert((await page.locator('.all-songs-list .playlist-card').count())<40,'distant source uses a bounded render window')
+      await page.evaluate(()=>{
+        const songs=window.vm.playlist.library.allSongs,target=songs.find(song=>song.trackId==='many-750')
+        window.vm.playlist.library.onPlaySong(target.scope,target.trackId,songs.map(song=>({scope:song.scope,trackId:song.trackId})))
+      })
+      await page.waitForFunction(()=>window.vm.playback.track?.id==='many-750'&&!window.vm.playback.isSelectionPending&&!window.vm.playback.isAudioBusy)
+      await player(page,'all-songs')
+      await returnCurrent(page,'all-songs','many-750')
+      assert((await page.locator('.all-songs-list .playlist-card').count())<40,'return preserves bounded rendering')
+      await manualTop(page,'all-songs','many-750')
+      assert.deepEqual(errors,[])
+      passed++
+      console.log('PASS all songs distant virtual row 750 and one-shot return')
+    }finally{await page.close()}
+  } else {
   await check('all songs wide multi-column current position and one-shot return','all-songs',1440,0,async page=>{
     await player(page,'all-songs')
     await page.locator('.control-dock .next-button').click()
@@ -168,5 +190,6 @@ try{
   await check('playlist compact row current position','playlist',640,7)
   await delayedMetadata()
   await delayedMetadata(true)
+  }
   console.log('SOURCE_RETURN_POSITION_RESULT',passed,'passed')
 }finally{await browser.close()}

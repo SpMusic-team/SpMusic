@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useRef, useSyncExternalStore, type RefObject } from 'react'
 import { playlistCoverImageFromPixels } from '@/features/player/model/playlistCoverPixels'
 import { decodePlaylistCover } from '@/features/player/model/playlistCoverReadiness'
-import { normalizeAudioSourcePath } from '@/features/player/model/playlistTrackSummary'
 import type { AllSongsItem } from '@/features/player/model/playerUiViewModel'
-import { beginAudioPlaylistCoverWindow, probeAudioPlaylistCover } from '@/features/player/services/audioCommands'
-import { schedulePlaylistCoverPixels } from '@/features/player/services/playlistCoverScheduler'
+import { beginAudioPlaylistCoverWindow } from '@/features/player/services/audioCommands'
+import { scheduleTrackThumbnail } from '@/features/player/services/playlistCoverScheduler'
 
 type WindowRow = Readonly<{ trackId: string; sourcePath: string; coverUrl?: string; transientFailure?: boolean }>
 export type AllSongsCoverStore = {
@@ -133,16 +132,12 @@ export function useAllSongsWindow(items: readonly AllSongsItem[], panelRef: RefO
               return
             }
             if (!itemIsCurrent()) return
-            const cover = await probeAudioPlaylistCover(item.sourcePath)
-            if (cover.id !== item.trackId || normalizeAudioSourcePath(cover.sourcePath) !== item.key) throw new Error('Cover does not match its folder descriptor')
+            const pixels = await scheduleTrackThumbnail(
+              { clientId, sourcePath: item.sourcePath, maxEdge: 256, windowGeneration: coverGeneration },
+              { priority: 1, signal: runtime.controller.signal, isCurrent: itemIsCurrent },
+            )
             if (!itemIsCurrent()) return
-            if (cover.coverArt?.filePath) {
-              const pixels = await schedulePlaylistCoverPixels(
-                { clientId, filePath: cover.coverArt.filePath, maxEdge: 128, windowGeneration: coverGeneration },
-                { priority: 1, signal: runtime.controller.signal,
-                  isCurrent: itemIsCurrent },
-              )
-              if (!pixels) return
+            if (pixels) {
               if (!itemIsCurrent()) return
               const thumbnail = playlistCoverImageFromPixels(pixels)
               coverUrl = thumbnail.src

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { test } from 'node:test'
 
@@ -23,11 +23,40 @@ async function harness(count = 100) {
   let nextUrl = 0
   let refIndex = 0
   let effectIndex = 0
+  let frameSequence = 0
+  const frames = new Map()
+  const scrollListeners = new Set()
+  const panel = {
+    scrollTop: 0, clientHeight: 240,
+    getBoundingClientRect: () => ({ top: 0, bottom: 240, height: 240 }),
+    addEventListener: (name, listener) => { if (name === 'scroll') scrollListeners.add(listener) },
+    removeEventListener: (name, listener) => { if (name === 'scroll') scrollListeners.delete(listener) },
+  }
   let items = Array.from({ length: count }, (_, index) => ({
     key: `/music/${index}.flac`, sourcePath: `/music/${index}.flac`,
     trackId: `track-${index}`, available: true, track: {},
   }))
+  const nodes = new Map()
+  const nodeFor = (item, index) => {
+    let node = nodes.get(item.key)
+    if (!node) {
+      node = { dataset: { songKey: item.key }, index, isConnected: true,
+        get offsetTop() { return Math.floor(node.index / 2) * 80 },
+        getBoundingClientRect: () => {
+          const top = Math.floor(node.index / 2) * 80 - panel.scrollTop
+          return { top, bottom: top + 80, height: 80, left: node.index % 2 * 100, width: 100 }
+        } }
+      nodes.set(item.key, node)
+    }
+    node.index = index
+    return node
+  }
+  const orderPath = new URL('../model/playlistArtworkOrder.ts', import.meta.url)
+  const orderExports = existsSync(orderPath) ? await import(`data:text/javascript;base64,${Buffer.from(ts.transpileModule(readFileSync(orderPath, 'utf8'), {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+  }).outputText).toString('base64')}`) : {}
   globalThis.__allSongsWindowTest = {
+    ...orderExports,
     useRef: value => refs[refIndex++] ?? (refs[refIndex - 1] = { current: value }),
     useEffect: (effect, deps) => {
       const index = effectIndex++
@@ -38,7 +67,10 @@ async function harness(count = 100) {
       }
     },
     useCallback: callback => callback,
+    useMemo: factory => factory(),
     useSyncExternalStore: () => {},
+    requestAnimationFrame: callback => { const id = ++frameSequence; frames.set(id, callback); return id },
+    cancelAnimationFrame: id => frames.delete(id),
     beginAudioPlaylistCoverWindow: async () => { if (beginFailure) throw new Error('window unavailable'); return 1 },
     scheduleTrackThumbnail: (input, options) => {
       pixelCalls.push({ input, options })
@@ -55,18 +87,19 @@ async function harness(count = 100) {
       observe() {}
       disconnect() {}
     },
+    ResizeObserver: class { observe() {} disconnect() {} },
   }
   const compiled = ts.transpileModule(source, {
     compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
   }).outputText
   const imports = compiled.match(/^import .+;$/gm)
-  assert.equal(imports.length, 5, 'all runtime boundaries are explicitly mocked')
+  assert.equal(imports.length, source.includes('orderPlaylistArtworkRows') ? 6 : 5, 'all runtime boundaries are explicitly supplied, including the real ordering helper')
   const bindings = Object.keys(globalThis.__allSongsWindowTest).join(', ')
-  const patched = `const { ${bindings} } = globalThis.__allSongsWindowTest;\n${compiled.replace(/^import .+;$/gm, '')}`
+  const patched = `const { ${bindings} } = globalThis.__allSongsWindowTest;\n${compiled.replace(/^import .+;$/gm, '')}\n//# sourceURL=useAllSongsWindow.test-module.mjs`
   const module = await import(`data:text/javascript;base64,${Buffer.from(patched).toString('base64')}#${Math.random()}`)
   const store = module.createAllSongsCoverStore()
-  const panelRef = { current: {} }
-  const listRef = { current: { querySelectorAll: () => [] } }
+  const panelRef = { current: panel }
+  const listRef = { current: { dataset: { layoutLevel: '2' }, querySelectorAll: () => items.map(nodeFor) } }
   const render = (nextItems = items, enabled = true) => {
     items = nextItems
     refIndex = 0
@@ -75,12 +108,18 @@ async function harness(count = 100) {
     for (const effect of effects.splice(0)) effect()
   }
   render()
-  const flush = async () => { for (let index = 0; index < 12; index += 1) await Promise.resolve() }
+  const flush = async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+    const ready = [...frames.values()]; frames.clear()
+    for (const callback of ready) callback(performance.now())
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  }
   const demand = async indices => {
     const desired = new Set(indices)
-    observer(items.map((item, index) => ({ target: { dataset: { songKey: item.key } }, isIntersecting: desired.has(index) })))
+    observer(items.map((item, index) => ({ target: nodeFor(item, index), boundingClientRect: nodeFor(item, index).getBoundingClientRect(), rootBounds: panel.getBoundingClientRect(), isIntersecting: desired.has(index) })))
     await flush()
   }
+  const scroll = async top => { panel.scrollTop = top; for (const listener of scrollListeners) listener(); await flush() }
   const finish = async (request = pending.shift(), mode = 'cover') => {
     assert(request, 'a native thumbnail is pending')
     if (mode === 'error') request.reject(new Error('unreadable artwork'))
@@ -94,9 +133,10 @@ async function harness(count = 100) {
   }
   const unmount = () => { for (const cleanup of cleanups) cleanup?.() }
   return {
-    get items() { return items }, store, calls, pending, revoked, pixelCalls, demand, finish, drain, flush, unmount, render,
+    get items() { return items }, store, calls, pending, revoked, pixelCalls, demand, scroll, panel, finish, drain, flush, unmount, render,
     holdDecode: () => { holdDecode = true },
     failBegin: value => { beginFailure = value },
+    releaseDecodeAt: async index => { const resolve=decodePending.splice(index,1)[0]; assert(resolve,'a decoder is pending'); resolve(); await flush() },
     releaseDecode: async () => { for (const resolve of decodePending.splice(0)) resolve(); await flush() },
     dispose: () => { unmount(); module.disposeAllSongsCoverStore(store) },
   }
@@ -318,5 +358,60 @@ test('unmount aborts queued work and revokes an object URL completed after clean
     assert.equal(h.calls.length, 2, 'cleanup starts no further probes')
     assert.equal(h.store.cache.size, 0)
     assert.deepEqual(h.revoked, ['blob:cover-1'])
+  } finally { h.dispose() }
+})
+
+test('scrolling backward reverses visible row groups while preserving horizontal order and warm covers', async () => {
+  const h=await harness(20)
+  try {
+    await h.scroll(120)
+    await h.demand([4,5,6,7])
+    await h.drain(4)
+    assert.deepEqual(h.calls,['/music/4.flac','/music/5.flac','/music/6.flac','/music/7.flac'],'positive scroll delta starts with the top visible row')
+    await h.scroll(60)
+    await h.demand([0,1,2,3])
+    await h.drain(4)
+    assert.deepEqual(h.calls.slice(4),['/music/2.flac','/music/3.flac','/music/0.flac','/music/1.flac'],'negative delta starts with the bottom visible row without reversing its columns')
+    const probes=h.calls.length
+    await h.scroll(120)
+    await h.demand([4,5,6,7])
+    await h.flush()
+    assert.equal(h.calls.length,probes,'direction changes alone never reread cached covers')
+  } finally { h.dispose() }
+})
+
+test('a fast reverse takes the newest window for the next free slot without preempting admitted work', async () => {
+  const h=await harness(20)
+  try {
+    await h.scroll(120)
+    await h.demand([4,5,6,7,8,9])
+    assert.deepEqual(h.calls,['/music/4.flac','/music/5.flac'],'the local pipeline admits at most two requests')
+    const oldFirst=h.pending.shift(),oldSecond=h.pending.shift()
+    await h.scroll(60)
+    await h.demand([0,1,2,3])
+    assert.equal(h.calls.length,2,'reversal does not pretend an already active native request can be interrupted')
+    await h.finish(oldFirst)
+    assert.equal(h.calls.at(-1),'/music/2.flac','the newly free slot follows the latest backward order, not the old queue')
+    assert(!h.store.cache.has(h.items[4].key),'late off-window completion cannot publish stale artwork')
+    await h.finish(oldSecond)
+    assert.equal(h.calls.at(-1),'/music/3.flac')
+    await h.drain(4)
+    assert.deepEqual(h.calls.slice(2),['/music/2.flac','/music/3.flac','/music/0.flac','/music/1.flac'])
+  } finally { h.dispose() }
+})
+
+test('a ready later row publishes immediately while an earlier admitted decode is still pending', async () => {
+  const h=await harness(20)
+  try {
+    h.holdDecode()
+    await h.demand([0,2])
+    await h.finish(h.pending.shift())
+    await h.finish(h.pending.shift())
+    await h.releaseDecodeAt(1)
+    assert(h.store.cache.get(h.items[2].key)?.coverUrl,'a ready image is never held back to serialize its fade behind another row')
+    assert(!h.store.cache.has(h.items[0].key))
+    await h.releaseDecode()
+    assert(h.store.cache.get(h.items[0].key)?.coverUrl)
+    assert.equal(h.calls.length,2,'row admission adds no retry or artificial delay')
   } finally { h.dispose() }
 })

@@ -3,6 +3,7 @@ import { normalizeAudioSourcePath } from '@/features/player/model/playlistTrackS
 import { playlistCoverImageFromPixels } from '@/features/player/model/playlistCoverPixels'
 import { decodePlaylistCover } from '@/features/player/model/playlistCoverReadiness'
 import { createPlaylistArtworkStore, playlistArtworkKey } from '@/features/player/model/playlistArtworkStore'
+import { admitLibraryArtwork } from '@/features/player/model/libraryArtworkAdmission'
 import type { PlaylistArtworkDemand, PlaylistCoverImage } from '@/features/player/model/playerUiViewModel'
 import {
   selectArtworkEvictionKey,
@@ -44,6 +45,17 @@ const MAX_RESIDENT = 80
 const MAX_DETAIL = 40
 const CONCURRENCY = 2
 
+function protectedArtworkPaths(runtime: Runtime): Set<string> {
+  const paths = new Set([...runtime.detailVisiblePaths, ...runtime.pinned, ...runtime.consumerPins.keys()])
+  for (const key of runtime.previews.values()) if (runtime.descriptors.get(key)?.available) paths.add(key)
+  const hero = runtime.detail?.tracks[0]
+  if (hero?.available) {
+    const key = normalizeAudioSourcePath(hero.sourcePath)
+    if (runtime.detailPaths.has(key)) paths.add(key)
+  }
+  return paths
+}
+
 async function dataUrlThumbnail(dataUrl: string, maxEdge: number): Promise<PlaylistCoverImage> {
   const bitmap = await createImageBitmap(await (await fetch(dataUrl)).blob())
   const canvas = document.createElement('canvas')
@@ -80,11 +92,13 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
     const [, , path] = JSON.parse(key) as [string, string, string]
     const runtime = runtimeRef.current
     if (!runtime?.mounted) return () => {}
-    runtime.consumerPins.set(path, (runtime.consumerPins.get(path) ?? 0) + 1)
+    const previous = runtime.consumerPins.get(path) ?? 0
+    runtime.consumerPins.set(path, previous + 1)
+    if (previous === 0) runtime.refresh()
     return () => {
       const count = runtime.consumerPins.get(path) ?? 0
-      if (count <= 1) runtime.consumerPins.delete(path)
-      else runtime.consumerPins.set(path, count - 1)
+      if (count > 1) runtime.consumerPins.set(path, count - 1)
+      else if (runtime.consumerPins.delete(path) && runtime.mounted) runtime.refresh()
     }
   }) }, [artworkStore])
   const artworkSource = useMemo(() => ({ store: artworkStore,
@@ -106,18 +120,20 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
       console.warn('无法创建媒体库封面窗口', error)
       return null
     })
-    const publish = () => {
+    const trimCache = () => {
       const desired = new Set(runtime.desired.keys())
+      const protectedPaths = protectedArtworkPaths(runtime)
+      let changed = false
       while (runtime.cache.size > MAX_RESIDENT) {
         // The cap applies to optional residents. Dense viewports may need more
         // than 80 live thumbnails; evicting one would leave a visible blank.
-        const protectedPaths = new Set([...runtime.detailVisiblePaths, ...runtime.previews.values(), ...runtime.pinned, ...runtime.consumerPins.keys()])
         const candidates = [...runtime.cache.keys()].filter((key) => !protectedPaths.has(key))
         const key = selectArtworkEvictionKey(candidates, desired, runtime.pinned)
         if (key === undefined) break
         const entry = runtime.cache.get(key)
         if (entry?.row.coverThumbnail) URL.revokeObjectURL(entry.row.coverThumbnail.src)
         runtime.cache.delete(key)
+        changed = true
         for (const [src, pending] of runtime.pendingReplacements) {
           if (pending.key !== key) continue
           if (pending.previous.row.coverThumbnail) URL.revokeObjectURL(pending.previous.row.coverThumbnail.src)
@@ -125,6 +141,10 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
           runtime.pendingReplacements.delete(src)
         }
       }
+      return changed
+    }
+    const publish = () => {
+      trimCache()
       const nextRows = new Map([...runtime.cache].map(([key, entry]) => [key, entry.row]))
       runtime.rows = nextRows
       artworkStore.notifyAll()
@@ -226,7 +246,7 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
       }
     }
     runtime.refresh = () => {
-      const desired = new Map<string, 128 | 256 | 512>()
+      const required = new Map<string, 128 | 256 | 512>()
       const hero = runtime.detail?.tracks[0]
       const heroKey = hero ? normalizeAudioSourcePath(hero.sourcePath) : undefined
       const heroReady = heroKey ? Boolean(runtime.cache.get(heroKey)?.row.coverThumbnail) : false
@@ -238,17 +258,23 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
       // the hero upgrade and offscreen prefetch.
       for (const [key, edge] of runtime.detailPaths) {
         if ((runtime.detailVisiblePaths.has(key) || key === heroKey) && (key !== heroKey || !heroUpgradeReady)) {
-          desired.set(key, key === heroKey ? 256 : edge)
+          required.set(key, key === heroKey ? 256 : edge)
         }
       }
       for (const key of runtime.previews.values()) {
-        if (runtime.descriptors.get(key)?.available && !desired.has(key) && desired.size < MAX_RESIDENT
-          && !(key === heroKey && heroUpgradeReady)) desired.set(key, 256)
+        if (runtime.descriptors.get(key)?.available && !required.has(key)
+          && !(key === heroKey && heroUpgradeReady)) required.set(key, 256)
       }
-      for (const [key, edge] of runtime.detailPaths) {
-        if (!desired.has(key)) desired.set(key, edge)
+      if (heroKey && heroUpgradeReady && runtime.detailPaths.has(heroKey)) {
+        required.set(heroKey, runtime.detailPaths.get(heroKey)!)
       }
-      runtime.desired = runtime.visible ? desired : new Map()
+      // Required viewport/preview images may exceed the nominal resident cap.
+      // Only spare capacity admits prefetch; otherwise the cache would evict
+      // a still-desired optional image and immediately read it again forever.
+      runtime.desired = runtime.visible
+        ? admitLibraryArtwork(required, runtime.detailPaths, protectedArtworkPaths(runtime), MAX_RESIDENT, MAX_DETAIL)
+        : new Map()
+      if (trimCache()) publish()
       runtime.pump()
     }
     const observed = new Set<Element>()
@@ -471,7 +497,10 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
   const retainSourcePaths = useCallback((sourcePaths: readonly string[]) => {
     const runtime = runtimeRef.current
     if (!runtime) return
-    runtime.pinned = new Set(sourcePaths)
+    const next = new Set(sourcePaths)
+    if (next.size === runtime.pinned.size && [...next].every(path => runtime.pinned.has(path))) return
+    runtime.pinned = next
+    runtime.refresh()
   }, [])
 
   return { get rows() { return runtimeRef.current?.rows ?? rows }, artworkSource, setVisibleTrackIds, retainSourcePaths }

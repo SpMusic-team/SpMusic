@@ -420,21 +420,28 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
-  /* Thumbnails cross-dissolve over the placeholder surface instead of popping
-     in from nothing. The duration follows the appearance motion scale. */
+  /* Decode and request timing stay independent of the first visible reveal. */
   opacity: 0;
-  transition: opacity var(--app-motion-standard, 240ms) cubic-bezier(.2, 0, .2, 1);
 }
 
 .playlist-card-cover-image[data-loaded="true"] { opacity: 1; }
 
-/* The URL fallback cover is rendered eagerly (it has its own onError fallback
-   chain and no thumbnail load signal), so it stays outside the dissolve and
-   must not inherit the base opacity: 0. */
-.playlist-card-cover-image.playlist-card-cover-image-eager { opacity: 1; transition: none; }
+.playlist-card-cover-image[data-loaded="true"][data-reveal="new"] {
+  animation: playlist-card-cover-reveal var(--app-motion-prototype-press, 200ms) var(--app-motion-easing, ease) both;
+}
+
+@keyframes playlist-card-cover-reveal {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.spmusic-app[data-motion="off"] .playlist-card-cover-image,
+.playlist-grid[data-cover-motion="off"] .playlist-card-cover-image {
+  animation: none !important;
+}
 
 @media (prefers-reduced-motion: reduce) {
-  .playlist-card-cover-image { transition: none; }
+  .playlist-card-cover-image { animation: none !important; }
 }
 
 /* No `ready` override: the sheen lives on the container and stays painted

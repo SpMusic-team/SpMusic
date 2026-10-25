@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useSyncExternalStore, type RefObject } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore, type RefObject } from 'react'
 import { playlistCoverImageFromPixels } from '@/features/player/model/playlistCoverPixels'
 import { decodePlaylistCover } from '@/features/player/model/playlistCoverReadiness'
 import type { AllSongsItem } from '@/features/player/model/playerUiViewModel'
 import { beginAudioPlaylistCoverWindow } from '@/features/player/services/audioCommands'
 import { scheduleTrackThumbnail } from '@/features/player/services/playlistCoverScheduler'
+import { orderPlaylistArtworkRows, type PlaylistArtworkDirection } from '@/features/player/model/playlistArtworkOrder'
 
 type WindowRow = Readonly<{ trackId: string; sourcePath: string; coverUrl?: string; transientFailure?: boolean }>
 export type AllSongsCoverStore = {
@@ -59,6 +60,8 @@ export function useAllSongsWindow(items: readonly AllSongsItem[], panelRef: RefO
   const runtimeRef = useRef<WindowRuntime | null>(null)
   const itemsByKeyRef = useRef<ReadonlyMap<string, AllSongsItem>>(new Map())
   const metadataLoadingRef = useRef(false)
+  const itemOrderKey = useMemo(() => items.map(item => `${item.key}\u0001${item.trackId}`).join('\u0000'), [items])
+  const directionRef = useRef<{ items: string; layout?: string; top: number; direction: PlaylistArtworkDirection } | null>(null)
 
   useEffect(() => {
     if (!enabled) return
@@ -72,6 +75,7 @@ export function useAllSongsWindow(items: readonly AllSongsItem[], panelRef: RefO
       coverQueued: new Set(), coverActive: 0, pump: () => {},
     }
     runtimeRef.current = runtime
+    directionRef.current = null
     const clientId = `all-songs-${globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)}`
     const coverReady = beginAudioPlaylistCoverWindow(clientId).catch(() => null)
 
@@ -210,6 +214,50 @@ export function useAllSongsWindow(items: readonly AllSongsItem[], panelRef: RefO
     const keys = new Set(renderedItems.map((item) => item.key))
     for (const key of runtime.desired) if (!keys.has(key)) runtime.desired.delete(key)
     let observing = true
+    let frame: number | null = null
+    // Collect nodes once per rendered window, then measure only IO-admitted
+    // demand on scroll. A long tile library never gains a full-library scan.
+    const nodes = new Map([...list.querySelectorAll<HTMLElement>('[data-song-key]')]
+      .map((element, domIndex) => [element.dataset.songKey!, { element, domIndex }] as const))
+    const identity = () => {
+      const layout = list.dataset.layoutLevel
+      let state = directionRef.current
+      if (!state || state.items !== itemOrderKey || state.layout !== layout) {
+        state = { items: itemOrderKey, layout, top: panel.scrollTop, direction: 0 }
+        directionRef.current = state
+      }
+      return state
+    }
+    identity()
+    const reorder = () => {
+      if (!observing || !runtime.mounted) return
+      const state = identity()
+      const bounds = panel.getBoundingClientRect()
+      const entries = []
+      const unmeasured: string[] = []
+      for (const key of runtime.desired) {
+        const node = nodes.get(key)
+        if (!node || !node.element.isConnected) { unmeasured.push(key); continue }
+        const rect = node.element.getBoundingClientRect()
+        const inViewport = rect.bottom > bounds.top && rect.top < bounds.bottom
+        const side: -1 | 0 | 1 = inViewport ? 0 : rect.bottom <= bounds.top ? -1 : 1
+        const viewportDistance = inViewport ? 0 : side < 0 ? bounds.top - rect.bottom : rect.top - bounds.bottom
+        entries.push({ key, domIndex: node.domIndex, rowTop: node.element.offsetTop, inViewport, side, viewportDistance })
+      }
+      runtime.desired = new Set([...orderPlaylistArtworkRows(entries, state.direction).map(entry => entry.key), ...unmeasured])
+      runtime.pump()
+    }
+    const scheduleReorder = () => {
+      if (frame === null) frame = requestAnimationFrame(() => { frame = null; reorder() })
+    }
+    const onScroll = () => {
+      const state = identity()
+      const top = panel.scrollTop
+      const delta = top - state.top
+      if (delta !== 0) state.direction = delta < 0 ? -1 : 1
+      state.top = top
+      scheduleReorder()
+    }
     const observer = new IntersectionObserver((entries) => {
       if (!observing || !runtime.mounted) return
       for (const entry of entries) {
@@ -218,13 +266,23 @@ export function useAllSongsWindow(items: readonly AllSongsItem[], panelRef: RefO
         if (entry.isIntersecting) runtime.desired.add(key)
         else runtime.desired.delete(key)
       }
-      runtime.pump()
+      reorder()
     }, { root: panel, rootMargin: '150px 0px' })
-    for (const row of list.querySelectorAll<HTMLElement>('[data-song-key]')) observer.observe(row)
+    for (const { element } of nodes.values()) observer.observe(element)
+    panel.addEventListener('scroll', onScroll, { passive: true })
+    const resize = new ResizeObserver(scheduleReorder)
+    resize.observe(panel)
+    resize.observe(list)
     // Retain visibility across list-summary updates. Clearing it dropped
     // in-flight covers and forced their full decode to run again.
-    return () => { observing = false; observer.disconnect() }
-  }, [items, renderedItems, panelRef, listRef, enabled, metadataLoading])
+    return () => {
+      observing = false
+      observer.disconnect()
+      resize.disconnect()
+      panel.removeEventListener('scroll', onScroll)
+      if (frame !== null) cancelAnimationFrame(frame)
+    }
+  }, [items, itemOrderKey, renderedItems, panelRef, listRef, enabled, metadataLoading])
 
   return store
 }

@@ -179,16 +179,11 @@ function PlaylistCardContent({ track, songKey, coverUrl, artworkVisible, selectM
   return <>
       <span className="playlist-card-cover" aria-hidden="true">
         {coverUrl ? (
-          <img className="playlist-card-cover-image playlist-card-cover-image-eager" src={coverUrl} alt="" onError={handleCoverError} />
+          <PlaylistCoverImage className="playlist-card-cover-image" src={coverUrl} reveal onError={handleCoverError} />
         ) : track.coverThumbnail ? (
-          <PlaylistCoverImage className="playlist-card-cover-image" image={track.coverThumbnail} />
+          <PlaylistCoverImage className="playlist-card-cover-image" image={track.coverThumbnail} reveal />
         ) : !coverFailed && artworkVisible && track.hasLocalArtwork === false && coverSource ? (
-          // This eager <img> has no thumbnail pipeline and therefore no load
-          // signal, so it opts out of the cross-dissolve: without its own class
-          // it would inherit the dissolve's opacity 0 and never appear. It is
-          // gated on a *known* "no local artwork" so an unhydrated track cannot
-          // fail here and latch the card into the error state.
-          <img key={`${coverSource}\0${track.coverImageFallback ?? ''}`} className="playlist-card-cover-image playlist-card-cover-image-eager" src={coverSource} alt="" onError={handleCoverError} />
+          <PlaylistCoverImage key={`${coverSource}\0${track.coverImageFallback ?? ''}`} className="playlist-card-cover-image" src={coverSource} reveal onError={handleCoverError} />
         ) : null}
         {coverMarkVisible ? (
           <span className="playlist-card-cover-mark">

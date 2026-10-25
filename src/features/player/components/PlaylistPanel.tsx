@@ -22,6 +22,7 @@ import { LibraryChromeTransitionContext } from '@/features/player/hooks/useLibra
 import { readLibraryLayoutRect } from '@/features/player/model/libraryNavigationGeometry'
 import type { PlaylistControllerMode } from '@/features/player/model/playlistControllerMode'
 import { appCopy } from '@/features/player/model/playerCopy'
+import { orderPlaylistArtworkRows, type PlaylistArtworkDirection } from '@/features/player/model/playlistArtworkOrder'
 import type { ShuffleMode } from '@/features/player/model/playbackModes'
 import { formatPlaylistDurationLabel, type PlaylistDurationStatus } from '@/features/player/model/playlistDuration'
 import type { PlayerPlaybackViewModel, PlayerTimelineViewModel, PlayerPlaylistViewModel, PlaylistLibraryViewModel, PlaylistArtworkDemand, PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
@@ -603,14 +604,17 @@ export function PlaylistPanel({
     let disposed = false
     let cardIndex: PlaylistCardIndex | null = null
     let indexDirty = true
+    let previousScrollTop = panel.scrollTop
+    let direction: PlaylistArtworkDirection = 0
     const transformingCards = new Set<EventTarget>()
     const publish = () => {
       frameId = null
       if (disposed) return
       const panelRect = panel.getBoundingClientRect()
-      const dock = panel.parentElement?.querySelector<HTMLElement>('.playlist-playback-dock')
-      const dockTop = dock?.getBoundingClientRect().top ?? panelRect.bottom
-      const viewportBottom = Math.min(panelRect.bottom, dockTop)
+      // The translucent playback dock overlays the scrollport; it does not
+      // shorten it. Covers behind it remain physical viewport demand so they
+      // are ready as the dock moves or a card emerges from underneath it.
+      const viewportBottom = panelRect.bottom
       if (indexDirty) {
         cardIndex = buildPlaylistCardIndex(grid, panel)
         indexDirty = false
@@ -620,7 +624,7 @@ export function PlaylistPanel({
         : null
       if (cardIndex && !candidates && transformingCards.size === 0
         && !grid.querySelector('.playlist-card:active')) indexDirty = true
-      const orderedEntries = (candidates ?? [...grid.querySelectorAll<HTMLElement>('[data-playlist-track-id]')]
+      const entries = (candidates ?? [...grid.querySelectorAll<HTMLElement>('[data-playlist-track-id]')]
         .map((card, domIndex) => ({ card, domIndex })))
         .map(({ card, domIndex }) => {
           const trackId = card.dataset.playlistTrackId
@@ -631,12 +635,11 @@ export function PlaylistPanel({
           const viewportDistance = inViewport
             ? 0
             : rect.bottom <= panelRect.top ? panelRect.top - rect.bottom : rect.top - viewportBottom
-          return { trackId, domIndex, inViewport, viewportDistance }
+          const side = inViewport ? 0 : rect.bottom <= panelRect.top ? -1 : 1
+          return { trackId, domIndex, inViewport, viewportDistance, rowTop: card.offsetTop, side: side as -1 | 0 | 1 }
         })
         .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
-        .sort((left, right) => Number(right.inViewport) - Number(left.inViewport)
-          || (left.inViewport ? left.domIndex - right.domIndex : left.viewportDistance - right.viewportDistance)
-          || left.domIndex - right.domIndex)
+      const orderedEntries = orderPlaylistArtworkRows(entries, direction)
       if (!layout.showArtwork) {
         // Returning to artwork must republish even if geometry/IDs are equal to
         // the last cover layout; the player may have expired its warm leases.
@@ -678,6 +681,13 @@ export function PlaylistPanel({
     const schedulePublish = () => {
       if (frameId === null) frameId = requestAnimationFrame(publish)
     }
+    const onScroll = () => {
+      const top = panel.scrollTop
+      const delta = top - previousScrollTop
+      if (delta !== 0) direction = delta < 0 ? -1 : 1
+      previousScrollTop = top
+      schedulePublish()
+    }
     const invalidateIndex = () => {
       indexDirty = true
       schedulePublish()
@@ -700,7 +710,7 @@ export function PlaylistPanel({
       onVisibleTrackIdsChange([], true, layout.showArtwork)
     }
     if (cards.length > 0) schedulePublish()
-    panel.addEventListener('scroll', schedulePublish, { passive: true })
+    panel.addEventListener('scroll', onScroll, { passive: true })
     grid.addEventListener('transitionrun', onTransformStart)
     grid.addEventListener('transitionend', onTransformEnd)
     grid.addEventListener('transitioncancel', onTransformEnd)
@@ -726,7 +736,7 @@ export function PlaylistPanel({
     }
     return () => {
       disposed = true
-      panel.removeEventListener('scroll', schedulePublish)
+      panel.removeEventListener('scroll', onScroll)
       grid.removeEventListener('transitionrun', onTransformStart)
       grid.removeEventListener('transitionend', onTransformEnd)
       grid.removeEventListener('transitioncancel', onTransformEnd)

@@ -3,6 +3,24 @@ import type { PlaylistCoverImage } from './playerUiViewModel'
 // Readiness belongs to the resource, not to the temporary view displaying it.
 // Weak ownership lets the bounded artwork store release an image normally.
 const decodedCovers = new WeakSet<PlaylistCoverImage>()
+// Decode readiness is not a presentation: workers prepare images before any
+// card mounts. Keep first-reveal history separate and never retain image data.
+const presentedCovers = new WeakSet<PlaylistCoverImage>()
+const presentedUrls = new Set<string>()
+const PRESENTED_URL_LIMIT = 512
+
+export function isPlaylistCoverPresented(image: PlaylistCoverImage | string): boolean {
+  return typeof image === 'string' ? presentedUrls.has(image)
+    : presentedCovers.has(image) || presentedUrls.has(image.src)
+}
+
+export function markPlaylistCoverPresented(image: PlaylistCoverImage | string): void {
+  if (typeof image !== 'string') presentedCovers.add(image)
+  const src = typeof image === 'string' ? image : image.src
+  presentedUrls.delete(src)
+  presentedUrls.add(src)
+  if (presentedUrls.size > PRESENTED_URL_LIMIT) presentedUrls.delete(presentedUrls.values().next().value!)
+}
 
 // Prepare the actual object URL before it reaches a temporary playlist view.
 // The caller owns concurrency, staleness checks, and URL disposal.

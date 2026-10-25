@@ -6,6 +6,7 @@ import { createElement, type ComponentType } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import ts from 'typescript'
 import { forgetPlaylistCoverDecoded, isPlaylistCoverDecoded, markPlaylistCoverDecoded } from './playlistCoverReadiness.ts'
+import * as playlistCoverReadiness from './playlistCoverReadiness.ts'
 
 // Exercise the real TSX consumers with the project's existing React/TypeScript
 // packages. No DOM/test framework or browser globals are needed for first paint.
@@ -17,7 +18,7 @@ function loadComponent(name: string): ComponentType<Record<string, unknown>> {
   }).outputText
   const module = { exports: {} as Record<string, ComponentType<Record<string, unknown>>> }
   const resolve = (id: string): unknown => {
-    if (id.endsWith('/playlistCoverReadiness')) return { forgetPlaylistCoverDecoded, isPlaylistCoverDecoded, markPlaylistCoverDecoded }
+    if (id.endsWith('/playlistCoverReadiness')) return playlistCoverReadiness
     if (id.endsWith('/PlaylistCoverImage')) return { PlaylistCoverImage: loadComponent('PlaylistCoverImage') }
     if (id.endsWith('/useAppearance')) return { useSystemIcons: () => ({ music: () => null }) }
     if (id.endsWith('/playerCopy')) return { appCopy: { playlistPage: { moreUnavailable: '不可用' } } }

@@ -8,7 +8,8 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty'
 import { useAppearance, useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { CoverPanel } from '@/features/player/components/CoverPanel'
-import { ControlDock, ExternalPlaybackModeControls } from '@/features/player/components/ControlDock'
+import { ControlDock, ExternalPlaybackModeControls, type VisualizationMode } from '@/features/player/components/ControlDock'
+import { AudioVisualization } from '@/features/player/components/AudioVisualization'
 import { EmptyPlayerState } from '@/features/player/components/EmptyPlayerState'
 import { LyricsPanel } from '@/features/player/components/LyricsPanel'
 import { PlaybackInfoButton } from '@/features/player/components/PlaybackInfoButton'
@@ -1081,10 +1082,70 @@ export function PlayerSurface({
     return () => query.removeEventListener('change', update)
   }, [])
   const realPlaybackState: PlaybackVisualState = playback.isPlaying ? 'playing' : 'paused'
+  const [visualizationMode, setVisualizationMode] = useState<VisualizationMode>('off')
+  const fullscreenExitRef = useRef<HTMLButtonElement>(null)
+  const fadeLayerRef = useRef<HTMLDivElement>(null)
   const [pendingVisualPlaybackState, setPendingVisualPlaybackState] = useState<PlaybackVisualState | null>(null)
   const visualPlaybackState = pendingVisualPlaybackState ?? realPlaybackState
   const [playbackTransitionPending, setPlaybackTransitionPending] = useState(false)
   const playerStageRef = useRef<HTMLElement>(null)
+  useLayoutEffect(() => {
+    if (visualizationMode !== 'fade' || playlist.isOpen) return
+    let frameId = 0
+    let lastMeasuredAt = -Infinity
+    let lastRight = Number.NaN
+    let lastCenterY = Number.NaN
+    let lastHeight = Number.NaN
+    const measure = (now: number) => {
+      // The cover can move during the playlist return transition without
+      // resizing, and may not exist on the first frame after remount.
+      if (now - lastMeasuredAt >= 30) {
+        lastMeasuredAt = now
+        const cover = playerStageRef.current?.querySelector<HTMLElement>('.cover-frame')
+        const layer = fadeLayerRef.current
+        if (cover && layer) {
+          const rect = cover.getBoundingClientRect()
+          const centerY = rect.top + rect.height / 2
+          if (Math.abs(rect.right - lastRight) >= .5 || !Number.isFinite(lastRight)) {
+            layer.style.setProperty('--audio-visualization-cover-right', `${rect.right}px`)
+            lastRight = rect.right
+          }
+          if (Math.abs(centerY - lastCenterY) >= .5 || !Number.isFinite(lastCenterY)) {
+            layer.style.setProperty('--audio-visualization-cover-center-y', `${centerY}px`)
+            lastCenterY = centerY
+          }
+          if (Math.abs(rect.height - lastHeight) >= .5 || !Number.isFinite(lastHeight)) {
+            layer.style.setProperty('--audio-visualization-cover-height', `${rect.height}px`)
+            lastHeight = rect.height
+          }
+        }
+      }
+      frameId = requestAnimationFrame(measure)
+    }
+    frameId = requestAnimationFrame(measure)
+    return () => {
+      cancelAnimationFrame(frameId)
+    }
+  }, [visualizationMode, playlist.isOpen])
+
+  useEffect(() => {
+    if (visualizationMode !== 'fullscreen' || playlist.isOpen) return
+    const layout = document.querySelector<HTMLElement>('.responsive-player-layout')
+    const wasInert = layout?.inert ?? false
+    if (layout) layout.inert = true
+    const focusFrame = requestAnimationFrame(() => fullscreenExitRef.current?.focus())
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      setVisualizationMode('off')
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      cancelAnimationFrame(focusFrame)
+      window.removeEventListener('keydown', onKeyDown)
+      if (layout) layout.inert = wasInert
+    }
+  }, [visualizationMode, playlist.isOpen])
   const playbackTransitionRequestRef = useRef<PlaybackTransitionRequest | null>(null)
   const playbackTransitionDuration = appearanceMotion.disabled || reduceMotion
     ? 0
@@ -2877,7 +2938,12 @@ export function PlayerSurface({
                   ) : null}
                 </AnimatePresence>
               </>
-            ) : <EmptyPlayerState state={contentState === 'track' ? 'empty' : contentState} statusText={playback.statusText} />}
+            ) : <EmptyPlayerState
+              state={contentState === 'track' ? 'empty' : contentState}
+              statusText={playback.statusText}
+              onOpenAudio={playback.onOpenAudio}
+              openDisabled={playback.isAudioBusy || playback.isSelectionPending}
+            />}
 
             <div className="player-control-region">
               <ExternalPlaybackModeControls
@@ -2905,6 +2971,8 @@ export function PlayerSurface({
                 playbackTransitionPending={playbackTransitionPending}
                 playbackVisualReady={currentArtworkReady}
                 onPlayToggle={handlePlayToggle}
+                visualizationMode={visualizationMode}
+                onVisualizationModeChange={setVisualizationMode}
               />
             </div>
               </motion.section> : null}
@@ -3002,6 +3070,45 @@ export function PlayerSurface({
         </LayoutGroup>
         </LibraryDockContext.Provider>
         </LibraryChromeTransitionContext.Provider>
+        <AnimatePresence initial={false}>
+          {visualizationMode === 'fade' && !playlist.isOpen ? (
+            <motion.div
+              key="audio-visualization-fade-layer"
+              ref={fadeLayerRef}
+              className="audio-visualization-fade-layer"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: trackCardReducedMotion ? 0 : .28 }}
+              aria-hidden="true"
+            >
+              <div className="audio-visualization-fade-wash" />
+              <AudioVisualization variant="ambient" trackId={playback.track?.id ?? null} isPlaying={visualPlaybackState === 'playing'} />
+            </motion.div>
+          ) : null}
+          {visualizationMode === 'fullscreen' && !playlist.isOpen ? (
+            <motion.div
+              key="audio-visualization-fullscreen-layer"
+              className="audio-visualization-fullscreen-layer"
+              role="dialog"
+              aria-modal="true"
+              aria-label="全屏音频可视化"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: trackCardReducedMotion ? 0 : .28 }}
+            >
+              <AudioVisualization variant="fullscreen" trackId={playback.track?.id ?? null} isPlaying={visualPlaybackState === 'playing'} />
+              <button
+                ref={fullscreenExitRef}
+                className="audio-visualization-fullscreen-exit"
+                type="button"
+                aria-label="退出全屏音频可视化"
+                onClick={() => setVisualizationMode('off')}
+              />
+            </motion.div>
+          ) : null}
+        </AnimatePresence>
       </main>
     </TooltipProvider>
   )

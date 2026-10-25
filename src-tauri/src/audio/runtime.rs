@@ -2,7 +2,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU64, Ordering},
-        mpsc::{Receiver, Sender},
+        mpsc::{Receiver, Sender, SyncSender},
         Arc, Mutex, MutexGuard,
     },
     thread,
@@ -28,6 +28,7 @@ use super::{
         AudioSeekInput, AudioSetVolumeInput, AudioTrackRef, AudioTransitionPlaybackInput,
         AudioTransportTarget, AudioTransportTransition,
     },
+    visualization::{tap_source, QueuedVisualizationFrame, VisualizationSession},
 };
 
 const MAX_TRANSPORT_TRANSITION_MS: u64 = 5_000;
@@ -306,6 +307,9 @@ pub(crate) struct AudioRuntime {
     pending_load_generation: Option<u64>,
     load_generation: u64,
     current_generation: Option<u64>,
+    visualization_tx: Option<SyncSender<QueuedVisualizationFrame>>,
+    visualization_session: Arc<VisualizationSession>,
+    visualization_source_revision: Option<Arc<AtomicU64>>,
 }
 
 impl Default for AudioRuntime {
@@ -330,6 +334,9 @@ impl Default for AudioRuntime {
             pending_load_generation: None,
             load_generation: 0,
             current_generation: None,
+            visualization_tx: None,
+            visualization_session: Arc::new(VisualizationSession::default()),
+            visualization_source_revision: None,
         }
     }
 }
@@ -383,6 +390,15 @@ fn scaled_transport_duration_ms(base_duration_ms: u64, from_gain: f32, to_gain: 
 }
 
 impl AudioRuntime {
+    pub(crate) fn set_visualization(
+        &mut self,
+        tx: SyncSender<QueuedVisualizationFrame>,
+        session: Arc<VisualizationSession>,
+    ) {
+        self.visualization_tx = Some(tx);
+        self.visualization_session = session;
+    }
+
     pub(crate) fn start_load(&mut self, path: &Path) -> u64 {
         let started_at = Instant::now();
         let generation = self.load_generation;
@@ -467,6 +483,14 @@ impl AudioRuntime {
             apply_volume_to_sink(Some(&sink), self.volume * self.transport_gain);
             // Keep the replacement paused until the latest-intent commit point.
             // A superseded preparation can then be dropped without leaking audio.
+            let (source, visualization_revision) = if let Some(tx) = &self.visualization_tx {
+                let revision = self.visualization_session.next_revision();
+                let (source, source_revision) =
+                    tap_source(source, tx.clone(), generation, track.id.clone(), revision);
+                (source, Some((revision, source_revision)))
+            } else {
+                (source, None)
+            };
             configure_rebuilt_sink(&sink, source, Duration::ZERO, false).map_err(|error| {
                 audio_error(
                     AudioErrorCode::PlaybackFailed,
@@ -474,7 +498,7 @@ impl AudioRuntime {
                     true,
                 )
             })?;
-            Ok::<_, AudioCommandError>((normalized_path, track, sink))
+            Ok::<_, AudioCommandError>((normalized_path, track, sink, visualization_revision))
         })();
 
         latest_intent.commit_if_latest(request_id, || {
@@ -483,7 +507,7 @@ impl AudioRuntime {
             self.current_generation = Some(generation);
             self.invalidate_loaded_audio();
 
-            let (normalized_path, track, sink) = match preparation {
+            let (normalized_path, track, sink, visualization_revision) = match preparation {
                 Ok(prepared) => prepared,
                 Err(error) => {
                     self.phase = AudioPlaybackPhase::Error;
@@ -507,6 +531,10 @@ impl AudioRuntime {
             self.current_path = Some(normalized_path);
             self.current_track = Some(track);
             self.install_prepared_sink(sink);
+            if let Some((revision, source_revision)) = visualization_revision {
+                self.visualization_source_revision = Some(source_revision);
+                self.visualization_session.activate(revision);
+            }
             self.accumulated = Duration::ZERO;
             self.started_at = Some(Instant::now());
             self.phase = AudioPlaybackPhase::Playing;
@@ -954,6 +982,8 @@ impl AudioRuntime {
             track_id = self.current_track.as_ref().map(|track| track.id.as_str()),
             "stop requested",
         );
+        self.visualization_session.clear();
+        self.visualization_source_revision = None;
         if let Some(sink) = self.sink.take() {
             sink.stop();
         }
@@ -1017,8 +1047,14 @@ impl AudioRuntime {
 
         if should_play {
             if let Some(sink) = &self.sink {
+                self.visualization_session.clear();
                 match sink.try_seek(target) {
                     Ok(()) => {
+                        if let Some(source_revision) = &self.visualization_source_revision {
+                            let revision = self.visualization_session.next_revision();
+                            source_revision.store(revision, Ordering::Release);
+                            self.visualization_session.activate(revision);
+                        }
                         tracing::debug!(
                             operation = "audio.runtime.seek",
                             requested_ms = input.position_ms,
@@ -1116,6 +1152,8 @@ impl AudioRuntime {
     }
 
     fn invalidate_loaded_audio(&mut self) {
+        self.visualization_session.clear();
+        self.visualization_source_revision = None;
         self.cancel_transport_transition(false);
         self.transport_gain = 1.0;
         self.latest_transport_request_id = None;
@@ -1240,6 +1278,8 @@ impl AudioRuntime {
             self.phase = AudioPlaybackPhase::Paused;
         }
 
+        self.visualization_session.clear();
+        self.visualization_source_revision = None;
         let sink_release_started_at = Instant::now();
         let had_sink = self.sink.is_some();
         if let Some(sink) = self.sink.take() {
@@ -1365,7 +1405,21 @@ impl AudioRuntime {
             )
         })?;
         let source = open_source(&path)?;
+        let (source, visualization_revision) = if let (Some(tx), Some(generation), Some(track)) = (
+            &self.visualization_tx,
+            self.current_generation,
+            &self.current_track,
+        ) {
+            let revision = self.visualization_session.next_revision();
+            let (source, source_revision) =
+                tap_source(source, tx.clone(), generation, track.id.clone(), revision);
+            (source, Some((revision, source_revision)))
+        } else {
+            (source, None)
+        };
 
+        self.visualization_session.clear();
+        self.visualization_source_revision = None;
         if let Some(previous) = self.sink.take() {
             previous.stop();
         }
@@ -1385,6 +1439,10 @@ impl AudioRuntime {
             )
         })?;
         self.sink = Some(sink);
+        if let Some((revision, source_revision)) = visualization_revision {
+            self.visualization_source_revision = Some(source_revision);
+            self.visualization_session.activate(revision);
+        }
         tracing::info!(
             operation = "audio.runtime.rebuild_sink",
             elapsed_ms = started_at.elapsed().as_millis() as u64,

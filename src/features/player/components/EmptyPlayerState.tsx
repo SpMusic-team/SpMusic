@@ -1,6 +1,8 @@
 import { motion } from 'motion/react'
+import { Button } from '@/components/ui/button'
 import {
   Empty,
+  EmptyContent,
   EmptyDescription,
   EmptyHeader,
   EmptyMedia,
@@ -14,9 +16,11 @@ import type { PlayerContentState } from '@/features/player/model/playerUiViewMod
 type EmptyPlayerStateProps = {
   state?: Exclude<PlayerContentState, 'track'>
   statusText?: string
+  onOpenAudio: () => void
+  openDisabled?: boolean
 }
 
-export function EmptyPlayerState({ state = 'empty', statusText }: EmptyPlayerStateProps) {
+export function EmptyPlayerState({ state = 'empty', statusText, onOpenAudio, openDisabled = false }: EmptyPlayerStateProps) {
   const systemIcons = useSystemIcons()
   const appearanceMotion = useAppearanceMotion()
   const loading = state === 'loading'
@@ -42,6 +46,14 @@ export function EmptyPlayerState({ state = 'empty', statusText }: EmptyPlayerSta
                 <EmptyTitle>{title}</EmptyTitle>
                 {error && description ? <EmptyDescription>{description}</EmptyDescription> : null}
               </EmptyHeader>
+              {!loading ? (
+                <EmptyContent>
+                  <Button className="empty-open-audio-button" size="lg" disabled={openDisabled} onClick={onOpenAudio}>
+                    <systemIcons.music data-icon="inline-start" aria-hidden="true" />
+                    {appCopy.controls.openAudio}
+                  </Button>
+                </EmptyContent>
+              ) : null}
             </Empty>
           </div>
         </motion.div>

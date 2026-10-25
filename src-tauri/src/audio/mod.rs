@@ -23,6 +23,7 @@ mod symphonia_source;
 // tests; no read/load path imports this module.
 mod tag_writer;
 mod types;
+mod visualization;
 
 #[cfg(test)]
 mod source_tests;

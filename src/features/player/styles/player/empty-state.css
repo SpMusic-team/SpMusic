@@ -83,6 +83,29 @@
   z-index: 1;
 }
 
+.empty-open-audio-button[data-slot="button"] {
+  width: fit-content;
+  max-width: 100%;
+  min-height: 44px;
+  padding-inline: 20px;
+  gap: 8px;
+  border-radius: var(--player-controls-radius-short);
+  background: var(--player-blue);
+  color: var(--app-accent-contrast);
+  font-size: 15px;
+  font-weight: 600;
+}
+.cover-art .empty-open-audio-button[data-slot="button"] svg {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+}
+.empty-open-audio-button[data-slot="button"]:hover,
+.empty-open-audio-button[data-slot="button"]:focus-visible {
+  background: var(--player-blue-ink);
+  color: var(--player-dock);
+}
+
 /* motion.level === 'off' also lands here through the global app rule; keep the
    explicit backstop next to the animation it disables. */
 .spmusic-app[data-motion="off"] .player-loading-cover-skeleton {

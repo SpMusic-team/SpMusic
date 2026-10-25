@@ -31,6 +31,7 @@ use super::{
         AudioOpenSourceResult, AudioPlayInput, AudioPlaybackState, AudioSeekInput,
         AudioSetVolumeInput, AudioTrackDetailsChanged, AudioTrackRef, AudioTransitionPlaybackInput,
     },
+    visualization::{run_visualization_bridge, VisualizationSession},
     AUDIO_STATE_CHANGED_EVENT, AUDIO_TRACK_DETAILS_CHANGED_EVENT,
 };
 
@@ -175,6 +176,13 @@ impl AudioController {
         );
 
         let runtime_parser_tx = parser_tx.clone();
+        let (visualization_tx, visualization_rx) = mpsc::sync_channel(2);
+        let visualization_session = Arc::new(VisualizationSession::default());
+        let bridge_session = Arc::clone(&visualization_session);
+        let bridge_app_handle = app_handle.clone();
+        thread::spawn(move || {
+            run_visualization_bridge(bridge_app_handle, visualization_rx, bridge_session);
+        });
         let load_and_play_queue = Arc::new(LoadAndPlayQueue::default());
         let runtime_load_and_play_queue = Arc::clone(&load_and_play_queue);
 
@@ -184,6 +192,7 @@ impl AudioController {
                 "started audio runtime thread",
             );
             let mut runtime = AudioRuntime::default();
+            runtime.set_visualization(visualization_tx, visualization_session);
             let mut pending_load: Option<PendingLoad> = None;
             let _load_and_play_shutdown_guard =
                 LoadAndPlayQueueShutdownGuard(Arc::clone(&runtime_load_and_play_queue));

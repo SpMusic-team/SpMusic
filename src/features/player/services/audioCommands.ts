@@ -12,6 +12,22 @@ export { AUDIO_PLAYLIST_DURATION_BATCH_LIMIT }
 
 export const AUDIO_STATE_CHANGED_EVENT = 'audio_state_changed'
 export const AUDIO_TRACK_DETAILS_CHANGED_EVENT = 'audio_track_details_changed'
+export const AUDIO_VISUALIZATION_FRAME_EVENT = 'audio_visualization_frame'
+
+export type AudioVisualizationFrame = {
+  generation: number
+  trackId: string
+  /** 48 fixed logarithmic frequency bands, ordered low to high, each normalized to 0..1. */
+  bars: number[]
+}
+
+export async function listenAudioVisualizationFrame(
+  handler: (frame: AudioVisualizationFrame) => void,
+): Promise<UnlistenFn> {
+  return listen<AudioVisualizationFrame>(AUDIO_VISUALIZATION_FRAME_EVENT, (event) => {
+    handler(event.payload)
+  })
+}
 
 export type AudioPlaybackPhase =
   | 'idle'

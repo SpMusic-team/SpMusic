@@ -281,6 +281,110 @@ body[data-player-controls-density="comfortable"] .control-dock { --player-contro
 .control-row > *, .control-primary, .control-auxiliary { min-width: 0; max-width: 100%; }
 .control-primary, .control-auxiliary { box-sizing: border-box; display: flex; align-items: center; }
 .control-primary { justify-self: center; justify-content: center; gap: calc(36 * var(--player-controls-density-unit)); }
+
+.audio-visualization {
+  pointer-events: none;
+}
+.audio-visualization-bars {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: max(2px, calc(3 * var(--control-unit, var(--prototype-unit))));
+}
+.audio-visualization-bar {
+  height: 100%;
+  min-width: 1px;
+  flex: 1 1 0;
+  border-radius: 999px;
+  background: var(--player-blue-soft);
+  transform: scaleY(.035);
+  transform-origin: center;
+  transition: transform 90ms ease-out;
+  will-change: transform;
+}
+.audio-visualization-menu {
+  width: 210px !important;
+  padding: 8px;
+  border-radius: var(--player-controls-radius-short);
+  background: var(--player-dock);
+  color: var(--player-ink);
+}
+.audio-visualization-menu [data-slot="dropdown-menu-radio-item"] {
+  min-height: 38px;
+  padding-inline: 12px 28px;
+  border-radius: 8px;
+}
+.audio-visualization-fade-layer,
+.audio-visualization-fullscreen-layer {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+}
+.audio-visualization-fade-layer {
+  z-index: 41;
+  pointer-events: none;
+}
+.audio-visualization-fade-wash {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--app-bg) 64%, transparent);
+}
+.audio-visualization-ambient {
+  position: absolute;
+  top: var(--audio-visualization-cover-center-y, 50vh);
+  left: 0;
+  width: min(var(--audio-visualization-cover-right, 55vw), 100vw);
+  height: min(calc(var(--audio-visualization-cover-height, 55vh) * 1.05), 72vh);
+  transform: translateY(-50%);
+  opacity: .92;
+}
+.audio-visualization-ambient .audio-visualization-bars,
+.audio-visualization-fullscreen .audio-visualization-bars {
+  gap: clamp(1px, .27vw, 6px);
+}
+.audio-visualization-ambient .audio-visualization-bar {
+  background: color-mix(in srgb, var(--player-blue) 80%, var(--app-surface));
+  transition-duration: 50ms;
+}
+.audio-visualization-fullscreen-layer {
+  z-index: 90;
+  background: var(--app-bg);
+}
+.audio-visualization-fullscreen {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 100%;
+  height: min(64vh, 700px);
+  transform: translateY(-50%);
+}
+.audio-visualization-fullscreen .audio-visualization-bar {
+  background: var(--player-blue);
+  transition-duration: 50ms;
+}
+.audio-visualization-fullscreen-exit {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: zoom-out;
+  -webkit-app-region: no-drag;
+}
+.audio-visualization-fullscreen-exit:focus-visible {
+  outline: 2px solid var(--player-blue);
+  outline-offset: -8px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .audio-visualization,
+  .audio-visualization-fullscreen-layer { animation: none; }
+  .audio-visualization-bar { transition: none; }
+}
 .responsive-player-layout:not([data-player-layout="quarter"]) .control-primary {
   width: min(100%, calc(240 * var(--control-unit, var(--prototype-unit)) + 84 * var(--control-unit, var(--prototype-unit)) * var(--player-primary-size-scale) + 216 * var(--player-controls-density-unit)));
   padding-inline: calc(36 * var(--player-controls-density-unit));

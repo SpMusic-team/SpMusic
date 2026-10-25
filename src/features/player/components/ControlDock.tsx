@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type FocusEvent, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react'
 import { AnimatePresence, animate, motion, type Easing } from 'motion/react'
 import { Button } from '@/components/ui/button'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Slider } from '@/components/ui/slider'
 import { useAppearance, useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { appCopy } from '@/features/player/model/playerCopy'
@@ -19,11 +20,15 @@ import {
 } from './playbackModePresentation'
 import { VolumeControl } from './VolumeControl'
 
+export type VisualizationMode = 'off' | 'fade' | 'fullscreen'
+
 type ControlDockProps = Pick<PlayerUiViewModel, 'playback' | 'timeline' | 'volume' | 'queue'> & {
   visualIsPlaying: boolean
   playbackTransitionPending: boolean
   playbackVisualReady: boolean
   onPlayToggle: () => void
+  visualizationMode: VisualizationMode
+  onVisualizationModeChange: (mode: VisualizationMode) => void
 }
 type ProgressPressEndReason = 'pointerup' | 'pointercancel' | 'blur'
 
@@ -464,10 +469,13 @@ export function ControlDock({
   playbackTransitionPending,
   playbackVisualReady,
   onPlayToggle,
+  visualizationMode,
+  onVisualizationModeChange,
 }: ControlDockProps) {
   const systemIcons = useSystemIcons()
   const { appearance } = useAppearance()
   const appearanceMotion = useAppearanceMotion()
+  const [visualizationMenuOpen, setVisualizationMenuOpen] = useState(false)
   const selectionIntent = playback.selectionVisualIntent
   const selectionKey = selectionIntent
     ? `${selectionIntent.sequence}:${selectionIntent.requestId}:${selectionIntent.targetTrackId}` : null
@@ -532,7 +540,25 @@ export function ControlDock({
         } : undefined}
       />
       <div className="control-row">
-        <div className="control-auxiliary control-auxiliary-start"><IconButton icon={systemIcons.audioWave} label={appCopy.controls.openAudio} disabled={commandBusy} onClick={playback.onOpenAudio} /></div>
+        <div className="control-auxiliary control-auxiliary-start">
+          <DropdownMenu open={visualizationMenuOpen} onOpenChange={setVisualizationMenuOpen}>
+            <DropdownMenuTrigger render={
+              <Button aria-label="音频可视化" aria-haspopup="menu" aria-pressed={visualizationMode !== 'off'} data-selected={visualizationMode !== 'off'} size="icon" variant="ghost">
+                <systemIcons.audioWave aria-hidden="true" />
+              </Button>
+            } />
+            <DropdownMenuContent className="audio-visualization-menu" align="start" side="top" sideOffset={12}>
+              <DropdownMenuRadioGroup value={visualizationMode} onValueChange={(value) => {
+                onVisualizationModeChange(value as VisualizationMode)
+                setVisualizationMenuOpen(false)
+              }}>
+                <DropdownMenuRadioItem value="off">禁用可视化</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="fade">可视化 · 淡出</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="fullscreen">可视化 · 全屏</DropdownMenuRadioItem>
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
         <div className="control-primary" data-playback-state={visualIsPlaying ? 'playing' : 'paused'}>
           <IconButton className="control-optional" icon={shufflePresentation.icon} label={shufflePresentation.label} selected={shufflePresentation.pressed} disabled={disabled} onClick={handleShuffleCycle} />
           <div className="control-transport">

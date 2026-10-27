@@ -28,9 +28,17 @@ dist-ssr
 .claude/
 .codex/
 
-# 逆向分析工作区：仅提交 findings/REPORT 文档，排除第三方 APK、构建产物、原生库与临时备份
+# 逆向分析工作区：仅提交 findings/REPORT 文档与文档实际引用的资源证据，
+# 排除第三方 APK、smali/classes、原生库与临时备份
 .rea-analysis/*.apk
 .rea-analysis/*.bak
 .rea-analysis/*.log*
-.rea-analysis/decoded/
 .rea-analysis/natives/
+# apktool 产物整体排除，仅保留架构文档引用的偏好 XML 与 strings.xml
+.rea-analysis/decoded/*
+!.rea-analysis/decoded/res/
+.rea-analysis/decoded/res/*
+!.rea-analysis/decoded/res/xml/
+!.rea-analysis/decoded/res/values/
+.rea-analysis/decoded/res/values/*
+!.rea-analysis/decoded/res/values/strings.xml

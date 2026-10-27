@@ -3015,8 +3015,8 @@ export function PlayerSurface({
               variants={appearanceMotion.variants.backdrop} transition={appearanceMotion.layoutTransition}
               initial="initial" animate="animate" exit="exit" /> : null}
             {playlist.isOpen && playlist.library?.route?.view === 'overview' ? <MediaLibraryPanel key="media-library-overview" playlist={playlist} onOpenPlayer={() => requestPlaylistOpenChange(false)} /> : null}
-            {playlist.isOpen && playlist.library?.route?.view === 'category' && playlist.library.route.categoryId === 'folders' ? <FolderHierarchyPanel key="folder-hierarchy" controllerMode={controllerMode} timelineInteraction={timeline.interaction} playlist={playlist} allSongsCoverStore={allSongsCoverStore} librarySidebarOpen={librarySidebarOpen} onLibrarySidebarOpenChange={setCompactSidebarOpen} searchRequestId={searchRequestId} /> : null}
-            {playlist.isOpen && playlist.library?.isOpen && playlist.library.route?.view !== 'overview' && !(playlist.library.route?.view === 'category' && playlist.library.route.categoryId === 'folders') ? (
+            {playlist.isOpen && playlist.library?.route?.view === 'category' && ['folders', 'folder'].includes(playlist.library.route.categoryId) ? <FolderHierarchyPanel key={playlist.library.route.categoryId} categoryId={playlist.library.route.categoryId === 'folder' ? 'folder' : 'folders'} controllerMode={controllerMode} timelineInteraction={timeline.interaction} playlist={playlist} allSongsCoverStore={allSongsCoverStore} librarySidebarOpen={librarySidebarOpen} onLibrarySidebarOpenChange={setCompactSidebarOpen} searchRequestId={searchRequestId} /> : null}
+            {playlist.isOpen && playlist.library?.isOpen && playlist.library.route?.view !== 'overview' && !(playlist.library.route?.view === 'category' && ['folders', 'folder'].includes(playlist.library.route.categoryId)) ? (
               <PlaylistLibraryPanel
                 controllerMode={controllerMode}
                 entryPosition={playlist.entryPosition}

@@ -680,11 +680,11 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
         selectMode={selectMode} onSelect={toggleSelection} selectDisabled={!library.allSongs?.length}
         more={renderMore(true)} />
     </motion.div> : null}
-    {(categoryId === 'playlists' || (isSongs && library.allSongsMetadataStatus !== 'loading')) ? <>
+    {<>
     {quickIndexPreview ? <div className="playlist-management-quick-index-preview" data-visible={quickIndexPreview.visible} style={{ top: quickIndexPreview.top }} aria-hidden="true">
       {quickIndexPreview.key === 'top' ? <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m2 7 6-6 6 6M2 14l6-6 6 6" /></svg> : quickIndexPreview.key}
     </div> : null}
-    <nav className="playlist-management-quick-index" aria-label={isSongs ? '歌曲快速查找' : '播放列表快速查找'}
+    <nav className="playlist-management-quick-index" aria-label={isSongs ? '歌曲快速查找' : category.label + '快速查找'}
       onPointerDown={(event) => {
         if (!event.isPrimary || event.button !== 0) return
         event.preventDefault()
@@ -704,6 +704,6 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
       {QUICK_INDEX_KEYS.map((key) => <button key={key} type="button" aria-label={key === '0' ? `查找数字开头的${isSongs ? '歌曲' : '播放列表'}` : key === '#' ? `查找其他字符开头的${isSongs ? '歌曲' : '播放列表'}` : `查找 ${key} 开头的${isSongs ? '歌曲' : '播放列表'}`}
         aria-current={activeQuickIndex === key ? 'true' : undefined} title={key === '0' ? '数字' : key === '#' ? '其他字符' : key}
         onClick={(event) => activateQuickIndexByKeyboard(key, event)}>{key}</button>)}
-    </nav></> : null}
+    </nav></>}
   </motion.div>
 }

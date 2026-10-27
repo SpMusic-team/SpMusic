@@ -151,3 +151,7 @@
 @media (max-width: 480px) { .folder-detail-menu-artwork { flex-basis: 110px; width: 110px; height: 110px; } .folder-detail-menu-parent, .folder-detail-menu-metadata { font-size: 18px; line-height: 26px; } }
 
 .folder-detail-menu .folder-root-menu-action[data-slot="button"]:disabled { opacity: .45; }
+
+[data-folder-category='folder'] .folder-directory-list[data-folder-flow='tile'] { column-gap: 48px; row-gap: 22px; }
+[data-folder-kind='flat'][data-folder-variant='tile'] .folder-copy { font-weight: 400; }
+[data-folder-kind='flat'] { --folder-card-radius: calc(var(--app-radius-lg) * 5 / 6); }

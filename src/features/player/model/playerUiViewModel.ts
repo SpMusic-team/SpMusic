@@ -195,6 +195,8 @@ export type PlaylistLibraryViewModel = PlaylistAddCallbacks & {
   folderRoots?: readonly { path: string; directoryPaths?: readonly string[]; status: 'loading' | 'ready' | 'error'; error?: string; selection?: RootSelection }[]
   isFolderRestorePending?: boolean
   folderError?: string
+  flatFolderLocation?: { rootPath: string; directoryPath: string } | null
+  onFlatFolderLocationChange?: (location: { rootPath: string; directoryPath: string } | null) => void
   folderLocation?: { rootPath: string; directoryPath: string } | null
   onFolderLocationChange?: (location: { rootPath: string; directoryPath: string } | null) => void
   route?: MediaLibraryRoute

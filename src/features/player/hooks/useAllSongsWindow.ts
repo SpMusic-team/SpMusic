@@ -126,6 +126,9 @@ export function useFolderCoverUrl(store: AllSongsCoverStore, item?: FolderCoverI
   return useCoverUrl(store, item?.key ?? '', item ? coverIdentity(item) : '')
 }
 
+export function useCollectionCoverUrl(store: AllSongsCoverStore, item?: AllSongsCoverItem): string | undefined {
+ return useCoverUrl(store, item?.key ?? '', item ? coverIdentity(item) : '')
+}
 function useCoverUrl(store: AllSongsCoverStore, key: string, identity: string, revision = true): string | undefined {
   const subscribe = useCallback((listener: () => void) => {
     const listeners = store.listeners.get(key) ?? new Set<() => void>()

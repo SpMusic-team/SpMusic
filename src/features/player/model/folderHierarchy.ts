@@ -83,3 +83,26 @@ export function folderEntries(roots: NonNullable<PlaylistLibraryViewModel['folde
 export function folderNavigationKey(rootPath: string, directoryPath: string): string {
   return JSON.stringify([folderPath(rootPath), folderPath(directoryPath)])
 }
+
+// Group the selected library union by immediate parent, never by scan root.
+export function flatFolderEntries(songs: readonly AllSongsItem[]): FolderHierarchyEntry[] {
+  const groups = new Map<string, AllSongsItem[]>()
+  const seen = new Set<string>()
+  for (const song of songs) {
+    const key = folderPath(song.sourcePath)
+    if (seen.has(key)) continue
+    seen.add(key)
+    const path = parentFolder(song.sourcePath)
+    const group = groups.get(path) ?? []
+    group.push(song)
+    groups.set(path, group)
+  }
+  return [...groups].map(([path, songs]) => ({
+    path,
+    name: folderName(path),
+    parentName: folderName(parentFolder(path)),
+    songs,
+    status: 'ready' as const,
+    complete: true,
+  }))
+}

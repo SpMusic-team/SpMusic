@@ -25,6 +25,8 @@ source_documents:
 
 **本文记录的是外部实现 Poweramp 的媒体内三视图结构，不是 SpMusic 的现状描述。**
 
+> SpMusic 对照基线说明：本文第 2、8、9 节中对 SpMusic 的比较基于平铺文件夹改造前的历史实现。2026-10-28 已实现“平铺所有直接含歌目录、详情仅含本层歌曲”及分类根页快速索引；当前契约以 [媒体库三页面关系](media-library-page-relationships.md) 为准。此更新不改变本文的 Poweramp 取证结果或待验证项。
+
 用途：为 SpMusic 三页面模型（`docs/architecture/media-library-page-relationships.md`）提供**一个有实证支撑的对照物**。凡涉及「我们该怎么做」，集中在第 10 章并明确标注为提案。
 
 ### 0.1 证据分级

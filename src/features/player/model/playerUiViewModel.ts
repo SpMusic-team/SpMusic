@@ -150,7 +150,46 @@ export type AllSongsItem = Readonly<{
   available: boolean
 }>
 
-export type PlaylistLibraryViewModel = {
+export type PlaylistDeleteSnapshot = Readonly<{
+  scope: string | null
+  songKeys: readonly string[]
+  canRemoveFromList: boolean
+}>
+
+export type PlaylistDeleteResult = Readonly<{
+  succeededKeys: readonly string[]
+  failedKeys: readonly string[]
+  errorMessage?: string
+}>
+
+export type PlaylistDeleteMode = 'list' | 'files'
+export type PlaylistDeleteAction = (snapshot: PlaylistDeleteSnapshot, mode: PlaylistDeleteMode) => Promise<PlaylistDeleteResult>
+
+export type SongReorderRequest = Readonly<{ scope: string | null; expectedKeys: readonly string[]; orderedKeys: readonly string[] }>
+export type SongReorderAction = (request: SongReorderRequest) => Promise<{ ok: boolean; errorMessage?: string }>
+
+export type PlaylistAddSnapshot = Readonly<{ scope: string | null; songKeys: readonly string[] }>
+export type PlaylistAddTarget = PlaylistLibraryItem & Readonly<{ containedCount: number; containsAll: boolean }>
+export type PlaylistAddRequest = Readonly<{ snapshot: PlaylistAddSnapshot; targets: readonly PlaylistAddTarget[]; suggestedName?: string; artworkSource?: PlaylistArtworkSource }>
+export type PlaylistInsertionPosition = 'start' | 'end' | 'random'
+export type PlaylistAddResult = Readonly<{
+  targetScope: string
+  addedCount: number
+  removedCount?: number
+  alreadyPresentCount: number
+  failedKeys: readonly string[]
+  errorMessage?: string
+}>
+export type PlaylistAddAction = (snapshot: PlaylistAddSnapshot, targetScope: string, position?: PlaylistInsertionPosition) => Promise<PlaylistAddResult>
+export type PlaylistRemoveAction = (snapshot: PlaylistAddSnapshot, targetScope: string) => Promise<PlaylistAddResult>
+export type PlaylistAddCallbacks = {
+  onPreparePlaylistAdd?: (snapshot: PlaylistAddSnapshot) => PlaylistAddRequest | undefined
+  onAddToPlaylist?: PlaylistAddAction
+  onRemoveFromPlaylist?: PlaylistRemoveAction
+  onCreateAddPlaylist?: (name: string, snapshot: PlaylistAddSnapshot) => PlaylistAddRequest | undefined
+}
+
+export type PlaylistLibraryViewModel = PlaylistAddCallbacks & {
   route?: MediaLibraryRoute
   onOpenOverview?: () => void
   onSelectCategory?: (categoryId: MediaLibraryCategoryId) => void
@@ -158,6 +197,8 @@ export type PlaylistLibraryViewModel = {
   items: readonly PlaylistLibraryItem[]
   allSongs?: readonly AllSongsItem[]
   allSongsMetadataStatus?: 'loading' | 'ready'
+  allSongsManualOrder?: boolean
+  onReorderSongs?: SongReorderAction
   currentScope?: string | null
   activeScope?: string | null
   onOpen: () => void
@@ -170,9 +211,16 @@ export type PlaylistLibraryViewModel = {
   isImportPending?: boolean
   isPlaylistRestorePending?: boolean
   onCreatePlaylist?: (name: string, songKeys: readonly string[]) => string | null
+  onDeleteSongs?: PlaylistDeleteAction
+  isDeletePending?: boolean
 }
 
-export type PlayerPlaylistViewModel = {
+export type PlayerPlaylistViewModel = PlaylistAddCallbacks & {
+  onReorderSongs?: SongReorderAction
+  deleteScope?: string | null
+  canRemoveFromList?: boolean
+  onDeleteSongs?: PlaylistDeleteAction
+  isDeletePending?: boolean
   artworkSource?: PlaylistArtworkSource
   fallbackArtworkSource?: PlaylistArtworkSource
   entryPosition?: Readonly<{ requestId: number; target: 'top' | 'current-track' }>

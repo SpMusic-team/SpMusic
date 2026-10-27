@@ -1,9 +1,13 @@
 import { memo, useCallback, useLayoutEffect, useSyncExternalStore, type CSSProperties, type SyntheticEvent } from 'react'
+import { EqualIcon } from 'lucide-react'
 import { useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { PlaylistCoverImage } from '@/features/player/components/PlaylistCoverImage'
+import { usePlaylistCardLongPress } from '@/features/player/hooks/usePlaylistCardLongPress'
 import { appCopy } from '@/features/player/model/playerCopy'
 import type { PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
 import type { PlaylistArtworkSource } from '@/features/player/model/playlistArtworkStore'
+import checkbox from '@/assets/song-card/checkbox-unchecked.svg'
+import arrowMove from '@/assets/song-card/arrow-move.svg'
 
 type PlaylistCardProps = {
   track: PlaylistTrackItemViewModel
@@ -27,6 +31,7 @@ type PlaylistCardProps = {
   onCoverFailed: (trackId: string, source: string) => void
   onActivate: (trackId: string) => void
   onToggleSelect: (trackId: string) => void
+  onEnterSelectMode?: (trackId: string) => void
 }
 
 // `idle` is off-window (nothing requested yet), `loading` waits for local
@@ -39,6 +44,18 @@ const cardStyles = Array.from({ length: 16 }, (_, shape) => Array.from({ length:
   '--cover-placeholder-stagger': `${phase * COVER_STAGGER_STEP_MS}ms`,
   '--playlist-card-slot-min-height': `var(--playlist-content-height-${shape}, 0px)`,
 }) as CSSProperties))
+
+function SongCardGlyph({ src, className }: { src: string; className: string }) {
+  return <span className={`playlist-card-glyph ${className}`} style={{ maskImage: `url("${src}")` }} />
+}
+
+function SongCardCheckbox() {
+  return <span className="playlist-card-checkbox" aria-hidden="true">
+    <SongCardGlyph className="playlist-card-checkbox-icon" src={checkbox} />
+    <span className="playlist-card-checkbox-fill" />
+    <svg className="playlist-card-checkbox-check" viewBox="0 0 24 24" fill="none"><path pathLength="1" d="m6 12 4 4 8-8" /></svg>
+  </span>
+}
 
 function formatTrackClock(durationSeconds?: number): string | null {
   if (durationSeconds == null || !Number.isFinite(durationSeconds) || durationSeconds <= 0) return null
@@ -76,6 +93,7 @@ export const PlaylistCard = memo(function PlaylistCard({
   onCoverFailed,
   onActivate,
   onToggleSelect,
+  onEnterSelectMode,
 }: PlaylistCardProps) {
   const visual = useCardArtwork(artworkSource, baseTrack.id)
   const fallback = useCardArtwork(fallbackArtworkSource, baseTrack.id)
@@ -92,7 +110,11 @@ export const PlaylistCard = memo(function PlaylistCard({
     coverThumbnail: visual?.coverThumbnail ?? fallback?.coverThumbnail,
     hasLocalArtwork: visual?.hasLocalArtwork ?? baseTrack.hasLocalArtwork ?? fallback?.hasLocalArtwork,
   } : baseTrack
-  const handleClick = () => {
+  const disabled = (unavailable && !(selectMode && canSelectUnavailable)) || (!selectMode && !canActivate)
+  const longPress = usePlaylistCardLongPress({ identity: songKey ?? track.id,
+    disabled: disabled || !contentVisible, selectMode, onEnterSelectMode })
+  const handleClick = (event: React.MouseEvent<HTMLButtonElement>) => {
+    if (longPress.consumeClick(event)) return
     if (selectMode) onToggleSelect(songKey ?? track.id)
     else onActivate(songKey ?? track.id)
   }
@@ -139,19 +161,21 @@ export const PlaylistCard = memo(function PlaylistCard({
       data-select-mode={selectMode ? 'true' : undefined}
       aria-current={current ? 'true' : undefined}
       aria-pressed={selectMode ? selected : undefined}
-      disabled={(unavailable && !(selectMode && canSelectUnavailable)) || (!selectMode && !canActivate)}
+      disabled={disabled}
       title={label}
       aria-label={label}
       onClick={handleClick}
+      onPointerDown={longPress.onPointerDown}
+      onContextMenu={longPress.onContextMenu}
     >
       {contentVisible ? <PlaylistCardContent track={track} songKey={songKey} coverUrl={coverUrl} artworkVisible={artworkVisible}
-        selectMode={selectMode} unavailable={unavailable} showExtendedMetadata={showExtendedMetadata}
+        unavailable={unavailable} showExtendedMetadata={showExtendedMetadata}
         coverState={coverState} coverFailed={coverFailed} onCoverFailed={onCoverFailed} /> : null}
     </button>
   )
 })
 
-function PlaylistCardContent({ track, songKey, coverUrl, artworkVisible, selectMode, unavailable, showExtendedMetadata, coverState, coverFailed, onCoverFailed }: Pick<PlaylistCardProps, 'track' | 'songKey' | 'coverUrl' | 'artworkVisible' | 'selectMode' | 'unavailable' | 'showExtendedMetadata' | 'coverFailed' | 'onCoverFailed'> & { coverState: PlaylistCardCoverState }) {
+function PlaylistCardContent({ track, songKey, coverUrl, artworkVisible, unavailable, showExtendedMetadata, coverState, coverFailed, onCoverFailed }: Pick<PlaylistCardProps, 'track' | 'songKey' | 'coverUrl' | 'artworkVisible' | 'unavailable' | 'showExtendedMetadata' | 'coverFailed' | 'onCoverFailed'> & { coverState: PlaylistCardCoverState }) {
   const systemIcons = useSystemIcons()
   const coverSource = coverUrl ?? track.coverImage ?? track.coverImageFallback
   const coverMarkVisible = coverState === 'empty' || coverState === 'error'
@@ -191,7 +215,10 @@ function PlaylistCardContent({ track, songKey, coverUrl, artworkVisible, selectM
           </span>
         ) : null}
         {unavailable ? <span className="playlist-card-cover-state">{appCopy.playlistPage.moreUnavailable}</span> : null}
-        {selectMode ? <span className="playlist-card-checkbox" /> : null}
+        <span className="playlist-card-cover-selection" aria-hidden="true">
+          <SongCardCheckbox />
+          <span className="playlist-card-move" data-reorder-handle><SongCardGlyph className="playlist-card-move-icon" src={arrowMove} /></span>
+        </span>
       </span>
       <span className="playlist-card-copy">
         <span className="playlist-card-title">{track.title}</span>
@@ -207,6 +234,10 @@ function PlaylistCardContent({ track, songKey, coverUrl, artworkVisible, selectM
             ))}
           </span>
         ) : null}
+      </span>
+      <span className="playlist-card-selection-actions" aria-hidden="true">
+        <span className="playlist-card-row-move" data-reorder-handle><EqualIcon aria-hidden="true" strokeWidth={3} /></span>
+        <SongCardCheckbox />
       </span>
   </>
 }

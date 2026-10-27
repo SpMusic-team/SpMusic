@@ -378,12 +378,18 @@
   text-align: left;
   cursor: pointer;
   transition:
-    background-color var(--app-motion-fast) var(--app-motion-easing),
+    background-color var(--selection-background-duration) var(--selection-controls-easing),
     transform var(--app-motion-fast) var(--app-motion-easing);
 }
 
 .playlist-card:hover:not(:disabled) { background: color-mix(in srgb, var(--player-surface-variant) 58%, transparent); }
-.playlist-card:active:not(:disabled) { transform: scale(0.995); }
+.playlist-card[data-select-mode="true"] [data-reorder-handle] { pointer-events: auto; touch-action: none; cursor: grab; }
+.playlist-card[data-reorder-source="true"] { opacity: 0 !important; pointer-events: none; }
+.playlist-grid[data-reordering="true"] .playlist-card { user-select: none; }
+.playlist-reorder-overlay { position: fixed; z-index: 100; pointer-events: none; box-sizing: border-box; box-shadow: var(--controller-background-shadow); color: var(--player-ink); }
+.playlist-reorder-overlay .playlist-card { pointer-events: none; }
+.playlist-reorder-count { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); border-radius: var(--app-radius-pill); padding: 4px 12px; background: var(--player-dock); color: var(--player-blue); font-size: calc(16px * var(--app-font-scale)); line-height: calc(24px * var(--app-font-scale)); white-space: nowrap; }
+.playlist-card:active:not(:disabled) { transform: none; }
 .playlist-card:disabled { cursor: default; }
 
 .playlist-card[data-current="true"],
@@ -618,19 +624,139 @@
 .playlist-card-checkbox {
   position: absolute;
   top: 10px;
-  right: 10px;
-  display: none;
-  width: 28px;
-  height: 28px;
-  border: 2px solid rgb(255 255 255 / 90%);
-  border-radius: 50%;
-  background: rgb(0 0 0 / 35%);
+  left: 10px;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--app-radius-pill);
+  background: var(--player-dock);
+  color: var(--player-blue);
+  pointer-events: none;
 }
 
-.playlist-card[data-select-mode="true"] .playlist-card-checkbox { display: block; }
-.playlist-card[data-selected="true"] .playlist-card-checkbox { border-color: #fff; background: var(--player-blue, #477fa7); }
+/* Preserve the Figma shapes while inheriting the active theme's icon color. */
+.playlist-card-glyph {
+  display: block;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  background: currentColor;
+  mask-repeat: no-repeat;
+  mask-position: center;
+}
+.playlist-card-cover-selection {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.playlist-card-cover-selection,
+.playlist-card-selection-actions {
+  opacity: 0;
+  transition: opacity var(--selection-controls-duration) var(--selection-controls-easing);
+}
+.playlist-card[data-select-mode="true"] .playlist-card-cover-selection,
+.playlist-card[data-select-mode="true"] .playlist-card-selection-actions { opacity: 1; }
+.playlist-card-checkbox-icon { transition: opacity var(--selection-check-fill-duration) var(--selection-check-easing); }
+.playlist-card-checkbox-fill {
+  position: absolute;
+  inset: 4px;
+  border-radius: 2px;
+  background: currentColor;
+  opacity: 0;
+  transition: opacity var(--selection-check-fill-duration) var(--selection-check-easing);
+}
+.playlist-card-checkbox-check { position: absolute; inset: 0; width: 24px; height: 24px; color: var(--player-dock); }
+.playlist-card-checkbox-check path {
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  transition: stroke-dashoffset var(--selection-check-draw-duration) var(--selection-check-easing);
+}
+.playlist-card[data-selected="true"] .playlist-card-checkbox-icon { opacity: 0; }
+.playlist-card[data-selected="true"] .playlist-card-checkbox-fill { opacity: 1; }
+.playlist-card[data-selected="true"] .playlist-card-checkbox-check path {
+  stroke-dashoffset: 0;
+  transition-delay: var(--selection-check-draw-delay);
+}
+
+[data-selection-motion="off"] .playlist-card,
+[data-selection-motion="off"] .playlist-card-copy,
+[data-selection-motion="off"] .playlist-card-cover-selection,
+[data-selection-motion="off"] .playlist-card-selection-actions,
+[data-selection-motion="off"] .playlist-card-checkbox-icon,
+[data-selection-motion="off"] .playlist-card-checkbox-fill,
+[data-selection-motion="off"] .playlist-card-checkbox-check path { transition: none !important; }
+.playlist-card-move {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  display: none;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border-radius: var(--app-radius-pill);
+  background: var(--player-dock);
+  color: var(--player-blue);
+  pointer-events: none;
+}
+.playlist-grid[data-layout-flow="tile"] .playlist-card-move { display: grid; }
+.playlist-grid[data-layout-level="0"] .playlist-card-move { width: 48px; height: 48px; }
+.playlist-grid[data-layout-level="1"] .playlist-card-move { width: 28px; height: 28px; }
+.playlist-grid[data-layout-level="2"] .playlist-card-checkbox { top: 7px; }
+.playlist-grid[data-layout-level="2"] .playlist-card-move { right: 8px; bottom: 7px; }
+.playlist-grid[data-layout-level="3"] .playlist-card-checkbox,
+.playlist-grid[data-layout-level="4"] .playlist-card-checkbox { top: 50%; transform: translateY(-50%); }
+.playlist-grid[data-layout-level="5"] .playlist-card-checkbox { top: 50%; left: 5px; transform: translateY(-50%); }
+
+/* Tail slots appear only in selection mode; artwork and text keep their
+   existing layout metrics and leave space before the visual controls. */
+.playlist-card-selection-actions { display: none; pointer-events: none; }
+.playlist-grid[data-layout-flow="row"] .playlist-card,
+.playlist-grid[data-layout-flow="text"] .playlist-card { position: relative; }
+.playlist-grid[data-layout-flow="row"] .playlist-card[data-select-mode="true"] .playlist-card-copy {
+  box-sizing: border-box;
+  padding-right: 40px;
+}
+.playlist-grid[data-layout-flow="text"] .playlist-card[data-select-mode="true"] .playlist-card-copy {
+  box-sizing: border-box;
+  padding-right: 72px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, auto);
+}
+.playlist-grid[data-layout-flow="row"] .playlist-card-selection-actions,
+.playlist-grid[data-layout-flow="text"] .playlist-card-selection-actions {
+  position: absolute;
+  top: 50%;
+  right: 15px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transform: translateY(-50%);
+}
+.playlist-grid[data-layout-flow="text"] .playlist-card-selection-actions { right: 12px; }
+.playlist-card-row-move {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  place-items: center;
+  border-radius: var(--app-radius-pill);
+  background: var(--player-dock);
+  color: var(--player-blue);
+}
+.playlist-card-row-move > svg { width: 24px; height: 24px; }
+.playlist-card-selection-actions .playlist-card-checkbox {
+  position: static;
+  flex: none;
+  transform: none;
+}
+.playlist-grid[data-layout-flow="row"] .playlist-card-selection-actions .playlist-card-checkbox { display: none; }
 
 .playlist-card-copy {
+  transition: padding-right var(--selection-controls-duration) var(--selection-controls-easing);
   display: flex;
   min-width: 0;
   width: 100%;

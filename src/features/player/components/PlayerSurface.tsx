@@ -2984,6 +2984,7 @@ export function PlayerSurface({
               controllerRef={libraryDockRef}
               controllerOffsetY={dockBinding?.controllerOffsetY}
               controllerHidden={dockBinding?.controllerHidden}
+              selection={dockBinding?.selection}
               playback={dockPlayback} timeline={timeline}
               playlistTrack={playlist.playbackDockTrack} playlistTracks={playlist.tracks}
               coverLayer={dockArtworkLayer}
@@ -3033,7 +3034,7 @@ export function PlayerSurface({
               <OwnedPlaylistPanel
               onEntrySettled={onPlaylistNavigationSettled}
               controllerMode={controllerMode}
-              key={`${playlist.library?.currentScope ?? ''}:${playlist.playlistName ?? 'playlist'}:${playlist.tracks.length}:${playlist.tracks[0]?.id ?? ''}:${playlist.tracks[playlist.tracks.length - 1]?.id ?? ''}`}
+              key={playlist.deleteScope ?? playlist.library?.currentScope ?? playlist.playlistName ?? 'playlist'}
               ownerStateRef={playlistWindowOwnersRef}
               entryPosition={playlist.entryPosition}
               library={playlist.library}
@@ -3056,6 +3057,15 @@ export function PlayerSurface({
               isOpenAudioDisabled={playlist.isOpenAudioDisabled}
               onOpenAudio={playlist.onOpenAudio}
               onTrackSelect={playlist.onTrackSelect}
+              deleteScope={playlist.deleteScope}
+              canRemoveFromList={playlist.canRemoveFromList}
+              onDeleteSongs={playlist.onDeleteSongs}
+              onReorderSongs={playlist.onReorderSongs}
+              onPreparePlaylistAdd={playlist.onPreparePlaylistAdd}
+              onAddToPlaylist={playlist.onAddToPlaylist}
+              onRemoveFromPlaylist={playlist.onRemoveFromPlaylist}
+              onCreateAddPlaylist={playlist.onCreateAddPlaylist}
+              isDeletePending={playlist.isDeletePending}
               onVisibleTrackIdsChange={playlist.onVisibleTrackIdsChange}
               playback={playback}
               timeline={timeline}

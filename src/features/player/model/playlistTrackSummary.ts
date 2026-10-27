@@ -144,6 +144,9 @@ export function playlistDescriptorFingerprint(
 ): string {
   return `${descriptors.length}\u0002${descriptors
     .map((descriptor) => `${descriptor.id}\u0001${normalizeAudioSourcePath(descriptor.sourcePath)}`)
+    // Metadata belongs to id/path pairs, not their presentation order.
+    // Reordering must keep the active pass and painted rows alive.
+    .sort()
     .join('\u0000')}`
 }
 

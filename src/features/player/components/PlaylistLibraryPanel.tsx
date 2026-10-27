@@ -12,6 +12,8 @@ import { appCopy } from '@/features/player/model/playerCopy'
 import { readLibraryLayoutRect } from '@/features/player/model/libraryNavigationGeometry'
 import { useAllSongsRenderWindow } from '@/features/player/hooks/useAllSongsRenderWindow'
 import { useAllSongsTileNavigation } from '@/features/player/hooks/useAllSongsTileNavigation'
+import { usePlaylistSongReorder } from '@/features/player/hooks/usePlaylistSongReorder'
+import { mergeFilteredSongOrder } from '@/features/player/model/manualSongOrderStorage'
 import { useCollectionLayout } from '@/features/player/hooks/useCollectionLayout'
 import { useAllSongsCoverUrl, useAllSongsWindow, type AllSongsCoverStore } from '@/features/player/hooks/useAllSongsWindow'
 import { compareByQuickIndex, quickIndexKey } from '@/features/player/model/quickIndex'
@@ -78,10 +80,11 @@ type AllSongsCardProps = {
   onCoverFailed: (key: string, source: string) => void
   onActivate: (key: string) => void
   onToggleSelect: (key: string) => void
+  onEnterSelectMode?: (key: string) => void
 }
 
 const AllSongsCard = memo(function AllSongsCard({ item, index, store, current, canActivate, selectMode, selected,
-  artworkVisible, showExtendedMetadata, coverFailed, onCoverFailed, onActivate, onToggleSelect }: AllSongsCardProps) {
+  artworkVisible, showExtendedMetadata, coverFailed, onCoverFailed, onActivate, onToggleSelect, onEnterSelectMode }: AllSongsCardProps) {
   const coverUrl = useAllSongsCoverUrl(store, item.key, item.trackId, item.sourcePath)
   const track = item.track
   const bitDepth = track.audioFormat?.bitDepth
@@ -93,7 +96,7 @@ const AllSongsCard = memo(function AllSongsCard({ item, index, store, current, c
     selectMode={selectMode} selected={selected} artworkVisible={artworkVisible}
     showExtendedMetadata={showExtendedMetadata} contentVisible contentRepresentative={false}
     contentShape={contentShape} coverFailed={coverFailed} onCoverFailed={onCoverFailed}
-    onActivate={onActivate} onToggleSelect={onToggleSelect} />
+    onActivate={onActivate} onToggleSelect={onToggleSelect} onEnterSelectMode={onEnterSelectMode} />
 })
 
 export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverStore, librarySidebarOpen, onLibrarySidebarOpenChange, searchRequestId = 0, controllerMode = 'movable', timeline }: Props) {
@@ -127,6 +130,7 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
   const [searchOpen, setSearchOpen] = useState(false)
   const [dismissedSearchRequestId, setDismissedSearchRequestId] = useState(0)
   const [selectMode, setSelectMode] = useState(false)
+  const [reorderPreviewKeys, setReorderPreviewKeys] = useState<readonly string[] | null>(null)
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
   const [createOpen, setCreateOpen] = useState(false)
   const [playlistName, setPlaylistName] = useState('')
@@ -214,11 +218,17 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
   const visible = categoryItems
     .filter((item) => item.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
     .sort((left, right) => compareByQuickIndex(left.name, right.name))
-  const visibleSongs = useMemo(() => (library.allSongs ?? [])
-    .filter((item) => `${item.track.title} ${item.track.artist} ${item.track.album}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
-    .sort((left, right) => compareByQuickIndex(left.track.title, right.track.title)), [library.allSongs, query])
-  const songsWindow = useAllSongsRenderWindow(visibleSongs.length, songsLayout, panelRef, songsListRef, songsSpaceRef, library.allSongsMetadataStatus === 'loading')
-  const renderedSongs = useMemo(() => visibleSongs.slice(songsWindow.first, songsWindow.end), [visibleSongs, songsWindow.first, songsWindow.end])
+  const orderedSongs = useMemo(() => library.allSongsManualOrder ? [...library.allSongs ?? []]
+    : [...library.allSongs ?? []].sort((left, right) => compareByQuickIndex(left.track.title, right.track.title)), [library.allSongs, library.allSongsManualOrder])
+  const visibleSongs = useMemo(() => orderedSongs
+    .filter((item) => `${item.track.title} ${item.track.artist} ${item.track.album}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())), [orderedSongs, query])
+  const displayedSongs = useMemo(() => {
+    if (!reorderPreviewKeys) return visibleSongs
+    const byKey = new Map(visibleSongs.map(item => [item.key, item]))
+    return reorderPreviewKeys.flatMap(key => { const item = byKey.get(key); return item ? [item] : [] })
+  }, [visibleSongs, reorderPreviewKeys])
+  const songsWindow = useAllSongsRenderWindow(displayedSongs.length, songsLayout, panelRef, songsListRef, songsSpaceRef, library.allSongsMetadataStatus === 'loading')
+  const renderedSongs = useMemo(() => displayedSongs.slice(songsWindow.first, songsWindow.end), [displayedSongs, songsWindow.first, songsWindow.end])
   useLayoutEffect(() => {
     if (!isSongs || !entryPosition || !isPresent) return
     const panel = panelRef.current
@@ -280,6 +290,30 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
     navigationMotion.transition.duration ?? 0, Array.isArray(tileEase) ? `cubic-bezier(${tileEase.join(',')})` : 'ease')
   const coverStore = useAllSongsWindow(visibleSongs, panelRef, songsListRef,
     isSongs && songsLayout.showArtwork, library.allSongsMetadataStatus === 'loading', allSongsCoverStore, 8, renderedSongs)
+  const fullReorderKeys = useMemo(() => orderedSongs.map(item => item.key), [orderedSongs])
+  const reorderSourceVersion = useMemo(() => JSON.stringify(fullReorderKeys), [fullReorderKeys])
+  const visibleReorderKeys = useMemo(() => visibleSongs.map(item => item.key), [visibleSongs])
+  const songReorder = usePlaylistSongReorder({
+    enabled: isSongs && selectMode && isPresent && library.allSongsMetadataStatus !== 'loading' && !playlist.isOpenAudioDisabled
+      && !library.isDeletePending && Boolean(library.onReorderSongs),
+    scopeKey: 'all-songs', sourceVersion: reorderSourceVersion, layoutKey: `${songsLayout.level}:${query}:${searchOpen}:${searchRequestId}:${dismissedSearchRequestId}`,
+    orderedKeys: visibleReorderKeys, selectedKeys: selected, gridRef: songsListRef, scrollRef: panelRef,
+    onPreview: setReorderPreviewKeys,
+    onCommit: async draft => {
+      const orderedKeys = mergeFilteredSongOrder(fullReorderKeys, draft.expectedKeys, draft.orderedKeys)
+      return orderedKeys && library.onReorderSongs ? library.onReorderSongs({ scope: null, expectedKeys: fullReorderKeys, orderedKeys })
+        : { ok: false, errorMessage: '列表已更改，请重新拖动排序。' }
+    },
+    retainArtwork: key => {
+      const releases = [coverStore.retain(key)]
+      const item = orderedSongs.find(song => song.key === key)
+      if (item) for (const source of [playlist.artworkSource, playlist.fallbackArtworkSource]) {
+        const resourceKey = source?.keyByTrackId.get(item.trackId)
+        if (source && resourceKey) releases.push(source.store.retain(resourceKey))
+      }
+      return () => { for (const release of releases.reverse()) release() }
+    },
+  })
   const songsByKey = useMemo(() => new Map(visibleSongs.map((item) => [item.key, item])), [visibleSongs])
   const songActionsRef = useRef({ songsByKey, visibleSongs, onPlaySong: library.onPlaySong })
   useLayoutEffect(() => { songActionsRef.current = { songsByKey, visibleSongs, onPlaySong: library.onPlaySong } }, [songsByKey, visibleSongs, library.onPlaySong])
@@ -295,6 +329,10 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
       return next
     })
   }, [])
+  const handleSongEnterSelectMode = useCallback((key: string) => {
+    setSelectMode(true)
+    setSelected((previous) => previous.has(key) ? previous : new Set(previous).add(key))
+  }, [])
   const handleSongCoverFailed = useCallback((key: string) => {
     setFailedSongCovers((previous) => {
       if (previous.has(key)) return previous
@@ -302,13 +340,14 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
     })
   }, [])
   const quickIndexTargets = new Map<string, number>()
-  ;(isSongs ? visibleSongs.map((item) => item.track.title) : visible.map((item) => item.name)).forEach((name, index) => {
+  ;(isSongs ? displayedSongs.map((item) => item.track.title) : visible.map((item) => item.name)).forEach((name, index) => {
     const key = quickIndexKey(name)
     if (!quickIndexTargets.has(key)) quickIndexTargets.set(key, index)
   })
   const selectedItems = visible.filter((item) => selected.has(item.scope))
   const playTarget = selectMode ? selectedItems[0] : visible[0]
-  const selectedSongs = visibleSongs.filter((item) => selected.has(item.key) && item.available)
+  const selectedSongs = (library.allSongs ?? []).filter((item) => selected.has(item.key) && item.available)
+    .sort((left, right) => compareByQuickIndex(left.track.title, right.track.title))
   const playableSongs = visibleSongs.filter((item) => item.available)
   const songPlayTarget = selectMode ? selectedSongs[0] : playableSongs[0]
   // An in-flight playback command locks interaction; it is not unavailability.
@@ -326,10 +365,11 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
   const showSearch = hasDataSource && (searchOpen || searchRequestId > dismissedSearchRequestId)
   const controllerActive = isSongs && isPresent && dockContext?.activeRouteKey === dockRouteKey
   const controllerMotion = usePlaylistControllerMotion(panelRef, dockContext?.dockRef ?? fallbackDockRef,
-    controllerMode, timeline.interaction === 'seeking' || timeline.interaction === 'previewing',
+    controllerMode, selectMode || timeline.interaction === 'seeking' || timeline.interaction === 'previewing',
     `${songsLayout.level}:${query}:${visibleSongs.length}:${showSearch}:${selectMode}`,
     toolbarPassed, appearanceMotion.layoutTransition, controllerActive)
   const rebaseController = controllerMotion.rebase
+  useLayoutEffect(() => { if (isSongs && selectMode && isPresent) rebaseController({ reveal: true }) }, [isSongs, selectMode, isPresent, rebaseController])
   useLayoutEffect(() => {
     if (controllerActive && showSearch) rebaseController({ reveal: true })
   }, [controllerActive, showSearch, rebaseController])
@@ -490,7 +530,41 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
   }
   useLibraryDockBinding(dockRouteKey, { searchOpen: showSearch, onSearchToggle: hasDataSource ? toggleSearch : undefined,
     controllerOffsetY: isSongs ? controllerMotion.offsetY : undefined,
-    controllerHidden: isSongs ? controllerMotion.hidden : undefined,
+    controllerHidden: isSongs ? selectMode ? false : controllerMotion.hidden : undefined,
+    selection: isSongs ? {
+      scope: null,
+      active: selectMode, count: selected.size, total: library.allSongs?.length ?? 0,
+      allSelected: visibleSongs.length > 0 && visibleSongs.every(item => selected.has(item.key)),
+      canSelectAll: visibleSongs.length > 0,
+      canPlay: Boolean(selectedSongs.length && library.onPlaySong && !playbackCommandLocked),
+      canCreatePlaylist: Boolean(library.onCreatePlaylist),
+      canDelete: Boolean(library.onDeleteSongs && selected.size && !playbackCommandLocked && !library.isDeletePending),
+      canAddToPlaylist: Boolean(library.onPreparePlaylistAdd && library.onAddToPlaylist && selected.size && !playbackCommandLocked && !library.isDeletePending),
+      onPrepareAddToPlaylist: () => library.onPreparePlaylistAdd?.({ scope: null, songKeys: Object.freeze([...selected]) }),
+      onRefreshAddToPlaylist: library.onPreparePlaylistAdd,
+      onAddToPlaylist: library.onAddToPlaylist,
+      onRemoveFromPlaylist: library.onRemoveFromPlaylist,
+      onCreateAddPlaylist: library.onCreateAddPlaylist,
+      onOpenPlaylistTarget: library.onSelect,
+      onPrepareDelete: () => library.onDeleteSongs && selected.size ? {
+        scope: null, songKeys: Object.freeze([...selected]), canRemoveFromList: false,
+      } : undefined,
+      onDelete: library.onDeleteSongs ? async (snapshot, mode) => {
+        const result = await library.onDeleteSongs!(snapshot, mode)
+        setSelected(previous => new Set([...previous].filter(key => !result.succeededKeys.includes(key))))
+        return result
+      } : undefined,
+      onSelectAll: () => setSelected(previous => {
+        const next = new Set(previous)
+        const all = visibleSongs.length > 0 && visibleSongs.every(item => previous.has(item.key))
+        for (const item of visibleSongs) { if (all) next.delete(item.key); else next.add(item.key) }
+        return next
+      }),
+      onClear: () => setSelected(new Set()),
+      onExit: () => { setSelectMode(false); setSelected(new Set()) },
+      onPlay: () => { if (selectedSongs.length && !playbackCommandLocked) playSongs() },
+      onCreatePlaylist: openCreatePlaylist,
+    } : undefined,
   })
   return <motion.div className="playlist-management" data-select-mode={selectMode || undefined}
     inert={!isPresent || undefined} aria-hidden={!isPresent || undefined}>
@@ -537,6 +611,7 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
       <motion.div ref={toolbarRef} className="playlist-management-toolbar" custom={toolbarOffset} variants={navigationMotion.toolbar}
         initial={false} animate={toolbarControls} exit={atomicOverview ? 'exit' : 'animate'} transition={navigationMotion.transition}>
         {hasDataSource ? <motion.div key={`actions:${projectionKey}`} className="playlist-management-actions"
+          data-selection-hidden={isSongs && selectMode || undefined} inert={isSongs && selectMode || undefined} aria-hidden={isSongs && selectMode || undefined}
           layout={sharedProjection ? 'position' : undefined}
           layoutId={sharedProjection && library.currentScope ? `playlist-library-actions:${library.currentScope}` : undefined}
           transition={{ layout: returnTransition }}>
@@ -553,15 +628,17 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
           }}><img src={playIcon} alt="" /></Button>
           <Button variant="outline" aria-label={`搜索${category.label}`} aria-expanded={showSearch} onClick={() => { if (pendingEntryPosition.current) pendingEntryPosition.current.cancelled = true; setSearchOpen(true); queueMicrotask(() => searchRef.current?.focus()) }}><img src={searchIcon} alt="" /></Button>
           <Button variant="outline" aria-pressed={selectMode} disabled={isSongs ? !(library.allSongs?.length) : !categoryItems.length} onClick={toggleSelection}>{selectMode ? '取消选择' : '选择'}</Button>
-          {selectMode ? <span role="status">已选择 {selected.size} 项</span> : null}
-          {isSongs && selectMode ? <Button variant="outline" disabled={!selected.size || !library.onCreatePlaylist} onClick={openCreatePlaylist}>新建播放列表</Button> : null}
+          {selectMode && !isSongs ? <span role="status">已选择 {selected.size} 项</span> : null}
+
         </motion.div> : <div />}
-        {renderMore()}
+        <span className="playlist-management-selection-more" data-selection-hidden={isSongs && selectMode || undefined}
+          inert={isSongs && selectMode || undefined} aria-hidden={isSongs && selectMode || undefined}>{renderMore()}</span>
       </motion.div>
       {showSearch ? <motion.div className="playlist-management-search" variants={navigationMotion.chrome}
         initial={atomicOverview ? 'initial' : false} animate="animate" exit={atomicOverview ? 'exit' : 'animate'} transition={navigationMotion.transition}><Input ref={searchRef} type="search" aria-label={isSongs ? '搜索歌曲标题、艺术家或专辑' : `搜索${category.label}名称`} placeholder={isSongs ? '搜索歌曲' : `搜索${category.label}`} value={query} onChange={(event) => { if (pendingEntryPosition.current) pendingEntryPosition.current.cancelled = true; setQuery(event.target.value) }} onKeyDown={(event) => { if (event.key === 'Escape') { setQuery(''); setSearchOpen(false); setDismissedSearchRequestId(searchRequestId) } }} /></motion.div> : null}
       <span className="sr-only" role="status" aria-live="polite">{isSongs ? songsAnnouncement : announcement}</span>
-      {isSongs ? (library.allSongsMetadataStatus === 'loading' ? <PlaylistMetadataLoading layout={songsLayout} trackCount={library.allSongs?.length ?? 0} /> : visibleSongs.length ? <div ref={songsSpaceRef} style={songsWindow.spaceStyle}><motion.div ref={songsListRef} className="playlist-grid all-songs-list" aria-label="全部歌曲列表"
+      {isSongs ? (library.allSongsMetadataStatus === 'loading' ? <PlaylistMetadataLoading layout={songsLayout} trackCount={library.allSongs?.length ?? 0} /> : visibleSongs.length ? <div ref={songsSpaceRef} style={songsWindow.spaceStyle}><p className="sr-only" aria-live="polite">{songReorder.announcement}</p><motion.div ref={songsListRef} className="playlist-grid all-songs-list" aria-label="全部歌曲列表"
+        onPointerDownCapture={songReorder.onPointerDownCapture} onClickCapture={songReorder.onClickCapture} onKeyDownCapture={songReorder.onKeyDownCapture}
         data-layout-level={songsLayout.level} data-layout-flow={songsLayout.flow} data-layout-columns={songsLayout.columns}
         data-content-window={songsWindow.enabled ? 'bounded' : 'full'} data-cover-motion={appearanceMotion.disabled ? 'off' : undefined}
         variants={songsLayout.flow === 'tile' ? undefined : navigationMotion.cover} initial={atomicOverview && songsLayout.flow !== 'tile' ? 'initial' : false} animate="animate" exit={atomicOverview && songsLayout.flow !== 'tile' ? 'exit' : 'animate'} transition={navigationMotion.transition}
@@ -589,7 +666,7 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
             coverFailed={failedSongCovers.has(item.key)}
             onCoverFailed={handleSongCoverFailed}
             onActivate={handleSongActivate}
-            onToggleSelect={handleSongToggleSelect} />)}
+            onToggleSelect={handleSongToggleSelect} onEnterSelectMode={isPresent ? handleSongEnterSelectMode : undefined} />)}
       </motion.div></div> : <MotionEmpty className="playlist-management-empty" variants={navigationMotion.chrome} initial={false} animate="animate"><EmptyHeader><EmptyTitle>{(library.allSongs?.length ?? 0) ? '没有匹配的歌曲' : '暂无歌曲'}</EmptyTitle><EmptyDescription>{(library.allSongs?.length ?? 0) ? '尝试其他名称，或清空搜索。' : '选择音乐文件夹后，这里会汇总其中及子文件夹内的歌曲；不会自动创建播放列表。下次启动会重新扫描。'}</EmptyDescription></EmptyHeader><Button disabled={library.isImportPending} onClick={(library.allSongs?.length ?? 0) ? () => setQuery('') : library.onSelectFolders}>{(library.allSongs?.length ?? 0) ? '清空搜索' : '选择文件夹'}</Button></MotionEmpty>) : categoryId === 'playlists' && library.isPlaylistRestorePending && !visible.length ? <Empty className="playlist-management-empty"><EmptyHeader><EmptyTitle>正在恢复播放列表</EmptyTitle><EmptyDescription>正在读取已保存的 M3U8 清单。</EmptyDescription></EmptyHeader></Empty> : visible.length ? <div ref={gridRef} className="playlist-management-grid"
         data-layout-level={layout.level} data-layout-flow={layout.flow} data-layout-artwork={layout.showArtwork}
         aria-label={layout.label} style={{ ...layout.style, touchAction: 'pan-y' }}>
@@ -618,7 +695,8 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
     </motion.section>
     {isSongs ? <motion.div ref={controllerActionsRef} className="playlist-hero-actions playlist-controller-actions"
       role="group" aria-label="全部歌曲操作"
-      aria-hidden={!toolbarPassed || !controllerActive || undefined} inert={!toolbarPassed || !controllerActive || undefined}
+      data-selection-hidden={selectMode || undefined}
+      aria-hidden={selectMode || !toolbarPassed || !controllerActive || undefined} inert={selectMode || !toolbarPassed || !controllerActive || undefined}
       data-actions-visible={String(toolbarPassed && controllerActive)}
       variants={appearanceMotion.variants.controllerActions} initial="hidden"
       animate={toolbarPassed && controllerActive ? 'visible' : 'hidden'}

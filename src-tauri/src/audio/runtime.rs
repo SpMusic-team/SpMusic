@@ -122,6 +122,14 @@ pub(crate) enum AudioRuntimeRequest {
     Stop {
         reply: Sender<Result<AudioPlaybackState, AudioCommandError>>,
     },
+    DeleteFiles {
+        paths: Vec<(String, PathBuf)>,
+        reply: Sender<(
+            Vec<String>,
+            Vec<crate::file_deletion::DeleteFailure>,
+            AudioPlaybackState,
+        )>,
+    },
     Seek {
         input: AudioSeekInput,
         reply: Sender<Result<AudioPlaybackState, AudioCommandError>>,
@@ -1151,6 +1159,29 @@ impl AudioRuntime {
         self.current_track.clone()
     }
 
+    pub(crate) fn unload_for_deletion(
+        &mut self,
+        paths: &[(String, PathBuf)],
+        pending_matches: bool,
+    ) -> bool {
+        let current_matches = self.current_path.as_ref().is_some_and(|current| {
+            paths.iter().any(|(_, path)| {
+                crate::file_deletion::path_key(&current.to_string_lossy())
+                    == crate::file_deletion::path_key(&path.to_string_lossy())
+            })
+        });
+        if !current_matches && !pending_matches {
+            return false;
+        }
+        self.invalidate_loaded_audio();
+        self.pending_load_generation = None;
+        self.current_generation = None;
+        self.load_generation = self.load_generation.saturating_add(1);
+        self.phase = AudioPlaybackPhase::Idle;
+        self.clear_error();
+        true
+    }
+
     fn invalidate_loaded_audio(&mut self) {
         self.visualization_session.clear();
         self.visualization_source_revision = None;
@@ -1577,6 +1608,49 @@ mod tests {
     use rodio::source::Zero;
 
     use super::*;
+
+    #[test]
+    fn deletion_unloads_current_and_pending_generations_without_resurrection() {
+        let mut runtime = AudioRuntime::default();
+        runtime.current_path = Some(PathBuf::from("selected.flac"));
+        runtime.current_track = Some(loaded_test_track());
+        runtime.current_generation = Some(4);
+        runtime.pending_load_generation = Some(5);
+        runtime.phase = AudioPlaybackPhase::Playing;
+        let paths = vec![("selected.flac".to_string(), PathBuf::from("selected.flac"))];
+        assert!(runtime.unload_for_deletion(&paths, false));
+        assert!(runtime.current_path.is_none());
+        assert!(runtime.current_track.is_none());
+        assert!(runtime.current_generation.is_none());
+        assert!(runtime.pending_load_generation.is_none());
+        assert_eq!(runtime.get_state().phase, AudioPlaybackPhase::Idle);
+        assert!(!runtime.complete_load(
+            5,
+            PathBuf::from("selected.flac"),
+            &Ok(loaded_test_track())
+        ));
+        let generation = runtime.start_load(Path::new("pending.flac"));
+        assert!(runtime.unload_for_deletion(&[], true));
+        assert!(!runtime.complete_load(
+            generation,
+            PathBuf::from("pending.flac"),
+            &Ok(loaded_test_track())
+        ));
+        assert!(runtime.current_track.is_none());
+    }
+
+    #[test]
+    fn deletion_of_another_file_preserves_current_playback_identity() {
+        let mut runtime = AudioRuntime::default();
+        runtime.current_path = Some(PathBuf::from("playing.flac"));
+        runtime.current_track = Some(loaded_test_track());
+        runtime.current_generation = Some(4);
+        runtime.phase = AudioPlaybackPhase::Paused;
+        assert!(!runtime
+            .unload_for_deletion(&[("other.flac".into(), PathBuf::from("other.flac"))], false));
+        assert_eq!(runtime.current_generation, Some(4));
+        assert_eq!(runtime.get_state().phase, AudioPlaybackPhase::Paused);
+    }
 
     #[derive(Debug, PartialEq, Eq)]
     enum SinkAction {

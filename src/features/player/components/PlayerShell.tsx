@@ -10,11 +10,13 @@ import { formatPlaylistDurationLabel } from '@/features/player/model/playlistDur
 import { normalizeAudioSourcePath, pendingPlaylistTrackRow } from '@/features/player/model/playlistTrackSummary'
 import { readOnlyArtworkFallbackPaths, withReadOnlyArtworkFallback, type ReadOnlyArtworkRow } from '@/features/player/model/playlistArtworkFallback'
 import { useGlobalShortcuts } from '@/features/shortcuts/hooks/useGlobalShortcuts'
-import type { AllSongsItem, DevAudioToolsViewModel, PlayerUiViewModel, PlaylistArtworkDemand, PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
+import type { AllSongsItem, DevAudioToolsViewModel, PlayerUiViewModel, PlaylistArtworkDemand, PlaylistTrackItemViewModel, PlaylistAddRequest, PlaylistAddSnapshot } from '@/features/player/model/playerUiViewModel'
+import { playlistArtworkKey } from '@/features/player/model/playlistArtworkStore'
 import { readStartupPage } from '@/features/player/model/startupPageStorage'
 import { readPlaybackSession } from '@/features/player/model/playbackSessionStorage'
 import { playbackQueueOrigin, type PlaybackQueueOrigin } from '@/features/player/model/playbackQueue'
 import { sharePlaylistTrackRows } from '@/features/player/model/playlistTrackRows'
+import { applyManualSongOrder } from '@/features/player/model/manualSongOrderStorage'
 
 const EMPTY_KNOWN_DURATIONS: ReadonlyMap<string, number> = new Map()
 const EMPTY_FALLBACK_SOURCE_PATHS: ReadonlySet<string> = new Set()
@@ -290,7 +292,24 @@ export function PlayerShell() {
     return { rows, fallbackSourcePaths }
   }, [isSongsCategoryOpen, allSongDescriptors, allSongsActiveRows, allSongsDurations, summariesByScope,
     player.activePlaylistScope, player.playlistTrackMetadata, libraryArtwork])
-  const allSongs = allSongsPresentation.rows
+  const allSongs = useMemo(() => applyManualSongOrder(allSongsPresentation.rows, player.allSongsManualPaths, item => item.sourcePath), [allSongsPresentation.rows, player.allSongsManualPaths])
+  const decoratePlaylistAddRequest = useCallback((request: PlaylistAddRequest | undefined): PlaylistAddRequest | undefined => {
+    if (!request) return undefined
+    const targets = request.targets.map(target => {
+      const artwork = target.coverSourcePath ? libraryArtwork.get(normalizeAudioSourcePath(target.coverSourcePath)) : undefined
+      return target.coverTrack ? { ...target, coverTrack: { ...target.coverTrack, ...artwork } } : target
+    })
+    // Picker rows use target scope as their ID; different lists can share a cover song.
+    const keyByTrackId = new Map(targets.flatMap(target => target.coverTrack && target.coverSourcePath
+      ? [[target.scope, playlistArtworkKey(target.scope, target.coverTrack.id, target.coverSourcePath)] as const] : []))
+    return { ...request, targets, artworkSource: { store: libraryArtworkSource.store, keyByTrackId } }
+  }, [libraryArtwork, libraryArtworkSource.store])
+  const preparePlayerPlaylistAdd = player.preparePlaylistAdd
+  const createPlayerAddPlaylist = player.createAddPlaylist
+  const preparePlaylistAdd = useCallback((snapshot: PlaylistAddSnapshot) => decoratePlaylistAddRequest(preparePlayerPlaylistAdd(snapshot)),
+    [decoratePlaylistAddRequest, preparePlayerPlaylistAdd])
+  const createAddPlaylist = useCallback((name: string, snapshot: PlaylistAddSnapshot) => decoratePlaylistAddRequest(createPlayerAddPlaylist(name, snapshot)),
+    [decoratePlaylistAddRequest, createPlayerAddPlaylist])
   const allSongsFallbackSourcePaths = allSongsPresentation.fallbackSourcePaths
   // The displayed fallback thumbnails are owned by the library cache, so the
   // cache must keep their object URLs resident until an active visual replaces
@@ -425,6 +444,8 @@ export function PlayerShell() {
           ),
         }}),
         allSongs,
+        allSongsManualOrder: player.allSongsManualOrder,
+        onReorderSongs: player.reorderSongs,
         allSongsMetadataStatus: allSongsRowsReady ? 'ready' : 'loading',
         currentScope: browsedScope,
         activeScope: player.playbackSourceScope,
@@ -441,14 +462,30 @@ export function PlayerShell() {
         onShufflePlay: (entries) => player.shufflePlaybackQueue({ kind: 'all-songs', entries }),
         onSelectFolders: () => { void player.selectFolders() },
         onImportPlaylist: () => { void player.importPlaylist() },
-        isImportPending: player.libraryImportPending || player.libraryStatus === 'clearing',
+        isImportPending: player.libraryImportPending || player.deletePending || player.libraryStatus === 'clearing',
         isPlaylistRestorePending: player.playlistRestorePending,
         onCreatePlaylist: player.createPlaylist,
+        onPreparePlaylistAdd: preparePlaylistAdd,
+        onAddToPlaylist: player.addToPlaylist,
+        onRemoveFromPlaylist: player.removeFromPlaylist,
+        onCreateAddPlaylist: createAddPlaylist,
+        onDeleteSongs: player.deleteSongs,
+        isDeletePending: player.deletePending,
       },
       isOpenAudioDisabled: player.audioBusy
         || player.transportBusy
         || player.selectionPending
         || player.timelineInteraction === 'seeking',
+      deleteScope: pageOrigin.kind === 'all-songs' ? player.activePlaylistScope : displayScope,
+      canRemoveFromList: Boolean(browsedPlaylist && (browsedPlaylist.sourceKind === 'm3u8' || browsedPlaylist.sourceKind === 'custom')
+        && !playbackQueueOrigin(browsedPlaylist)),
+      onDeleteSongs: player.deleteSongs,
+      onReorderSongs: player.reorderSongs,
+      onPreparePlaylistAdd: preparePlaylistAdd,
+      onAddToPlaylist: player.addToPlaylist,
+      onRemoveFromPlaylist: player.removeFromPlaylist,
+      onCreateAddPlaylist: createAddPlaylist,
+      isDeletePending: player.deletePending,
       onOpenAudio: player.openAudio,
       tracks: browsedTracks,
       artworkSource: isBrowsingActive ? player.playlistArtworkSource : libraryArtworkSource,

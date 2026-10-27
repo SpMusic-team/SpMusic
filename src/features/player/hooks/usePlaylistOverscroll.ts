@@ -693,7 +693,7 @@ export function usePlaylistOverscroll(panelRef: RefObject<HTMLElement | null>, d
       if (event.pointerType !== 'mouse' || event.button !== 0 || !event.isPrimary || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return
       const target = event.target instanceof Element ? event.target : null
       // Cards remain click candidates until a vertical drag is established.
-      if (target?.closest('input, textarea, select, a, [contenteditable="true"], button:not(.playlist-card)')) return
+      if (target?.closest('[data-reorder-handle], input, textarea, select, a, [contenteditable="true"], button:not(.playlist-card)')) return
       clearWheelPending()
       const bounds = panel.getBoundingClientRect()
       if (event.clientX >= bounds.left + panel.clientLeft + panel.clientWidth) return // scrollbar
@@ -863,7 +863,7 @@ export function usePlaylistOverscroll(panelRef: RefObject<HTMLElement | null>, d
       clearNativePending()
       suppressClickRef.current = false
       const target = event.target instanceof Element ? event.target : null
-      if (target?.closest('input, textarea, select, a, [contenteditable="true"], button:not(.playlist-card)')) return
+      if (target?.closest('[data-reorder-handle], input, textarea, select, a, [contenteditable="true"], button:not(.playlist-card)')) return
       const first = event.touches[0]!
       touch = { id: first.identifier, startX: first.clientX, startY: first.clientY, lastY: first.clientY, owned: false, active: false, native: false }
     }

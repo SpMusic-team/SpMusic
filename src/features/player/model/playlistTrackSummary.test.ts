@@ -142,6 +142,7 @@ test('the descriptor fingerprint invalidates on id or path changes only', () => 
     { id: 'a-1', sourcePath: '/audio/a/1.flac' },
   ]
   assert.equal(playlistDescriptorFingerprint(base), playlistDescriptorFingerprint([...base]))
+  assert.equal(playlistDescriptorFingerprint(base), playlistDescriptorFingerprint([...base].reverse()))
   // Separator normalization keeps an unchanged list stable.
   assert.equal(
     playlistDescriptorFingerprint(base),

@@ -9,6 +9,7 @@ const dataAttributes = [
   'data-theme-tier',
   'data-icon-pack',
   'data-motion',
+  'data-selection-motion',
   'data-surface-variant',
   'data-button-variant',
   'data-window-controls',
@@ -33,6 +34,9 @@ export function applyAppearanceRuntime(
   const cssVariables = createAppearanceCssVars(appearance, resolvedColorScheme) as unknown as Record<string, string | number>
   cssVariables['color-scheme'] = resolvedColorScheme
   if (systemReducedMotion || appearance.motion.level === 'off') {
+    for (const key of Object.keys(cssVariables)) {
+      if (key.startsWith('--selection-') && (key.endsWith('-duration') || key.endsWith('-delay'))) cssVariables[key] = '0ms'
+    }
     cssVariables['--app-motion-fast'] = '0ms'
     cssVariables['--app-motion-standard'] = '0ms'
     cssVariables['--app-motion-slow'] = '0ms'
@@ -54,6 +58,7 @@ export function applyAppearanceRuntime(
     'data-theme-tier': appearance.metadata.tier,
     'data-icon-pack': appearance.icons.provider,
     'data-motion': appearance.motion.level,
+    'data-selection-motion': systemReducedMotion || appearance.motion.level === 'off' ? 'off' : 'on',
     'data-surface-variant': appearance.components.surface,
     'data-button-variant': appearance.components.buttons,
     'data-window-controls': appearance.components.windowControls,

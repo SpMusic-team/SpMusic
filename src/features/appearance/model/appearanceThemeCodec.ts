@@ -5,6 +5,8 @@ import type {
   AppearanceColorSchemes,
   AppearanceComponents,
   AppearanceEasing,
+  AppearanceSelectionMotion,
+  AppearanceReorderMotion,
   AppearancePreset,
   AppearancePlayer,
   AppearancePlayerControls,
@@ -36,7 +38,7 @@ export type AppearanceThemeDocumentV3 = {
   theme: Record<string, unknown>
 }
 
-export type AppearanceThemeColorSchemesV4 = Record<'light' | 'dark', Omit<AppearanceColors, 'playerSurfaceVariant' | 'playerSecondaryContainer' | 'playerSecondaryFix' | 'playerProgressPlayed' | 'playerProgressUnplayed'>>
+export type AppearanceThemeColorSchemesV4 = Record<'light' | 'dark', Omit<AppearanceColors, 'playerSurfaceVariant' | 'playerSecondaryContainer' | 'playerSecondaryFix' | 'playerProgressPlayed' | 'playerProgressUnplayed' | 'playerOutlineVariant'>>
 export type AppearanceThemePayloadV4 = Record<string, unknown>
 export type AppearanceThemeDocumentV4 = {
   schemaVersion: 4
@@ -72,7 +74,7 @@ type JsonObject = Record<string, unknown>
 const colorKeys = [
   'libraryIcon', 'librarySongs', 'libraryFolder', 'libraryFolders', 'libraryAlbum', 'libraryArtist', 'libraryAlbumArtist', 'libraryGenre', 'libraryYear', 'libraryComposer', 'libraryPlaylists', 'libraryStreams', 'libraryQueue', 'libraryBookmarks', 'libraryMostPlayed', 'libraryHighestRated', 'libraryLowestRated', 'libraryRecentPlayed', 'libraryRecentAdded', 'libraryLongTracks',
   'background', 'surface', 'surfaceMuted', 'text', 'textMuted', 'textStrong', 'border',
-  'accent', 'accentSoft', 'accentContrast', 'playerBlue', 'playerBlueSoft', 'playerBlueInk',
+  'accent', 'accentSoft', 'accentContrast', 'playerBlue', 'playerBlueSoft', 'playerBlueInk', 'playerOutlineVariant',
   'playerInk', 'playerMuted', 'playerLyrics', 'playerOverlay', 'playerDock',
   'playerSurfaceVariant',
   'playerSecondaryContainer',
@@ -81,7 +83,7 @@ const colorKeys = [
 ] as const satisfies readonly (keyof AppearanceColors)[]
 const radiusKeys = ['sm', 'md', 'lg', 'pill'] as const satisfies readonly (keyof AppearanceRadii)[]
 const motionLevels = ['off', 'subtle', 'expressive'] as const satisfies readonly MotionLevel[]
-const easingValues = ['linear', 'ease', 'ease-in', 'ease-out', 'ease-in-out', 'cubic-bezier(.65, 0, .35, 1)', 'cubic-bezier(.4, 0, .2, 1)'] as const satisfies readonly AppearanceEasing[]
+const easingValues = ['linear', 'ease', 'ease-in', 'ease-out', 'ease-in-out', 'cubic-bezier(.65, 0, .35, 1)', 'cubic-bezier(.4, 0, .2, 1)', 'cubic-bezier(.2, 0, 0, 1)', 'cubic-bezier(.25, 1, .5, 1)'] as const satisfies readonly AppearanceEasing[]
 const fontFamilies = ['geist', 'system', 'serif', 'monospace'] as const
 const surfaces = ['glass', 'solid', 'flat'] as const
 const buttonVariants = ['soft', 'outline', 'minimal'] as const
@@ -118,7 +120,7 @@ export function cloneAppearance(appearance: AppearancePreset): AppearancePreset 
       dark: { ...appearance.colorSchemes.dark },
     },
     radii: { ...appearance.radii },
-    motion: { ...appearance.motion },
+    motion: { ...appearance.motion, selection: { ...appearance.motion.selection }, reorder: { ...appearance.motion.reorder } },
     typography: { ...appearance.typography },
     components: { ...appearance.components },
     player: {
@@ -179,6 +181,36 @@ function boundedNumber(input: unknown, fallback: number, min: number, max: numbe
   if (typeof input === 'number' && Number.isFinite(input) && input >= min && input <= max) return input
   warnings.push(`${path} 必须在 ${min} 到 ${max} 之间，已使用默认值`)
   return fallback
+}
+
+function parseSelectionMotion(input: JsonObject, fallback: AppearanceSelectionMotion, warnings: string[]): AppearanceSelectionMotion {
+  const keys = Object.keys(defaultAppearance.motion.selection) as (keyof AppearanceSelectionMotion)[]
+  reportUnknownKeys(input, keys, 'theme.motion.selection', warnings)
+  const number = (key: keyof AppearanceSelectionMotion) => boundedNumber(input[key], fallback[key] as number, 0, 2000, `theme.motion.selection.${key}`, warnings)
+  const easing = (key: keyof AppearanceSelectionMotion) => enumValue(input[key], easingValues, fallback[key] as AppearanceEasing, `theme.motion.selection.${key}`, warnings)
+  return {
+    controlsDurationMs: number('controlsDurationMs'), controlsEasing: easing('controlsEasing'),
+    backgroundDurationMs: number('backgroundDurationMs'), checkFillDurationMs: number('checkFillDurationMs'),
+    checkDrawDelayMs: number('checkDrawDelayMs'), checkDrawDurationMs: number('checkDrawDurationMs'), checkEasing: easing('checkEasing'),
+    dockEnterDurationMs: number('dockEnterDurationMs'), dockEnterEasing: easing('dockEnterEasing'),
+    dockCrossfadeDurationMs: number('dockCrossfadeDurationMs'), dockExitDurationMs: number('dockExitDurationMs'), dockExitEasing: easing('dockExitEasing'),
+  }
+}
+
+function parseReorderMotion(input: JsonObject, fallback: AppearanceReorderMotion, warnings: string[]): AppearanceReorderMotion {
+  const keys = Object.keys(defaultAppearance.motion.reorder) as (keyof AppearanceReorderMotion)[]
+  reportUnknownKeys(input, keys, 'theme.motion.reorder', warnings)
+  const number = (key: keyof AppearanceReorderMotion, min: number, max: number) => boundedNumber(input[key], fallback[key] as number, min, max, `theme.motion.reorder.${key}`, warnings)
+  return {
+    activationDistancePx: number('activationDistancePx', 0, 32),
+    liftScale: number('liftScale', 1, 1.2),
+    liftDurationMs: number('liftDurationMs', 0, 2000),
+    neighborDurationMs: number('neighborDurationMs', 0, 2000),
+    settleDurationMs: number('settleDurationMs', 0, 2000),
+    easing: enumValue(input.easing, easingValues, fallback.easing, 'theme.motion.reorder.easing', warnings),
+    edgeZonePx: number('edgeZonePx', 8, 240),
+    maxScrollViewportPerSecond: number('maxScrollViewportPerSecond', 0.05, 3),
+  }
 }
 
 function steppedNumber(input: unknown, fallback: number, min: number, max: number, step: number, path: string, warnings: string[]) {
@@ -586,7 +618,7 @@ export function deserializeAppearanceTheme(source: string, fallback: AppearanceP
   reportUnknownKeys(theme, themeKeys, 'theme', warnings)
 
   const motionInput = section(theme, 'motion', warnings)
-  reportUnknownKeys(motionInput, ['level', 'durationScale', 'easing', 'trackSwitchEasing', 'trackSwitchDurationMs', 'trackDragDurationScale'], 'theme.motion', warnings)
+  reportUnknownKeys(motionInput, ['level', 'durationScale', 'easing', 'trackSwitchEasing', 'trackSwitchDurationMs', 'trackDragDurationScale', 'selection', 'reorder'], 'theme.motion', warnings)
   const iconInput = section(theme, 'icons', warnings)
   reportUnknownKeys(iconInput, ['provider'], 'theme.icons', warnings)
   const advancedInput = section(theme, 'advanced', warnings)
@@ -612,6 +644,8 @@ export function deserializeAppearanceTheme(source: string, fallback: AppearanceP
       trackSwitchEasing: enumValue(motionInput.trackSwitchEasing, easingValues, fallback.motion.trackSwitchEasing, 'theme.motion.trackSwitchEasing', warnings),
       trackSwitchDurationMs: boundedNumber(motionInput.trackSwitchDurationMs, fallback.motion.trackSwitchDurationMs, 80, 600, 'theme.motion.trackSwitchDurationMs', warnings),
       trackDragDurationScale: boundedNumber(motionInput.trackDragDurationScale, fallback.motion.trackDragDurationScale, 0.25, 1, 'theme.motion.trackDragDurationScale', warnings),
+      selection: parseSelectionMotion(section(motionInput, 'selection', warnings), fallback.motion.selection, warnings),
+      reorder: parseReorderMotion(section(motionInput, 'reorder', warnings), fallback.motion.reorder, warnings),
     },
     typography: parseTypography(section(theme, 'typography', warnings), fallback.typography, warnings),
     components: parseComponents(section(theme, 'components', warnings), fallback.components, warnings),

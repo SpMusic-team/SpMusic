@@ -40,6 +40,7 @@ const colorLabels: Record<keyof AppearanceColors, string> = {
   playerBlue: '播放器主色',
   playerBlueSoft: '播放器柔和色',
   playerBlueInk: '播放器强调文字',
+  playerOutlineVariant: '播放器轮廓变体',
   playerInk: '播放器正文',
   playerMuted: '播放器次要文字',
   playerLyrics: '播放器歌词',

@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     path::PathBuf,
     sync::{
         mpsc::{self, Receiver, RecvTimeoutError, Sender},
@@ -128,6 +129,8 @@ impl Drop for LoadAndPlayQueueShutdownGuard {
 
 pub struct AudioController {
     tx: Mutex<Sender<AudioRuntimeRequest>>,
+    known_track_paths: Mutex<HashSet<String>>,
+    file_mutation_lock: Arc<Mutex<()>>,
     // Held for the process lifetime so the parser worker keeps receiving
     // requests; the worker itself owns the receiving side.
     _parser_tx: Mutex<Sender<TrackParseRequest>>,
@@ -185,6 +188,9 @@ impl AudioController {
         });
         let load_and_play_queue = Arc::new(LoadAndPlayQueue::default());
         let runtime_load_and_play_queue = Arc::clone(&load_and_play_queue);
+        let file_mutation_lock = Arc::new(Mutex::new(()));
+        let runtime_file_mutation_lock = Arc::clone(&file_mutation_lock);
+        let runtime_lyrics_cache = Arc::clone(&lyrics_cache);
 
         thread::spawn(move || {
             tracing::info!(
@@ -481,6 +487,49 @@ impl AudioController {
                             AudioRuntime::stop,
                         );
                     }
+                    AudioRuntimeRequest::DeleteFiles { paths, reply } => {
+                        let pending_matches = pending_load.as_ref().is_some_and(|pending| {
+                            paths.iter().any(|(_, path)| {
+                                crate::file_deletion::path_key(&pending.path.to_string_lossy())
+                                    == crate::file_deletion::path_key(&path.to_string_lossy())
+                            })
+                        });
+                        if pending_matches {
+                            if let Some(pending) = pending_load.take() {
+                                let _ = pending.reply.send(Err(audio_error(
+                                    AudioErrorCode::Superseded,
+                                    "Audio load cancelled for file deletion",
+                                    true,
+                                )));
+                            }
+                        }
+                        let unloaded = runtime.unload_for_deletion(&paths, pending_matches);
+                        let _guard = runtime_file_mutation_lock
+                            .lock()
+                            .unwrap_or_else(|poison| poison.into_inner());
+                        let mut removed = Vec::new();
+                        let mut failures = Vec::new();
+                        for (source, path) in paths {
+                            match crate::file_deletion::recycle_file(&path) {
+                                Ok(()) => {
+                                    runtime_lyrics_cache.invalidate(&path);
+                                    removed.push(source);
+                                }
+                                Err(error) => {
+                                    failures.push(crate::file_deletion::DeleteFailure::new(
+                                        &source,
+                                        "TRASH_FAILED",
+                                        error,
+                                    ))
+                                }
+                            }
+                        }
+                        let state = runtime.get_state();
+                        if unloaded {
+                            emit_state_changed(&app_handle, state.clone());
+                        }
+                        let _ = reply.send((removed, failures, state));
+                    }
                     AudioRuntimeRequest::Seek { input, reply } => {
                         tracing::info!(
                             operation = "audio.seek",
@@ -554,6 +603,8 @@ impl AudioController {
 
         Self {
             tx: Mutex::new(tx),
+            known_track_paths: Mutex::new(HashSet::new()),
+            file_mutation_lock,
             _parser_tx: Mutex::new(parser_tx),
             cover_cache_dir,
             lyrics_cache,
@@ -569,6 +620,50 @@ impl AudioController {
     /// as long as the controller and is dropped with it.
     pub(crate) fn duration_cache(&self) -> Arc<DurationCache> {
         Arc::clone(&self.duration_cache)
+    }
+
+    pub(crate) fn known_track_paths(&self) -> Vec<String> {
+        self.known_track_paths
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .iter()
+            .cloned()
+            .collect()
+    }
+
+    pub(crate) fn remember_playlist(&self, playlist: &AudioFolderPlaylist) {
+        let mut known = self
+            .known_track_paths
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        known.extend(
+            playlist
+                .tracks
+                .iter()
+                .map(|track| track.source_path.clone()),
+        );
+    }
+
+    pub(crate) fn delete_files(
+        &self,
+        paths: Vec<(String, PathBuf)>,
+    ) -> Result<
+        (
+            Vec<String>,
+            Vec<crate::file_deletion::DeleteFailure>,
+            AudioPlaybackState,
+        ),
+        AudioCommandError,
+    > {
+        let (reply, rx) = mpsc::channel();
+        self.send(AudioRuntimeRequest::DeleteFiles { paths, reply })?;
+        rx.recv().map_err(|_| {
+            audio_error(
+                AudioErrorCode::InternalError,
+                "Audio runtime did not return deletion result",
+                true,
+            )
+        })
     }
 
     pub fn open_file(
@@ -665,8 +760,10 @@ impl AudioController {
             .and_then(|extension| extension.to_str())
             .is_some_and(|extension| extension.eq_ignore_ascii_case("m3u8"))
         {
-            return load_folder_playlist(&path)
-                .map(|playlist| AudioOpenSourceResult::Playlist { playlist });
+            return load_folder_playlist(&path).map(|playlist| {
+                self.remember_playlist(&playlist);
+                AudioOpenSourceResult::Playlist { playlist }
+            });
         }
 
         self.load_file_path(path)
@@ -716,13 +813,23 @@ impl AudioController {
                 self.load_and_play_queue.fail_pending(error);
             }
         }
-        rx.recv().map_err(|_| {
+        let result = rx.recv().map_err(|_| {
             audio_error(
                 AudioErrorCode::InternalError,
                 "Audio runtime did not return load-and-play result",
                 true,
             )
-        })?
+        })?;
+        if result.is_ok() {
+            let known_path = std::path::Path::new(&input.path)
+                .canonicalize()
+                .unwrap_or_else(|_| PathBuf::from(&input.path));
+            self.known_track_paths
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .insert(known_path.to_string_lossy().into_owned());
+        }
+        result
     }
 
     pub fn list_folder_tracks(
@@ -734,7 +841,9 @@ impl AudioController {
             selected_path = %input.selected_path,
             "folder playlist command received",
         );
-        load_folder_playlist(&input_path(&input.selected_path)?)
+        let playlist = load_folder_playlist(&input_path(&input.selected_path)?)?;
+        self.remember_playlist(&playlist);
+        Ok(playlist)
     }
 
     /// Explicitly embeds `lyrics` into the audio file's primary tag — the
@@ -747,6 +856,10 @@ impl AudioController {
         &self,
         input: AudioEmbedLyricsInput,
     ) -> Result<AudioTrackRef, AudioCommandError> {
+        let _guard = self
+            .file_mutation_lock
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
         let path = input_path(&input.path)?;
         validate_existing_file(&path)?;
         // Mirror `safe_update_tag`'s own path requirements up front so they
@@ -870,7 +983,12 @@ impl AudioController {
     fn load_file_path(&self, path: PathBuf) -> Result<AudioTrackRef, AudioCommandError> {
         let (reply, rx) = mpsc::channel();
         self.send(AudioRuntimeRequest::LoadFile { path, reply })?;
-        self.recv_track(rx)
+        let result = self.recv_track(rx)?;
+        self.known_track_paths
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .insert(result.source_path.clone());
+        Ok(result)
     }
 
     fn send(&self, request: AudioRuntimeRequest) -> Result<(), AudioCommandError> {

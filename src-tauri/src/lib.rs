@@ -1,8 +1,11 @@
 mod app_paths;
 mod audio;
+mod file_deletion;
 mod global_shortcuts;
 mod library_cover_warmup;
+mod library_deletion;
 mod library_folders;
+mod library_playlist_addition;
 mod library_playlists;
 mod webview_memory;
 mod window_state;
@@ -65,6 +68,7 @@ fn audio_open_source(
 #[tauri::command]
 fn audio_import_playlist(
     registry: State<'_, LibraryPlaylistRegistry>,
+    audio: State<'_, AudioController>,
 ) -> Result<Option<AudioFolderPlaylist>, AudioCommandError> {
     let Some(path) = rfd::FileDialog::new()
         .set_title("导入 M3U8 播放列表")
@@ -81,6 +85,7 @@ fn audio_import_playlist(
             message: format!("保存播放列表失败：{}", error.message),
             recoverable: true,
         })?;
+    audio.remember_playlist(&playlist);
     Ok(Some(playlist))
 }
 
@@ -178,8 +183,59 @@ fn library_get_folders(
 #[tauri::command]
 fn library_get_playlists(
     state: State<'_, LibraryPlaylistRegistry>,
+    audio: State<'_, AudioController>,
 ) -> Result<Vec<AudioFolderPlaylist>, LibraryError> {
-    state.get()
+    let playlists = state.get()?;
+    for playlist in &playlists {
+        audio.remember_playlist(playlist);
+    }
+    Ok(playlists)
+}
+
+#[tauri::command]
+async fn library_add_playlist_tracks(
+    input: library_playlist_addition::AddPlaylistTracksInput,
+    app: tauri::AppHandle,
+) -> Result<library_playlist_addition::AddPlaylistTracksResult, LibraryError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let audio = app.state::<AudioController>();
+        let folders = app.state::<LibraryFolderRegistry>();
+        let playlists = app.state::<LibraryPlaylistRegistry>();
+        library_playlist_addition::add_playlist_tracks(input, &audio, &folders, &playlists)
+    })
+    .await
+    .map_err(|error| LibraryError::storage(format!("添加任务意外中断，请检查播放列表：{error}")))?
+}
+
+#[tauri::command]
+async fn library_reorder_playlist_tracks(
+    input: library_playlists::ReorderPlaylistTracksInput,
+    app: tauri::AppHandle,
+) -> Result<AudioFolderPlaylist, LibraryError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<LibraryPlaylistRegistry>().reorder_tracks(input)
+    })
+    .await
+    .map_err(|error| LibraryError::storage(format!("排序任务意外中断，请检查播放列表：{error}")))?
+}
+
+#[tauri::command]
+async fn library_delete_tracks(
+    input: library_deletion::DeleteTracksInput,
+    app: tauri::AppHandle,
+) -> Result<library_deletion::DeleteTracksResult, LibraryError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let audio = app.state::<AudioController>();
+        let folders = app.state::<LibraryFolderRegistry>();
+        let playlists = app.state::<LibraryPlaylistRegistry>();
+        library_deletion::delete_tracks(input, &audio, &folders, &playlists)
+    })
+    .await
+    .map_err(|error| {
+        LibraryError::storage(format!(
+            "删除任务意外中断，结果未知，请检查本地文件：{error}"
+        ))
+    })?
 }
 
 #[tauri::command]
@@ -656,6 +712,9 @@ pub fn run() {
             audio_list_folder_tracks,
             library_get_folders,
             library_get_playlists,
+            library_delete_tracks,
+            library_add_playlist_tracks,
+            library_reorder_playlist_tracks,
             library_select_folders,
             library_add_folder,
             library_clear_folders,

@@ -517,6 +517,53 @@ export async function listAudioFolderTracks(selectedPath: string): Promise<Audio
 
 export type LibraryFolders = { folders: string[] }
 
+export type LibraryDeleteTracksResult = {
+  removedPaths: string[]
+  failures: { sourcePath: string; code: string; message: string }[]
+  playlists: AudioFolderPlaylist[]
+  state: AudioPlaybackState | null
+  storageError: { code: string; message: string } | null
+}
+
+export type LibraryAddPlaylistTracksResult = {
+  playlist: AudioFolderPlaylist
+  addedPaths: string[]
+  alreadyPresentPaths: string[]
+  failures: { sourcePath: string; code: string; message: string }[]
+}
+
+export async function addLibraryPlaylistTracks(input: { sourcePath: string; trackPaths: string[]; position?: 'start' | 'end' | 'random' }): Promise<LibraryAddPlaylistTracksResult> {
+  const result = await invoke<LibraryAddPlaylistTracksResult>('library_add_playlist_tracks', { input })
+  if (!result || result.playlist?.sourceKind !== 'm3u8' || typeof result.playlist.sourcePath !== 'string'
+    || !Array.isArray(result.playlist.tracks) || !Array.isArray(result.addedPaths) || !result.addedPaths.every(path => typeof path === 'string')
+    || !Array.isArray(result.alreadyPresentPaths) || !result.alreadyPresentPaths.every(path => typeof path === 'string')
+    || !Array.isArray(result.failures) || result.failures.some(item => !item || typeof item.sourcePath !== 'string' || typeof item.message !== 'string')) {
+    throw new Error('添加结果格式错误，请检查播放列表。')
+  }
+  return result
+}
+
+export async function reorderLibraryPlaylistTracks(input: { sourcePath: string; expectedTrackPaths: string[]; orderedTrackPaths: string[] }): Promise<AudioFolderPlaylist> {
+  const result = await invoke<AudioFolderPlaylist>('library_reorder_playlist_tracks', { input })
+  if (!result || result.sourceKind !== 'm3u8' || typeof result.sourcePath !== 'string' || !Array.isArray(result.tracks)
+    || result.tracks.some(track => !track || typeof track.id !== 'string' || typeof track.sourcePath !== 'string')) {
+    throw new Error('排序结果格式错误，请重新打开播放列表检查。')
+  }
+  return result
+}
+
+export async function deleteLibraryTracks(input: {
+  mode: 'list' | 'files'
+  sourcePath?: string
+  trackPaths: string[]
+}): Promise<LibraryDeleteTracksResult> {
+  const result = await invoke<LibraryDeleteTracksResult>('library_delete_tracks', { input })
+  if (!result || !Array.isArray(result.removedPaths) || !result.removedPaths.every(path => typeof path === 'string')
+    || !Array.isArray(result.failures) || result.failures.some(item => !item || typeof item.sourcePath !== 'string' || typeof item.message !== 'string')
+    || !Array.isArray(result.playlists)) throw new Error('删除结果格式错误，请检查歌曲文件与播放列表。')
+  return result
+}
+
 export async function selectLibraryFolders(): Promise<string[] | null> {
   return invoke<string[] | null>('library_select_folders')
 }

@@ -130,6 +130,8 @@ export function useCollectionLayout<Layout extends { label: string }>(options: O
     const acceptsTarget = (target: EventTarget | null) => {
       const area = gestureArea === 'panel' ? panel : gridRef.current
       if (!area || !(target instanceof Node) || !area.contains(target)) return false
+      const handleTarget = target instanceof Element ? target : target.parentElement
+      if (handleTarget?.closest('[data-reorder-handle]')) return false
       // Preserve the existing detail-grid boundary and input behavior.
       if (gestureArea === 'grid') return true
       const element = target instanceof Element ? target : target.parentElement

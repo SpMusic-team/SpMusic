@@ -17,6 +17,8 @@ import { PlaylistLibrarySidebar } from '@/features/player/components/PlaylistLib
 import { useCollectionLayout } from '@/features/player/hooks/useCollectionLayout'
 import { usePlaylistOverscroll } from '@/features/player/hooks/usePlaylistOverscroll'
 import { usePlaylistControllerMotion } from '@/features/player/hooks/usePlaylistControllerMotion'
+import { usePlaylistSongReorder } from '@/features/player/hooks/usePlaylistSongReorder'
+import { mergeFilteredSongOrder } from '@/features/player/model/manualSongOrderStorage'
 import { LibraryDockContext, useLibraryDockBinding } from '@/features/player/hooks/useLibraryDockBinding'
 import { LibraryChromeTransitionContext } from '@/features/player/hooks/useLibraryChromeTransition'
 import { readLibraryLayoutRect } from '@/features/player/model/libraryNavigationGeometry'
@@ -28,6 +30,15 @@ import { formatPlaylistDurationLabel, type PlaylistDurationStatus } from '@/feat
 import type { PlayerPlaybackViewModel, PlayerTimelineViewModel, PlayerPlaylistViewModel, PlaylistLibraryViewModel, PlaylistArtworkDemand, PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
 
 type PlaylistPanelProps = {
+  deleteScope?: string | null
+  canRemoveFromList?: boolean
+  onDeleteSongs?: PlayerPlaylistViewModel['onDeleteSongs']
+  onReorderSongs?: PlayerPlaylistViewModel['onReorderSongs']
+  onPreparePlaylistAdd?: PlayerPlaylistViewModel['onPreparePlaylistAdd']
+  onAddToPlaylist?: PlayerPlaylistViewModel['onAddToPlaylist']
+  onRemoveFromPlaylist?: PlayerPlaylistViewModel['onRemoveFromPlaylist']
+  onCreateAddPlaylist?: PlayerPlaylistViewModel['onCreateAddPlaylist']
+  isDeletePending?: boolean
   controllerMode?: PlaylistControllerMode
   entryPosition?: PlayerPlaylistViewModel['entryPosition']
   library?: PlaylistLibraryViewModel
@@ -243,6 +254,15 @@ export function PlaylistMetadataLoading({
 }
 
 export function PlaylistPanel({
+  deleteScope,
+  canRemoveFromList = false,
+  onDeleteSongs,
+  onReorderSongs,
+  onPreparePlaylistAdd,
+  onAddToPlaylist,
+  onRemoveFromPlaylist,
+  onCreateAddPlaylist,
+  isDeletePending = false,
   controllerMode = 'movable',
   entryPosition,
   library,
@@ -302,6 +322,7 @@ export function PlaylistPanel({
   const sharedScope = appearanceMotion.disabled || heroOffscreen ? undefined : library?.currentScope
   const handledEntryPositionIdRef = useRef<number | undefined>(undefined)
   const [selectMode, setSelectMode] = useState(false)
+  const [reorderPreviewKeys, setReorderPreviewKeys] = useState<readonly string[] | null>(null)
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(new Set())
   const [filter, setFilter] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
@@ -338,6 +359,7 @@ export function PlaylistPanel({
   const gridRef = useRef<HTMLDivElement | null>(null)
   const initialPositionAppliedRef = useRef(false)
   const artworkHoldIdsRef = useRef<ReadonlySet<string> | null>(null)
+  const reorderHeldIdsRef = useRef(new Set<string>())
   const artworkWindowIdsRef = useRef<ReadonlySet<string>>(new Set())
   const artworkWindowKeyRef = useRef('')
   const metadataWindowKeyRef = useRef<string | null>(null)
@@ -354,6 +376,11 @@ export function PlaylistPanel({
   }, [query, tracks])
   const filteredTrackIdsKey = useMemo(() => filteredTracks.map(track => track.id).join('\u0000'), [filteredTracks])
   const orderedTrackIds = useMemo(() => filteredTrackIdsKey ? filteredTrackIdsKey.split('\u0000') : [], [filteredTrackIdsKey])
+  const displayedTracks = useMemo(() => {
+    if (!reorderPreviewKeys) return filteredTracks
+    const byId = new Map(filteredTracks.map(track => [track.id, track]))
+    return reorderPreviewKeys.flatMap(key => { const track = byId.get(key); return track ? [track] : [] })
+  }, [filteredTracks, reorderPreviewKeys])
   const firstFilteredTrackId = filteredTracks[0]?.id
   const contentShapes = useMemo(() => new Map(filteredTracks.map(track => [track.id, playlistCardContentShape(track)])), [filteredTracks])
   const { level: layoutLevel, layout, announcement: layoutAnnouncement } = useCollectionLayout({
@@ -373,6 +400,35 @@ export function PlaylistPanel({
     onSettled: () => { artworkHoldIdsRef.current = null; setArtworkWindowRevision((previous) => previous + 1) },
   })
 
+  const fullReorderKeys = useMemo(() => tracks.map(track => track.id), [tracks])
+  const reorderSourceVersion = useMemo(() => JSON.stringify([deleteScope, fullReorderKeys]), [deleteScope, fullReorderKeys])
+  const songReorder = usePlaylistSongReorder({
+    enabled: selectMode && isPresent && metadataStatus !== 'loading' && !isOpenAudioDisabled && !isDeletePending && Boolean(onReorderSongs && deleteScope),
+    scopeKey: deleteScope ?? '', sourceVersion: reorderSourceVersion,
+    layoutKey: `${layoutLevel}:${filter}:${searchOpen}`, orderedKeys: orderedTrackIds, selectedKeys: selectedIds,
+    gridRef, scrollRef: panelRef,
+    onPreview: setReorderPreviewKeys,
+    onCommit: async draft => {
+      const orderedKeys = mergeFilteredSongOrder(fullReorderKeys, draft.expectedKeys, draft.orderedKeys)
+      return orderedKeys && onReorderSongs && deleteScope
+        ? onReorderSongs({ scope: deleteScope, expectedKeys: fullReorderKeys, orderedKeys })
+        : { ok: false, errorMessage: '列表已更改，请重新拖动排序。' }
+    },
+    retainArtwork: key => {
+      const releases: (() => void)[] = []
+      for (const source of [artworkSource, fallbackArtworkSource]) {
+        const resourceKey = source?.keyByTrackId.get(key)
+        if (source && resourceKey) releases.push(source.store.retain(resourceKey))
+      }
+      return () => { for (const release of releases.reverse()) release() }
+    },
+    holdContent: key => {
+      reorderHeldIdsRef.current.add(key)
+      setArtworkWindowRevision(previous => previous + 1)
+      return () => { reorderHeldIdsRef.current.delete(key); setArtworkWindowRevision(previous => previous + 1) }
+    },
+  })
+
   const unavailable = useMemo(
     () => unavailableTrackIds ?? new Set<string>(),
     [unavailableTrackIds],
@@ -386,13 +442,14 @@ export function PlaylistPanel({
     panelRef,
     playbackDockRef,
     controllerMode,
-    timeline.interaction === 'seeking' || timeline.interaction === 'previewing',
+    selectMode || timeline.interaction === 'seeking' || timeline.interaction === 'previewing',
     `${playlistName}:${layoutLevel}:${filteredTrackIdsKey}:${searchOpen}:${selectMode}`,
     controllerActionsVisible,
     appearanceMotion.layoutTransition,
     isPresent && (!dockContext || dockContext.activeRouteKey === dockRouteKey),
   )
   const rebaseController = controllerMotion.rebase
+  useLayoutEffect(() => { if (selectMode && isPresent) rebaseController({ reveal: true }) }, [selectMode, isPresent, rebaseController])
 
   const clearArtworkWindow = useCallback(() => {
     if (artworkWindowIdsRef.current.size === 0) return
@@ -418,6 +475,11 @@ export function PlaylistPanel({
     })
   }, [])
 
+  const handleEnterSelectMode = useCallback((trackId: string) => {
+    setSelectMode(true)
+    setSelectedIds((previous) => previous.has(trackId) ? previous : new Set(previous).add(trackId))
+  }, [])
+
   const handleSelectModeToggle = useCallback(() => {
     setSelectMode((previous) => {
       if (previous) setSelectedIds(new Set())
@@ -433,9 +495,56 @@ export function PlaylistPanel({
       return !previous
     })
   }, [])
+  const selectableTracks = filteredTracks.filter((track) => !unavailable.has(track.id))
+  const selectedPlayableTracks = tracks.filter((track) => selectedIds.has(track.id) && !unavailable.has(track.id))
+  const allSelected = selectableTracks.length > 0 && selectableTracks.every((track) => selectedIds.has(track.id))
+  const dockSelection = {
+    scope: deleteScope ?? dockRouteKey,
+    active: selectMode, count: selectedIds.size, total: tracks.length, allSelected,
+    canSelectAll: selectableTracks.length > 0,
+    canPlay: Boolean(onTrackSelect && !isOpenAudioDisabled && selectedPlayableTracks.length),
+    canCreatePlaylist: false,
+    canDelete: Boolean(onDeleteSongs && selectedIds.size && !isOpenAudioDisabled && !isDeletePending),
+    canAddToPlaylist: Boolean(onPreparePlaylistAdd && onAddToPlaylist && selectedIds.size && !isOpenAudioDisabled && !isDeletePending),
+    onPrepareAddToPlaylist: () => onPreparePlaylistAdd?.({ scope: deleteScope ?? null, songKeys: Object.freeze([...selectedIds]) }),
+    onRefreshAddToPlaylist: onPreparePlaylistAdd,
+    onAddToPlaylist,
+    onRemoveFromPlaylist: onRemoveFromPlaylist ? async (...args: Parameters<NonNullable<PlayerPlaylistViewModel['onRemoveFromPlaylist']>>) => {
+      const result = await onRemoveFromPlaylist(...args)
+      const [snapshot, targetScope] = args
+      if (targetScope === deleteScope) {
+        const removedIds = new Set(snapshot.songKeys.filter(id => !result.failedKeys.includes(id)))
+        setSelectedIds(previous => new Set([...previous].filter(id => !removedIds.has(id))))
+      }
+      return result
+    } : undefined,
+    onCreateAddPlaylist,
+    onOpenPlaylistTarget: library?.onSelect,
+    onPrepareDelete: () => onDeleteSongs && selectedIds.size ? {
+      scope: deleteScope ?? null,
+      songKeys: Object.freeze([...selectedIds]), canRemoveFromList,
+    } : undefined,
+    onDelete: onDeleteSongs ? async (...args: Parameters<NonNullable<PlayerPlaylistViewModel['onDeleteSongs']>>) => {
+      const result = await onDeleteSongs(...args)
+      setSelectedIds(previous => new Set([...previous].filter(id => !result.succeededKeys.includes(id))))
+      return result
+    } : undefined,
+    onSelectAll: () => setSelectedIds(previous => {
+      const next = new Set(previous)
+      for (const track of selectableTracks) { if (allSelected) next.delete(track.id); else next.add(track.id) }
+      return next
+    }),
+    onClear: handleClearSelection,
+    onExit: () => { setSelectMode(false); setSelectedIds(new Set()) },
+    onPlay: () => {
+      if (isOpenAudioDisabled || !selectedPlayableTracks.length) return
+      onTrackSelect?.(selectedPlayableTracks[0].id, selectedPlayableTracks.map(track => track.id))
+    },
+  }
   useLibraryDockBinding(dockRouteKey, {
     searchOpen, onSearchToggle: handleSearchToggle,
-    controllerOffsetY: controllerMotion.offsetY, controllerHidden: controllerMotion.hidden,
+    controllerOffsetY: controllerMotion.offsetY, controllerHidden: selectMode ? false : controllerMotion.hidden,
+    selection: dockSelection,
   })
 
   const handlePlay = useCallback(() => {
@@ -653,7 +762,7 @@ export function PlaylistPanel({
       }
       // Geometry is recalculated on scroll as well as layout changes: the
       // prefetch observer alone cannot report motion inside its root margin.
-      const heldIds = artworkHoldIdsRef.current
+      const heldIds = new Set([...(artworkHoldIdsRef.current ?? []), ...reorderHeldIdsRef.current])
       const visibleTrackIds = orderedEntries.filter((entry) => entry.inViewport).map((entry) => entry.trackId)
       const prefetchTrackIds = orderedEntries.filter((entry) => !entry.inViewport).map((entry) => entry.trackId)
       const orderedIds = [...new Set([
@@ -765,7 +874,6 @@ export function PlaylistPanel({
     onOpenAudio?.()
   }, [onOpenAudio])
 
-  const selectedCount = selectedIds.size
   const firstTrack = tracks[0]
   const firstTrackCoverSource = firstTrack?.coverImage ?? firstTrack?.coverImageFallback
   const handleHeroCoverError = useCallback((event: SyntheticEvent<HTMLImageElement>) => {
@@ -778,7 +886,7 @@ export function PlaylistPanel({
     image.hidden = true
   }, [firstTrack?.coverImageFallback])
   const showExtendedMetadata = layout.flow !== 'tile'
-  const cards = useMemo(() => filteredTracks.map((track, index) => (
+  const cards = useMemo(() => displayedTracks.map((track, index) => (
     <PlaylistCard
       key={track.id}
       track={track}
@@ -801,9 +909,10 @@ export function PlaylistPanel({
       onCoverFailed={handleCoverFailed}
       onActivate={handleActivate}
       onToggleSelect={handleToggleSelect}
+      onEnterSelectMode={isPresent ? handleEnterSelectMode : undefined}
     />
-  )), [filteredTracks, artworkSource, fallbackArtworkSource, currentTrackId, unavailable, onTrackSelect, selectMode, selectedIds,
-    artworkWindowIds, showExtendedMetadata, handleActivate, handleToggleSelect,
+  )), [displayedTracks, artworkSource, fallbackArtworkSource, currentTrackId, unavailable, onTrackSelect, selectMode, selectedIds,
+    artworkWindowIds, showExtendedMetadata, handleActivate, handleToggleSelect, handleEnterSelectMode, isPresent,
     contentShapes, failedCoverSources, handleCoverFailed])
 
   function renderPlaylistActions(compact = false) {
@@ -826,8 +935,9 @@ export function PlaylistPanel({
         layoutId={!compact && sharedScope ? `playlist-library-actions:${sharedScope}` : undefined}
         role="group"
         aria-label="播放列表操作"
-        aria-hidden={compact && (!controllerActionsVisible || !isPresent) ? true : undefined}
-        inert={compact && (!controllerActionsVisible || !isPresent) ? true : undefined}
+        data-selection-hidden={selectMode || undefined}
+        aria-hidden={selectMode || compact && (!controllerActionsVisible || !isPresent) ? true : undefined}
+        inert={selectMode || compact && (!controllerActionsVisible || !isPresent) ? true : undefined}
         data-actions-visible={compact ? String(controllerActionsVisible && isPresent) : undefined}
         custom={compact ? returnGeometry : undefined}
         variants={compact ? { ...appearanceMotion.variants.controllerActions,
@@ -962,23 +1072,20 @@ export function PlaylistPanel({
         </div>
       ) : null}
 
-      {selectMode ? (
-        <div className="playlist-selection-bar">
-          <span className="playlist-selection-count">{appCopy.playlistPage.selected(selectedCount)}</span>
-          <Button variant="ghost" size="sm" disabled={selectedCount === 0} onClick={handleClearSelection}>
-            {appCopy.playlistPage.clearSelection}
-          </Button>
-        </div>
-      ) : null}
+
 
       {metadataStatus === 'loading' ? (
         <PlaylistMetadataLoading layout={layout} trackCount={tracks.length} />
       ) : filteredTracks.length ? (
         <>
           <p className="sr-only" aria-live="polite" aria-atomic="true">{layoutAnnouncement}</p>
+          <p className="sr-only" aria-live="polite" aria-atomic="true">{songReorder.announcement}</p>
           <div
             ref={gridRef}
             className="playlist-grid"
+            onPointerDownCapture={songReorder.onPointerDownCapture}
+            onClickCapture={songReorder.onClickCapture}
+            onKeyDownCapture={songReorder.onKeyDownCapture}
             data-content-window="full"
             data-layout-level={layout.level}
             data-layout-flow={layout.flow}
@@ -1002,7 +1109,8 @@ export function PlaylistPanel({
       {!dockContext ? <PlaylistPlaybackDock
         controllerRef={playbackDockRef}
         controllerOffsetY={controllerMotion.offsetY}
-        controllerHidden={controllerMotion.hidden}
+        controllerHidden={selectMode ? false : controllerMotion.hidden}
+        selection={dockSelection}
         playback={playback}
         timeline={timeline}
         visualIsPlaying={visualIsPlaying}

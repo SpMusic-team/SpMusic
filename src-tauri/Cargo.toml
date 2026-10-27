@@ -79,6 +79,9 @@ windows = { version = "0.54.0", features = [
 ] }
 rustfft = "6.4.1"
 
+[target.'cfg(not(target_os = "windows"))'.dependencies]
+trash = "=5.2.9"
+
 [target.'cfg(target_os = "windows")'.dependencies]
 webview2-com = "=0.38.2"
 windows-core-061 = { package = "windows-core", version = "=0.61.2" }

@@ -13,6 +13,13 @@ export type PlaylistLibraryDurationData = {
 }
 const noKnownDurations: ReadonlyMap<string, number> = new Map()
 
+// Totals and per-path probe results do not depend on presentation order.
+// Keep duplicates and availability in the identity while allowing a reorder
+// to reuse the prepared result instead of unmounting the painted song grid.
+function durationSourceKey(sources: readonly DurationSource[]): string {
+  return JSON.stringify(sources.map(({ sourcePath, available }) => JSON.stringify([sourcePath, available !== false])).sort())
+}
+
 function knownForScope(knownDurationsByScope: ReadonlyMap<string, ReadonlyMap<string, number>>, scope: string): ReadonlyMap<string, number> {
   return knownDurationsByScope.get(scope) ?? noKnownDurations
 }
@@ -51,7 +58,7 @@ export function usePlaylistLibraryDurations(
       return (leftPriority < 0 ? preferredScopes.length : leftPriority)
         - (rightPriority < 0 ? preferredScopes.length : rightPriority)
     })
-    .map((item) => ({ ...item, sourceKey: JSON.stringify(item.sources.map(({ sourcePath, available }) => [sourcePath, available !== false])) })),
+    .map((item) => ({ ...item, sourceKey: durationSourceKey(item.sources) })),
   [sources, scope, librarySources, preferredScopes])
   const [completed, setCompleted] = useState<ReadonlyMap<string, CompletedDuration>>(new Map())
   const completedRef = useRef(completed)
@@ -130,7 +137,7 @@ export function usePlaylistLibraryDurations(
 export function usePlaylistDuration(sources: readonly DurationSource[], scope: string, knownDurations: ReadonlyMap<string, number>): PlaylistDurationResult {
   // A refreshed playlist DTO can carry the same entries in a new array. Show
   // its prepared total while revalidating durations in the background.
-  const sourceKey = useMemo(() => JSON.stringify(sources.map(({ sourcePath, available }) => [sourcePath, available !== false])), [sources])
+  const sourceKey = useMemo(() => durationSourceKey(sources), [sources])
   const [completed, setCompleted] = useState<{ sourceKey: string; scope: string; result: PlaylistDurationScanResult } | null>(null)
   const readKnownDurations = useEffectEvent(() => knownDurations)
   useEffect(() => {

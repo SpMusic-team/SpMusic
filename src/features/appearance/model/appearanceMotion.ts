@@ -9,6 +9,8 @@ export const appearanceEasingMap: Record<AppearanceEasing, Easing> = {
   'ease-in-out': [0.42, 0, 0.58, 1],
   'cubic-bezier(.65, 0, .35, 1)': [0.65, 0, 0.35, 1],
   'cubic-bezier(.4, 0, .2, 1)': [0.4, 0, 0.2, 1],
+  'cubic-bezier(.2, 0, 0, 1)': [0.2, 0, 0, 1],
+  'cubic-bezier(.25, 1, .5, 1)': [0.25, 1, 0.5, 1],
 }
 
 export type AppearanceMotionRuntime = {
@@ -19,6 +21,22 @@ export type AppearanceMotionRuntime = {
   trackCardCommitEase: Easing
   trackCardCommitDurationSeconds: number
   trackDragDurationScale: number
+  selection: {
+    controls: Transition
+    dockEnter: Transition
+    dockCrossfade: Transition
+    dockExit: Transition
+  }
+  reorder: {
+    activationDistancePx: number
+    liftScale: number
+    lift: Transition
+    neighbor: Transition
+    settle: Transition
+    easing: string
+    edgeZonePx: number
+    maxScrollViewportPerSecond: number
+  }
   libraryNavigation: {
     transition: Transition
     chrome: Variants
@@ -49,10 +67,31 @@ export function createAppearanceMotionRuntime(
   systemReducedMotion: boolean,
 ): AppearanceMotionRuntime {
   const disabled = systemReducedMotion || motion.level === 'off'
+  const selectionTransition = (duration: number, easing: AppearanceEasing): Transition => ({
+    type: 'tween', duration: disabled ? 0 : duration / 1000 * motion.durationScale, ease: appearanceEasingMap[easing],
+  })
+  const selection = {
+    controls: selectionTransition(motion.selection.controlsDurationMs, motion.selection.controlsEasing),
+    dockEnter: selectionTransition(motion.selection.dockEnterDurationMs, motion.selection.dockEnterEasing),
+    dockCrossfade: selectionTransition(motion.selection.dockCrossfadeDurationMs, motion.selection.controlsEasing),
+    dockExit: selectionTransition(motion.selection.dockExitDurationMs, motion.selection.dockExitEasing),
+  }
+  const reorder = {
+    activationDistancePx: motion.reorder.activationDistancePx,
+    liftScale: disabled ? 1 : motion.reorder.liftScale,
+    lift: selectionTransition(motion.reorder.liftDurationMs, motion.reorder.easing),
+    neighbor: selectionTransition(motion.reorder.neighborDurationMs, motion.reorder.easing),
+    settle: selectionTransition(motion.reorder.settleDurationMs, motion.reorder.easing),
+    easing: motion.reorder.easing,
+    edgeZonePx: motion.reorder.edgeZonePx,
+    maxScrollViewportPerSecond: motion.reorder.maxScrollViewportPerSecond,
+  }
 
   if (disabled) {
     return {
       disabled: true,
+      selection,
+      reorder,
       reducedMotion: 'always',
       transition: { duration: 0 },
       layoutTransition: { duration: 0 },
@@ -105,6 +144,8 @@ export function createAppearanceMotionRuntime(
 
   return {
     disabled: false,
+    selection,
+    reorder,
     reducedMotion: 'never',
     layoutTransition: prototypeSmartTransition,
     trackCardCommitEase: appearanceEasingMap[motion.trackSwitchEasing],

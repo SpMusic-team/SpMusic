@@ -11,6 +11,9 @@ export type AllSongsCoverStore = {
   cache: Map<string, WindowRow>
   listeners: Map<string, Set<() => void>>
   notify: (key: string) => void
+  leases: Map<string, number>
+  retire: (key: string, url: string) => void
+  retain: (key: string) => () => void
 }
 type WindowRuntime = {
   mounted: boolean
@@ -27,13 +30,34 @@ const CACHE_LIMIT = 60
 
 export function createAllSongsCoverStore(): AllSongsCoverStore {
   const listeners = new Map<string, Set<() => void>>()
-  return { cache: new Map(), listeners, notify: (key) => {
+  const leases = new Map<string, number>()
+  const retired = new Map<string, Set<string>>()
+  const retire = (key: string, url: string) => {
+    if (!leases.has(key)) { URL.revokeObjectURL(url); return }
+    const urls = retired.get(key) ?? new Set<string>()
+    urls.add(url)
+    retired.set(key, urls)
+  }
+  const retain = (key: string) => {
+    leases.set(key, (leases.get(key) ?? 0) + 1)
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      const remaining = (leases.get(key) ?? 1) - 1
+      if (remaining > 0) { leases.set(key, remaining); return }
+      leases.delete(key)
+      for (const url of retired.get(key) ?? []) URL.revokeObjectURL(url)
+      retired.delete(key)
+    }
+  }
+  return { cache: new Map(), listeners, leases, retain, retire, notify: (key) => {
     for (const listener of listeners.get(key) ?? []) listener()
   } }
 }
 
 export function disposeAllSongsCoverStore(store: AllSongsCoverStore): void {
-  for (const row of store.cache.values()) if (row.coverUrl) URL.revokeObjectURL(row.coverUrl)
+  for (const [key, row] of store.cache) if (row.coverUrl) store.retire(key, row.coverUrl)
   const keys = [...store.cache.keys()]
   store.cache.clear()
   for (const key of keys) store.notify(key)
@@ -86,8 +110,8 @@ export function useAllSongsWindow(items: readonly AllSongsItem[], panelRef: RefO
       const limit = Math.max(CACHE_LIMIT, runtime.desired.size)
       for (const [key, evicted] of runtime.cache) {
         if (runtime.cache.size <= limit) break
-        if (runtime.desired.has(key)) continue
-        if (evicted?.coverUrl) URL.revokeObjectURL(evicted.coverUrl)
+        if (runtime.desired.has(key) || store.leases.has(key)) continue
+        if (evicted?.coverUrl) store.retire(key, evicted.coverUrl)
         runtime.cache.delete(key)
         store.notify(key)
       }
@@ -96,7 +120,7 @@ export function useAllSongsWindow(items: readonly AllSongsItem[], panelRef: RefO
     const publish = (key: string, row: WindowRow) => {
       if (!runtime.mounted || !runtime.desired.has(key)) return false
       const previous = runtime.cache.get(key)
-      if (previous?.coverUrl && previous.coverUrl !== row.coverUrl) URL.revokeObjectURL(previous.coverUrl)
+      if (previous?.coverUrl && previous.coverUrl !== row.coverUrl) store.retire(key, previous.coverUrl)
       runtime.cache.delete(key)
       runtime.cache.set(key, row)
       trimCache()
@@ -157,7 +181,7 @@ export function useAllSongsWindow(items: readonly AllSongsItem[], panelRef: RefO
             // missing artwork, and cannot suppress a replacement descriptor.
             if (itemIsCurrent()) publish(item.key, { trackId: item.trackId, sourcePath: item.sourcePath, transientFailure: true })
           } finally {
-            if (coverUrl) URL.revokeObjectURL(coverUrl)
+            if (coverUrl) store.retire(item.key, coverUrl)
             runtime.coverQueued.delete(item.key)
             runtime.coverActive -= 1
             runtime.pump()
@@ -183,7 +207,7 @@ export function useAllSongsWindow(items: readonly AllSongsItem[], panelRef: RefO
       // Player thumbnails have a separate, shorter-lived owner. Their arrival
       // must not discard this window's cover when the descriptor is unchanged.
       if (cached.trackId === item.trackId && cached.sourcePath === item.sourcePath) continue
-      if (cached.coverUrl) URL.revokeObjectURL(cached.coverUrl)
+      if (cached.coverUrl) store.retire(item.key, cached.coverUrl)
       store.cache.delete(item.key)
       store.notify(item.key)
     }

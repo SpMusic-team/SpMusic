@@ -63,6 +63,18 @@ export function createAppearanceCssVars(appearance: AppearancePreset, resolvedCo
   const coverPlaceholderPulse = `color-mix(in srgb, ${colors.accent} 16%, ${colors.accentSoft})`
 
   return {
+    '--selection-controls-duration': scaleDuration(appearance.motion.selection.controlsDurationMs, durationScale),
+    '--selection-controls-easing': appearance.motion.selection.controlsEasing,
+    '--selection-background-duration': scaleDuration(appearance.motion.selection.backgroundDurationMs, durationScale),
+    '--selection-check-fill-duration': scaleDuration(appearance.motion.selection.checkFillDurationMs, durationScale),
+    '--selection-check-draw-delay': scaleDuration(appearance.motion.selection.checkDrawDelayMs, durationScale),
+    '--selection-check-draw-duration': scaleDuration(appearance.motion.selection.checkDrawDurationMs, durationScale),
+    '--selection-check-easing': appearance.motion.selection.checkEasing,
+    '--selection-dock-enter-duration': scaleDuration(appearance.motion.selection.dockEnterDurationMs, durationScale),
+    '--selection-dock-enter-easing': appearance.motion.selection.dockEnterEasing,
+    '--selection-dock-crossfade-duration': scaleDuration(appearance.motion.selection.dockCrossfadeDurationMs, durationScale),
+    '--selection-dock-exit-duration': scaleDuration(appearance.motion.selection.dockExitDurationMs, durationScale),
+    '--selection-dock-exit-easing': appearance.motion.selection.dockExitEasing,
     '--playlist-controller-swipe-page-gap': `${appearance.player.controllerSwipe.pageGap}px`,
     '--playlist-controller-toggle-width': `${appearance.player.controllerSwipe.toggleWidth}px`,
     '--playlist-controller-toggle-height': `${appearance.player.controllerSwipe.toggleHeight}px`,
@@ -117,6 +129,7 @@ export function createAppearanceCssVars(appearance: AppearancePreset, resolvedCo
     '--player-blue': colors.playerBlue,
     '--player-blue-soft': colors.playerBlueSoft,
     '--player-blue-ink': colors.playerBlueInk,
+    '--player-outline-variant': colors.playerOutlineVariant,
     '--player-ink': colors.playerInk,
     '--player-muted': colors.playerMuted,
     '--player-lyrics-color': colors.playerLyrics,

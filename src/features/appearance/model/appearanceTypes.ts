@@ -5,7 +5,7 @@ export type AppearanceThemeId = string
 export type ColorSchemePreference = 'system' | 'light' | 'dark'
 export type ResolvedColorScheme = Exclude<ColorSchemePreference, 'system'>
 export type MotionLevel = 'off' | 'subtle' | 'expressive'
-export type AppearanceEasing = 'linear' | 'ease' | 'ease-in' | 'ease-out' | 'ease-in-out' | 'cubic-bezier(.65, 0, .35, 1)' | 'cubic-bezier(.4, 0, .2, 1)'
+export type AppearanceEasing = 'linear' | 'ease' | 'ease-in' | 'ease-out' | 'ease-in-out' | 'cubic-bezier(.65, 0, .35, 1)' | 'cubic-bezier(.4, 0, .2, 1)' | 'cubic-bezier(.2, 0, 0, 1)' | 'cubic-bezier(.25, 1, .5, 1)'
 export type AppearanceTier = 'standard' | 'advanced' | 'experimental'
 export type SurfaceVariant = 'glass' | 'solid' | 'flat'
 export type ButtonVariant = 'soft' | 'outline' | 'minimal'
@@ -47,6 +47,7 @@ export type AppearanceColors = {
   playerBlue: string
   playerBlueSoft: string
   playerBlueInk: string
+  playerOutlineVariant: string
   playerInk: string
   playerMuted: string
   playerLyrics: string
@@ -68,6 +69,32 @@ export type AppearanceRadii = {
   pill: string
 }
 
+export type AppearanceSelectionMotion = {
+  controlsDurationMs: number
+  controlsEasing: AppearanceEasing
+  backgroundDurationMs: number
+  checkFillDurationMs: number
+  checkDrawDelayMs: number
+  checkDrawDurationMs: number
+  checkEasing: AppearanceEasing
+  dockEnterDurationMs: number
+  dockEnterEasing: AppearanceEasing
+  dockCrossfadeDurationMs: number
+  dockExitDurationMs: number
+  dockExitEasing: AppearanceEasing
+}
+
+export type AppearanceReorderMotion = {
+  activationDistancePx: number
+  liftScale: number
+  liftDurationMs: number
+  neighborDurationMs: number
+  settleDurationMs: number
+  easing: AppearanceEasing
+  edgeZonePx: number
+  maxScrollViewportPerSecond: number
+}
+
 export type AppearanceMotion = {
   level: MotionLevel
   durationScale: number
@@ -75,6 +102,8 @@ export type AppearanceMotion = {
   trackSwitchEasing: AppearanceEasing
   trackSwitchDurationMs: number
   trackDragDurationScale: number
+  selection: AppearanceSelectionMotion
+  reorder: AppearanceReorderMotion
 }
 
 export type AppearanceTypography = {
@@ -188,6 +217,18 @@ export type AppearancePreset = {
 }
 
 export type AppearanceCssVars = CSSProperties & {
+  '--selection-controls-duration': string
+  '--selection-controls-easing': string
+  '--selection-background-duration': string
+  '--selection-check-fill-duration': string
+  '--selection-check-draw-delay': string
+  '--selection-check-draw-duration': string
+  '--selection-check-easing': string
+  '--selection-dock-enter-duration': string
+  '--selection-dock-enter-easing': string
+  '--selection-dock-crossfade-duration': string
+  '--selection-dock-exit-duration': string
+  '--selection-dock-exit-easing': string
   '--playlist-controller-swipe-page-gap': string
   '--playlist-controller-toggle-width': string
   '--playlist-controller-toggle-height': string
@@ -242,6 +283,7 @@ export type AppearanceCssVars = CSSProperties & {
   '--player-blue': string
   '--player-blue-soft': string
   '--player-blue-ink': string
+  '--player-outline-variant': string
   '--player-ink': string
   '--player-muted': string
   '--player-lyrics-color': string

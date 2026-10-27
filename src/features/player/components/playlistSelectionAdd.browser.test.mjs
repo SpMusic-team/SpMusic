@@ -21,7 +21,7 @@ const dependency = name => {
 const shared = readFileSync(new URL('./allSongs.browser.test.mjs', import.meta.url), 'utf8')
 const literal = shared.match(/const fixture = (`[\s\S]*?`)\r?\nconst html/)
 assert(literal)
-let fixture = runInNewContext(literal[1], { dependency })
+let fixture = runInNewContext(literal[1], { dependency }).replaceAll('/audio/common/shared.flac', '/audio/a/shared.flac')
 fixture = fixture.replace('React.createElement(PlayerShell)', 'React.createElement(ThemeProbe)')
 fixture += `
 import {useAppearance} from '/src/features/appearance/hooks/useAppearance.ts';
@@ -33,10 +33,17 @@ fixture = fixture.replace(marker, `
 window.addFailures=[];window.addError=false;window.addGate=false;window.addResolvers=[];window.loadGate=false;window.loadResolvers=[];window.fileDeletes=[];
 window.persistedPlaylists=(window.seedTargets??['a','b','c']).map(choice=>{window.choice=choice;window.playlistImport=true;return playlist()});
 window.choice='a';window.playlistImport=false;
+window.folderSettings={revision:0,roots:[]};
 const originalInvoke=window.backendInvoke;
 window.backendInvoke=async(command,args)=>{
  if(command==='audio_load_and_play'&&window.loadGate)await new Promise(resolve=>window.loadResolvers.push(resolve));
  if(command==='library_get_playlists')return window.persistedPlaylists;
+ if(command==='library_get_folders')return structuredClone(window.folderSettings);
+ if(command==='library_replace_folders'){
+   if(args.input.expectedRevision!==window.folderSettings.revision)throw {code:'LIBRARY_SETTINGS_CONFLICT',message:'fixture revision conflict'};
+   window.folderSettings={revision:window.folderSettings.revision+1,roots:structuredClone(args.input.roots)};
+   return structuredClone(window.folderSettings);
+ }
  if(command==='library_delete_tracks'){
    const input=args.input;window.calls.push({command,input});
    if(input.mode!=='list'){window.fileDeletes.push(input);throw Error('switch must never delete files');}
@@ -98,9 +105,9 @@ async function open({ width = 1280, targets = ['a', 'b', 'c'], kind = 'playlist'
   await page.route('**/__selection_add_fixture.js', route => route.fulfill({ contentType: 'text/javascript', body: fixture }))
   await page.route('**/__selection_add_test', route => route.fulfill({ contentType: 'text/html', body: html }))
   await page.goto(origin + '/__selection_add_test')
-  await page.waitForFunction(() => Boolean(window.viewModel && window.themeApi) && !window.viewModel.playlist.library.isPlaylistRestorePending)
+  await page.waitForFunction(() => Boolean(window.viewModel?.folderSelection?.committed && window.themeApi) && !window.viewModel.playlist.library.isPlaylistRestorePending)
   if (!sourcePlaylist) {
-    await page.evaluate(() => { window.choice = 'a'; window.viewModel.playlist.library.onSelectFolders() })
+    await addFolder(page, '/audio/a')
     await page.waitForFunction(() => !window.viewModel.playlist.library.isImportPending)
   }
   await page.evaluate(({ kind, sourcePlaylist }) => {
@@ -111,6 +118,14 @@ async function open({ width = 1280, targets = ['a', 'b', 'c'], kind = 'playlist'
   await grid.locator('.playlist-card').first().waitFor()
   await page.getByRole('button', { name: '选择', exact: true }).first().click()
   return { page, grid, errors }
+}
+async function addFolder(page, path) {
+  await page.evaluate(async path => {
+    const editor = window.viewModel.folderSelection
+    const committed = editor.committed
+    await editor.onSave({ expectedRevision: committed.revision,
+      roots: [...committed.roots, { path, selected: true, directoryRules: [] }] })
+  }, path)
 }
 const dock = page => page.locator('.playlist-playback-dock:not([data-dock-superseded])')
 const calls = page => page.evaluate(() => window.calls.filter(call => call.command === 'library_add_playlist_tracks'))
@@ -218,7 +233,7 @@ try {
     assert.equal(await target(context.page, 'List c').getAttribute('aria-pressed'), 'true')
     const records = await calls(context.page)
     assert.equal(records.length, 2)
-    assert.deepEqual(records[0].input, { sourcePath: '/lists/b.m3u8', trackPaths: ['/audio/a/0.flac', '/audio/common/shared.flac'], position: 'start' })
+    assert.deepEqual(records[0].input, { sourcePath: '/lists/b.m3u8', trackPaths: ['/audio/a/0.flac', '/audio/a/shared.flac'], position: 'start' })
     assert.equal(new Set(await context.page.evaluate(() => window.persistedPlaylists.find(item => item.sourcePath === '/lists/b.m3u8').tracks.map(item => item.sourcePath))).size, 3)
     await dialog.getByRole('button', { name: '完成', exact: true }).click()
     await context.page.locator('.playlist-selection-completed').filter({ hasText: '已添加' }).waitFor()
@@ -244,7 +259,7 @@ try {
   await check('partial failure remains retryable and never pretends full membership', {}, async context => {
     await choose(context)
     const dialog = await begin(context)
-    await context.page.evaluate(() => { window.addFailures = ['/audio/common/shared.flac'] })
+    await context.page.evaluate(() => { window.addFailures = ['/audio/a/shared.flac'] })
     await target(context.page, 'List c').click()
     await dialog.getByRole('alert').filter({ hasText: 'fixture rejected source' }).waitFor()
     assert.equal(await target(context.page, 'List c').getAttribute('aria-pressed'), 'false')
@@ -318,7 +333,7 @@ try {
   await check('custom source append updates saved origin without changing its captured live queue', { kind: 'songs' }, async context => {
     const customScope = await context.page.evaluate(() => window.viewModel.playlist.library.onCreatePlaylist('Live source', ['/audio/a/0.flac']))
     assert(customScope)
-    await context.page.evaluate(() => { window.choice = 'b'; window.viewModel.playlist.library.onSelectFolders() })
+    await addFolder(context.page, '/audio/b')
     await context.page.waitForFunction(() => !window.viewModel.playlist.library.isImportPending && window.viewModel.playlist.library.allSongs.length === 3)
     await context.page.evaluate(scope => window.viewModel.playlist.library.onPlay(scope), customScope)
     await context.page.waitForFunction(() => window.viewModel.playback.track?.id === 'a-0' && !window.viewModel.playback.isSelectionPending && !window.viewModel.playback.isAudioBusy)
@@ -377,9 +392,9 @@ try {
     await context.page.waitForFunction(() => [...document.querySelectorAll('.playlist-add-row')].some(row => row.dataset.targetScope.includes('/lists/a.m3u8') && row.getAttribute('aria-pressed') === 'true'))
     const operations = await context.page.evaluate(() => window.calls.filter(call => ['library_delete_tracks', 'library_add_playlist_tracks'].includes(call.command)))
     assert.equal(operations[0].command, 'library_delete_tracks')
-    assert.deepEqual(operations[0].input, { mode: 'list', sourcePath: '/lists/a.m3u8', trackPaths: ['/audio/a/0.flac', '/audio/common/shared.flac'] })
+    assert.deepEqual(operations[0].input, { mode: 'list', sourcePath: '/lists/a.m3u8', trackPaths: ['/audio/a/0.flac', '/audio/a/shared.flac'] })
     assert.equal(operations.filter(call => call.command === 'library_add_playlist_tracks').length, 2)
-    assert.deepEqual(await context.page.evaluate(() => window.persistedPlaylists.find(item => item.sourcePath === '/lists/a.m3u8').tracks.map(item => item.sourcePath)), ['/audio/a/0.flac', '/audio/common/shared.flac'])
+    assert.deepEqual(await context.page.evaluate(() => window.persistedPlaylists.find(item => item.sourcePath === '/lists/a.m3u8').tracks.map(item => item.sourcePath)), ['/audio/a/0.flac', '/audio/a/shared.flac'])
   })
   await check('single mode has no checkbox and finishes immediately after one target', {}, async context => {
     await choose(context)
@@ -399,7 +414,7 @@ try {
     await context.page.waitForFunction(() => [...document.querySelectorAll('.playlist-add-row')].some(row => row.dataset.targetScope.includes('/lists/b.m3u8') && row.getAttribute('aria-pressed') === 'true'))
     assert.equal((await calls(context.page))[0].input.position, position)
     const members = await context.page.evaluate(() => window.persistedPlaylists.find(item => item.sourcePath === '/lists/b.m3u8').tracks.map(item => item.sourcePath))
-    assert.deepEqual(members.filter(path => path !== '/audio/a/0.flac'), ['/audio/b/0.flac', '/audio/common/shared.flac'])
+    assert.deepEqual(members.filter(path => path !== '/audio/a/0.flac'), ['/audio/b/0.flac', '/audio/a/shared.flac'])
     assert.equal(members.filter(path => path === '/audio/a/0.flac').length, 1)
     if (position === 'end') assert.equal(members.at(-1), '/audio/a/0.flac')
   })

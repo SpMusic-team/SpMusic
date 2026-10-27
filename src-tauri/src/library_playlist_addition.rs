@@ -1,7 +1,7 @@
 use crate::{
-    audio::{load_library_folder, AudioController, AudioFolderPlaylist},
+    audio::{AudioController, AudioFolderPlaylist},
     file_deletion::{path_key, validate_path},
-    library_folders::{LibraryError, LibraryFolderRegistry},
+    library_folders::{selected_folder_track_paths, LibraryError, LibraryFolderRegistry},
     library_playlists::{LibraryPlaylistRegistry, PlaylistInsertPosition},
 };
 use serde::{Deserialize, Serialize};
@@ -62,12 +62,8 @@ pub fn add_playlist_tracks(
             known.insert(path_key(&track.source_path), track.source_path.clone());
         }
     }
-    for root in folders.get()?.folders {
-        if let Ok(playlist) = load_library_folder(Path::new(&root)) {
-            for track in playlist.tracks {
-                known.insert(path_key(&track.source_path), track.source_path);
-            }
-        }
+    for path in selected_folder_track_paths(&folders.get()?) {
+        known.insert(path_key(&path), path);
     }
     add_known_tracks(input, &known, registry)
 }
@@ -261,6 +257,7 @@ mod tests {
             source_name: "target".into(),
             directory_path: root.to_string_lossy().into_owned(),
             directory_name: "fixture".into(),
+            directory_paths: None,
             selected_index: 0,
             tracks: vec![],
         };

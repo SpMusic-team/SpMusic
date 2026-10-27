@@ -6,9 +6,9 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    audio::{load_library_folder, AudioController, AudioFolderPlaylist, AudioPlaybackState},
+    audio::{AudioController, AudioFolderPlaylist, AudioPlaybackState},
     file_deletion::{checked_regular_file, path_key, DeleteFailure},
-    library_folders::{LibraryError, LibraryFolderRegistry},
+    library_folders::{selected_folder_track_paths, LibraryError, LibraryFolderRegistry},
     library_playlists::LibraryPlaylistRegistry,
 };
 
@@ -74,12 +74,8 @@ pub fn delete_tracks(
             known.insert(path_key(&track.source_path), track.source_path.clone());
         }
     }
-    for root in folders.get()?.folders {
-        if let Ok(playlist) = load_library_folder(Path::new(&root)) {
-            for track in playlist.tracks {
-                known.insert(path_key(&track.source_path), track.source_path);
-            }
-        }
+    for path in selected_folder_track_paths(&folders.get()?) {
+        known.insert(path_key(&path), path);
     }
     let (paths, mut failures) = prepare_known_files(input.track_paths, &known);
     let (removed_paths, mut file_failures, state) = audio

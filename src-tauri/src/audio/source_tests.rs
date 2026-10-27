@@ -210,6 +210,11 @@ fn folder_playlist_lists_supported_sibling_audio_in_stable_order() {
         vec!["01 Intro.mp3", "02 Selected.FLAC", "10 Outro.opus"]
     );
     assert_eq!(playlist.selected_index, 1);
+    assert!(playlist.directory_paths.is_none());
+    assert!(serde_json::to_value(&playlist)
+        .unwrap()
+        .get("directoryPaths")
+        .is_none());
     assert_eq!(playlist.tracks[1].id, track_id(&selected_path));
     assert_eq!(
         playlist.directory_name,
@@ -259,6 +264,8 @@ fn library_folder_scan_recurses_and_preserves_overlapping_track_identity() {
     ));
     let nested = test_dir.join("artist").join("album");
     std::fs::create_dir_all(&nested).unwrap();
+    let empty = test_dir.join("empty").join("leaf");
+    std::fs::create_dir_all(&empty).unwrap();
     for path in [test_dir.join("z-root.mp3"), nested.join("a-nested.FLAC")] {
         std::fs::write(path, []).unwrap();
     }
@@ -266,6 +273,25 @@ fn library_folder_scan_recurses_and_preserves_overlapping_track_identity() {
     std::fs::write(nested.join("album.m3u8"), b"missing.mp3\n").unwrap();
 
     let playlist = load_library_folder(&test_dir).unwrap();
+    let mut expected_directories = [
+        test_dir.as_path(),
+        test_dir.join("artist").as_path(),
+        nested.as_path(),
+        test_dir.join("empty").as_path(),
+        empty.as_path(),
+    ]
+    .into_iter()
+    .map(|path| path.canonicalize().unwrap().to_string_lossy().into_owned())
+    .collect::<Vec<_>>();
+    expected_directories.sort();
+    assert_eq!(
+        playlist.directory_paths.as_ref().unwrap(),
+        &expected_directories
+    );
+    assert_eq!(
+        serde_json::to_value(&playlist).unwrap()["directoryPaths"],
+        serde_json::json!(expected_directories)
+    );
     assert_eq!(
         playlist
             .tracks
@@ -275,11 +301,20 @@ fn library_folder_scan_recurses_and_preserves_overlapping_track_identity() {
         ["a-nested.FLAC", "z-root.mp3"]
     );
     let album = load_library_folder(&nested).unwrap();
+    assert_eq!(
+        album.directory_paths.as_ref().unwrap(),
+        &vec![nested
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned()]
+    );
     assert_eq!(album.tracks.len(), 1);
     assert_eq!(playlist.tracks[0].id, album.tracks[0].id);
     assert_eq!(playlist.tracks[0].source_path, album.tracks[0].source_path);
     assert!(playlist.tracks.iter().all(|track| track.available));
     let repeated = load_library_folder(&test_dir).unwrap();
+    assert_eq!(playlist.directory_paths, repeated.directory_paths);
     assert_eq!(
         playlist
             .tracks
@@ -296,7 +331,7 @@ fn library_folder_scan_recurses_and_preserves_overlapping_track_identity() {
 }
 
 #[test]
-fn library_folder_scan_rejects_invalid_roots_and_empty_trees() {
+fn library_folder_scan_rejects_invalid_roots_and_preserves_empty_trees() {
     assert!(matches!(
         load_library_folder(Path::new("relative-folder"))
             .unwrap_err()
@@ -311,10 +346,33 @@ fn library_folder_scan_rejects_invalid_roots_and_empty_trees() {
             .unwrap()
             .as_nanos()
     ));
-    std::fs::create_dir_all(test_dir.join("empty")).unwrap();
+    std::fs::create_dir_all(&test_dir).unwrap();
+    let root_path = test_dir
+        .canonicalize()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let empty_root = load_library_folder(&test_dir).unwrap();
+    assert!(empty_root.tracks.is_empty());
+    assert_eq!(empty_root.directory_paths, Some(vec![root_path.clone()]));
+    assert_eq!(empty_root.selected_index, 0);
+    let empty = test_dir.join("empty");
+    std::fs::create_dir_all(&empty).unwrap();
     std::fs::write(test_dir.join("list.m3u8"), b"missing.mp3\n").unwrap();
+    let empty_tree = load_library_folder(&test_dir).unwrap();
+    assert!(empty_tree.tracks.is_empty());
+    let mut expected = vec![
+        root_path,
+        empty.canonicalize().unwrap().to_string_lossy().into_owned(),
+    ];
+    expected.sort();
+    assert_eq!(empty_tree.directory_paths, Some(expected));
+    // Opening an ordinary file still uses the original nonrecursive playlist
+    // contract, which rejects a directory without supported sibling audio.
+    let notes = empty.join("notes.txt");
+    std::fs::write(&notes, b"notes").unwrap();
     assert!(matches!(
-        load_library_folder(&test_dir).unwrap_err().code,
+        load_folder_playlist(&notes).unwrap_err().code,
         AudioErrorCode::UnsupportedFormat
     ));
     assert!(matches!(
@@ -371,6 +429,14 @@ fn library_folder_scan_skips_link_cycles_and_outside_directories() {
         }
     }
     let playlist = load_library_folder(&root).unwrap();
+    assert_eq!(
+        playlist.directory_paths,
+        Some(vec![root
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned()])
+    );
     assert_eq!(playlist.tracks.len(), 1);
     assert_eq!(playlist.tracks[0].file_name, "inside.mp3");
     for link in [&loop_link, &outside_link] {
@@ -399,6 +465,7 @@ fn m3u8_import_is_descriptor_only_and_preserves_missing_entries() {
     let path = test_dir.join("chosen.M3U8");
     std::fs::write(&path, b"#EXTM3U\nmissing.mp3\npresent.wav\nmissing.mp3\n").unwrap();
     let playlist = import_m3u8_playlist(&path).unwrap();
+    assert!(playlist.directory_paths.is_none());
     assert_eq!(playlist.source_kind, AudioPlaylistSourceKind::M3u8);
     assert_eq!(playlist.tracks.len(), 2);
     assert!(!playlist.tracks[0].available);

@@ -39,11 +39,18 @@ window.choice='many';window.playlistImport=true;
 window.persistedPlaylists=window.seedRegistered?[playlist()]:[];
 window.choice='many';window.playlistImport=false;
 window.savedLibraryFolders=window.seedFolders??[];
+window.folderSettings={revision:0,roots:window.savedLibraryFolders.map(path=>({path,selected:true,directoryRules:[]}))};
 window.reorderRecords=[];window.reorderFail=null;window.reorderGate=false;window.reorderResolvers=[];
 window.replaceRegistryOrder=ids=>{window.persistedPlaylists=window.persistedPlaylists.map(list=>({...list,tracks:ids.map(id=>list.tracks.find(track=>track.id===id))}))};
 const originalInvoke=window.backendInvoke;
 window.backendInvoke=async(command,args)=>{
  if(command==='library_get_playlists')return window.persistedPlaylists;
+ if(command==='library_get_folders')return structuredClone(window.folderSettings);
+ if(command==='library_replace_folders'){
+  if(args.input.expectedRevision!==window.folderSettings.revision)throw {code:'LIBRARY_SETTINGS_CONFLICT',message:'fixture revision conflict'};
+  window.folderSettings={revision:window.folderSettings.revision+1,roots:structuredClone(args.input.roots)};
+  return structuredClone(window.folderSettings);
+ }
  if(command!=='library_reorder_playlist_tracks')return originalInvoke(command,args);
  const input=args.input;window.reorderRecords.push(structuredClone(input));
  if(window.reorderGate)await new Promise(resolve=>window.reorderResolvers.push(resolve));
@@ -102,9 +109,11 @@ async function open({ kind='playlist', level=4, registered=true, reducedMotion='
   await page.route('**/__song_reorder_fixture.js',route=>route.fulfill({contentType:'text/javascript',body:fixture}))
   await page.route('**/__song_reorder_test',route=>route.fulfill({contentType:'text/html',body:html}))
   await page.goto(origin+'/__song_reorder_test')
-  await page.waitForFunction(()=>Boolean(window.viewModel&&window.themeApi)&&!window.viewModel.playlist.library.isPlaylistRestorePending)
+  await page.waitForFunction(()=>Boolean(window.viewModel?.folderSelection?.committed&&window.themeApi)&&!window.viewModel.playlist.library.isPlaylistRestorePending&&!window.viewModel.playlist.library.isFolderRestorePending)
   if(!registered||kind==='songs'){
-    await page.evaluate(()=>{window.choice='many';window.playlistImport=false;window.viewModel.playlist.library.onSelectFolders()})
+    await page.evaluate(async()=>{const editor=window.viewModel.folderSelection;const current=editor.committed;
+      if(!current.roots.some(root=>root.path==='/audio/many'))await editor.onSave({expectedRevision:current.revision,
+        roots:[...current.roots,{path:'/audio/many',selected:true,directoryRules:[]}]})})
     await page.waitForFunction(()=>!window.viewModel.playlist.library.isImportPending)
   }
   await page.evaluate(({kind,registered})=>{

@@ -169,13 +169,13 @@ export const PlaylistCard = memo(function PlaylistCard({
       onContextMenu={longPress.onContextMenu}
     >
       {contentVisible ? <PlaylistCardContent track={track} songKey={songKey} coverUrl={coverUrl} artworkVisible={artworkVisible}
-        unavailable={unavailable} showExtendedMetadata={showExtendedMetadata}
+        selectMode={selectMode} unavailable={unavailable} showExtendedMetadata={showExtendedMetadata}
         coverState={coverState} coverFailed={coverFailed} onCoverFailed={onCoverFailed} /> : null}
     </button>
   )
 })
 
-function PlaylistCardContent({ track, songKey, coverUrl, artworkVisible, unavailable, showExtendedMetadata, coverState, coverFailed, onCoverFailed }: Pick<PlaylistCardProps, 'track' | 'songKey' | 'coverUrl' | 'artworkVisible' | 'unavailable' | 'showExtendedMetadata' | 'coverFailed' | 'onCoverFailed'> & { coverState: PlaylistCardCoverState }) {
+function PlaylistCardContent({ track, songKey, coverUrl, artworkVisible, selectMode, unavailable, showExtendedMetadata, coverState, coverFailed, onCoverFailed }: Pick<PlaylistCardProps, 'track' | 'songKey' | 'coverUrl' | 'artworkVisible' | 'selectMode' | 'unavailable' | 'showExtendedMetadata' | 'coverFailed' | 'onCoverFailed'> & { coverState: PlaylistCardCoverState }) {
   const systemIcons = useSystemIcons()
   const coverSource = coverUrl ?? track.coverImage ?? track.coverImageFallback
   const coverMarkVisible = coverState === 'empty' || coverState === 'error'
@@ -215,10 +215,17 @@ function PlaylistCardContent({ track, songKey, coverUrl, artworkVisible, unavail
           </span>
         ) : null}
         {unavailable ? <span className="playlist-card-cover-state">{appCopy.playlistPage.moreUnavailable}</span> : null}
-        <span className="playlist-card-cover-selection" aria-hidden="true">
+        {/* Selection controls are structurally bound to selection mode: outside it
+            a card mounts no mask-image glyph and no per-card SVG, which is what kept
+            a non-virtualized list at two extra subtree layers per row. The reorder
+            handle lives here too, and both of its readers resolve it at event time
+            (`usePlaylistSongReorder` reads `event.target.closest('[data-reorder-handle]')`,
+            `useCollectionLayout` marks a gesture invalid the same way), so the mount
+            follows the same `selectMode` flag those readers already require. */}
+        {selectMode ? <span className="playlist-card-cover-selection" aria-hidden="true">
           <SongCardCheckbox />
           <span className="playlist-card-move" data-reorder-handle><SongCardGlyph className="playlist-card-move-icon" src={arrowMove} /></span>
-        </span>
+        </span> : null}
       </span>
       <span className="playlist-card-copy">
         <span className="playlist-card-title">{track.title}</span>
@@ -235,9 +242,9 @@ function PlaylistCardContent({ track, songKey, coverUrl, artworkVisible, unavail
           </span>
         ) : null}
       </span>
-      <span className="playlist-card-selection-actions" aria-hidden="true">
+      {selectMode ? <span className="playlist-card-selection-actions" aria-hidden="true">
         <span className="playlist-card-row-move" data-reorder-handle><EqualIcon aria-hidden="true" strokeWidth={3} /></span>
         <SongCardCheckbox />
-      </span>
+      </span> : null}
   </>
 }

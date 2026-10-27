@@ -13,7 +13,7 @@ export const LibraryChromeTransitionContext = createContext<{
 
 // Latch stationary route replacement for this library session. Outgoing pages
 // must not rejoin the player projection stack after a successor finishes entering.
-export function useLibraryChromeTransition(route: string | null, playerVisible: boolean) {
+export function useLibraryChromeTransition(route: string | null, playerVisible: boolean, parentRouteKey?: string | null) {
   const geometry = useRef<LibraryNavigationGeometry>({ items: new Map() })
   const [detailVisibility, setDetailVisibility] = useState<{ routeKey: string; offscreen: boolean } | null>(null)
   const publishDetailVisibility = useCallback((routeKey: string, offscreen: boolean) => {
@@ -28,7 +28,7 @@ export function useLibraryChromeTransition(route: string | null, playerVisible: 
     categoryId: route?.startsWith('category:') ? route.slice(9) : session.categoryId,
     // Consume a scope-owned snapshot only at a detail -> category boundary.
     // Keep it for this route, including StrictMode's repeated render.
-    offscreenReturn: Boolean(session.route?.startsWith('tracks:') && route?.startsWith('category:')
+    offscreenReturn: Boolean(session.route?.startsWith('tracks:') && (parentRouteKey !== undefined ? route === parentRouteKey : route?.startsWith('category:'))
       && detailVisibility?.routeKey === session.route && detailVisibility.offscreen),
   }
   // Update during render so descendants see the new route in the same commit.

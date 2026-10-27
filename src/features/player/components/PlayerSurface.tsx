@@ -1,3 +1,5 @@
+import { FolderHierarchyPanel } from '@/features/player/components/FolderHierarchyPanel'
+import { FolderSelectionDialog } from '@/features/player/components/FolderSelectionDialog'
 import '@/features/player/styles/player.css'
 import { isTauri } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
@@ -2755,6 +2757,7 @@ export function PlayerSurface({
 
   return (
     <TooltipProvider>
+      {viewModel.folderSelection ? <FolderSelectionDialog folderSelection={viewModel.folderSelection} /> : null}
       <main
         className="player-shell"
         data-startup-ready={firstSurfaceReady}
@@ -3012,7 +3015,8 @@ export function PlayerSurface({
               variants={appearanceMotion.variants.backdrop} transition={appearanceMotion.layoutTransition}
               initial="initial" animate="animate" exit="exit" /> : null}
             {playlist.isOpen && playlist.library?.route?.view === 'overview' ? <MediaLibraryPanel key="media-library-overview" playlist={playlist} onOpenPlayer={() => requestPlaylistOpenChange(false)} /> : null}
-            {playlist.isOpen && playlist.library?.isOpen && playlist.library.route?.view !== 'overview' ? (
+            {playlist.isOpen && playlist.library?.route?.view === 'category' && playlist.library.route.categoryId === 'folders' ? <FolderHierarchyPanel key="folder-hierarchy" controllerMode={controllerMode} timelineInteraction={timeline.interaction} playlist={playlist} allSongsCoverStore={allSongsCoverStore} librarySidebarOpen={librarySidebarOpen} onLibrarySidebarOpenChange={setCompactSidebarOpen} searchRequestId={searchRequestId} /> : null}
+            {playlist.isOpen && playlist.library?.isOpen && playlist.library.route?.view !== 'overview' && !(playlist.library.route?.view === 'category' && playlist.library.route.categoryId === 'folders') ? (
               <PlaylistLibraryPanel
                 controllerMode={controllerMode}
                 entryPosition={playlist.entryPosition}

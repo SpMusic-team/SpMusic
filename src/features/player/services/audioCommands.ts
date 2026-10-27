@@ -123,6 +123,14 @@ export type AudioLoadTrackThumbnailInput = {
   windowGeneration: number
 }
 
+export type AudioLoadFolderThumbnailInput = {
+  clientId: string
+  rootPath: string
+  directoryPath: string
+  maxEdge: 128 | 256
+  windowGeneration: number
+}
+
 export type AudioCoverPixels = {
   width: number
   height: number
@@ -310,6 +318,7 @@ export type AudioFolderTrackRef = {
 export type AudioPlaylistSourceKind = 'folder' | 'm3u8' | 'custom'
 
 export type AudioFolderPlaylist = {
+  directoryPaths?: string[]
   directoryPath: string
   directoryName: string
   sourceKind: AudioPlaylistSourceKind
@@ -489,6 +498,12 @@ export async function loadAudioTrackThumbnail(input: AudioLoadTrackThumbnailInpu
   return parseCoverPixels(response, input.maxEdge)
 }
 
+export async function loadAudioFolderThumbnail(input: AudioLoadFolderThumbnailInput): Promise<AudioCoverPixels | null> {
+  const response = await invoke<ArrayBuffer | Uint8Array>('audio_load_folder_thumbnail', { input })
+  if (coverPixelBytes(response).byteLength === 0) return null
+  return parseCoverPixels(response, input.maxEdge)
+}
+
 export async function beginAudioPlaylistCoverWindow(clientId: string): Promise<number> {
   return invoke<number>('audio_begin_playlist_cover_window', { input: { clientId } })
 }
@@ -515,7 +530,25 @@ export async function listAudioFolderTracks(selectedPath: string): Promise<Audio
   })
 }
 
-export type LibraryFolders = { folders: string[] }
+export type DirectorySelectionRule = { relativePath: string; selected: boolean }
+export type RootSelection = { path: string; selected: boolean; directoryRules: DirectorySelectionRule[] }
+export type LibraryFolderSettings = { revision: number; roots: RootSelection[] }
+export type LibraryError = { code: string; message: string }
+export type DirectoryChildren = {
+  rootPath: string
+  directoryPath: string
+  children: { path: string; name: string; hasChildren: boolean | null; readError?: LibraryError }[]
+}
+export type ReplaceLibraryFoldersInput = { expectedRevision: number; roots: RootSelection[] }
+export type LibraryFolders = LibraryFolderSettings
+
+export async function replaceLibraryFolders(input: ReplaceLibraryFoldersInput): Promise<LibraryFolderSettings> {
+  return invoke<LibraryFolderSettings>('library_replace_folders', { input })
+}
+
+export async function listLibraryFolderDirectories(input: { rootPath: string; directoryPath: string }): Promise<DirectoryChildren> {
+  return invoke<DirectoryChildren>('library_list_folder_directories', { input })
+}
 
 export type LibraryDeleteTracksResult = {
   removedPaths: string[]

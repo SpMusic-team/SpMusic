@@ -88,26 +88,26 @@
     -webkit-mask-repeat: no-repeat;
     -webkit-mask-position: center;
   }
-  /* Category backgrounds sampled from 分类列表.png, in sidebar order. */
-  .playlist-library-category:nth-child(1) { --playlist-category-background: var(--playlist-category-songs, #728ace); }
-  .playlist-library-category:nth-child(2) { --playlist-category-background: var(--playlist-category-folder, #4d7ac4); }
-  .playlist-library-category:nth-child(3) { --playlist-category-background: var(--playlist-category-folders, #5066d8); }
-  .playlist-library-category:nth-child(4) { --playlist-category-background: var(--playlist-category-album, #5858ad); }
-  .playlist-library-category:nth-child(5) { --playlist-category-background: var(--playlist-category-artist, #5c5880); }
-  .playlist-library-category:nth-child(6) { --playlist-category-background: var(--playlist-category-album-artist, #706c9d); }
-  .playlist-library-category:nth-child(7) { --playlist-category-background: var(--playlist-category-genre, #663e63); }
-  .playlist-library-category:nth-child(8) { --playlist-category-background: var(--playlist-category-year, #5392a2); }
-  .playlist-library-category:nth-child(9) { --playlist-category-background: var(--playlist-category-composer, #225e3d); }
-  .playlist-library-category:nth-child(10) { --playlist-category-background: var(--playlist-category-playlists, #704840); }
-  .playlist-library-category:nth-child(11) { --playlist-category-background: var(--playlist-category-streams, #76a47a); }
-  .playlist-library-category:nth-child(12) { --playlist-category-background: var(--playlist-category-queue, #716b40); }
-  .playlist-library-category:nth-child(13) { --playlist-category-background: var(--playlist-category-bookmarks, #5474db); }
-  .playlist-library-category:nth-child(14) { --playlist-category-background: var(--playlist-category-most-played, #a080b7); }
-  .playlist-library-category:nth-child(15) { --playlist-category-background: var(--playlist-category-highest-rated, #50646b); }
-  .playlist-library-category:nth-child(16) { --playlist-category-background: var(--playlist-category-lowest-rated, #555555); }
-  .playlist-library-category:nth-child(17) { --playlist-category-background: var(--playlist-category-recent-played, #454588); }
-  .playlist-library-category:nth-child(18) { --playlist-category-background: var(--playlist-category-recent-added, #4e5d44); }
-  .playlist-library-category:nth-child(19) { --playlist-category-background: var(--playlist-category-long-tracks, #4d3e8c); }
+  /* Category backgrounds sampled from 分类列表.png, bound to identity so pinning preserves theme colors. */
+  .playlist-library-category[data-category-id="songs"] { --playlist-category-background: var(--playlist-category-songs, #728ace); }
+  .playlist-library-category[data-category-id="folder"] { --playlist-category-background: var(--playlist-category-folder, #4d7ac4); }
+  .playlist-library-category[data-category-id="folders"] { --playlist-category-background: var(--playlist-category-folders, #5066d8); }
+  .playlist-library-category[data-category-id="album"] { --playlist-category-background: var(--playlist-category-album, #5858ad); }
+  .playlist-library-category[data-category-id="artist"] { --playlist-category-background: var(--playlist-category-artist, #5c5880); }
+  .playlist-library-category[data-category-id="album-artist"] { --playlist-category-background: var(--playlist-category-album-artist, #706c9d); }
+  .playlist-library-category[data-category-id="genre"] { --playlist-category-background: var(--playlist-category-genre, #663e63); }
+  .playlist-library-category[data-category-id="year"] { --playlist-category-background: var(--playlist-category-year, #5392a2); }
+  .playlist-library-category[data-category-id="composer"] { --playlist-category-background: var(--playlist-category-composer, #225e3d); }
+  .playlist-library-category[data-category-id="playlists"] { --playlist-category-background: var(--playlist-category-playlists, #704840); }
+  .playlist-library-category[data-category-id="streams"] { --playlist-category-background: var(--playlist-category-streams, #76a47a); }
+  .playlist-library-category[data-category-id="queue"] { --playlist-category-background: var(--playlist-category-queue, #716b40); }
+  .playlist-library-category[data-category-id="bookmarks"] { --playlist-category-background: var(--playlist-category-bookmarks, #5474db); }
+  .playlist-library-category[data-category-id="most-played"] { --playlist-category-background: var(--playlist-category-most-played, #a080b7); }
+  .playlist-library-category[data-category-id="highest-rated"] { --playlist-category-background: var(--playlist-category-highest-rated, #50646b); }
+  .playlist-library-category[data-category-id="lowest-rated"] { --playlist-category-background: var(--playlist-category-lowest-rated, #555555); }
+  .playlist-library-category[data-category-id="recent-played"] { --playlist-category-background: var(--playlist-category-recent-played, #454588); }
+  .playlist-library-category[data-category-id="recent-added"] { --playlist-category-background: var(--playlist-category-recent-added, #4e5d44); }
+  .playlist-library-category[data-category-id="long-tracks"] { --playlist-category-background: var(--playlist-category-long-tracks, #4d3e8c); }
   .playlist-library-category-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .playlist-library-separator { flex: 0 0 2px; background: var(--app-border); }
   .playlist-library-lists { display: flex; min-height: 154px; flex: 1; flex-direction: column; gap: 16px; padding-top: 22px; }

@@ -4,6 +4,7 @@ mod file_deletion;
 mod global_shortcuts;
 mod library_cover_warmup;
 mod library_deletion;
+mod library_folder_directories;
 mod library_folders;
 mod library_playlist_addition;
 mod library_playlists;
@@ -17,13 +18,14 @@ use audio::{
     audio_error, current_output_info, import_m3u8_playlist, load_library_folder, AudioErrorCode,
 };
 use audio::{
-    begin_playlist_cover_window, load_cover_pixels, load_playlist_cover_pixels,
+    begin_playlist_cover_window, load_cover_pixels, load_folder_thumbnail, load_playlist_cover_pixels,
     load_track_thumbnail, probe_playlist_cover, probe_playlist_durations,
     probe_playlist_track_summaries, shutdown_playlist_cover_cache,
     AudioBeginPlaylistCoverWindowInput, AudioCommandError, AudioController, AudioEmbedLyricsInput,
     AudioFolderPlaylist, AudioFolderPlaylistInput, AudioLoadAndPlayInput, AudioLoadAndPlayResult,
-    AudioLoadCoverPixelsInput, AudioLoadFileInput, AudioLoadPlaylistCoverPixelsInput,
-    AudioLoadTrackThumbnailInput, AudioOpenFileInput, AudioOpenSourceResult, AudioOutputInfo,
+    AudioLoadCoverPixelsInput, AudioLoadFileInput, AudioLoadFolderThumbnailInput,
+    AudioLoadPlaylistCoverPixelsInput, AudioLoadTrackThumbnailInput, AudioOpenFileInput,
+    AudioOpenSourceResult, AudioOutputInfo,
     AudioPlayInput, AudioPlaybackState, AudioPlaylistCoverSource, AudioPlaylistDurationItem,
     AudioPlaylistTrackSummaryItem, AudioProbePlaylistDurationsInput,
     AudioProbePlaylistTrackSummariesInput, AudioSeekInput, AudioSetVolumeInput, AudioTrackRef,
@@ -33,7 +35,10 @@ use global_shortcuts::{
     global_shortcuts_get_settings, global_shortcuts_set_suspended, global_shortcuts_update_settings,
 };
 use library_cover_warmup::{LibraryCoverWarmupInput, LibraryCoverWarmupResult};
-use library_folders::{LibraryError, LibraryFolderRegistry, LibraryFolders};
+use library_folder_directories::{DirectoryChildren, ListFolderDirectoriesInput};
+use library_folders::{
+    LibraryError, LibraryFolderRegistry, LibraryFolderSettings, ReplaceFoldersInput,
+};
 use library_playlists::LibraryPlaylistRegistry;
 use tauri::{ipc::Response, Manager, State};
 use tracing_subscriber::EnvFilter;
@@ -138,8 +143,8 @@ fn audio_load_and_play(
 }
 
 #[tauri::command]
-fn audio_hydrate_track(
-    state: State<'_, AudioController>,
+async fn audio_hydrate_track(
+    app: tauri::AppHandle,
     input: AudioLoadFileInput,
 ) -> Result<AudioTrackRef, AudioCommandError> {
     tracing::info!(
@@ -147,9 +152,33 @@ fn audio_hydrate_track(
         path = %input.path,
         "Tauri command invoked",
     );
-    let result = state.hydrate_track(input);
-    log_track_command_result("audio_hydrate_track", &result);
-    result
+    // Hydration is blocking work: it opens a decoder, and the metadata path may
+    // enumerate the containing directory and fully decode folder artwork while
+    // waiting on the shared cover decode slots. A plain `#[tauri::command] fn`
+    // runs inline on the webview IPC thread (the window main thread on Windows),
+    // so it froze the window for every track the playlist pumps through here.
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AudioController>();
+        let result = state.hydrate_track(input);
+        log_track_command_result("audio_hydrate_track", &result);
+        result
+    })
+    .await
+    .map_err(|error| {
+        tracing::error!(
+            command = "audio_hydrate_track",
+            error = %error,
+            "track hydration worker failed",
+        );
+        // The worker was cancelled or panicked, so no track result exists. This
+        // is an internal backend fault rather than a property of the file, and
+        // it stays recoverable so the caller may retry the same path.
+        audio_error(
+            AudioErrorCode::InternalError,
+            "Track hydration worker failed",
+            true,
+        )
+    })?
 }
 
 #[tauri::command]
@@ -176,8 +205,29 @@ fn audio_list_folder_tracks(
 #[tauri::command]
 fn library_get_folders(
     state: State<'_, LibraryFolderRegistry>,
-) -> Result<LibraryFolders, LibraryError> {
+) -> Result<LibraryFolderSettings, LibraryError> {
     state.get()
+}
+
+#[tauri::command]
+fn library_replace_folders(
+    state: State<'_, LibraryFolderRegistry>,
+    input: ReplaceFoldersInput,
+) -> Result<LibraryFolderSettings, LibraryError> {
+    state.replace(input)
+}
+
+#[tauri::command]
+async fn library_list_folder_directories(
+    input: ListFolderDirectoriesInput,
+) -> Result<DirectoryChildren, LibraryError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        library_folder_directories::list_folder_directories(input)
+    })
+    .await
+    .map_err(|error| {
+        LibraryError::directory(format!("Directory listing worker failed: {error}"))
+    })?
 }
 
 #[tauri::command]
@@ -266,7 +316,7 @@ fn library_select_folders() -> Result<Option<Vec<String>>, LibraryError> {
 fn library_add_folder(
     state: State<'_, LibraryFolderRegistry>,
     path: String,
-) -> Result<LibraryFolders, LibraryError> {
+) -> Result<LibraryFolderSettings, LibraryError> {
     state.add(&path)
 }
 
@@ -638,6 +688,15 @@ async fn audio_load_track_thumbnail(
 }
 
 #[tauri::command]
+async fn audio_load_folder_thumbnail(
+    state: State<'_, AppPaths>,
+    input: AudioLoadFolderThumbnailInput,
+) -> Result<Response, CoverPixelsError> {
+    let response = load_folder_thumbnail(state.cache_dir.clone(), input).await?;
+    Ok(Response::new(response))
+}
+
+#[tauri::command]
 fn audio_begin_playlist_cover_window(
     input: AudioBeginPlaylistCoverWindowInput,
 ) -> Result<u64, CoverPixelsError> {
@@ -711,6 +770,8 @@ pub fn run() {
             audio_probe_playlist_cover,
             audio_list_folder_tracks,
             library_get_folders,
+            library_replace_folders,
+            library_list_folder_directories,
             library_get_playlists,
             library_delete_tracks,
             library_add_playlist_tracks,
@@ -737,6 +798,7 @@ pub fn run() {
             audio_begin_playlist_cover_window,
             audio_load_playlist_cover_pixels,
             audio_load_track_thumbnail,
+            audio_load_folder_thumbnail,
         ])
         .setup(|app| {
             let app_paths = AppPaths::prepare()?;

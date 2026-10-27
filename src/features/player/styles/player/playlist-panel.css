@@ -916,7 +916,7 @@
   .playlist-hero-play-button svg,
   .playlist-hero-actions .playlist-search-button svg { width: 32px; height: 32px; }
   .playlist-hero-actions .playlist-select-toggle { height: 42px; min-height: 42px; padding: 5px 15px; }
-  .playlist-grid[data-layout-level="0"] { --playlist-cover-size: 240px !important; --playlist-card-title-size: 16px !important; --playlist-card-artist-size: 14px !important; grid-template-columns: repeat(auto-fill, 270px); gap: 22px 48px; }
+  .playlist-grid[data-layout-level="0"] { --playlist-cover-size: 240px !important; --playlist-card-title-size: 16px !important; --playlist-card-artist-size: 14px !important; grid-template-columns: repeat(auto-fill, 270px); gap: 22px 28px; }
   .playlist-grid[data-layout-level="0"] .playlist-card { gap: 24px; padding: 15px; border-radius: calc(var(--app-radius-lg) * 2.5); }
   .playlist-grid[data-layout-level="0"] .playlist-card-cover { width: 240px; height: 240px; flex: 0 0 240px; border-radius: calc(var(--app-radius-lg) * 5 / 3); }
   .playlist-grid[data-layout-level="0"] .playlist-card-copy { width: 200px; gap: 0; }

@@ -4,6 +4,7 @@ import { playlistCoverImageFromPixels } from '@/features/player/model/playlistCo
 import { decodePlaylistCover } from '@/features/player/model/playlistCoverReadiness'
 import { createPlaylistArtworkStore, playlistArtworkKey } from '@/features/player/model/playlistArtworkStore'
 import { admitLibraryArtwork } from '@/features/player/model/libraryArtworkAdmission'
+import { playlistArtworkRevision } from '@/features/player/model/playlistArtworkRevision'
 import type { PlaylistArtworkDemand, PlaylistCoverImage } from '@/features/player/model/playerUiViewModel'
 import {
   selectArtworkEvictionKey,
@@ -16,13 +17,13 @@ import {
 import { schedulePlaylistCoverPixels, scheduleTrackThumbnail } from '@/features/player/services/playlistCoverScheduler'
 
 type ArtworkRow = ReadOnlyArtworkRow
-type CacheEntry = { row: ArtworkRow; edge: number; trackId: string }
+type CacheEntry = { row: ArtworkRow; edge: number; trackId: string; artworkRevision: number }
 type Runtime = {
   mounted: boolean
   visible: boolean
   controller: AbortController
   revision: number
-  descriptors: Map<string, AudioFolderTrackRef>
+  descriptors: Map<string, AudioFolderTrackRef & { artworkRevision: number }>
   previews: Map<Element, string>
   desired: Map<string, 128 | 256 | 512>
   pinned: Set<string>
@@ -159,7 +160,8 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
         const next = [...runtime.desired].find(([key, edge]) => {
           const descriptor = runtime.descriptors.get(key)
           const entry = runtime.cache.get(key)
-          return descriptor?.available && !runtime.queued.has(key) && (!entry || entry.edge < edge)
+          return descriptor?.available && !runtime.queued.has(key) && (!entry || entry.edge < edge
+            || entry.artworkRevision !== descriptor.artworkRevision && !runtime.failedUpgrades.has(key))
         })
         if (!next) break
         const [key, edge] = next
@@ -211,7 +213,7 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
             }
             const previous = runtime.cache.get(key)
             runtime.cache.delete(key)
-            runtime.cache.set(key, { edge: hasLocalArtwork ? Math.max(edge, 256) : 512, trackId: descriptor.id,
+            runtime.cache.set(key, { edge: hasLocalArtwork ? Math.max(edge, 256) : 512, trackId: descriptor.id, artworkRevision: descriptor.artworkRevision,
               row: { hasLocalArtwork, coverThumbnail: thumbnail } })
             if (previous?.row.coverThumbnail) {
               if (thumbnail) {
@@ -233,7 +235,7 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
               // when a real I/O or protocol error prevented the read.
               console.warn('读取媒体库封面失败', { sourcePath: descriptor.sourcePath, error })
               const previous = runtime.cache.get(key)
-              runtime.cache.set(key, { edge: 512, trackId: descriptor.id, row: previous?.row ?? {} })
+              runtime.cache.set(key, { edge: 512, trackId: descriptor.id, artworkRevision: descriptor.artworkRevision, row: previous?.row ?? {} })
               publish()
             }
           } finally {
@@ -249,7 +251,8 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
       const required = new Map<string, 128 | 256 | 512>()
       const hero = runtime.detail?.tracks[0]
       const heroKey = hero ? normalizeAudioSourcePath(hero.sourcePath) : undefined
-      const heroReady = heroKey ? Boolean(runtime.cache.get(heroKey)?.row.coverThumbnail) : false
+      const heroReady = heroKey ? Boolean(runtime.cache.get(heroKey)?.row.coverThumbnail)
+        && runtime.cache.get(heroKey)?.artworkRevision === runtime.descriptors.get(heroKey)?.artworkRevision : false
       const heroUpgradeReady = heroReady && !runtime.failedUpgrades.has(heroKey ?? '') && (runtime.detail?.tracks.length === 1
         || (runtime.detailVisiblePaths.size > 1 && [...runtime.detailVisiblePaths].every((key) =>
           key === heroKey || runtime.cache.has(key))))
@@ -400,11 +403,14 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
     runtime.descriptors = new Map()
     for (const source of sources) for (const descriptor of source.tracks) {
       const key = normalizeAudioSourcePath(descriptor.sourcePath)
-      if (!runtime.descriptors.get(key)?.available) runtime.descriptors.set(key, descriptor)
+      if (!runtime.descriptors.get(key)?.available) runtime.descriptors.set(key, { ...descriptor, artworkRevision: playlistArtworkRevision(source) })
     }
     for (const [key, entry] of runtime.cache) {
       const descriptor = runtime.descriptors.get(key)
-      if (descriptor?.available && descriptor.id === entry.trackId) continue
+      if (descriptor?.available && descriptor.id === entry.trackId) {
+        if (descriptor.artworkRevision !== entry.artworkRevision) runtime.failedUpgrades.delete(key)
+        continue
+      }
       if (entry.row.coverThumbnail) URL.revokeObjectURL(entry.row.coverThumbnail.src)
       runtime.cache.delete(key)
       runtime.failedUpgrades.delete(key)

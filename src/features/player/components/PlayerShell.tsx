@@ -17,6 +17,9 @@ import { readPlaybackSession } from '@/features/player/model/playbackSessionStor
 import { playbackQueueOrigin, type PlaybackQueueOrigin } from '@/features/player/model/playbackQueue'
 import { sharePlaylistTrackRows } from '@/features/player/model/playlistTrackRows'
 import { applyManualSongOrder } from '@/features/player/model/manualSongOrderStorage'
+import { playlistArtworkRevision } from '@/features/player/model/playlistArtworkRevision'
+import { readPinnedCategoryIds, writePinnedCategoryIds } from '@/features/player/model/librarySidebarPreferences'
+import { folderSelectionPath, isDirectorySelected, isRootSelectionActive } from '@/features/player/model/folderSelection'
 
 const EMPTY_KNOWN_DURATIONS: ReadonlyMap<string, number> = new Map()
 const EMPTY_FALLBACK_SOURCE_PATHS: ReadonlySet<string> = new Set()
@@ -35,6 +38,13 @@ function useStablePlaylistTrackRows(input: PlaylistTrackItemViewModel[]): Playli
 }
 
 export function PlayerShell() {
+  const [pinnedCategoryIds, setPinnedCategoryIds] = useState(readPinnedCategoryIds)
+  const toggleCategoryPin = useCallback((id: MediaLibraryCategoryId) => {
+    setPinnedCategoryIds(previous => previous.includes(id) ? previous.filter(item => item !== id) : [...previous, id])
+  }, [])
+  const foldersPinnedInSidebar = pinnedCategoryIds.includes('folders')
+  const toggleFoldersPin = useCallback(() => toggleCategoryPin('folders'), [toggleCategoryPin])
+  useEffect(() => { writePinnedCategoryIds(pinnedCategoryIds) }, [pinnedCategoryIds])
   const [isPlaylistOpen, setIsPlaylistOpen] = useState(() => readStartupPage() === 'media-library')
   // Restore only the saved playback source as the player's first return page.
   // Later navigation keeps its own destination throughout this session.
@@ -44,10 +54,34 @@ export function PlayerShell() {
     return playbackQueueOrigin(saved?.playlist.customPlaylist)?.kind === 'all-songs'
       ? { view: 'category', categoryId: 'songs' } : { view: 'tracks' }
   })
+  const [folderLocation, setFolderLocation] = useState<{ rootPath: string; directoryPath: string } | null>(null)
   const [playlistArtworkSettled, setPlaylistArtworkSettled] = useState(false)
   // While the player is in front, prepare its source list for the cover's
   // return path. The existing artwork lane keeps this work optional and bounded.
   const player = useAudioPlayer(isPlaylistOpen && libraryRoute.view === 'tracks', playlistArtworkSettled, !isPlaylistOpen)
+  const committedFolderSettings = player.folderSelection.committed
+  const [locationSettings, setLocationSettings] = useState(committedFolderSettings)
+  if (locationSettings !== committedFolderSettings) {
+    setLocationSettings(committedFolderSettings)
+    if (committedFolderSettings) setFolderLocation(previous => {
+      if (!previous) return previous
+      const root = committedFolderSettings.roots.find(item => folderSelectionPath(item.path) === folderSelectionPath(previous.rootPath))
+      if (!root || !isRootSelectionActive(root)) return null
+      const base = folderSelectionPath(root.path)
+      const current = folderSelectionPath(previous.directoryPath)
+      if (current !== base && !current.startsWith(`${base}/`)) return null
+      let relative = current === base ? '' : current.slice(base.length + 1)
+      let directoryPath = previous.directoryPath.replace(/\\/g, '/').replace(/\/+$/, '')
+      const visible = () => isDirectorySelected(root, relative) || root.directoryRules.some(rule => rule.selected
+        && (!relative || folderSelectionPath(rule.relativePath).startsWith(`${relative}/`)))
+      while (relative && !visible()) {
+        relative = relative.includes('/') ? relative.slice(0, relative.lastIndexOf('/')) : ''
+        directoryPath = directoryPath.slice(0, directoryPath.lastIndexOf('/'))
+      }
+      if (folderSelectionPath(directoryPath) === current) return previous
+      return { ...previous, directoryPath: relative ? directoryPath : root.path }
+    })
+  }
   useGlobalShortcuts(player)
   const [isDevAudioToolsOpen, setIsDevAudioToolsOpen] = useState(false)
   const [selectedBrowsedScope, setBrowsedScope] = useState<string | null>(null)
@@ -56,7 +90,12 @@ export function PlayerShell() {
   const requestedBrowsedScope = selectedBrowsedScope ?? player.playbackSourceScope
   const browsedPlaylist = librarySources.find((item) => playlistScope(item) === requestedBrowsedScope)
   const browsedScope = browsedPlaylist ? requestedBrowsedScope : null
-  const isBrowsingActive = !browsedPlaylist || browsedScope === player.activePlaylistScope
+  // A registered folder detail always consumes the selection projection, even
+  // when an older direct-folder playback snapshot has the same scope.
+  const missingLibrarySource = !browsedPlaylist && (selectedBrowsedScope !== null
+    || (requestedBrowsedScope !== null && player.isLibraryFolderScope(requestedBrowsedScope)))
+  const isBrowsingActive = (!browsedPlaylist && !missingLibrarySource)
+    || (browsedPlaylist?.sourceKind !== 'folder' && browsedScope !== null && browsedScope === player.activePlaylistScope)
   const playbackSourcePlaylist = librarySources.find((item) => playlistScope(item) === player.playbackSourceScope)
   const warmSource = !isPlaylistOpen && player.startupRestoreReady && player.playbackQueueKind !== 'all-songs'
     && player.playbackSourceScope !== player.activePlaylistScope ? playbackSourcePlaylist ?? null : null
@@ -73,6 +112,7 @@ export function PlayerShell() {
     setPlaylistArtworkSettled(false)
     setIsPlaylistOpen(true)
     setLibraryRoute({ view: 'category', categoryId })
+    if (categoryId === 'folders') setFolderLocation(null)
     if (categoryId === 'songs') setPlaylistEntryPosition((previous) => ({ requestId: previous.requestId + 1, target: 'top' }))
   }
   const openLibrary = () => selectLibraryCategory('playlists')
@@ -93,7 +133,7 @@ export function PlayerShell() {
     if (!isBrowsingActive && browsedScope) ensurePlaylistSummaries(browsedScope)
   }, [browsedScope, ensurePlaylistSummaries, isBrowsingActive])
   useEffect(() => {
-    if (libraryRoute.view !== 'category' || libraryRoute.categoryId !== 'songs') return
+    if (libraryRoute.view !== 'category' || !['songs', 'folders'].includes(libraryRoute.categoryId)) return
     for (const source of player.libraryFolderPlaylists) ensurePlaylistSummaries(playlistScope(source))
   }, [libraryRoute, player.libraryFolderPlaylists, ensurePlaylistSummaries])
   const handlePlaylistOpenChange = useCallback((open: boolean) => {
@@ -102,7 +142,7 @@ export function PlayerShell() {
     if (open && !isPlaylistOpen && player.track) {
       setPlaylistEntryPosition((previous) => ({ requestId: previous.requestId + 1, target: 'current-track' }))
       if (player.playbackQueueKind === 'all-songs') {
-        setLibraryRoute({ view: 'category', categoryId: 'songs' })
+        if (!(libraryRoute.view === 'category' && libraryRoute.categoryId === 'folders')) setLibraryRoute({ view: 'category', categoryId: 'songs' })
         setBrowsedScope(null)
       } else {
         setLibraryRoute({ view: 'tracks' })
@@ -110,7 +150,7 @@ export function PlayerShell() {
           ? player.playbackSourceScope : null)
       }
     }
-  }, [isPlaylistOpen, player.track, player.playbackQueueKind, player.playbackSourceScope, librarySources])
+  }, [isPlaylistOpen, player.track, player.playbackQueueKind, player.playbackSourceScope, librarySources, libraryRoute])
   const currentTrackId = player.track?.id ?? null
   const summariesByScope = player.playlistTrackSummariesByScope
   // Layering order: queue row < read-only tag summary < hydrated metadata <
@@ -193,14 +233,15 @@ export function PlayerShell() {
     setKnownScopeState({ scope: durationScope, known: activeKnownDurations, byScope })
   }
   const knownDurationsByScope = knownScopeState.byScope
-  const preferredDurationScopes = useMemo(() => libraryRoute.view === 'category' && libraryRoute.categoryId === 'songs'
+  const preferredDurationScopes = useMemo(() => libraryRoute.view === 'category' && ['songs', 'folders'].includes(libraryRoute.categoryId)
     ? player.libraryFolderPlaylists.map(playlistScope)
     : displayScope ? [displayScope] : [],
   [libraryRoute, player.libraryFolderPlaylists, displayScope])
   const durationData = usePlaylistLibraryDurations(durationSources, durationScope, libraryDurationSources, knownDurationsByScope, preferredDurationScopes)
   const playlistDurations = durationData.totals
   const playlistDuration = playlistDurations.get(durationScope)!
-  const browsedDuration = browsedPlaylist ? playlistDurations.get(playlistScope(browsedPlaylist))! : playlistDuration
+  const browsedDuration = browsedPlaylist ? playlistDurations.get(playlistScope(browsedPlaylist))!
+    : missingLibrarySource ? { status: 'ready' as const, totalSeconds: 0, detail: undefined } : playlistDuration
   // The queue and the playlist page must agree about a song, so the read-only
   // library artwork is layered onto the shared active rows. It only fills what
   // the active metadata/visual lanes do not know yet: after a cross-source
@@ -225,7 +266,7 @@ export function PlayerShell() {
   }, [rawPlaylistTracks, player.playlistDurationTracks, player.activePlaylistScope, durationData.durationsByScope, libraryArtwork])
   const playlistTracks = useStablePlaylistTrackRows(playlistPresentation.tracks)
   const libraryFallbackSourcePaths = playlistPresentation.fallbackSourcePaths
-  const isSongsCategoryOpen = isPlaylistOpen && libraryRoute.view === 'category' && libraryRoute.categoryId === 'songs'
+  const isSongsCategoryOpen = isPlaylistOpen && libraryRoute.view === 'category' && ['songs', 'folders'].includes(libraryRoute.categoryId)
   const browsedTrackRows = useMemo<PlaylistTrackItemViewModel[]>(() => {
     if (isBrowsingActive) return playlistTracks
     const summaries = browsedScope ? summariesByScope[browsedScope] : undefined
@@ -245,8 +286,8 @@ export function PlayerShell() {
   const handlePlaylistTrackSelect = useCallback((trackId: string, orderedTrackIds?: readonly string[]) => {
     if (browsedPlaylist && browsedScope) void selectPlaybackQueueTrack({ kind: 'playlist', sourceScope: browsedScope,
       entries: (orderedTrackIds ?? browsedPlaylist.tracks.map(item => item.id)).map(id => ({ scope: browsedScope, trackId: id })) }, trackId)
-    else selectQueueTrack(trackId)
-  }, [browsedPlaylist, browsedScope, selectPlaybackQueueTrack, selectQueueTrack])
+    else if (isBrowsingActive) selectQueueTrack(trackId)
+  }, [browsedPlaylist, browsedScope, isBrowsingActive, selectPlaybackQueueTrack, selectQueueTrack])
   // Other library routes still expose song descriptors to consumers such as
   // custom playlist creation. Build this list only when folder sources change;
   // summary, duration and artwork updates belong to the visible Songs route.
@@ -255,11 +296,12 @@ export function PlayerShell() {
     const rows: AllSongsItem[] = []
     for (const source of player.libraryFolderPlaylists) {
       const scope = playlistScope(source)
+      const artworkRevision = playlistArtworkRevision(source)
       for (const descriptor of source.tracks) {
         const key = normalizeAudioSourcePath(descriptor.sourcePath)
         if (seen.has(key)) continue
         seen.add(key)
-        rows.push({ key, scope, trackId: descriptor.id, sourcePath: descriptor.sourcePath,
+        rows.push({ key, scope, trackId: descriptor.id, sourcePath: descriptor.sourcePath, artworkRevision,
           available: descriptor.available, track: pendingPlaylistTrackRow(descriptor) })
       }
     }
@@ -267,32 +309,51 @@ export function PlayerShell() {
   }, [player.libraryFolderPlaylists])
   const allSongsActiveRows = isSongsCategoryOpen ? playlistTracks : null
   const allSongsDurations = isSongsCategoryOpen ? durationData.durationsByScope : null
-  const allSongsPresentation = useMemo(() => {
-    if (!isSongsCategoryOpen) return { rows: allSongDescriptors, fallbackSourcePaths: EMPTY_FALLBACK_SOURCE_PATHS }
+  // The aggregated rows deliberately carry no artwork. `libraryArtwork` is a Map
+  // that the read-only cache rebuilds on every thumbnail it publishes, so merging
+  // it here gave the whole library a new row array per arriving cover, which in
+  // turn re-ran the quick-index sort, the search filter and the observer setup.
+  // Covers reach the aggregated cards through the artwork stores they already
+  // subscribe to (`PlaylistCard`'s `artworkSource` / `fallbackArtworkSource`,
+  // layered exactly as `withReadOnlyArtworkFallback` did), so a cover update no
+  // longer changes any row identity.
+  const allSongsRows = useMemo<AllSongsItem[]>(() => {
+    if (!isSongsCategoryOpen) return allSongDescriptors
     const rows: AllSongsItem[] = []
-    const fallbackSourcePaths = new Set<string>()
     const activeRows = new Map(allSongsActiveRows?.map((item) => [item.id, item]))
     for (const item of allSongDescriptors) {
-      const { key, scope, trackId, sourcePath } = item
+      const { scope, trackId, sourcePath } = item
       const activeRow = allSongsActiveRows ? activeRows.get(trackId) : undefined
       const sourceRow = summariesByScope[scope]?.[trackId]
       const activeRowReady = player.playlistTrackMetadata[trackId]
         || summariesByScope[player.activePlaylistScope ?? '']?.[trackId]
       const row = activeRow && activeRowReady ? activeRow : sourceRow ?? activeRow ?? item.track
       const durationMs = allSongsDurations?.get(scope)?.get(sourcePath)
-      // The aggregated page must stay painted when a click activates another
-      // folder: the previous active rows lose their player-owned thumbnails,
-      // and the read-only artwork already cached for those files bridges the
-      // gap. Only rows whose current owner has no cover are pinned to the cache.
-      const artwork = libraryArtwork.get(key)
-      if (artwork?.coverThumbnail && !(row as ReadOnlyArtworkRow).coverThumbnail) fallbackSourcePaths.add(key)
-      const merged = withReadOnlyArtworkFallback(row, artwork)
-      rows.push({ ...item, track: (row.durationSeconds ?? 0) > 0 || durationMs == null ? merged : { ...merged, durationSeconds: durationMs / 1000 } })
+      rows.push({ ...item, track: (row.durationSeconds ?? 0) > 0 || durationMs == null ? row : { ...row, durationSeconds: durationMs / 1000 } })
     }
-    return { rows, fallbackSourcePaths }
+    return rows
   }, [isSongsCategoryOpen, allSongDescriptors, allSongsActiveRows, allSongsDurations, summariesByScope,
-    player.activePlaylistScope, player.playlistTrackMetadata, libraryArtwork])
-  const allSongs = useMemo(() => applyManualSongOrder(allSongsPresentation.rows, player.allSongsManualPaths, item => item.sourcePath), [allSongsPresentation.rows, player.allSongsManualPaths])
+    player.activePlaylistScope, player.playlistTrackMetadata])
+  // The aggregated page must stay painted when a click activates another folder:
+  // the previous active rows lose their player-owned thumbnails, and the read-only
+  // artwork already cached for those files bridges the gap. Only rows whose current
+  // owner has no cover are pinned to the cache.
+  const allSongsFallbackSourcePaths = useMemo(() => {
+    if (!isSongsCategoryOpen) return EMPTY_FALLBACK_SOURCE_PATHS
+    const fallbackSourcePaths = new Set<string>()
+    for (const row of allSongsRows) {
+      if ((row.track as ReadOnlyArtworkRow).coverThumbnail) continue
+      if (!libraryArtwork.get(row.key)?.coverThumbnail) continue
+      fallbackSourcePaths.add(row.key)
+    }
+    return fallbackSourcePaths
+  }, [allSongsRows, isSongsCategoryOpen, libraryArtwork])
+  const allSongsManualPaths = player.allSongsManualPaths
+  // Without a manual order the derived array *is* the presentation array, so keep
+  // that reference instead of copying it on every render.
+  const allSongs = useMemo(() => allSongsManualPaths
+    ? applyManualSongOrder(allSongsRows, allSongsManualPaths, item => item.sourcePath)
+    : allSongsRows, [allSongsRows, allSongsManualPaths])
   const decoratePlaylistAddRequest = useCallback((request: PlaylistAddRequest | undefined): PlaylistAddRequest | undefined => {
     if (!request) return undefined
     const targets = request.targets.map(target => {
@@ -310,7 +371,6 @@ export function PlayerShell() {
     [decoratePlaylistAddRequest, preparePlayerPlaylistAdd])
   const createAddPlaylist = useCallback((name: string, snapshot: PlaylistAddSnapshot) => decoratePlaylistAddRequest(createPlayerAddPlaylist(name, snapshot)),
     [decoratePlaylistAddRequest, createPlayerAddPlaylist])
-  const allSongsFallbackSourcePaths = allSongsPresentation.fallbackSourcePaths
   // The displayed fallback thumbnails are owned by the library cache, so the
   // cache must keep their object URLs resident until an active visual replaces
   // them. `useEffect` runs after the commit that first displays them. The
@@ -358,6 +418,7 @@ export function PlayerShell() {
   }
 
   const viewModel: PlayerUiViewModel = {
+    folderSelection: player.folderSelection,
     playback: {
       track: player.track,
       audioOutputInfo: player.audioOutputInfo,
@@ -443,6 +504,17 @@ export function PlayerShell() {
             item.tracks.length,
           ),
         }}),
+        folderLocation,
+        isFolderRestorePending: player.libraryRestorePending,
+        folderError: player.libraryFolderErrors[''],
+        onFolderLocationChange: setFolderLocation,
+        folderRoots: player.activeFolderPaths.map(path => {
+          const source = player.libraryFolderPlaylists.find(item => normalizeAudioSourcePath(item.sourcePath) === normalizeAudioSourcePath(path))
+          const error = player.libraryFolderErrors[path]
+          const selection = player.folderSelection.committed?.roots.find(root => normalizeAudioSourcePath(root.path) === normalizeAudioSourcePath(path))
+          return { path, directoryPaths: source?.directoryPaths, error, selection,
+            status: error ? 'error' as const : source ? 'ready' as const : 'loading' as const }
+        }),
         allSongs,
         allSongsManualOrder: player.allSongsManualOrder,
         onReorderSongs: player.reorderSongs,
@@ -461,6 +533,14 @@ export function PlayerShell() {
           entries: orderedSongs ?? [{ scope, trackId }] }, trackId) },
         onShufflePlay: (entries) => player.shufflePlaybackQueue({ kind: 'all-songs', entries }),
         onSelectFolders: () => { void player.selectFolders() },
+        foldersPinnedInSidebar,
+        onToggleFoldersPin: toggleFoldersPin,
+        pinnedCategoryIds,
+        onToggleCategoryPin: toggleCategoryPin,
+        isFolderRescanPending: player.libraryRescanPending,
+        onRescanFolders: player.libraryRestorePending || player.libraryImportPending
+          || player.libraryStatus === 'clearing' || !player.activeFolderPaths.length
+          ? undefined : () => { void player.rescanSelectedLibraryFolders() },
         onImportPlaylist: () => { void player.importPlaylist() },
         isImportPending: player.libraryImportPending || player.deletePending || player.libraryStatus === 'clearing',
         isPlaylistRestorePending: player.playlistRestorePending,
@@ -491,7 +571,7 @@ export function PlayerShell() {
       artworkSource: isBrowsingActive ? player.playlistArtworkSource : libraryArtworkSource,
       fallbackArtworkSource: isBrowsingActive ? libraryArtworkSource : undefined,
       unavailableTrackIds: browsedUnavailableIds,
-      playlistName: browsedPlaylist ? playlistDisplayName(browsedPlaylist) : player.playlistName,
+      playlistName: browsedPlaylist ? playlistDisplayName(browsedPlaylist) : isBrowsingActive ? player.playlistName : '未选择文件夹',
       metadataStatus: playlistRowsReady ? 'ready' : 'loading',
       totalDurationSeconds: browsedDuration.totalSeconds,
       totalDurationStatus: browsedDuration.status,

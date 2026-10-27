@@ -1,4 +1,5 @@
 import type { MediaLibraryCategoryId, MediaLibraryRoute } from '@/features/player/model/mediaLibraryCategories'
+import type { LibraryFolderSettings, DirectoryChildren, ReplaceLibraryFoldersInput, RootSelection } from '@/features/player/services/audioCommands'
 import type { PlaylistArtworkSource } from '@/features/player/model/playlistArtworkStore'
 import type { RepeatMode, ShuffleMode } from '@/features/player/model/playbackModes'
 import type { PlaylistDurationStatus } from '@/features/player/model/playlistDuration'
@@ -148,6 +149,7 @@ export type AllSongsItem = Readonly<{
   sourcePath: string
   track: PlaylistTrackItemViewModel
   available: boolean
+  artworkRevision?: number
 }>
 
 export type PlaylistDeleteSnapshot = Readonly<{
@@ -190,6 +192,11 @@ export type PlaylistAddCallbacks = {
 }
 
 export type PlaylistLibraryViewModel = PlaylistAddCallbacks & {
+  folderRoots?: readonly { path: string; directoryPaths?: readonly string[]; status: 'loading' | 'ready' | 'error'; error?: string; selection?: RootSelection }[]
+  isFolderRestorePending?: boolean
+  folderError?: string
+  folderLocation?: { rootPath: string; directoryPath: string } | null
+  onFolderLocationChange?: (location: { rootPath: string; directoryPath: string } | null) => void
   route?: MediaLibraryRoute
   onOpenOverview?: () => void
   onSelectCategory?: (categoryId: MediaLibraryCategoryId) => void
@@ -207,6 +214,12 @@ export type PlaylistLibraryViewModel = PlaylistAddCallbacks & {
   onPlaySong?: (scope: string, trackId: string, orderedSongs?: readonly PlaybackQueueEntry[]) => void
   onShufflePlay?: (orderedSongs: readonly PlaybackQueueEntry[]) => Promise<boolean> | boolean
   onSelectFolders?: () => void
+  onRescanFolders?: () => void
+  isFolderRescanPending?: boolean
+  foldersPinnedInSidebar?: boolean
+  onToggleFoldersPin?: () => void
+  pinnedCategoryIds?: readonly MediaLibraryCategoryId[]
+  onToggleCategoryPin?: (categoryId: MediaLibraryCategoryId) => void
   onImportPlaylist?: () => void
   isImportPending?: boolean
   isPlaylistRestorePending?: boolean
@@ -265,7 +278,19 @@ export type PlayerFeedbackViewModel = {
   onToggle: (feedback: TrackFeedback) => void
 }
 
+export type FolderSelectionViewModel = {
+  isOpen: boolean
+  committed: LibraryFolderSettings | null
+  isSaving: boolean
+  error?: string
+  onOpenChange: (open: boolean) => void
+  onPickFolders: () => Promise<string[] | null>
+  onListDirectories: (input: { rootPath: string; directoryPath: string }) => Promise<DirectoryChildren>
+  onSave: (input: ReplaceLibraryFoldersInput) => Promise<void>
+}
+
 export type PlayerUiViewModel = {
+  folderSelection?: FolderSelectionViewModel
   playback: PlayerPlaybackViewModel
   timeline: PlayerTimelineViewModel
   volume: PlayerVolumeViewModel

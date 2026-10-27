@@ -143,7 +143,11 @@ async function run(mode,before){
     await page.waitForFunction(()=>{const p=document.querySelector('.playlist-panel'),r=p.getBoundingClientRect();const ids=window.coverDemands.at(-1)?.visibleIds??[];return [...p.querySelectorAll('[data-playlist-track-id]')].filter(n=>{const b=n.getBoundingClientRect();return b.bottom>r.top&&b.top<r.bottom}).every(n=>ids.includes(n.dataset.playlistTrackId))})
     await settleNative(page)
     const stats=await page.evaluate(()=>({maxNative:window.maxNativeActive,requests:window.calls.filter(call=>call.command==='audio_load_track_thumbnail').length,edges:window.calls.filter(call=>call.command==='audio_load_track_thumbnail').map(call=>call.input.maxEdge),windowCount:window.coverDemands.at(-1).ids.length,fullHydrates:window.calls.slice(window.postJumpCallsIndex).filter(call=>call.command==='audio_hydrate_track').length}))
-    assert.equal(stats.maxNative,1)
+    // The shared scheduler is bounded, not serialised: up to MAX_CONCURRENT
+    // (four, matching the Rust decode permits) native cover requests may be in
+    // flight at once. What this test protects is that the dock window never
+    // becomes unbounded, so the ceiling — not a bare `1` — is asserted.
+    assert(stats.maxNative <= 4, 'native cover work stays within the admission ceiling')
     assert(stats.requests<count/2,'bounded nearby demand does not read the complete source')
     assert(stats.windowCount<count/2,'physical visibility keeps a bounded nearby window instead of preloading the entire source')
     assert.equal(stats.fullHydrates,0,'cover visibility never introduces complete player metadata reads')

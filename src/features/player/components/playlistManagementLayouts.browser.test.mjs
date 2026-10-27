@@ -1,4 +1,4 @@
-// Independent six-layout browser acceptance. Run Vite and provide an existing
+// Independent ten-layout browser acceptance. Run Vite and provide an existing
 // Playwright package via SPMUSIC_PLAYWRIGHT; no dependencies are installed.
 // Uses real management/detail components, appearance provider and shared gestures.
 import assert from 'node:assert/strict'
@@ -16,7 +16,8 @@ const dependency = name => {
   assert(match,'resolve '+name)
   return match[1]
 }
-const managementStorage = 'spmusic.playlist-management.layout-level.v1'
+const managementStorage = 'spmusic.playlist-management.layout-level.v2'
+const legacyStorage = 'spmusic.playlist-management.layout-level.v1'
 const detailStorage = 'spmusic.playlist.layout-level.v1'
 const fixture = `
 import React from '${dependency('react.js')}';
@@ -49,11 +50,12 @@ const directory = process.env.SPMUSIC_SCREENSHOT_DIR || join(tmpdir(),'spmusic-m
 mkdirSync(directory,{recursive:true})
 const browser = await chromium.launch({headless:true,channel:'msedge'})
 const report=[]
-async function open({level='0',detailLevel='8',width=2560,height=1440,motion='no-preference',dark=false}={}){
+async function open({level='0',detailLevel='8',width=2560,height=1440,motion='no-preference',dark=false,legacy=null}={}){
  const page=await browser.newPage({viewport:{width,height},hasTouch:true,reducedMotion:motion,colorScheme:dark?'dark':'light'});page.setDefaultTimeout(10000)
  const errors=[];page.on('pageerror',error=>errors.push(error.message))
- await page.addInitScript(({level,detailLevel,managementStorage,detailStorage})=>{
+ await page.addInitScript(({level,detailLevel,managementStorage,detailStorage,legacy,legacyStorage})=>{
   if(level!==null)localStorage.setItem(managementStorage,level)
+  if(legacy!==null)localStorage.setItem(legacyStorage,legacy)
   if(detailLevel!==null)localStorage.setItem(detailStorage,detailLevel)
   window.listenersEvidence=[];window.partAnimations=[];window.touchEvidence=[]
   const add=EventTarget.prototype.addEventListener,remove=EventTarget.prototype.removeEventListener
@@ -63,7 +65,7 @@ async function open({level='0',detailLevel='8',width=2560,height=1440,motion='no
   const animate=Element.prototype.animate
   Element.prototype.animate=function(...args){const animation=animate.apply(this,args);if(this.matches('.playlist-management-cover,.playlist-management-copy'))window.partAnimations.push(animation);return animation}
   for(const type of ['touchstart','touchmove','touchend','touchcancel'])document.addEventListener(type,event=>window.touchEvidence.push({type,trusted:event.isTrusted,canceled:event.defaultPrevented}),{passive:true})
- },{level,detailLevel,managementStorage,detailStorage})
+ },{level,detailLevel,managementStorage,detailStorage,legacy,legacyStorage})
  await page.route('**/__management_layout_fixture.js',route=>route.fulfill({contentType:'text/javascript',body:fixture}))
  if(process.env.SPMUSIC_LAYOUT_BASELINE_PATH)await page.route('**/src/features/player/hooks/useCollectionLayout.ts*',route=>route.fulfill({contentType:'text/javascript',body:readFileSync(process.env.SPMUSIC_LAYOUT_BASELINE_PATH,'utf8')}))
  await page.route('**/__management_layout_test',route=>route.fulfill({contentType:'text/html',body:html}))
@@ -83,18 +85,18 @@ async function levelIs(page,level){await page.waitForFunction(level=>document.qu
 async function check(name,run,options){if(process.env.SPMUSIC_LAYOUT_CASE&&!name.includes(process.env.SPMUSIC_LAYOUT_CASE))return;const context=await open(options);try{await run(context);assert.deepEqual(context.errors,[]);report.push(name)}catch(error){await context.page.screenshot({path:join(directory,'failure.png')});throw error}finally{await context.page.close()}}
 try{
  if(process.env.SPMUSIC_SCOPE_ONLY!=='1'){
- await check('six levels, physical Ctrl-wheel repetition, boundaries, FLIP/node/focus retention and separate persistence',async({page,wheel,scrollToGrid})=>{
+ await check('ten levels, physical Ctrl-wheel repetition, boundaries, FLIP/node/focus retention and separate persistence',async({page,wheel,scrollToGrid})=>{
   await levelIs(page,0)
   await page.locator('.playlist-management-card-button').first().focus()
   await page.evaluate(()=>{window.originalNodes=[...document.querySelectorAll('[data-playlist-scope]')];window.originalFocus=document.activeElement})
   await page.keyboard.down('Control')
   const geometry=[]
-  for(let target=1;target<=5;target++){
+  for(let target=1;target<=9;target++){
    await scrollToGrid();await wheel(120);await levelIs(page,target);await page.waitForTimeout(180)
    geometry.push(await page.locator('.playlist-management-card').first().evaluate(card=>{const cover=card.querySelector('.playlist-management-cover'),rect=cover.getBoundingClientRect();return {level:document.querySelector('.playlist-management-grid').dataset.layoutLevel,coverWidth:rect.width,coverHeight:rect.height,display:getComputedStyle(cover).display}}))
   }
-  await wheel(120);await page.waitForTimeout(180);await levelIs(page,5)
-  for(let target=4;target>=0;target--){await scrollToGrid();await wheel(-120);await levelIs(page,target);await page.waitForTimeout(180)}
+  await wheel(120);await page.waitForTimeout(180);await levelIs(page,9)
+  for(let target=8;target>=0;target--){await scrollToGrid();await wheel(-120);await levelIs(page,target);await page.waitForTimeout(180)}
   await wheel(-120);await page.waitForTimeout(180);await levelIs(page,0);await page.keyboard.up('Control')
   assert.equal(await page.evaluate(()=>window.originalNodes.every((node,i)=>node===document.querySelectorAll('[data-playlist-scope]')[i])),true)
   assert.equal(await page.evaluate(()=>window.originalFocus===document.activeElement),true)
@@ -138,7 +140,9 @@ try{
   })
   assert.deepEqual(cleanup,{canceled:false,activeListeners:0,runningAnimations:0},JSON.stringify(await page.evaluate(()=>window.listenersEvidence.filter(item=>item.active).map(item=>({type:item.type,callback:String(item.listener).slice(0,180)})))))
  },{level:'3'})
- for(const level of ['-1','6','NaN','1.5','01','',null])await check('invalid/missing preference '+String(level)+' falls back without borrowing detail preference',async({page})=>{await levelIs(page,0);assert.equal(await page.evaluate(key=>localStorage.getItem(key),detailStorage),'8')},{level,motion:'reduce'})
+ for(const level of ['-1','10','NaN','1.5','01','',null])await check('invalid/missing preference '+String(level)+' falls back without borrowing detail preference',async({page})=>{await levelIs(page,0);assert.equal(await page.evaluate(key=>localStorage.getItem(key),detailStorage),'8')},{level,motion:'reduce'})
+ for(const [oldLevel,newLevel] of ['0','1','2','3','4','5'].map((value,index)=>[value,[0,1,3,4,6,9][index]]))await check('v1 preference migration '+oldLevel,async({page})=>{await levelIs(page,newLevel)},{level:null,legacy:oldLevel,motion:'reduce'})
+ await check('v2 preference takes precedence over v1',async({page})=>{await levelIs(page,2)},{level:'2',legacy:'5',motion:'reduce'})
  await check('legal preferences are independent across management/detail and remounts',async({page})=>{
   await levelIs(page,5);await page.evaluate(()=>window.showDetail());await page.locator('.playlist-grid').waitFor();assert.equal(await page.locator('.playlist-grid').getAttribute('data-layout-level'),'8')
   await page.keyboard.down('Control');await page.locator('.playlist-grid').evaluate(grid=>grid.dispatchEvent(new WheelEvent('wheel',{bubbles:true,cancelable:true,ctrlKey:true,deltaY:120})));await page.keyboard.up('Control')
@@ -162,13 +166,13 @@ try{
   await page.locator('.playlist-playback-nav').getByRole('button',{name:'搜索',exact:true}).click();await page.getByRole('searchbox',{name:'搜索播放列表名称'}).waitFor()
   assert.equal(await page.locator('.playlist-filter-input').count(),0)
  },{level:'3',motion:'reduce'})
- for(let level=0;level<6;level++)await check('geometry/screenshot '+level,async({page})=>{
+ for(let level=0;level<10;level++)await check('geometry/screenshot '+level,async({page})=>{
   await levelIs(page,level)
   const geometry=await page.locator('.playlist-management-cover').first().evaluate(element=>{const rect=element.getBoundingClientRect();return {display:getComputedStyle(element).display,width:rect.width,height:rect.height}})
-  if(level<4){assert.equal(geometry.width,level%2===0?240:155);assert.equal(geometry.height,level%2===0?165:107)}else assert.equal(geometry.display,'none')
+  if(level<6){assert.equal(geometry.width,[240,155,120,240,155,93][level]);assert.equal(geometry.height,[165,107,82,165,107,64][level])}else assert.equal(geometry.display,'none')
   const rows=await page.locator('.playlist-management-card').evaluateAll(cards=>cards.slice(0,3).map(element=>{const rect=element.getBoundingClientRect();return {x:rect.x,y:rect.y}}))
-  if(level===4)assert(rows[1].y>rows[0].y&&rows[1].x===rows[0].x)
-  if(level===5)assert.equal(rows[1].y,rows[0].y)
+  if(level>=3&&level<=8)assert(rows[1].y>rows[0].y&&rows[1].x===rows[0].x)
+  if(level===9)assert.equal(rows[1].y,rows[0].y)
   await page.locator('.playlist-management-content').evaluate(panel=>panel.scrollTop=0)
   await page.screenshot({path:join(directory,'management-layout-'+level+'.png')})
  },{level:String(level),motion:'reduce'})

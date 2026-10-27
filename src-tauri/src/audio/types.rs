@@ -274,6 +274,11 @@ pub struct AudioFolderPlaylistInput {
 pub struct AudioFolderPlaylist {
     pub directory_path: String,
     pub directory_name: String,
+    /// Successfully enumerated directories for a recursive library scan.
+    /// Other playlist sources leave this absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub directory_paths: Option<Vec<String>>,
     pub source_kind: AudioPlaylistSourceKind,
     pub source_path: String,
     pub source_name: String,
@@ -331,6 +336,13 @@ mod tests {
     use ts_rs::{Config, TS};
 
     use super::*;
+
+    #[test]
+    fn recursive_folder_directories_export_as_optional_paths() {
+        let exported = AudioFolderPlaylist::export_to_string(&Config::default()).unwrap();
+        assert!(exported.contains("directoryPaths?: Array<string>"));
+        assert!(!exported.contains("directoryPaths?: Array<string> | null"));
+    }
 
     #[test]
     fn playlist_cover_source_contract_has_only_identity_and_nullable_artwork() {

@@ -37,12 +37,47 @@ const FLAG_RESIZED: u32 = 1 << 1;
 const ALLOWED_MAX_EDGES: [u32; 7] = [256, 512, 768, 1024, 1536, 2048, 3072];
 const ALLOWED_PLAYLIST_MAX_EDGES: [u32; 3] = [128, 256, 512];
 const MAX_PLAYLIST_CLIENTS: usize = 16;
-const PLAYLIST_DECODE_PERMITS: usize = if cfg!(feature = "sp022-playlist-decode-n2") {
-    2
-} else {
-    1
-};
+/// Ceiling for concurrent *playlist/track pixel decodes*.
+///
+/// Decoding is CPU bound and each in-flight decode may transiently hold a
+/// decoder buffer bounded by [`MAX_DECODE_BYTES`], so this width is deliberately
+/// narrower than the tag-probe lane in `playlist_cover`: the probe lane is I/O
+/// bound and only retains a small header/tag block per worker, while this lane
+/// multiplies both CPU pressure and the transient decode budget.
+///
+/// The derivation is `available_parallelism() / 4` capped to
+/// [`MAX_PLAYLIST_DECODE_PERMITS`] and floored at one. A single decode already
+/// saturates its own core during Lanczos3 reduction of a large cover, so
+/// admitting one worker per four logical cores keeps decodes from oversubscribing
+/// the machine, while the cap stops a very wide host from multiplying the
+/// transient budget without improving latency for a playlist-sized burst.
+///
+/// Transient worst case is `permits * MAX_DECODE_BYTES` (4 * 256 MiB = 1 GiB)
+/// and is *transient*: it is released when the decode returns. The persistent
+/// budgets ([`THUMBNAIL_CACHE_BYTES`], [`THUMBNAIL_PENDING_BYTES`]) are
+/// unchanged, so raising the width does not raise steady-state memory.
+const MAX_PLAYLIST_DECODE_PERMITS: usize = 4;
+
+fn playlist_decode_permits() -> usize {
+    // The diagnostic feature keeps its documented meaning as an explicit width.
+    if cfg!(feature = "sp022-playlist-decode-n2") {
+        return 2;
+    }
+    let parallelism = std::thread::available_parallelism()
+        .map(|parallelism| parallelism.get())
+        .unwrap_or(1);
+    (parallelism / 4).clamp(1, MAX_PLAYLIST_DECODE_PERMITS)
+}
+
 const MAX_PLAYLIST_REQUESTS: usize = 32;
+/// Slots the background warmup lane must leave free for foreground requests.
+///
+/// Warmup is speculative (`try_warm_track_thumbnail` /
+/// `try_warm_playlist_cover_pixels`) and already yields whenever a foreground
+/// request is registered. This constant additionally guarantees that warmup can
+/// never consume the pool, so a visible cover always finds a free slot even
+/// while a library-wide prefetch is running.
+const BACKGROUND_RESERVED: usize = 1;
 const MAX_PLAYLIST_FLIGHT_WAITERS: usize = 32;
 const THUMBNAIL_DIRECTORY: &str = "thumbnails";
 const THUMBNAIL_CACHE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
@@ -392,6 +427,16 @@ pub struct AudioLoadTrackThumbnailInput {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AudioLoadFolderThumbnailInput {
+    pub client_id: String,
+    pub root_path: String,
+    pub directory_path: String,
+    pub max_edge: u32,
+    pub window_generation: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AudioBeginPlaylistCoverWindowInput {
     pub client_id: String,
 }
@@ -420,7 +465,7 @@ pub struct CoverPixelsError {
 }
 
 impl CoverPixelsError {
-    fn recoverable(code: CoverPixelsErrorCode, message: impl Into<String>) -> Self {
+    pub(super) fn recoverable(code: CoverPixelsErrorCode, message: impl Into<String>) -> Self {
         Self {
             code,
             message: message.into(),
@@ -436,7 +481,7 @@ impl CoverPixelsError {
         }
     }
 
-    fn stale() -> Self {
+    pub(super) fn stale() -> Self {
         Self::recoverable(
             CoverPixelsErrorCode::StaleRequest,
             "a newer cover pixel request superseded this request",
@@ -513,17 +558,24 @@ impl CoverRequestCoordinator {
 struct PlaylistDecodeSlots {
     release: tauri::async_runtime::Sender<()>,
     tokens: tauri::async_runtime::Mutex<tauri::async_runtime::Receiver<()>>,
+    width: usize,
+    // Tokens currently handed out, used to keep the background warmup lane from
+    // taking the last foreground slot.
+    held: Arc<AtomicUsize>,
 }
 
 impl PlaylistDecodeSlots {
     fn new() -> Self {
-        let (release, tokens) = tauri::async_runtime::channel(PLAYLIST_DECODE_PERMITS);
-        for _ in 0..PLAYLIST_DECODE_PERMITS {
+        let width = playlist_decode_permits();
+        let (release, tokens) = tauri::async_runtime::channel(width);
+        for _ in 0..width {
             release.try_send(()).expect("seed playlist decode slots");
         }
         Self {
             release,
             tokens: tauri::async_runtime::Mutex::new(tokens),
+            width,
+            held: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -534,16 +586,56 @@ impl PlaylistDecodeSlots {
             .recv()
             .await
             .ok_or_else(playlist_worker_failed)?;
-        Ok(PlaylistDecodePermit(self.release.clone()))
+        Ok(PlaylistDecodePermit::new(
+            self.release.clone(),
+            Arc::clone(&self.held),
+        ))
+    }
+
+    /// Take a permit for the background warmup lane, or `None`.
+    ///
+    /// Warmup must never reduce the foreground lane's width. With a single slot
+    /// "try and see" was sufficient, but with several slots a plain `try_recv`
+    /// could hand warmup the second-to-last token while a user-facing request is
+    /// already queued behind it, delaying the cover the user just scrolled to.
+    /// Admission is therefore conditioned on leaving at least
+    /// `BACKGROUND_RESERVED` tokens available for foreground work: the claim is a
+    /// compare-and-set on `held`, so the reservation cannot be won by a race.
+    fn try_acquire_background(&self) -> Option<PlaylistDecodePermit> {
+        let background_ceiling = self.width.saturating_sub(BACKGROUND_RESERVED).max(1);
+        let mut tokens = self.tokens.try_lock().ok()?;
+        // Re-check under the token mutex so the foreground queue order is
+        // respected: if the pool is already at the warmup ceiling, yield.
+        if self.held.load(Ordering::Acquire) >= background_ceiling {
+            return None;
+        }
+        if tokens.try_recv().is_err() {
+            return None;
+        }
+        Some(PlaylistDecodePermit::new(
+            self.release.clone(),
+            Arc::clone(&self.held),
+        ))
     }
 }
 
-struct PlaylistDecodePermit(tauri::async_runtime::Sender<()>);
+struct PlaylistDecodePermit {
+    release: tauri::async_runtime::Sender<()>,
+    held: Arc<AtomicUsize>,
+}
+
+impl PlaylistDecodePermit {
+    fn new(release: tauri::async_runtime::Sender<()>, held: Arc<AtomicUsize>) -> Self {
+        held.fetch_add(1, Ordering::AcqRel);
+        Self { release, held }
+    }
+}
 
 impl Drop for PlaylistDecodePermit {
     fn drop(&mut self) {
         // Exactly one return per acquired token; no await or panicking cleanup.
-        let _ = self.0.try_send(());
+        self.held.fetch_sub(1, Ordering::AcqRel);
+        let _ = self.release.try_send(());
     }
 }
 
@@ -883,6 +975,45 @@ impl PlaylistCoverRequestCoordinator {
         .map_err(|_| playlist_worker_failed())?
     }
 
+    async fn load_folder(
+        self: &Arc<Self>,
+        app_cache_dir: PathBuf,
+        input: AudioLoadFolderThumbnailInput,
+    ) -> Result<Vec<u8>, CoverPixelsError> {
+        if !matches!(input.max_edge, 128 | 256) {
+            return Err(CoverPixelsError::recoverable(
+                CoverPixelsErrorCode::InvalidMaxEdge,
+                "folder thumbnail maxEdge must be 128 or 256",
+            ));
+        }
+        self.ensure_current(&input.client_id, input.window_generation)?;
+        let request = self.reserve_request()?;
+        let permit = self.slots.acquire().await?;
+        self.ensure_current(&input.client_id, input.window_generation)?;
+        let coordinator = Arc::clone(self);
+        tauri::async_runtime::spawn_blocking(move || {
+            // Keep admission owned by the worker even if its async caller leaves.
+            let _permit = permit;
+            let _request = request;
+            let current = || {
+                coordinator
+                    .ensure_current(&input.client_id, input.window_generation)
+                    .is_ok()
+            };
+            let response = super::folder_cover::load_folder_thumbnail_blocking(
+                &app_cache_dir,
+                &input.root_path,
+                &input.directory_path,
+                input.max_edge,
+                current,
+            )?;
+            coordinator.ensure_current(&input.client_id, input.window_generation)?;
+            Ok(response)
+        })
+        .await
+        .map_err(|_| playlist_worker_failed())?
+    }
+
     fn run_worker(
         &self,
         root: &Path,
@@ -999,13 +1130,44 @@ pub async fn load_track_thumbnail(
     coordinator.load_track(app_cache_dir, input).await
 }
 
+pub async fn load_folder_thumbnail(
+    app_cache_dir: PathBuf,
+    input: AudioLoadFolderThumbnailInput,
+) -> Result<Vec<u8>, CoverPixelsError> {
+    let coordinator = PLAYLIST_REQUEST_COORDINATOR
+        .get_or_init(|| Arc::new(PlaylistCoverRequestCoordinator::new()));
+    coordinator.load_folder(app_cache_dir, input).await
+}
+
+/// Only synchronous metadata / source-probe workers use this bridge. Thumbnail
+/// workers already own a permit and call the inner image helper directly.
+pub(super) fn with_directory_decode_slot<T>(
+    work: impl FnOnce() -> Result<T, CoverPixelsError>,
+) -> Result<T, CoverPixelsError> {
+    let coordinator = PLAYLIST_REQUEST_COORDINATOR
+        .get_or_init(|| Arc::new(PlaylistCoverRequestCoordinator::new()));
+    let _permit = tauri::async_runtime::block_on(coordinator.slots.acquire())?;
+    work()
+}
+
+#[cfg(test)]
+pub(super) fn with_all_directory_slots_held_for_test<T>(work: impl FnOnce() -> T) -> T {
+    let coordinator = PLAYLIST_REQUEST_COORDINATOR
+        .get_or_init(|| Arc::new(PlaylistCoverRequestCoordinator::new()));
+    let mut permits = Vec::new();
+    for _ in 0..coordinator.slots.width {
+        permits.push(tauri::async_runtime::block_on(coordinator.slots.acquire()).unwrap());
+    }
+    work()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct TrackFingerprint {
     size: u64,
     modified_ns: u128,
 }
 
-fn ordinary_file(metadata: &fs::Metadata) -> bool {
+pub(super) fn ordinary_file(metadata: &fs::Metadata) -> bool {
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
@@ -1016,7 +1178,7 @@ fn ordinary_file(metadata: &fs::Metadata) -> bool {
     metadata.file_type().is_file()
 }
 
-fn ordinary_directory(metadata: &fs::Metadata) -> bool {
+pub(super) fn ordinary_directory(metadata: &fs::Metadata) -> bool {
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
@@ -1191,11 +1353,30 @@ fn write_track_index(
     outcome
 }
 
-fn load_track_thumbnail_blocking(
+pub(super) fn load_track_thumbnail_blocking(
     app_cache_dir: &Path,
     source_path: &str,
     max_edge: u32,
     is_current: impl FnOnce() -> bool + Copy,
+) -> Result<Vec<u8>, CoverPixelsError> {
+    load_track_thumbnail_blocking_with_mode(app_cache_dir, source_path, max_edge, is_current, false)
+}
+
+pub(super) fn load_folder_track_thumbnail_blocking(
+    app_cache_dir: &Path,
+    source_path: &str,
+    max_edge: u32,
+    is_current: impl FnOnce() -> bool + Copy,
+) -> Result<Vec<u8>, CoverPixelsError> {
+    load_track_thumbnail_blocking_with_mode(app_cache_dir, source_path, max_edge, is_current, true)
+}
+
+fn load_track_thumbnail_blocking_with_mode(
+    app_cache_dir: &Path,
+    source_path: &str,
+    max_edge: u32,
+    is_current: impl FnOnce() -> bool + Copy,
+    skip_invalid_tags: bool,
 ) -> Result<Vec<u8>, CoverPixelsError> {
     let fingerprint = source_fingerprint(source_path)?;
     let cache_dir = app_cache_dir
@@ -1203,7 +1384,9 @@ fn load_track_thumbnail_blocking(
         .join(THUMBNAIL_DIRECTORY);
     if let Some(indexed) = read_track_index(app_cache_dir, source_path, fingerprint) {
         match indexed {
-            None => return Ok(Vec::new()),
+            None => return if skip_invalid_tags { Ok(Vec::new()) } else {
+                super::folder_cover::load_sibling_thumbnail(app_cache_dir, source_path, max_edge, is_current)
+            },
             Some(hash) => {
                 let filename = thumbnail_filename(hash, max_edge);
                 let target = cache_dir.join(&filename);
@@ -1222,15 +1405,30 @@ fn load_track_thumbnail_blocking(
     }
     #[cfg(test)]
     TRACK_THUMBNAIL_PROBES.fetch_add(1, Ordering::Relaxed);
-    let source = super::playlist_cover::probe_playlist_cover_blocking(app_cache_dir, source_path)
-        .map_err(|error| {
-        CoverPixelsError::recoverable(CoverPixelsErrorCode::InvalidPath, error.message)
-    })?;
+    let source = match super::playlist_cover::probe_playlist_cover_blocking(app_cache_dir, source_path) {
+        Ok(source) => source,
+        // Folder selection may continue past malformed/unsupported audio, but
+        // I/O failures must remain distinguishable from proven missing artwork.
+        Err(error)
+            if skip_invalid_tags
+                && matches!(error.code, super::error::AudioErrorCode::UnsupportedFormat) =>
+        {
+            return Ok(Vec::new());
+        }
+        Err(error) => {
+            return Err(CoverPixelsError::recoverable(
+                CoverPixelsErrorCode::InvalidPath,
+                error.message,
+            ));
+        }
+    };
     let Some(cover) = source.cover_art else {
         if is_current() && source_fingerprint(source_path).ok() == Some(fingerprint) {
             let _ = write_track_index(app_cache_dir, source_path, fingerprint, None);
         }
-        return Ok(Vec::new());
+        return if skip_invalid_tags { Ok(Vec::new()) } else {
+            super::folder_cover::load_sibling_thumbnail(app_cache_dir, source_path, max_edge, is_current)
+        };
     };
     let bytes = if let Some(file_path) = cover.file_path {
         let covers_root = app_cache_dir
@@ -1274,14 +1472,9 @@ pub(crate) async fn try_warm_playlist_cover_pixels(
     if coordinator.requests.load(Ordering::Acquire) != 0 {
         return Ok(None);
     }
-    let Ok(mut tokens) = coordinator.slots.tokens.try_lock() else {
+    let Some(permit) = coordinator.slots.try_acquire_background() else {
         return Ok(None);
     };
-    if tokens.try_recv().is_err() {
-        return Ok(None);
-    }
-    let permit = PlaylistDecodePermit(coordinator.slots.release.clone());
-    drop(tokens);
     if coordinator.requests.load(Ordering::Acquire) != 0 {
         return Ok(None);
     }
@@ -1335,14 +1528,9 @@ pub(crate) async fn try_warm_track_thumbnail(
     if coordinator.requests.load(Ordering::Acquire) != 0 {
         return Ok(None);
     }
-    let Ok(mut tokens) = coordinator.slots.tokens.try_lock() else {
+    let Some(permit) = coordinator.slots.try_acquire_background() else {
         return Ok(None);
     };
-    if tokens.try_recv().is_err() {
-        return Ok(None);
-    }
-    let permit = PlaylistDecodePermit(coordinator.slots.release.clone());
-    drop(tokens);
     if coordinator.requests.load(Ordering::Acquire) != 0 {
         return Ok(None);
     }
@@ -1465,7 +1653,7 @@ fn thumbnail_filename(source_hash: blake3::Hash, max_edge: u32) -> String {
     )
 }
 
-fn playlist_pixels_from_bytes(
+pub(super) fn playlist_pixels_from_bytes(
     app_cache_dir: &Path,
     bytes: &[u8],
     source_hash: blake3::Hash,
@@ -2036,8 +2224,15 @@ fn validate_cover_path(
     Ok(canonical_path)
 }
 
-fn read_bounded_file(path: &Path) -> Result<Vec<u8>, CoverPixelsError> {
-    let file = File::open(path).map_err(|error| {
+pub(super) fn read_bounded_file(path: &Path) -> Result<Vec<u8>, CoverPixelsError> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.custom_flags(0x00200000).share_mode(1); // OPEN_REPARSE_POINT; no DELETE share
+    }
+    let file = options.open(path).map_err(|error| {
         tracing::warn!(
             operation = "audio.cover_pixels.open",
             path = %path.display(),
@@ -2063,7 +2258,7 @@ fn read_bounded_file(path: &Path) -> Result<Vec<u8>, CoverPixelsError> {
         )
     })?;
 
-    if !metadata.is_file() {
+    if !ordinary_file(&metadata) {
         return Err(CoverPixelsError::recoverable(
             CoverPixelsErrorCode::InvalidPath,
             "cover cache path is not a regular file",
@@ -2119,7 +2314,7 @@ fn decode_and_pack(bytes: &[u8], max_edge: u32) -> Result<Vec<u8>, CoverPixelsEr
     decode_and_pack_with_strategy(bytes, max_edge, false)
 }
 
-fn decode_playlist_and_pack(bytes: &[u8], max_edge: u32) -> Result<Vec<u8>, CoverPixelsError> {
+pub(super) fn decode_playlist_and_pack(bytes: &[u8], max_edge: u32) -> Result<Vec<u8>, CoverPixelsError> {
     decode_and_pack_with_strategy(bytes, max_edge, true)
 }
 
@@ -2690,7 +2885,7 @@ mod tests {
         tauri::async_runtime::block_on(async {
             let coordinator = Arc::new(PlaylistCoverRequestCoordinator::new());
             let mut held = Vec::new();
-            for _ in 0..PLAYLIST_DECODE_PERMITS {
+            for _ in 0..coordinator.slots.width {
                 held.push(coordinator.slots.acquire().await.unwrap());
             }
             let (sender, receiver) = std::sync::mpsc::channel();
@@ -2731,10 +2926,99 @@ mod tests {
             }
             drop(held);
             let mut reacquired = Vec::new();
-            for _ in 0..PLAYLIST_DECODE_PERMITS {
+            for _ in 0..coordinator.slots.width {
                 reacquired.push(coordinator.slots.acquire().await.unwrap());
             }
             drop(reacquired);
+        });
+    }
+
+    #[test]
+    fn playlist_decode_slots_admit_multiple_concurrent_decodes() {
+        tauri::async_runtime::block_on(async {
+            let coordinator = PlaylistCoverRequestCoordinator::new();
+            let width = coordinator.slots.width;
+            assert_eq!(width, playlist_decode_permits());
+            // Every slot is independently available, so `width` decodes can be
+            // in flight together. Before the change the pool seeded exactly one
+            // token and this held only one permit.
+            let mut held = Vec::new();
+            for _ in 0..width {
+                held.push(coordinator.slots.acquire().await.unwrap());
+            }
+            if width > 1 {
+                assert!(
+                    coordinator.requests.load(Ordering::Acquire) == 0,
+                    "holding every slot must not consume request reservations"
+                );
+            }
+            // The pool is a real bound: one more acquire cannot complete.
+            use std::task::{Context, Poll, Waker};
+            let mut queued = std::pin::pin!(coordinator.slots.acquire());
+            assert!(matches!(
+                std::future::Future::poll(queued.as_mut(), &mut Context::from_waker(Waker::noop())),
+                Poll::Pending
+            ));
+            held.pop();
+            assert!(std::future::Future::poll(
+                queued.as_mut(),
+                &mut Context::from_waker(Waker::noop())
+            )
+            .is_ready());
+            drop(queued);
+            drop(held);
+            // Full width is restored once every permit is dropped.
+            for _ in 0..width {
+                drop(coordinator.slots.acquire().await.unwrap());
+            }
+            assert_eq!(coordinator.slots.held.load(Ordering::Acquire), 0);
+        });
+    }
+
+    #[test]
+    fn background_warmup_keeps_a_foreground_slot_free() {
+        tauri::async_runtime::block_on(async {
+            let coordinator = PlaylistCoverRequestCoordinator::new();
+            let width = coordinator.slots.width;
+            let ceiling = width.saturating_sub(BACKGROUND_RESERVED).max(1);
+
+            // An idle pool lets warmup take a slot.
+            let warm = coordinator
+                .slots
+                .try_acquire_background()
+                .expect("idle pool admits one warmup decode");
+            assert_eq!(coordinator.slots.held.load(Ordering::Acquire), 1);
+            drop(warm);
+
+            // Saturate the foreground: warmup must decline rather than compete.
+            let mut held = Vec::new();
+            for _ in 0..width {
+                held.push(coordinator.slots.acquire().await.unwrap());
+            }
+            assert!(
+                coordinator.slots.try_acquire_background().is_none(),
+                "warmup must never take the last foreground slot"
+            );
+
+            // Drop down to exactly the warmup ceiling: still declined, because
+            // admitting would consume the slot reserved for visible work.
+            while held.len() > ceiling {
+                held.pop();
+            }
+            assert_eq!(coordinator.slots.held.load(Ordering::Acquire), ceiling);
+            assert!(
+                coordinator.slots.try_acquire_background().is_none(),
+                "warmup must stop at the reserved-slot ceiling"
+            );
+
+            // One slot below the ceiling, warmup is admitted again.
+            if ceiling >= 1 && ceiling < width {
+                held.pop();
+                assert!(coordinator.slots.try_acquire_background().is_some());
+            }
+
+            drop(held);
+            assert_eq!(coordinator.slots.held.load(Ordering::Acquire), 0);
         });
     }
 
@@ -2763,7 +3047,7 @@ mod tests {
             let input = safety_input(&coordinator, &source, "cap-client");
             let pause = SafetyPause::install(&coordinator, PlaylistTestStage::Entered, 0, false);
             let mut held = Vec::new();
-            for _ in 0..PLAYLIST_DECODE_PERMITS {
+            for _ in 0..coordinator.slots.width {
                 held.push(coordinator.slots.acquire().await.unwrap());
             }
             let jobs: Vec<_> = (0..MAX_PLAYLIST_REQUESTS)
@@ -2802,16 +3086,16 @@ mod tests {
             let pause = SafetyPause::install(
                 &coordinator,
                 PlaylistTestStage::Entered,
-                PLAYLIST_DECODE_PERMITS,
+                coordinator.slots.width,
                 false,
             );
             let mut active = Vec::new();
-            for index in 0..PLAYLIST_DECODE_PERMITS {
+            for index in 0..coordinator.slots.width {
                 let source = safety_source(&dir, &format!("{index}.png"), 4 + index as u32);
                 let input = safety_input(&coordinator, &source, &format!("active-{index}"));
                 active.push(safety_start(&coordinator, dir.path(), input));
             }
-            pause.wait(PlaylistTestStage::Entered, PLAYLIST_DECODE_PERMITS);
+            pause.wait(PlaylistTestStage::Entered, coordinator.slots.width);
             for job in &active {
                 job.abort();
             }
@@ -2820,7 +3104,7 @@ mod tests {
             }
             assert_eq!(
                 coordinator.requests.load(Ordering::Acquire),
-                PLAYLIST_DECODE_PERMITS
+                coordinator.slots.width
             );
             let source = safety_source(&dir, "later.png", 9);
             let input = safety_input(&coordinator, &source, "later");
@@ -2828,18 +3112,18 @@ mod tests {
             pause.wait(PlaylistTestStage::Queued, 1);
             assert_eq!(
                 pause.state.active.load(Ordering::Acquire),
-                PLAYLIST_DECODE_PERMITS
+                coordinator.slots.width
             );
             if let Ok(mut tokens) = coordinator.slots.tokens.try_lock() {
                 assert!(tokens.try_recv().is_err());
             }
             pause.release();
             later.await.unwrap().unwrap();
-            pause.wait(PlaylistTestStage::Left, PLAYLIST_DECODE_PERMITS + 1);
-            pause.wait_released(PLAYLIST_DECODE_PERMITS + 1);
+            pause.wait(PlaylistTestStage::Left, coordinator.slots.width + 1);
+            pause.wait_released(coordinator.slots.width + 1);
             assert_eq!(
                 pause.state.peak.load(Ordering::Acquire),
-                PLAYLIST_DECODE_PERMITS
+                coordinator.slots.width
             );
             safety_assert_idle(&coordinator);
         });
@@ -2859,7 +3143,10 @@ mod tests {
             let a = safety_start(&coordinator, dir.path(), first.clone());
             pause.wait(PlaylistTestStage::Leader, 1);
             let b = safety_start(&coordinator, dir.path(), second.clone());
-            if PLAYLIST_DECODE_PERMITS == 2 {
+            // With more than one slot the aliasing consumer can reach the flight
+            // registry and join while the leader is still decoding. With a
+            // single slot it could only observe the leader's published result.
+            if coordinator.slots.width > 1 {
                 pause.wait(PlaylistTestStage::Joined, 1);
             }
             pause.release();
@@ -3716,7 +4003,7 @@ mod tests {
             let coordinator = Arc::new(PlaylistCoverRequestCoordinator::new());
             let generation = coordinator.begin_window("track-thumbnail-test").unwrap();
             let mut held = Vec::new();
-            for _ in 0..PLAYLIST_DECODE_PERMITS {
+            for _ in 0..coordinator.slots.width {
                 held.push(coordinator.slots.acquire().await.unwrap());
             }
             let waiting = Arc::clone(&coordinator);
@@ -4200,7 +4487,7 @@ mod tests {
             let coordinator = Arc::new(PlaylistCoverRequestCoordinator::new());
             let old_window = coordinator.begin_window("client-a").unwrap();
             let mut held_gate = Vec::new();
-            for _ in 0..PLAYLIST_DECODE_PERMITS {
+            for _ in 0..coordinator.slots.width {
                 held_gate.push(coordinator.slots.acquire().await.unwrap());
             }
             let stale_coordinator = Arc::clone(&coordinator);

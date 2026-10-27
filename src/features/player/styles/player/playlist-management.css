@@ -77,29 +77,28 @@
 .playlist-management-grid .playlist-management-cover { width: var(--management-cover-width); height: var(--management-cover-height); flex: 0 0 auto; }
 .playlist-management-copy { display: flex; min-width: 0; flex-direction: column; align-items: stretch; }
 .playlist-management-grid .playlist-management-name { font-size: var(--management-title-size); line-height: var(--management-title-height); }
-.playlist-management-meta { display: flex; min-width: 0; align-items: center; gap: 16px; color: var(--player-blue); font-size: var(--management-meta-size, 24px); line-height: var(--management-meta-height, 32px); font-weight: 400; white-space: nowrap; }
-.playlist-management-meta img { flex: 0 0 auto; }
+.playlist-management-meta { display: flex; min-width: 0; align-items: center; gap: var(--management-meta-gap, 16px); color: var(--player-inverse-primary, var(--player-blue)); font-size: var(--management-meta-size, 24px); line-height: var(--management-meta-height, 32px); font-weight: 400; white-space: nowrap; }
+.playlist-management-meta-icon { flex: 0 0 auto; width: var(--management-icon-size, 24px); height: var(--management-icon-size, 24px); background: currentColor; mask: url('../../../../assets/playlist-library/de6be.svg') center / contain no-repeat; }
 .playlist-management-meta > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .playlist-management-grid[data-layout-flow='tile'] .playlist-management-meta { display: none; }
 .playlist-management-grid[data-layout-flow='row'],
-.playlist-management-grid[data-layout-flow='text'] { display: grid; grid-template-columns: minmax(0, 1fr); row-gap: 20px; }
+.playlist-management-grid[data-layout-flow='text'] { display: grid; grid-template-columns: minmax(0, 1fr); row-gap: var(--management-row-gap, 20px); }
 .playlist-management-grid:not([data-layout-flow='tile']) .playlist-management-card { width: 100%; }
-.playlist-management-grid[data-layout-flow='row'] .playlist-management-card-button { flex-direction: row; align-items: center; gap: 48px; padding: 15px; }
+.playlist-management-grid[data-layout-flow='row'] .playlist-management-card-button { flex-direction: row; align-items: center; gap: var(--management-item-gap, 48px); padding: var(--management-item-block-padding, 15px) 15px; }
 .playlist-management-grid[data-layout-flow='row'] .playlist-management-copy { flex: 1; gap: var(--management-copy-gap); }
 .playlist-management-grid[data-layout-flow='text'] .playlist-management-card-button { padding: 15px; }
 .playlist-management-grid[data-layout-flow='text'] .playlist-management-copy { flex-direction: row; align-items: center; justify-content: space-between; gap: 24px; width: 100%; }
 .playlist-management-grid[data-layout-flow='text'] .playlist-management-name { flex: 1; }
 .playlist-management-grid[data-layout-artwork='false'] .playlist-management-cover { display: none; }
-.playlist-management-grid[data-layout-level='5'] { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 28px; }
+.playlist-management-grid[data-layout-level='9'] { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 28px; }
 /* Selection remains visible when the artwork slot is hidden. */
 .playlist-management-grid[data-layout-artwork='false'] .playlist-management-card-button[aria-pressed='true'] { outline: 2px solid var(--player-blue); outline-offset: -2px; }
 @media (width <= 900px) {
-  .playlist-management-grid[data-layout-level='5'] { grid-template-columns: minmax(0, 1fr); }
+  .playlist-management-grid[data-layout-level='9'] { grid-template-columns: minmax(0, 1fr); }
 }
 @media (width <= 540px) {
   .playlist-management-grid[data-layout-flow='row'] .playlist-management-card-button { gap: 24px; }
   .playlist-management-grid[data-layout-flow='row'] .playlist-management-cover { width: min(var(--management-cover-width), 35vw); height: auto; aspect-ratio: 240 / 165; }
-  .playlist-management-grid[data-layout-level='3'] .playlist-management-cover { aspect-ratio: 155 / 107; }
   .playlist-management-grid[data-layout-flow='text'] .playlist-management-copy { gap: 12px; }
 }
 

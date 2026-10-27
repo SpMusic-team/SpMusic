@@ -6,32 +6,86 @@
 }
 
 .more-actions-menu[data-slot="dialog-content"] {
-  --more-unit: min(0.0390625vw, 0.0694444svh);
+  --more-unit: 1px;
+  --more-width: 902px;
+  --more-cover-size: 240px;
+  --more-row-gap: 42px;
+  --more-section-gap: 42px;
+  --more-summary-inset: 18px;
+  --more-row-height: 48px;
+  --more-feedback-width: 108px;
+  --more-feedback-height: 64px;
+  --more-scrollbar-outline-variant: #c1c7ce;
   display: flex;
   flex-direction: column;
   gap: 0;
-  width: min(max(360px, calc(902 * var(--more-unit))), calc(100vw - 24px));
-  height: min(max(360px, calc(983 * var(--more-unit))), calc(100svh - 24px));
-  max-width: min(calc(902 * var(--more-unit)), calc(100vw - 24px));
-  max-height: min(calc(983 * var(--more-unit)), calc(100svh - 24px));
-  padding: calc(27 * var(--more-unit));
+  box-sizing: border-box;
+  width: min(var(--more-width), calc(100vw - 32px));
+  height: auto;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100svh - 32px);
+  padding: 0;
   overflow: hidden;
   border: 0;
   border-radius: calc(30 * var(--more-unit));
   background: var(--app-surface);
   color: var(--player-blue-ink);
   outline: 0;
-  box-shadow: 0 calc(4 * var(--more-unit)) calc(4 * var(--more-unit)) rgba(0,0,0,.25);
+  box-shadow: 0 calc(4 * var(--more-unit)) calc(4 * var(--more-unit)) color-mix(in srgb, var(--player-ink) 25%, transparent);
   --tw-enter-scale: 1;
   --tw-exit-scale: 1;
   animation-duration: var(--app-motion-prototype-smart);
   animation-timing-function: ease-out;
 }
 
-.more-track-summary { display: grid; grid-template-columns: calc(240 * var(--more-unit)) minmax(0, calc(258 * var(--more-unit))); gap: calc(16 * var(--more-unit)); align-items: center; padding: calc(20 * var(--more-unit)) 0; }
-.more-menu-cover { width: calc(240 * var(--more-unit)); aspect-ratio: 1; overflow: hidden; border-radius: calc(30 * var(--more-unit)); background: var(--cover-art); box-shadow: 0 calc(4 * var(--more-unit)) calc(4 * var(--more-unit)) rgba(0,0,0,.25), inset 0 1px 0 var(--cover-placeholder-sheen); }
+.more-actions-scroll {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  /* Inherit the shell's resolved viewport cap. A percentage alone would be
+     indefinite while the shell uses content-driven height. */
+  max-height: inherit;
+  box-sizing: border-box;
+  padding: calc(24 * var(--more-unit)) calc(27 * var(--more-unit));
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* Player menu native scrollbar; playlist detail has a full-dialog rail. */
+.more-actions-scroll {
+  margin-right: 5px;
+  /* Chromium must use the explicit width instead of platform `thin`. */
+  scrollbar-width: auto;
+  scrollbar-color: auto;
+}
+.more-actions-scroll::-webkit-scrollbar { width: 2.5px; }
+.more-actions-scroll::-webkit-scrollbar-track {
+  margin-block: calc(30 * var(--more-unit));
+  background: transparent;
+}
+.more-actions-scroll::-webkit-scrollbar-thumb, .playlist-hero-more-scrollbar-thumb {
+  border-radius: 999px;
+  background-image: linear-gradient(var(--more-scrollbar-outline-variant), var(--more-scrollbar-outline-variant));
+}
+.more-actions-scroll::-webkit-scrollbar-thumb {
+  /* Keep the player's existing native marker presentation. */
+  background-size: 100% 10%;
+  background-repeat: no-repeat;
+  background-position: 0 calc(var(--more-scroll-progress, 0) * 100%);
+}
+.more-actions-scroll::-webkit-scrollbar-button { display: none; }
+@supports not selector(::-webkit-scrollbar) {
+  .more-actions-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: var(--more-scrollbar-outline-variant) transparent;
+  }
+}
+
+.more-track-summary { display: grid; grid-template-columns: var(--more-cover-size) minmax(0, 258px); gap: calc(16 * var(--more-unit)); align-items: center; padding: var(--more-summary-inset) 0 calc(18 * var(--more-unit)); }
+.more-menu-cover { width: var(--more-cover-size); aspect-ratio: 1; overflow: hidden; border-radius: calc(30 * var(--more-unit)); background: var(--cover-art); box-shadow: 0 calc(4 * var(--more-unit)) calc(4 * var(--more-unit)) color-mix(in srgb, var(--player-ink) 25%, transparent), inset 0 1px 0 var(--cover-placeholder-sheen); }
 /* A real cover keeps the same drop shadow and drops the placeholder sheen. */
-.more-menu-cover:has(canvas) { box-shadow: 0 calc(4 * var(--more-unit)) calc(4 * var(--more-unit)) rgba(0,0,0,.25); }
+.more-menu-cover:has(canvas) { box-shadow: 0 calc(4 * var(--more-unit)) calc(4 * var(--more-unit)) color-mix(in srgb, var(--player-ink) 25%, transparent); }
 .more-menu-cover canvas { width: 100%; height: 100%; display: block; }
 /* Same placeholder language as the cards and the dock: a soft disc under the
    glyph instead of a bare icon on a flat surface. */
@@ -45,18 +99,95 @@
 .more-track-meta > span { min-width: 0; display: flex; align-items: center; gap: calc(4 * var(--more-unit)); white-space: nowrap; }
 .more-track-meta > span svg { width: calc(24 * var(--more-unit)); height: calc(24 * var(--more-unit)); }
 .more-feedback-actions { display: flex; gap: calc(9 * var(--more-unit)); }
-.more-feedback-action { width: calc(106 * var(--more-unit)); height: calc(72 * var(--more-unit)); display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; padding: 0; border: 0; border-radius: 999px; background: var(--player-blue-soft); color: var(--player-blue-ink); box-shadow: 0 calc(4 * var(--more-unit)) calc(4 * var(--more-unit)) rgba(0,0,0,.25); }
-.more-feedback-action:focus { outline: 0; }
+.more-feedback-action { width: var(--more-feedback-width); height: var(--more-feedback-height); min-width: 44px; display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; padding: 0; border: 0; border-radius: 999px; background: var(--player-blue-soft); color: var(--player-blue-ink); box-shadow: 0 calc(4 * var(--more-unit)) calc(4 * var(--more-unit)) color-mix(in srgb, var(--player-ink) 25%, transparent); }
+.more-feedback-action:focus-visible { outline: 2px solid var(--player-blue-ink); outline-offset: 3px; }
 .more-feedback-action .player-control-icon-frame { width: calc(48 * var(--more-unit)); height: calc(48 * var(--more-unit)); }
 .more-feedback-action .player-control-icon-frame > svg { display: block; width: 100%; height: 100%; }
-.more-actions-menu [data-slot="separator"] { height: max(1px, calc(2.5 * var(--more-unit))); margin: 0; background: var(--app-border); }
-.more-action-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: calc(42 * var(--more-unit)) 0; padding: calc(42 * var(--more-unit)) 0 calc(20 * var(--more-unit)); }
-.more-action { min-width: 0; min-height: calc(48 * var(--more-unit)); display: flex; align-items: center; gap: calc(9 * var(--more-unit)); padding: 0; border: 0; background: transparent; color: var(--player-blue-ink); text-align: left; }
+.more-actions-menu [data-slot="separator"] { height: 2px; margin: 0; background: var(--app-border); }
+.more-action-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--more-row-gap) calc(16 * var(--more-unit)); padding: var(--more-section-gap) 0 calc(20 * var(--more-unit)); }
+.more-action { min-width: 0; min-height: var(--more-row-height); display: flex; align-items: center; gap: calc(9 * var(--more-unit)); padding: 0; border: 0; background: transparent; color: var(--player-blue-ink); text-align: left; }
 .more-action:disabled { opacity: 1; }
 .more-action > svg { width: calc(48 * var(--more-unit)); height: calc(48 * var(--more-unit)); flex: 0 0 auto; stroke-width: 1.75; }
 .more-action-wide { grid-column: 1 / -1; }
-.more-action-spacer { min-height: calc(48 * var(--more-unit)); }
+.more-action-spacer { min-height: var(--more-row-height); }
 .more-action-copy { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 0; }
 .more-action-copy strong { max-width: 100%; overflow: hidden; font-size: calc(22 * var(--more-unit)); font-weight: 500; line-height: calc(28 * var(--more-unit)); text-overflow: ellipsis; white-space: nowrap; }
 .more-action-copy small { display: none; }
-.more-action-grid-secondary { padding-top: calc(42 * var(--more-unit)); padding-bottom: 0; }
+.more-action-grid-secondary { padding-top: var(--more-section-gap); padding-bottom: 0; }
+
+.more-actions-leading, .more-action-grid-secondary { flex-shrink: 0; }
+.more-action > .more-info-icon { transform: scaleY(-1); }
+
+/* Dialog content is portaled outside the player canvas. Follow its resolved
+   view without inheriting the canvas transform or shrinking with viewport vw. */
+body:has(.responsive-player-layout[data-player-layout="horizontal"]) .more-actions-menu {
+  --more-width: 631.4px;
+  --more-unit: .7px;
+  --more-cover-size: 168px;
+  --more-row-gap: 29.4px;
+  --more-section-gap: 29.4px;
+  --more-summary-inset: 0px;
+  --more-row-height: 33.6px;
+  --more-feedback-width: 75.6px;
+  --more-feedback-height: 44.8px;
+}
+
+body:has(.responsive-player-layout:is([data-player-layout="vertical"], [data-player-layout="quarter"])) .more-actions-menu {
+  --more-width: 564px;
+  --more-summary-inset: 0px;
+}
+
+body:has(.responsive-player-layout[data-player-layout="compact"]) .more-actions-menu {
+  --more-width: 480px;
+  --more-unit: .75px;
+  --more-cover-size: 128px;
+  --more-row-gap: 12px;
+  --more-section-gap: 20px;
+  --more-summary-inset: 0px;
+  --more-row-height: 44px;
+  --more-feedback-width: 72px;
+  --more-feedback-height: 44px;
+}
+
+body:has(.responsive-player-layout[data-player-layout="compact"]) .more-track-details { gap: 8px; padding-left: 0; }
+body:has(.responsive-player-layout[data-player-layout="horizontal"]) .more-track-details { gap: 8px; }
+body:has(.responsive-player-layout[data-player-layout="compact"]) .more-action-wide { grid-column: auto; }
+body:has(.responsive-player-layout[data-player-layout="compact"]) .more-action-spacer { display: none; }
+
+/* Preserve readable controls in unsupported tiny windows. Content remains
+   reachable by scrolling when both complete groups cannot fit on screen. */
+@media (max-width: 580px), (max-height: 620px) {
+  .more-actions-menu[data-slot="dialog-content"] {
+    --more-width: 480px;
+    --more-unit: .7px;
+    --more-cover-size: 96px;
+    --more-row-gap: 8px;
+    --more-section-gap: 16px;
+    --more-summary-inset: 0px;
+    --more-row-height: 44px;
+    --more-feedback-width: 64px;
+    --more-feedback-height: 44px;
+    width: min(var(--more-width), calc(100vw - 16px));
+    max-width: calc(100vw - 16px);
+    max-height: calc(100svh - 16px);
+  }
+  .more-track-summary { grid-template-columns: var(--more-cover-size) minmax(0, 1fr); }
+  .more-track-details { gap: 6px; padding-left: 0; }
+  .more-action-wide { grid-column: auto; }
+  .more-action-spacer { display: none; }
+}
+
+/* Most views intentionally show the song summary and first action group.
+   The complete secondary group stays in the same wheel-scrollable dialog. */
+body:has(.responsive-player-layout:is([data-player-layout="horizontal"], [data-player-layout="vertical"], [data-player-layout="quarter"])) .more-actions-menu {
+  max-height: min(calc(var(--more-leading-height, 100svh) + 24 * var(--more-unit)), calc(100svh - 32px));
+}
+body:has(.responsive-player-layout[data-player-layout="horizontal"]) .more-action-wide { grid-column: auto; }
+
+/* Compact has room for the complete menu at >=800 by >=720. Smaller
+   Compact windows use the same two-section viewport as portrait views. */
+@media (max-width: 799px), (max-height: 719px) {
+  body:has(.responsive-player-layout[data-player-layout="compact"]) .more-actions-menu {
+    max-height: min(calc(var(--more-leading-height, 100svh) + 24 * var(--more-unit)), calc(100svh - 32px));
+  }
+}

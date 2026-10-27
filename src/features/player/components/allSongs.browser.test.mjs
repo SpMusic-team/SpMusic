@@ -437,14 +437,17 @@ try {
       window.viewModel.playlist.library.onSelectCategory('songs')
     })
     await page.getByRole('heading', { name: '全部歌曲' }).waitFor()
-    await page.waitForFunction(() => window.pendingPixelLoads.length === 1)
+    // The shared scheduler admits up to MAX_CONCURRENT native pixel loads at
+    // once, so the gate fills more than one entry. Only "at least one held
+    // request" is meaningful here; the ceiling is asserted where it matters.
+    await page.waitForFunction(() => window.pendingPixelLoads.length >= 1)
     await page.waitForFunction(() => window.libraryRenderCount > 0 && performance.now() - window.libraryLastRenderAt >= 500)
     const rendersBeforeCovers = await page.evaluate(() => window.libraryRenderCount)
     await page.waitForTimeout(250)
     assert.equal(await page.evaluate(() => window.libraryRenderCount), rendersBeforeCovers,
       'idle control has no parent renders while pixel results are held')
     for (let loaded = 1; loaded <= 4; loaded++) {
-      await page.waitForFunction(() => window.pendingPixelLoads.length === 1)
+      await page.waitForFunction(() => window.pendingPixelLoads.length >= 1)
       await page.evaluate(() => window.pendingPixelLoads.shift()())
       await page.waitForFunction(expected => [...document.querySelectorAll('.all-songs-list .playlist-card-cover-image')]
         .filter(image => image.complete && image.naturalWidth > 0).length >= expected, loaded)
@@ -593,7 +596,10 @@ try {
       panel.scrollTop = panel.scrollHeight
     })
     await page.waitForFunction(() => window.pendingPixelLoads.length >= 1)
-    assert.equal(await page.evaluate(() => window.pendingPixelLoads.length), 1, 'shared scheduler has one native pixel load in flight')
+    // Bounded, not serialised: the shared scheduler may hold up to four native
+    // pixel loads. A bare `1` would re-encode the single-slot bottleneck.
+    assert(await page.evaluate(() => window.pendingPixelLoads.length) <= 4,
+      'shared scheduler stays within its admission ceiling')
     await page.evaluate(() => window.viewModel.playlist.library.onSelectCategory('artist'))
     await page.getByRole('heading', { name: '艺术家' }).waitFor()
     const createdBeforeRelease = await page.evaluate(() => window.coverObjectUrls.created.length)

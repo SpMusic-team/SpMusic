@@ -1,17 +1,18 @@
+import { useCallback } from 'react'
 import {
-  BookmarkIcon,
-  CirclePlusIcon,
-  ClosedCaptionIcon,
-  Disc3Icon,
-  FolderIcon,
-  GuitarIcon,
-  ImageIcon,
-  InfoIcon,
-  Mic2Icon,
-  Music2Icon,
-  Trash2Icon,
-} from 'lucide-react'
-import { DataHistogram24Regular } from '@fluentui/react-icons'
+  AddCircle48Regular,
+  Bookmark24Regular,
+  Cd16Regular,
+  ClosedCaption48Regular,
+  DataHistogram24Regular,
+  Delete48Regular,
+  ErrorCircle48Regular,
+  Folder48Regular,
+  Guitar24Regular,
+  Image48Regular,
+  Mic48Regular,
+  MusicNote124Regular,
+} from '@fluentui/react-icons'
 import { PingPongText } from '@/components/PingPongText'
 import { buttonVariants } from '@/components/ui/button'
 import {
@@ -61,13 +62,19 @@ function UnavailableAction({ icon: Icon, label, wide = false }: UnavailableActio
       aria-label={`${label}，${appCopy.moreMenu.unavailable}`}
       disabled
     >
-      <Icon />
+      <Icon aria-hidden="true" className={cn(Icon === ErrorCircle48Regular && 'more-info-icon')} />
       <span className="more-action-copy">
         <strong>{label}</strong>
         <small>{appCopy.moreMenu.unavailable}</small>
       </span>
     </button>
   )
+}
+
+function syncScrollMarker(scroll: HTMLDivElement) {
+  const range = scroll.scrollHeight - scroll.clientHeight
+  const progress = range > 0 ? scroll.scrollTop / range : 0
+  scroll.style.setProperty('--more-scroll-progress', `${Number.isFinite(progress) ? Math.min(1, Math.max(0, progress)) : 0}`)
 }
 
 export function MoreActionsMenu({
@@ -83,6 +90,24 @@ export function MoreActionsMenu({
   open,
 }: MoreActionsMenuProps) {
   const systemIcons = useSystemIcons()
+  const measureMenu = useCallback((menu: HTMLDivElement | null) => {
+    if (!menu) return
+    const leading = menu.querySelector<HTMLElement>('.more-actions-leading')
+    const scroll = menu.querySelector<HTMLDivElement>('.more-actions-scroll')
+    if (!leading || !scroll) return
+
+    // Measure the actual first two sections, including font metrics and view
+    // density, so the scrolling viewport ends exactly at their divider.
+    const updateMeasurements = () => {
+      menu.style.setProperty('--more-leading-height', `${leading.getBoundingClientRect().height}px`)
+      syncScrollMarker(scroll)
+    }
+    updateMeasurements()
+    const observer = new ResizeObserver(updateMeasurements)
+    observer.observe(leading)
+    observer.observe(scroll)
+    return () => observer.disconnect()
+  }, [])
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -109,72 +134,76 @@ export function MoreActionsMenu({
         <TooltipContent>{appCopy.controls.more}</TooltipContent>
       </Tooltip>
 
-      <DialogContent className="more-actions-menu" overlayClassName="more-actions-overlay" showCloseButton={false}>
-        <DialogTitle className="sr-only">{appCopy.moreMenu.title}</DialogTitle>
-        <DialogDescription className="sr-only">{track.title}</DialogDescription>
+      <DialogContent ref={measureMenu} className="more-actions-menu" overlayClassName="more-actions-overlay" showCloseButton={false}>
+        <div className="more-actions-scroll" onScroll={(event) => syncScrollMarker(event.currentTarget)}>
+          <DialogTitle className="sr-only">{appCopy.moreMenu.title}</DialogTitle>
+          <DialogDescription className="sr-only">{track.title}</DialogDescription>
 
-        <section className="more-track-group" aria-label={appCopy.moreMenu.title}>
-          <div className="more-track-summary">
-            <div className="more-menu-cover">
-              {coverSource
-                ? <ArtworkCanvas source={coverSource} label={`${track.title} 演示封面`} />
-                : (
-                  <span className="more-menu-cover-mark">
-                    <systemIcons.music aria-hidden="true" />
-                  </span>
-                )}
-            </div>
-            <div className="more-track-details">
-              <PingPongText as="strong" className="more-track-title" text={track.title} />
-              <PingPongText className="more-track-byline" text={`${track.artist} - ${track.album}`} />
-              <div className="more-track-meta">
-                <span><Music2Icon />{formatCompactDuration(track.durationSeconds)} | {track.fileExtension ?? 'flac'}</span>
+          <div className="more-actions-leading">
+            <section className="more-track-group" aria-label={appCopy.moreMenu.title}>
+              <div className="more-track-summary">
+                <div className="more-menu-cover">
+                  {coverSource
+                    ? <ArtworkCanvas source={coverSource} label={`${track.title} 封面`} />
+                    : (
+                      <span className="more-menu-cover-mark">
+                        <systemIcons.music aria-hidden="true" />
+                      </span>
+                    )}
+                </div>
+                <div className="more-track-details">
+                  <PingPongText as="strong" className="more-track-title" text={track.title} />
+                  <PingPongText className="more-track-byline" text={`${track.artist} - ${track.album}`} />
+                  <div className="more-track-meta">
+                    <span><MusicNote124Regular />{formatCompactDuration(track.durationSeconds)} | {track.fileExtension ?? 'flac'}</span>
+                  </div>
+                  <div className="more-feedback-actions">
+                    <IconButton
+                      className="more-feedback-action"
+                      animated
+                      pressFeedback
+                      icon={LikeIcon}
+                      label={appCopy.controls.like}
+                      selected={liked}
+                      onClick={onLike}
+                    />
+                    <IconButton
+                      className="more-feedback-action"
+                      animated
+                      pressFeedback
+                      icon={DislikeIcon}
+                      label={appCopy.controls.dislike}
+                      selected={disliked}
+                      onClick={onDislike}
+                    />
+                  </div>
+                </div>
               </div>
-              <div className="more-feedback-actions">
-                <IconButton
-                  className="more-feedback-action"
-                  animated
-                  pressFeedback
-                  icon={LikeIcon}
-                  label={appCopy.controls.like}
-                  selected={liked}
-                  onClick={onLike}
-                />
-                <IconButton
-                  className="more-feedback-action"
-                  animated
-                  pressFeedback
-                  icon={DislikeIcon}
-                  label={appCopy.controls.dislike}
-                  selected={disliked}
-                  onClick={onDislike}
-                />
-              </div>
-            </div>
+            </section>
+
+            <Separator />
+
+            <section className="more-action-grid" aria-label={appCopy.moreMenu.title}>
+              <UnavailableAction icon={Delete48Regular} label={appCopy.moreMenu.delete} wide />
+              <UnavailableAction icon={AddCircle48Regular} label={appCopy.moreMenu.playlist} />
+              <UnavailableAction icon={Bookmark24Regular} label={appCopy.moreMenu.bookmark} />
+              <UnavailableAction icon={Image48Regular} label={appCopy.moreMenu.cover} wide />
+              <UnavailableAction icon={ErrorCircle48Regular} label={appCopy.moreMenu.info} />
+              <UnavailableAction icon={ClosedCaption48Regular} label={appCopy.moreMenu.lyrics} />
+            </section>
+
+            <Separator />
           </div>
-        </section>
 
-        <Separator />
-
-        <section className="more-action-grid" aria-label={appCopy.moreMenu.title}>
-          <UnavailableAction icon={Trash2Icon} label={appCopy.moreMenu.delete} wide />
-          <UnavailableAction icon={CirclePlusIcon} label={appCopy.moreMenu.playlist} />
-          <UnavailableAction icon={BookmarkIcon} label={appCopy.moreMenu.bookmark} />
-          <UnavailableAction icon={ImageIcon} label={appCopy.moreMenu.cover} wide />
-          <UnavailableAction icon={InfoIcon} label={appCopy.moreMenu.info} />
-          <UnavailableAction icon={ClosedCaptionIcon} label={appCopy.moreMenu.lyrics} />
-        </section>
-
-        <Separator />
-
-        <section className="more-action-grid more-action-grid-secondary" aria-label={appCopy.moreMenu.title}>
-          <UnavailableAction icon={Mic2Icon} label={appCopy.moreMenu.artist} />
-          <UnavailableAction icon={Disc3Icon} label={appCopy.moreMenu.album} />
-          <UnavailableAction icon={GuitarIcon} label={appCopy.moreMenu.genre} />
-          <div className="more-action-spacer" aria-hidden="true" />
-          <UnavailableAction icon={FolderIcon} label={appCopy.moreMenu.folder} />
-          <UnavailableAction icon={DataHistogram24Regular} label={appCopy.moreMenu.listeningHistory} />
-        </section>
+          <section className="more-action-grid more-action-grid-secondary" aria-label={appCopy.moreMenu.title}>
+            <UnavailableAction icon={Mic48Regular} label={appCopy.moreMenu.artist} />
+            <UnavailableAction icon={Cd16Regular} label={appCopy.moreMenu.album} />
+            <UnavailableAction icon={Guitar24Regular} label={appCopy.moreMenu.genre} />
+            <div className="more-action-spacer" aria-hidden="true" />
+            <UnavailableAction icon={Folder48Regular} label={appCopy.moreMenu.folder} />
+            <UnavailableAction icon={DataHistogram24Regular} label={appCopy.moreMenu.listeningHistory} />
+          </section>
+        </div>
       </DialogContent>
     </Dialog>
   )

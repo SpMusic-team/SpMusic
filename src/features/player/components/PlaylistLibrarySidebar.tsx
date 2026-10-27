@@ -8,7 +8,7 @@ import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks
 import { PlaylistCoverImage } from '@/features/player/components/PlaylistCoverImage'
 import type { PlaylistLibraryViewModel, PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
 import logo from '@/assets/playlist-library/f8690.png'
-import { mediaLibraryCategories } from '@/features/player/model/mediaLibraryCategories'
+import { sidebarLibraryCategories } from '@/features/player/model/librarySidebarPreferences'
 
 type PlaylistLibrarySidebarProps = {
   playlistName: string
@@ -47,11 +47,12 @@ export function PlaylistLibrarySidebar({ playlistName, trackCount, totalClock, c
         <span>SPMusic</span>
       </div>
       <nav className="playlist-library-categories" aria-label="媒体库分类" tabIndex={0}>
-        {mediaLibraryCategories.map((category) => {
+        {sidebarLibraryCategories(library?.pinnedCategoryIds ?? library?.foldersPinnedInSidebar ?? false).map((category) => {
           const current = library?.route?.view === 'category' ? library.route.categoryId === category.id : category.id === 'playlists'
           return (
             <Button
               key={category.id}
+              data-category-id={category.id}
               className="playlist-library-category"
               variant="ghost"
               aria-current={current ? 'page' : undefined}

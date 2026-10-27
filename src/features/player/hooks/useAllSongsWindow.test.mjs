@@ -77,6 +77,11 @@ async function harness(count = 100) {
       calls.push(input.sourcePath)
       return new Promise((resolve, reject) => pending.push({ path: input.sourcePath, resolve, reject }))
     },
+    scheduleFolderThumbnail: (input, options) => {
+      pixelCalls.push({ input, options })
+      calls.push(input.directoryPath)
+      return new Promise((resolve, reject) => pending.push({ path: input.directoryPath, resolve, reject }))
+    },
     playlistCoverImageFromPixels: () => ({ src: `blob:cover-${++nextUrl}` }),
     decodePlaylistCover: async () => {
       if (holdDecode) await new Promise(resolve => decodePending.push(resolve))
@@ -88,6 +93,8 @@ async function harness(count = 100) {
       disconnect() {}
     },
     ResizeObserver: class { observe() {} disconnect() {} },
+    MutationObserver: class { observe() {} disconnect() {} },
+    document: { documentElement: {}, querySelectorAll: () => [] },
   }
   const compiled = ts.transpileModule(source, {
     compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
@@ -139,6 +146,7 @@ async function harness(count = 100) {
     releaseDecodeAt: async index => { const resolve=decodePending.splice(index,1)[0]; assert(resolve,'a decoder is pending'); resolve(); await flush() },
     releaseDecode: async () => { for (const resolve of decodePending.splice(0)) resolve(); await flush() },
     dispose: () => { unmount(); module.disposeAllSongsCoverStore(store) },
+    revisions: roots => module.folderCoverRevisions(store, roots),
   }
 }
 
@@ -413,5 +421,114 @@ test('a ready later row publishes immediately while an earlier admitted decode i
     await h.releaseDecode()
     assert(h.store.cache.get(h.items[0].key)?.coverUrl)
     assert.equal(h.calls.length,2,'row admission adds no retry or artificial delay')
+  } finally { h.dispose() }
+})
+
+test('folder artwork shares the bounded cache without inventing a song descriptor', async () => {
+  const h = await harness(1)
+  try {
+    const item = {kind:'folder',key:'folder:root/music',rootPath:'/root',directoryPath:'/root/music',available:true}
+    h.render([item])
+    await h.demand([0]); await h.drain(1)
+    const call = h.pixelCalls.at(-1).input
+    assert.equal(call.rootPath, '/root'); assert.equal(call.directoryPath, '/root/music')
+    assert.equal(call.maxEdge, 256); assert(!('sourcePath' in call)); assert(!('trackId' in call))
+    const cached = h.store.cache.get(item.key)
+    assert.equal(cached.kind, 'folder'); assert.equal(cached.directoryPath, '/root/music'); assert(cached.coverUrl)
+    const count = h.calls.length
+    h.render([item]); await h.demand([0]); await h.flush()
+    assert.equal(h.calls.length, count, 'the same directory stays warm across rerenders')
+  } finally { h.dispose() }
+})
+
+test('late folder response cannot populate a replacement directory using the same row key', async () => {
+  const h = await harness(1)
+  try {
+    const old = {kind:'folder',key:'same-row',rootPath:'/root',directoryPath:'/root/old',available:true}
+    h.render([old]); await h.demand([0]); const pending=h.pending.shift()
+    const replacement = {...old,directoryPath:'/root/new'}
+    h.render([replacement]); await h.demand([0]); await h.finish(pending)
+    assert(!h.store.cache.has(old.key), 'obsolete folder identity cannot publish')
+    await h.drain(1)
+    assert.equal(h.store.cache.get(old.key).directoryPath, replacement.directoryPath)
+  } finally { h.dispose() }
+})
+
+test('a successful same-path rescan refreshes confirmed-missing and prepared folder covers', async () => {
+  for (const mode of ['missing', 'cover']) {
+    const h=await harness(1)
+    try {
+      const paths=['/root'],root={path:'/root',directoryPaths:paths,status:'ready'}
+      const revision=h.revisions([root]).get('/root')
+      assert.equal(h.revisions([{...root}]).get('/root'),revision,'unrelated rerenders preserve the completed scan')
+      const makeItem=version=>({kind:'folder',key:`folder:/root:${version}`,rootPath:'/root',directoryPath:'/root',available:true})
+      h.render([makeItem(revision)]);await h.demand([0]);await h.drain(1,mode)
+      const before=h.calls.length,newRevision=h.revisions([{...root,directoryPaths:[...paths]}]).get('/root')
+      assert.notEqual(newRevision,revision,'new successful scan invalidates both positive and negative artwork')
+      h.render([makeItem(newRevision)]);await h.demand([0]);await h.drain(1)
+      assert.equal(h.calls.length,before+1);assert(h.store.cache.get(makeItem(newRevision).key).coverUrl)
+    } finally {h.dispose()}
+  }
+})
+
+test('legacy roots get a new folder artwork revision after loading becomes ready',async()=>{
+  const h=await harness(1)
+  try{
+    const root={path:'/legacy',status:'ready'},first=h.revisions([root]).get(root.path)
+    h.revisions([{...root,status:'loading'}])
+    assert.notEqual(h.revisions([root]).get(root.path),first)
+  }finally{h.dispose()}
+})
+
+test('same-song rescan refreshes negative and positive cache without dropping a prepared cover during decode',async()=>{
+  for(const initial of ['missing','cover']){
+    const h=await harness(1)
+    try{
+      const first={...h.items[0],artworkRevision:1}
+      h.render([first]);await h.demand([0]);await h.drain(1,initial)
+      const old=h.store.cache.get(first.key).coverUrl
+      h.holdDecode()
+      h.render([{...first,artworkRevision:2}]);await h.demand([0]);await h.finish()
+      assert.equal(h.calls.length,2,'a fresh scan invalidates confirmed missing artwork as well as a decoded cover')
+      assert.equal(h.store.cache.get(first.key).coverUrl,old,'the prepared cover remains painted until its replacement decodes')
+      assert(!old||!h.revoked.includes(old))
+      await h.releaseDecode()
+      assert.equal(h.store.cache.get(first.key).artworkRevision,2)
+      assert(h.store.cache.get(first.key).coverUrl)
+      h.render([{...first,artworkRevision:3}]);await h.demand([0]);await h.drain(1,'missing')
+      assert.equal(h.store.cache.get(first.key).artworkRevision,3)
+      assert.equal(h.store.cache.get(first.key).coverUrl,undefined,'deleting the sibling image removes the previously decoded cover')
+    }finally{h.dispose()}
+  }
+})
+
+test('late old-scan thumbnail cannot publish over a new revision and summary/duration hydration does not reload',async()=>{
+  const h=await harness(1)
+  try{
+    const item={...h.items[0],artworkRevision:1}
+    h.render([item]);await h.demand([0]);const stale=h.pending.shift()
+    const rescanned={...item,artworkRevision:2}
+    h.render([rescanned]);await h.demand([0]);await h.finish(stale)
+    assert(!h.store.cache.has(item.key),'old scan completion is discarded before it becomes a cache row')
+    await h.drain(1)
+    const ready=h.store.cache.get(item.key).coverUrl,calls=h.calls.length
+    h.render([{...rescanned,track:{title:'Hydrated title',durationSeconds:234,artist:'Hydrated artist'}}])
+    await h.demand([0]);await h.flush()
+    assert.equal(h.calls.length,calls,'summary and duration changes preserve the scan revision and prepared image')
+    assert.equal(h.store.cache.get(item.key).coverUrl,ready)
+  }finally{h.dispose()}
+})
+
+test('a retained cover survives a scan replacement until the last lease is released', async () => {
+  const h = await harness(1)
+  try {
+    const item = { ...h.items[0], artworkRevision: 1 }
+    h.render([item]); await h.demand([0]); await h.drain(1)
+    const old = h.store.cache.get(item.key).coverUrl
+    const releaseA = h.store.retain(item.key), releaseB = h.store.retain(item.key)
+    h.render([{ ...item, artworkRevision: 2 }]); await h.demand([0]); await h.drain(1)
+    assert(!h.revoked.includes(old))
+    releaseA(); assert(!h.revoked.includes(old))
+    releaseB(); assert(h.revoked.includes(old))
   } finally { h.dispose() }
 })

@@ -1,15 +1,18 @@
+import { useCollectionEntryProjection } from '../hooks/useCollectionEntryProjection'
+import { CollectionManagementHeader } from '@/features/player/components/CollectionManagementHeader'
+import { LibraryRootMenu } from '@/features/player/components/LibraryRootMenu'
+import { useCollectionManagementChrome } from '@/features/player/hooks/useCollectionManagementChrome'
 import { mediaLibraryCategories } from '@/features/player/model/mediaLibraryCategories'
 import { memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from 'react'
 import { LibraryChromeTransitionContext } from '@/features/player/hooks/useLibraryChromeTransition'
-import { motion, useAnimationControls, useIsPresent } from 'motion/react'
+import { motion, useIsPresent } from 'motion/react'
 import { LibraryDockContext, useLibraryDockBinding } from '@/features/player/hooks/useLibraryDockBinding'
 import { usePlaylistControllerMotion } from '@/features/player/hooks/usePlaylistControllerMotion'
 import type { PlaylistControllerMode } from '@/features/player/model/playlistControllerMode'
 import { PlaylistActionButtons } from '@/features/player/components/PlaylistActionButtons'
 import { getShuffleModePresentation, showPlaybackModeToast } from '@/features/player/components/playbackModePresentation'
 import { appCopy } from '@/features/player/model/playerCopy'
-import { readLibraryLayoutRect } from '@/features/player/model/libraryNavigationGeometry'
 import { useAllSongsRenderWindow } from '@/features/player/hooks/useAllSongsRenderWindow'
 import { useAllSongsTileNavigation } from '@/features/player/hooks/useAllSongsTileNavigation'
 import { usePlaylistSongReorder } from '@/features/player/hooks/usePlaylistSongReorder'
@@ -30,12 +33,7 @@ import { Field, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { LibraryCover, PlaylistLibrarySidebar } from '@/features/player/components/PlaylistLibrarySidebar'
 import type { AllSongsItem, PlayerPlaybackViewModel, PlayerPlaylistViewModel, PlayerTimelineViewModel } from '@/features/player/model/playerUiViewModel'
-import musicLarge from '@/assets/playlist-library/e5527.svg'
-import musicSmall from '@/assets/playlist-library/de6be.svg'
-import parentIcon from '@/assets/playlist-library/2d425.svg'
-import shuffleIcon from '@/assets/playlist-library/ce103.svg'
-import playIcon from '@/assets/playlist-library/a31d0.svg'
-import searchIcon from '@/assets/playlist-library/514fd.svg'
+import type { PlaylistArtworkSource } from '@/features/player/model/playlistArtworkStore'
 import moreIcon from '@/assets/playlist-library/94abf.svg'
 
 const MANAGEMENT_LAYOUT_SELECTORS = {
@@ -70,6 +68,8 @@ type AllSongsCardProps = {
   item: AllSongsItem
   index: number
   store: AllSongsCoverStore
+  artworkSource?: PlaylistArtworkSource
+  fallbackArtworkSource?: PlaylistArtworkSource
   current: boolean
   canActivate: boolean
   selectMode: boolean
@@ -83,8 +83,12 @@ type AllSongsCardProps = {
   onEnterSelectMode?: (key: string) => void
 }
 
-const AllSongsCard = memo(function AllSongsCard({ item, index, store, current, canActivate, selectMode, selected,
-  artworkVisible, showExtendedMetadata, coverFailed, onCoverFailed, onActivate, onToggleSelect, onEnterSelectMode }: AllSongsCardProps) {
+// Covers are layered in the card from the artwork stores instead of being merged
+// into the aggregated rows. The rows therefore keep their identity while covers
+// arrive, and only the card whose own store entry changed re-renders.
+const AllSongsCard = memo(function AllSongsCard({ item, index, store, artworkSource, fallbackArtworkSource, current,
+  canActivate, selectMode, selected, artworkVisible, showExtendedMetadata, coverFailed, onCoverFailed, onActivate,
+  onToggleSelect, onEnterSelectMode }: AllSongsCardProps) {
   const coverUrl = useAllSongsCoverUrl(store, item.key, item.trackId, item.sourcePath)
   const track = item.track
   const bitDepth = track.audioFormat?.bitDepth
@@ -92,6 +96,7 @@ const AllSongsCard = memo(function AllSongsCard({ item, index, store, current, c
   const contentShape = Number(Boolean(track.title)) | (Number(Boolean(track.artist)) << 1)
     | (Number(Boolean(track.artist || track.album)) << 2) | (Number(hasFormat) << 3)
   return <PlaylistCard songKey={item.key} track={track} index={index} coverUrl={coverUrl}
+    artworkSource={artworkSource} fallbackArtworkSource={fallbackArtworkSource}
     current={current} unavailable={!item.available} canSelectUnavailable canActivate={canActivate}
     selectMode={selectMode} selected={selected} artworkVisible={artworkVisible}
     showExtendedMetadata={showExtendedMetadata} contentVisible contentRepresentative={false}
@@ -106,18 +111,7 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
   const isPresent = useIsPresent()
   const chromeTransition = useContext(LibraryChromeTransitionContext)
   const atomicOverview = chromeTransition.overviewBoundary
-  const [entrySession, setEntrySession] = useState({ isPresent, offscreen: chromeTransition.offscreenReturn,
-    sharedReady: !chromeTransition.offscreenReturn || appearanceMotion.disabled })
-  const currentEntry = entrySession.isPresent === isPresent ? entrySession : {
-    isPresent, offscreen: isPresent ? chromeTransition.offscreenReturn : entrySession.offscreen,
-    sharedReady: isPresent ? !chromeTransition.offscreenReturn || appearanceMotion.disabled : entrySession.sharedReady,
-  }
-  if (currentEntry !== entrySession) setEntrySession(currentEntry)
-  const offscreenEntry = currentEntry.offscreen
-  const entryPending = offscreenEntry && !currentEntry.sharedReady
-  const sharedProjection = !appearanceMotion.disabled && !entryPending
-  const projectionKey = sharedProjection ? 'shared' : 'local'
-  const entryControls = useAnimationControls()
+  const { offscreenEntry, sharedProjection, projectionKey, entryControls } = useCollectionEntryProjection(isPresent, chromeTransition.offscreenReturn)
   // Use a 250ms default, preserving theme scaling and the presence cleanup budget.
   const returnTransition = { ...appearanceMotion.layoutTransition, duration: Math.min((appearanceMotion.layoutTransition.duration ?? 0) * (5 / 6), 0.55) }
   const library = playlist.library!
@@ -151,57 +145,13 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
   const pendingEntryPosition = useRef<{ requestId: number; cancelled: boolean } | null>(null)
   const managementPanelRef = useRef<HTMLElement | null>(null)
   const [failedSongCovers, setFailedSongCovers] = useState<ReadonlySet<string>>(new Set())
-  const headingRef = useRef<HTMLElement | null>(null)
-  const toolbarRef = useRef<HTMLDivElement | null>(null)
   const controllerActionsRef = useRef<HTMLDivElement | null>(null)
   const [toolbarPassed, setToolbarPassed] = useState(false)
   const dockContext = useContext(LibraryDockContext)
   const fallbackDockRef = useRef<HTMLElement | null>(null)
   const dockRouteKey = `category:${categoryId}`
-  const toolbarControls = useAnimationControls()
-  const navigationMotion = appearanceMotion.libraryNavigation
-  useLayoutEffect(() => {
-    // Retain the last active heading geometry during departure. Reentry
-    // measures and subscribes again instead of letting the outgoing page
-    // continue publishing geometry while its successor enters.
-    if (!isPresent) return
-    const heading = headingRef.current
-    if (!heading || !chromeTransition.geometry) return
-    const measure = () => chromeTransition.geometry!.current.items.set(`heading:${categoryId}`, readLibraryLayoutRect(heading))
-    measure()
-    const observer = new ResizeObserver(measure)
-    observer.observe(heading)
-    window.addEventListener('resize', measure)
-    return () => { observer.disconnect(); window.removeEventListener('resize', measure) }
-  }, [categoryId, chromeTransition.geometry, isPresent])
-  useLayoutEffect(() => {
-    if (atomicOverview && isPresent) {
-      toolbarControls.set('initial')
-      void toolbarControls.start('animate')
-    } else if (isPresent) toolbarControls.set('animate')
-    return () => toolbarControls.stop()
-  }, [atomicOverview, isPresent, navigationMotion, toolbarControls])
-  useLayoutEffect(() => {
-    if (!isPresent) return
-    let cancelled = false
-    const enableSharedProjection = () => {
-      if (!cancelled) setEntrySession((previous) => previous.sharedReady ? previous : { ...previous, sharedReady: true })
-    }
-    if (entryPending && !appearanceMotion.disabled) {
-      entryControls.set('initial')
-      void entryControls.start('animate').then(enableSharedProjection)
-    } else {
-      entryControls.set('animate')
-      if (entryPending) enableSharedProjection()
-    }
-    return () => { cancelled = true; entryControls.stop() }
-  }, [entryPending, appearanceMotion.disabled, isPresent, navigationMotion, entryControls])
-  const toolbarOffset = () => {
-    if (appearanceMotion.disabled) return { x: 0, y: 0 }
-    const source = chromeTransition.geometry?.current.items.get(categoryId)
-    const target = chromeTransition.geometry?.current.items.get(`heading:${categoryId}`)
-    return source && target ? { x: source.x - target.x, y: source.y - target.y } : { x: 0, y: 0 }
-  }
+  const managementChrome = useCollectionManagementChrome(categoryId, isPresent)
+  const { toolbarRef, navigationMotion } = managementChrome
   const { layout, announcement } = useCollectionLayout({
     panelRef: managementPanelRef, gridRef, layouts: PLAYLIST_MANAGEMENT_LAYOUTS,
     storageKey: PLAYLIST_MANAGEMENT_LAYOUT_STORAGE_KEY,
@@ -218,8 +168,36 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
   const visible = categoryItems
     .filter((item) => item.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
     .sort((left, right) => compareByQuickIndex(left.name, right.name))
-  const orderedSongs = useMemo(() => library.allSongsManualOrder ? [...library.allSongs ?? []]
-    : [...library.allSongs ?? []].sort((left, right) => compareByQuickIndex(left.track.title, right.track.title)), [library.allSongs, library.allSongsManualOrder])
+  // `library.allSongs` gets a fresh array whenever a row is republished (a cover,
+  // a duration, a bit of metadata). The quick-index view is decided only by the
+  // row keys and their titles, so keep the sorted key order while those are
+  // unchanged instead of re-running `localeCompare` over the whole library.
+  const songQuickIndexKey = useMemo(() => {
+    const songs = library.allSongs ?? []
+    let key = ''
+    for (const item of songs) key += `${item.key}\u0001${item.track.title}\u0000`
+    return key
+  }, [library.allSongs])
+  const orderedSongKeys = useMemo(() => {
+    const songs = library.allSongs ?? []
+    return [...songs].sort((left, right) => compareByQuickIndex(left.track.title, right.track.title)).map((item) => item.key)
+    // The source array is intentionally not a dependency: only the key/title pair
+    // above decides this order.
+  }, [songQuickIndexKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  const orderedSongs = useMemo(() => {
+    const songs = library.allSongs ?? []
+    if (library.allSongsManualOrder) return [...songs]
+    const byKey = new Map(songs.map((item) => [item.key, item]))
+    const ordered: AllSongsItem[] = []
+    for (const key of orderedSongKeys) {
+      const item = byKey.get(key)
+      if (item) ordered.push(item)
+    }
+    // An unknown key would mean the caller replaced the list without changing the
+    // quick-index fingerprint; never reorder silently on stale keys.
+    return ordered.length === songs.length ? ordered
+      : [...songs].sort((left, right) => compareByQuickIndex(left.track.title, right.track.title))
+  }, [orderedSongKeys, library.allSongs, library.allSongsManualOrder])
   const visibleSongs = useMemo(() => orderedSongs
     .filter((item) => `${item.track.title} ${item.track.artist} ${item.track.album}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())), [orderedSongs, query])
   const displayedSongs = useMemo(() => {
@@ -339,16 +317,24 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
       return new Set(previous).add(key)
     })
   }, [])
-  const quickIndexTargets = new Map<string, number>()
-  ;(isSongs ? displayedSongs.map((item) => item.track.title) : visible.map((item) => item.name)).forEach((name, index) => {
-    const key = quickIndexKey(name)
-    if (!quickIndexTargets.has(key)) quickIndexTargets.set(key, index)
-  })
+  // Jump targets and the play/shuffle candidates are derived from the list, not
+  // from the scroll window; keep them off the render path so a window step does
+  // not rescan the whole library.
+  const quickIndexTargets = useMemo(() => {
+    const targets = new Map<string, number>()
+    const add = (name: string, index: number) => {
+      const key = quickIndexKey(name)
+      if (!targets.has(key)) targets.set(key, index)
+    }
+    if (isSongs) displayedSongs.forEach((item, index) => add(item.track.title, index))
+    else visible.forEach((item, index) => add(item.name, index))
+    return targets
+  }, [displayedSongs, isSongs, visible])
   const selectedItems = visible.filter((item) => selected.has(item.scope))
   const playTarget = selectMode ? selectedItems[0] : visible[0]
-  const selectedSongs = (library.allSongs ?? []).filter((item) => selected.has(item.key) && item.available)
-    .sort((left, right) => compareByQuickIndex(left.track.title, right.track.title))
-  const playableSongs = visibleSongs.filter((item) => item.available)
+  const selectedSongs = useMemo(() => (library.allSongs ?? []).filter((item) => selected.has(item.key) && item.available)
+    .sort((left, right) => compareByQuickIndex(left.track.title, right.track.title)), [library.allSongs, selected])
+  const playableSongs = useMemo(() => visibleSongs.filter((item) => item.available), [visibleSongs])
   const songPlayTarget = selectMode ? selectedSongs[0] : playableSongs[0]
   // An in-flight playback command locks interaction; it is not unavailability.
   const playbackCommandLocked = Boolean(playlist.isOpenAudioDisabled)
@@ -399,7 +385,7 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
       intersection.disconnect(); resize.disconnect()
       panel.removeEventListener('scroll', measure); window.removeEventListener('resize', measure)
     }
-  }, [controllerActive, songsLayout.level, showSearch, selectMode])
+  }, [controllerActive, songsLayout.level, showSearch, selectMode, toolbarRef])
   const sidebarProps = {
     playlistName: '', trackCount: 0, totalClock: null,
     library: { ...library,
@@ -515,6 +501,7 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
   function toggleSelection() { setSelectMode(!selectMode); setSelected(new Set()) }
   function openCreatePlaylist() { setPlaylistName(''); setCreateError(''); setCreateOpen(true) }
   function renderMore(compact = false) {
+    if (!compact) return <LibraryRootMenu key={categoryId} categoryId={categoryId} library={library} />
     return <DropdownMenu>
       <DropdownMenuTrigger render={<Button className={compact ? 'playlist-hero-icon playlist-hero-more-button' : 'playlist-management-more'}
         variant={compact ? 'ghost' : 'outline'} size={compact ? 'icon' : 'default'} aria-label="更多列表操作">
@@ -597,43 +584,22 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
       variants={offscreenEntry ? navigationMotion.detailReturn.incoming : appearanceMotion.variants.backdrop}
       transition={offscreenEntry ? navigationMotion.transition : atomicOverview ? { duration: 0 } : returnTransition}
       initial={atomicOverview ? false : 'initial'} animate={offscreenEntry ? entryControls : 'animate'} exit={atomicOverview ? 'animate' : 'exit'}>
-      <motion.div className="playlist-management-parent" variants={navigationMotion.chrome}
-        initial={atomicOverview ? 'initial' : false} animate="animate" exit={atomicOverview ? 'exit' : 'animate'} transition={navigationMotion.transition}>
-        <Button variant="outline" onClick={library.onOpenOverview} aria-label="返回媒体库"><img src={parentIcon} alt="" />媒体库</Button>
-      </motion.div>
-      <header ref={headingRef} className="playlist-management-heading">
-        <motion.span key={`category-icon:${projectionKey}`} className="playlist-management-category" aria-hidden="true" style={{ background: `var(--playlist-category-${categoryId})` }}
-          layoutId={sharedProjection ? `library-category-icon:${categoryId}` : undefined} layoutCrossfade={false}
-          transition={{ layout: navigationMotion.transition }}><span className="media-library-category-glyph" style={{ width: category.glyphWidth, height: category.glyphHeight, maskImage: `url("${category.overviewIcon}")`, WebkitMaskImage: `url("${category.overviewIcon}")` }} /></motion.span>
-        <motion.h2 key={`category-label:${projectionKey}`} layoutId={sharedProjection ? `library-category-label:${categoryId}` : undefined} layoutCrossfade={false}
-          transition={{ layout: navigationMotion.transition }}>{isSongs ? '全部歌曲' : category.label}</motion.h2>
-      </header>
-      <motion.div ref={toolbarRef} className="playlist-management-toolbar" custom={toolbarOffset} variants={navigationMotion.toolbar}
-        initial={false} animate={toolbarControls} exit={atomicOverview ? 'exit' : 'animate'} transition={navigationMotion.transition}>
-        {hasDataSource ? <motion.div key={`actions:${projectionKey}`} className="playlist-management-actions"
-          data-selection-hidden={isSongs && selectMode || undefined} inert={isSongs && selectMode || undefined} aria-hidden={isSongs && selectMode || undefined}
-          layout={sharedProjection ? 'position' : undefined}
-          layoutId={sharedProjection && library.currentScope ? `playlist-library-actions:${library.currentScope}` : undefined}
-          transition={{ layout: returnTransition }}>
-          <Button variant="outline" aria-label={`随机播放${category.label}`} data-playback-command-lock={playbackCommandLocked || undefined} disabled={isSongs ? !songPlayTarget || !library.onShufflePlay || playlist.isOpenAudioDisabled || library.allSongsMetadataStatus === 'loading' : !playTarget || playlist.isOpenAudioDisabled} onClick={() => {
-            if (isSongs) {
-              void shuffleSongs()
-              return
-            }
-            playListsRandomly()
-          }}><img src={shuffleIcon} alt="" /></Button>
-          <Button variant="outline" aria-label={`播放${category.label}`} data-playback-command-lock={playbackCommandLocked || undefined} disabled={isSongs ? !songPlayTarget || !library.onPlaySong || playlist.isOpenAudioDisabled : !playTarget || playlist.isOpenAudioDisabled} onClick={() => {
-            if (isSongs) playSongs()
-            else if (playTarget) library.onPlay(playTarget.scope)
-          }}><img src={playIcon} alt="" /></Button>
-          <Button variant="outline" aria-label={`搜索${category.label}`} aria-expanded={showSearch} onClick={() => { if (pendingEntryPosition.current) pendingEntryPosition.current.cancelled = true; setSearchOpen(true); queueMicrotask(() => searchRef.current?.focus()) }}><img src={searchIcon} alt="" /></Button>
-          <Button variant="outline" aria-pressed={selectMode} disabled={isSongs ? !(library.allSongs?.length) : !categoryItems.length} onClick={toggleSelection}>{selectMode ? '取消选择' : '选择'}</Button>
-          {selectMode && !isSongs ? <span role="status">已选择 {selected.size} 项</span> : null}
-
-        </motion.div> : <div />}
-        <span className="playlist-management-selection-more" data-selection-hidden={isSongs && selectMode || undefined}
-          inert={isSongs && selectMode || undefined} aria-hidden={isSongs && selectMode || undefined}>{renderMore()}</span>
-      </motion.div>
+      <CollectionManagementHeader chrome={managementChrome} category={category} title={isSongs ? '全部歌曲' : category.label}
+        sharedProjection={sharedProjection} onOverview={library.onOpenOverview} actionsScope={library.currentScope}
+        returnTransition={returnTransition} more={renderMore()} hideActions={isSongs && selectMode}
+        actions={hasDataSource ? {
+          shuffleLabel: `随机播放${category.label}`, playbackLocked: playbackCommandLocked,
+          shuffleDisabled: isSongs ? !songPlayTarget || !library.onShufflePlay || playlist.isOpenAudioDisabled || library.allSongsMetadataStatus === 'loading' : !playTarget || playlist.isOpenAudioDisabled,
+          onShuffle: () => { if (isSongs) void shuffleSongs(); else playListsRandomly() },
+          playLabel: `播放${category.label}`,
+          playDisabled: isSongs ? !songPlayTarget || !library.onPlaySong || playlist.isOpenAudioDisabled : !playTarget || playlist.isOpenAudioDisabled,
+          onPlay: () => { if (isSongs) playSongs(); else if (playTarget) library.onPlay(playTarget.scope) },
+          searchLabel: `搜索${category.label}`, searchOpen: showSearch,
+          onSearch: () => { if (pendingEntryPosition.current) pendingEntryPosition.current.cancelled = true; setSearchOpen(true); queueMicrotask(() => searchRef.current?.focus()) },
+          selectMode, selectDisabled: isSongs ? !(library.allSongs?.length) : !categoryItems.length,
+          onSelect: toggleSelection, selectedCount: selected.size,
+          extra: isSongs && selectMode ? <Button variant="outline" disabled={!selected.size || !library.onCreatePlaylist} onClick={openCreatePlaylist}>新建播放列表</Button> : undefined,
+        } : undefined} />
       {showSearch ? <motion.div className="playlist-management-search" variants={navigationMotion.chrome}
         initial={atomicOverview ? 'initial' : false} animate="animate" exit={atomicOverview ? 'exit' : 'animate'} transition={navigationMotion.transition}><Input ref={searchRef} type="search" aria-label={isSongs ? '搜索歌曲标题、艺术家或专辑' : `搜索${category.label}名称`} placeholder={isSongs ? '搜索歌曲' : `搜索${category.label}`} value={query} onChange={(event) => { if (pendingEntryPosition.current) pendingEntryPosition.current.cancelled = true; setQuery(event.target.value) }} onKeyDown={(event) => { if (event.key === 'Escape') { setQuery(''); setSearchOpen(false); setDismissedSearchRequestId(searchRequestId) } }} /></motion.div> : null}
       <span className="sr-only" role="status" aria-live="polite">{isSongs ? songsAnnouncement : announcement}</span>
@@ -659,6 +625,7 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
         }}
         style={{ ...songsLayout.style, touchAction: 'pan-y', transformOrigin: 'left top', ...songsWindow.gridStyle }}>
         {renderedSongs.map((item, index) => <AllSongsCard key={item.key} item={item} index={songsWindow.first + index} store={coverStore}
+            artworkSource={playlist.artworkSource} fallbackArtworkSource={playlist.fallbackArtworkSource}
             current={item.trackId === playlist.currentTrackId}
             canActivate={!playlist.isOpenAudioDisabled}
             selectMode={selectMode} selected={selected.has(item.key)}
@@ -666,7 +633,11 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
             coverFailed={failedSongCovers.has(item.key)}
             onCoverFailed={handleSongCoverFailed}
             onActivate={handleSongActivate}
-            onToggleSelect={handleSongToggleSelect} onEnterSelectMode={isPresent ? handleSongEnterSelectMode : undefined} />)}
+            // Deliberately independent of `useIsPresent`: that flips on the frame
+            // this panel starts leaving, which would invalidate every rendered
+            // card's memo on the exit animation's first frame. Long-press still
+            // cannot enter selection mode while leaving; the section is `inert`.
+            onToggleSelect={handleSongToggleSelect} onEnterSelectMode={handleSongEnterSelectMode} />)}
       </motion.div></div> : <MotionEmpty className="playlist-management-empty" variants={navigationMotion.chrome} initial={false} animate="animate"><EmptyHeader><EmptyTitle>{(library.allSongs?.length ?? 0) ? '没有匹配的歌曲' : '暂无歌曲'}</EmptyTitle><EmptyDescription>{(library.allSongs?.length ?? 0) ? '尝试其他名称，或清空搜索。' : '选择音乐文件夹后，这里会汇总其中及子文件夹内的歌曲；不会自动创建播放列表。下次启动会重新扫描。'}</EmptyDescription></EmptyHeader><Button disabled={library.isImportPending} onClick={(library.allSongs?.length ?? 0) ? () => setQuery('') : library.onSelectFolders}>{(library.allSongs?.length ?? 0) ? '清空搜索' : '选择文件夹'}</Button></MotionEmpty>) : categoryId === 'playlists' && library.isPlaylistRestorePending && !visible.length ? <Empty className="playlist-management-empty"><EmptyHeader><EmptyTitle>正在恢复播放列表</EmptyTitle><EmptyDescription>正在读取已保存的 M3U8 清单。</EmptyDescription></EmptyHeader></Empty> : visible.length ? <div ref={gridRef} className="playlist-management-grid"
         data-layout-level={layout.level} data-layout-flow={layout.flow} data-layout-artwork={layout.showArtwork}
         aria-label={layout.label} style={{ ...layout.style, touchAction: 'pan-y' }}>
@@ -687,7 +658,7 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
                 layout={sharedProjection ? 'position' : undefined}
                 layoutId={sharedProjection ? `playlist-library-name:${item.scope}` : undefined}
                 transition={{ layout: returnTransition }}>{item.name}</motion.span>
-              <span className="playlist-management-meta"><img src={layout.level === 2 ? musicLarge : musicSmall} alt="" aria-hidden="true" /><span>{item.trackCount}{item.totalClock ? ` | ${item.totalClock}` : ''}</span></span>
+              <span className="playlist-management-meta"><span className="playlist-management-meta-icon" aria-hidden="true" /><span>{item.trackCount}{item.totalClock ? ` | ${item.totalClock}` : ''}</span></span>
               </span>
             </Button>
         </motion.div>)}

@@ -136,7 +136,12 @@ try {
     assert.equal(shrunk.cache, 60, 'shrinking demand evicts offscreen overflow back to normal retention limit')
     assert.deepEqual(shrunk.missing, [])
     assert.deepEqual(shrunk.revokedDesired, [])
-    assert.equal(shrunk.maxActive, 1, 'shared scheduler admits one native pixel request')
+    // The shared scheduler is bounded, not serialised. This fixture answers every
+    // native pixel request inside its own microtask (`window.hold` is off), so
+    // overlap is impossible here by construction and only the ceiling is
+    // observable. The "more than one in flight" proof lives in
+    // playlistCoverScheduler.test.mjs, where the native boundary is held open.
+    assert(shrunk.maxActive <= 4, 'shared scheduler stays within its admission ceiling')
     assert(await page.evaluate(() => window.events.pixels.every(input=>input.maxEdge===256)))
     await page.evaluate(() => window.dispose())
     const disposed = await evidence(page)
@@ -150,7 +155,10 @@ try {
     const { page, errors } = await open(current)
     await settled(page)
     await page.evaluate(() => {window.hold=true;document.querySelector('#panel').scrollTop=650})
-    await page.waitForFunction(() => window.release.length === 1)
+    // The shared scheduler admits up to MAX_CONCURRENT loads, so a scroll while
+    // holding can park more than one release. Wait for at least one held load;
+    // the orphan-URL accounting below is what this case actually verifies.
+    await page.waitForFunction(() => window.release.length >= 1)
     const created = await page.evaluate(() => window.events.created.length)
     await page.evaluate(() => {window.dispose();window.hold=false;window.release.splice(0).forEach(resolve=>resolve())})
     await page.waitForFunction(() => window.events.active === 0)

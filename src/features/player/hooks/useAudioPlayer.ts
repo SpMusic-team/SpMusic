@@ -1,3 +1,4 @@
+import { folderSelectionPath, isRootSelectionActive, projectSelectedFolder } from '@/features/player/model/folderSelection'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import {
@@ -38,7 +39,7 @@ import { createPlaylistArtworkGrace } from '@/features/player/model/playlistArtw
 import { playlistCoverImageFromPixels } from '@/features/player/model/playlistCoverPixels'
 import { decodePlaylistCover } from '@/features/player/model/playlistCoverReadiness'
 import { createPlaylistArtworkStore, playlistArtworkKey } from '@/features/player/model/playlistArtworkStore'
-import { schedulePlaylistCoverPixels, scheduleTrackThumbnail } from '@/features/player/services/playlistCoverScheduler'
+import { MAX_CONCURRENT, schedulePlaylistCoverPixels, scheduleTrackThumbnail } from '@/features/player/services/playlistCoverScheduler'
 import {
   chunkPlaylistSummaryPaths,
   pendingPlaylistTrackRow,
@@ -74,10 +75,9 @@ import type {
   TrackSummary,
 } from '@/features/player/model/playerTypes'
 import { createPlayerVisualTimelineClock } from '@/features/player/model/visualTimelineClock'
-import { applyManualSongOrder, isSongOrderPermutation, readManualSongOrders, sameSongOrder, saveManualSongOrder } from '@/features/player/model/manualSongOrderStorage'
+import { applyManualSongOrder, isSongOrderPermutation, mergeFilteredSongOrder, readManualSongOrders, sameSongOrder, saveManualSongOrder } from '@/features/player/model/manualSongOrderStorage'
 import {
   AUDIO_PLAYLIST_TRACK_SUMMARY_BATCH_LIMIT,
-  addLibraryFolder,
   beginAudioPlaylistCoverWindow,
   cancelLibraryCoverWarmup,
   clearLibraryFolders,
@@ -85,6 +85,10 @@ import {
   addLibraryPlaylistTracks,
   reorderLibraryPlaylistTracks,
   getLibraryFolders,
+  replaceLibraryFolders,
+  listLibraryFolderDirectories,
+  type LibraryFolderSettings,
+  type ReplaceLibraryFoldersInput,
   getLibraryPlaylists,
   getAudioState,
   getAudioOutputInfo,
@@ -182,7 +186,13 @@ const HYDRATED_TRACK_CACHE_CAPACITY = 8
 // Application-owned BMP URLs and in-flight RGBA buffers. Renderer/GPU memory
 // still needs Release measurement; visible minimum quality is never truncated.
 const PLAYLIST_ARTWORK_RESIDENT_BUDGET = 96 * 1024 * 1024
-const PLAYLIST_ARTWORK_INFLIGHT_BUDGET = 2 * 512 * 512 * 4
+// In-flight RGBA reservations for the shared cover scheduler. The scheduler
+// admits up to MAX_CONCURRENT decodes, and the largest playlist edge it serves
+// is 512, so the reservation must cover every slot or the admission bound above
+// under-counts real transient memory. This hook's own hydration pump is capped
+// at 2 concurrent jobs, but the library hooks feeding the same scheduler are
+// not, so the width comes from the scheduler itself.
+const PLAYLIST_ARTWORK_INFLIGHT_BUDGET = MAX_CONCURRENT * 512 * 512 * 4
 
 function playlistImageBytes(image: PlaylistCoverImage): number {
   return image.encodedBytes + image.width * image.height * 4
@@ -446,6 +456,12 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
   useLayoutEffect(() => { libraryFolderPlaylistsRef.current = libraryFolderPlaylists }, [libraryFolderPlaylists])
   const [manualOrders, setManualOrders] = useState(() => readManualSongOrders().orders)
   const manualOrdersRef = useRef(manualOrders)
+  const [folderSettings, setFolderSettings] = useState<LibraryFolderSettings | null>(null)
+  const folderSettingsRef = useRef<LibraryFolderSettings | null>(null)
+  const pendingFolderSettingsRef = useRef<LibraryFolderSettings | null>(null)
+  const [folderSelectionOpen, setFolderSelectionOpen] = useState(false)
+  const [folderSelectionSaving, setFolderSelectionSaving] = useState(false)
+  const [folderSelectionError, setFolderSelectionError] = useState<string>()
   const [selectedFolderPaths, setSelectedFolderPaths] = useState<readonly string[]>([])
   const [libraryFolderErrors, setLibraryFolderErrors] = useState<Readonly<Record<string, string>>>({})
   const [libraryStatus, setLibraryStatus] = useState<'loading' | 'ready' | 'clearing' | 'error'>('loading')
@@ -457,6 +473,13 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
   const registeredM3uScopesRef = useRef(new Set<string>())
   const [playlistRestorePending, setPlaylistRestorePending] = useState(true)
   const libraryImportPendingRef = useRef(false)
+  const [libraryRescanPending, setLibraryRescanPending] = useState(false)
+  const libraryStatusRef = useRef(libraryStatus)
+  const libraryRestorePendingRef = useRef(libraryRestorePending)
+  useLayoutEffect(() => {
+    libraryStatusRef.current = libraryStatus
+    libraryRestorePendingRef.current = libraryRestorePending
+  }, [libraryStatus, libraryRestorePending])
   const [, setPlaylistTrackVisuals] = useState<Readonly<Record<string, PlaylistTrackVisual>>>({})
   const [playlistTrackMetadata, setPlaylistTrackMetadata] = useState<Readonly<Record<string, PlaylistTrackMetadata>>>({})
   // Read-only tag summaries, keyed by playlist scope. This is a third channel:
@@ -519,6 +542,8 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
   const playlistVisualWindowKeyRef = useRef<string | null>(null)
   const playlistTrackVisualsRef = useRef<Readonly<Record<string, PlaylistTrackVisual>>>({})
   const playlistVisualEdgeRef = useRef(new Map<string, 128 | 256 | 512>())
+  const playlistVisualStaleIdsRef = useRef(new Set<string>())
+  const currentArtworkRefreshRef = useRef(0)
   const playlistVisualSourceRef = useRef(new Map<string, string>())
   const [playlistArtworkStore] = useState(() => createPlaylistArtworkStore(() => undefined))
   // The bridge keeps only committed identity primitives. It does not retain a
@@ -599,14 +624,19 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
   const sessionPlaylistDescriptorsRef = useRef(new Map<string, AudioFolderPlaylist>())
   const playlistAddSnapshotsRef = useRef(new WeakMap<PlaylistAddSnapshot, ReadonlyMap<string, AudioFolderTrackRef>>())
   const libraryPlaylistObjectsRef = useRef(new WeakSet<AudioFolderPlaylist>())
+  // Provenance survives root removal so a missing library detail cannot fall
+  // back to an older playback snapshot. This retains no tracks or artwork.
+  const knownLibraryFolderScopesRef = useRef(new Set<string>())
   const libraryEpochRef = useRef(0)
+  const libraryImportRunRef = useRef(0)
+  const librarySavePendingRef = useRef(false)
   const coverWarmupQueueRef = useRef<Array<{ epoch: number; paths: string[] }>>([])
   const coverWarmupRunningRef = useRef(false)
   const selectedFolderPathsRef = useRef<readonly string[]>([])
   const libraryMutationRef = useRef<Promise<void>>(Promise.resolve())
   const playlistSummaryRowsRef = useRef<Readonly<Record<string, Readonly<Record<string, PlaylistTrackRow>>>>>({})
   const playlistSummaryStatusRef = useRef<Readonly<Record<string, PlaylistSummaryStatus>>>({})
-  const playlistSummaryRunRef = useRef(new Map<string, { runId: number; fingerprint: string }>())
+  const playlistSummaryRunRef = useRef(new Map<string, { runId: number; fingerprint: string; libraryEpoch: number | null }>())
   const playlistSummaryRunIdRef = useRef(0)
   const playlistSummaryDisposedRef = useRef(false)
   const trackCardPreviewIdRef = useRef(0)
@@ -681,6 +711,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     playlistVisualRetryTimersRef.current.clear()
     playlistImageErrorCountsRef.current.clear()
     playlistVisualFailedRef.current.clear()
+    playlistVisualStaleIdsRef.current.clear()
     for (const pending of playlistPendingReplacementRef.current.values()) {
       for (const older of pending.olderVisuals) {
         if (older.visual.coverThumbnail) URL.revokeObjectURL(older.visual.coverThumbnail.src)
@@ -864,6 +895,13 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     return active && playlistScope(active) === scope ? active : undefined
   }, [])
 
+  const isLibraryFolderScope = useCallback((scope: string) => {
+    const source = findPlaylistForScope(scope)
+      ?? playbackQueueOrigin(folderPlaylistRef.current)?.sourcePlaylist
+    if (source && playlistScope(source) === scope) return libraryPlaylistObjectsRef.current.has(source)
+    return knownLibraryFolderScopesRef.current.has(scope)
+  }, [findPlaylistForScope])
+
   const enqueueCoverWarmup = useCallback((playlist: AudioFolderPlaylist) => {
     const epoch = libraryEpochRef.current
     const paths = [...new Set(playlist.tracks.filter((track) => track.available).map((track) => track.sourcePath))]
@@ -912,6 +950,45 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     libraryPlaylistObjectsRef.current.add(playlist)
     const scope = playlistScope(playlist)
     sessionPlaylistDescriptorsRef.current.set(scope, playlist)
+    // Refresh presentation only. The playback snapshot and native transport
+    // continue to own the queue and decoder across a library rescan.
+    const active = folderPlaylistRef.current
+    const matchingPaths = new Set(playlist.tracks.map(item => normalizeAudioSourcePath(item.sourcePath)))
+    const affected = active?.tracks.filter(item => matchingPaths.has(normalizeAudioSourcePath(item.sourcePath))) ?? []
+    if (affected.length) {
+      playlistVisualGenerationRef.current += 1
+      for (const item of affected) {
+        playlistVisualStaleIdsRef.current.add(item.id)
+        playlistVisualFailedRef.current.delete(item.id)
+        const timer = playlistVisualRetryTimersRef.current.get(item.id)
+        if (timer) clearTimeout(timer)
+        playlistVisualRetryTimersRef.current.delete(item.id)
+      }
+      playlistVisualWindowKeyRef.current = null
+      refreshPlaylistVisualDemandRef.current()
+    }
+    const current = audioTrackRef.current
+    if (current && matchingPaths.has(normalizeAudioSourcePath(current.sourcePath))) {
+      const refresh = ++currentArtworkRefreshRef.current
+      const selection = selectionRequestIdRef.current
+      const activeEpoch = playlistScopeEpochRef.current
+      const isCurrent = () => !playlistSummaryDisposedRef.current
+        && currentArtworkRefreshRef.current === refresh
+        && libraryEpochRef.current === epoch
+        && sessionPlaylistDescriptorsRef.current.get(scope) === playlist
+        && playlistScopeEpochRef.current === activeEpoch
+        && selectionRequestIdRef.current === selection
+        && audioTrackRef.current?.id === current.id
+        && normalizeAudioSourcePath(audioTrackRef.current.sourcePath) === normalizeAudioSourcePath(current.sourcePath)
+        && presentationTrackRef.current?.id === current.id
+      void probeAudioPlaylistCover(current.sourcePath).then(cover => {
+        if (!isCurrent() || cover.id !== current.id
+          || normalizeAudioSourcePath(cover.sourcePath) !== normalizeAudioSourcePath(current.sourcePath)) return
+        commitPresentationArtwork(audioTrackToTrack({ ...current, metadata: { ...current.metadata, coverArt: cover.coverArt } }))
+      }).catch(error => {
+        if (isCurrent()) console.warn('重新扫描后刷新当前封面失败', error)
+      })
+    }
     setLibraryFolderPlaylists((previous) => previous.some((item) => playlistScope(item) === scope)
       ? previous.map((item) => playlistScope(item) === scope ? playlist : item)
       : [...previous, playlist])
@@ -921,74 +998,73 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       delete next[playlist.sourcePath]
       return next
     })
-  }, [applyFolderManualOrder])
+  }, [applyFolderManualOrder, commitPresentationArtwork])
 
-  const registerLibraryPlaylist = useCallback(async (playlist: AudioFolderPlaylist, epoch: number) => {
-    if (playlist.sourceKind !== 'folder' || libraryEpochRef.current !== epoch) return
-    const path = playlist.sourcePath
-    const mutation = libraryMutationRef.current.then(async () => {
-      if (libraryEpochRef.current !== epoch) return
-      try {
-        const result = await addLibraryFolder(path)
-        if (libraryEpochRef.current !== epoch) return
-        if (!Array.isArray(result.folders) || !result.folders.every((folder) => typeof folder === 'string')) throw new Error('歌曲文件夹列表格式错误')
-        selectedFolderPathsRef.current = result.folders
-        setSelectedFolderPaths(result.folders)
-        rememberLibraryPlaylist(playlist, epoch)
-        setLibraryStatus('ready')
-      } catch (error) {
-        if (libraryEpochRef.current !== epoch) return
-        const message = commandError(error).message
-        setLibraryFolderErrors((previous) => ({ ...previous, [path]: `无法保存选择：${message}` }))
-        setLibraryStatus('error')
-        toast.error(`无法保存文件夹选择：${message}`)
-      }
-    })
-    libraryMutationRef.current = mutation.catch(() => undefined)
-    await mutation
-  }, [rememberLibraryPlaylist])
+  const commitFolderSettings = useCallback((settings: LibraryFolderSettings) => {
+    pendingFolderSettingsRef.current = null
+    for (const root of settings.roots) knownLibraryFolderScopesRef.current.add(`folder\u0000${normalizeAudioSourcePath(root.path)}`)
+    folderSettingsRef.current = settings
+    setFolderSettings(settings)
+    selectedFolderPathsRef.current = settings.roots.map(root => root.path)
+    setSelectedFolderPaths(selectedFolderPathsRef.current)
+  }, [])
 
   const clearSelectedLibraryFolders = useCallback(async () => {
-    if (deletePendingRef.current) return
+    if (deletePendingRef.current || playlistSummaryDisposedRef.current || librarySavePendingRef.current || libraryStatusRef.current === 'clearing') return
+    setFolderSelectionOpen(false)
     const epoch = libraryEpochRef.current + 1
     libraryEpochRef.current = epoch
+    libraryImportRunRef.current += 1
+    libraryImportPendingRef.current = false
     coverWarmupQueueRef.current = []
     const priorPaths = selectedFolderPathsRef.current
     selectedFolderPathsRef.current = []
+    libraryStatusRef.current = 'clearing'
+    libraryRestorePendingRef.current = false
+    setLibraryImportPending(false)
+    setLibraryRescanPending(false)
     setLibraryStatus('clearing')
     setLibraryRestorePending(false)
     const mutation = libraryMutationRef.current.then(async () => {
+      if (playlistSummaryDisposedRef.current || libraryEpochRef.current !== epoch) return
       try {
         await clearLibraryFolders()
-        if (libraryEpochRef.current !== epoch) return
+        if (playlistSummaryDisposedRef.current || libraryEpochRef.current !== epoch) return
         try { await cancelLibraryCoverWarmup() } catch (error) { console.warn('取消歌曲封面预热失败', error) }
+        if (playlistSummaryDisposedRef.current || libraryEpochRef.current !== epoch) return
+        const settings = await getLibraryFolders()
+        if (playlistSummaryDisposedRef.current || libraryEpochRef.current !== epoch) return
         const activeScope = folderPlaylistRef.current ? playlistScope(folderPlaylistRef.current) : null
         for (const [scope, playlist] of sessionPlaylistDescriptorsRef.current) {
           if (playlist.sourceKind === 'folder' && scope !== activeScope) sessionPlaylistDescriptorsRef.current.delete(scope)
         }
         setSessionPlaylists((previous) => previous.filter((item) => item.sourceKind !== 'folder'))
         setLibraryFolderPlaylists([])
-        setSelectedFolderPaths([])
+        commitFolderSettings(settings)
         setLibraryFolderErrors({})
+        // A fast native result can batch clearing -> ready into one render.
+        // Release the synchronous guard even if the layout effect sees no change.
+        libraryStatusRef.current = 'ready'
         setLibraryStatus('ready')
       } catch (error) {
-        if (libraryEpochRef.current !== epoch) return
+        if (playlistSummaryDisposedRef.current || libraryEpochRef.current !== epoch) return
         try {
           const current = await getLibraryFolders()
-          if (libraryEpochRef.current !== epoch) return
-          selectedFolderPathsRef.current = current.folders
-          setSelectedFolderPaths(current.folders)
+          if (playlistSummaryDisposedRef.current || libraryEpochRef.current !== epoch) return
+          commitFolderSettings(current)
         } catch {
+          if (playlistSummaryDisposedRef.current || libraryEpochRef.current !== epoch) return
           selectedFolderPathsRef.current = priorPaths
         }
         const message = error instanceof Error ? error.message : String(error)
+        libraryStatusRef.current = 'error'
         setLibraryStatus('error')
         setLibraryFolderErrors((previous) => ({ ...previous, '': `清空歌曲选择失败：${message}` }))
       }
     })
     libraryMutationRef.current = mutation.catch(() => undefined)
     await mutation
-  }, [])
+  }, [commitFolderSettings])
 
   useEffect(() => {
     const epoch = libraryEpochRef.current + 1
@@ -998,18 +1074,15 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       try {
         const result = await getLibraryFolders()
         if (disposed || libraryEpochRef.current !== epoch) return
-        if (!Array.isArray(result.folders) || !result.folders.every((path) => typeof path === 'string')) {
-          throw new Error('歌曲文件夹列表格式错误')
-        }
-        selectedFolderPathsRef.current = [...new Set([...result.folders, ...selectedFolderPathsRef.current])]
-        setSelectedFolderPaths(selectedFolderPathsRef.current)
+        commitFolderSettings(result)
+        const paths = result.roots.filter(isRootSelectionActive).map(root => root.path)
         setLibraryStatus('ready')
         // Scanning two directories at a time lets a large library restore
         // progressively without monopolizing the backend's metadata path.
         let cursor = 0
         const scanNext = async () => {
-          while (!disposed && libraryEpochRef.current === epoch && cursor < result.folders.length) {
-            const path = result.folders[cursor++]
+          while (!disposed && libraryEpochRef.current === epoch && cursor < paths.length) {
+            const path = paths[cursor++]
             try {
               const playlist = await scanLibraryFolder(path)
               if (disposed || libraryEpochRef.current !== epoch) return
@@ -1018,7 +1091,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
               enqueueCoverWarmup(playlist)
             } catch (error) {
               if (disposed || libraryEpochRef.current !== epoch) return
-              const message = error instanceof Error ? error.message : String(error)
+              const message = commandError(error).message
               setLibraryFolderErrors((previous) => ({ ...previous, [path]: message }))
             }
           }
@@ -1039,7 +1112,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       coverWarmupQueueRef.current = []
       void cancelLibraryCoverWarmup().catch(() => undefined)
     }
-  }, [rememberLibraryPlaylist, enqueueCoverWarmup])
+  }, [rememberLibraryPlaylist, enqueueCoverWarmup, commitFolderSettings])
 
   // Publish one batch of tag rows. Every guard below is load-bearing: a stale
   // pass must never write another scope, another descriptor set, or a list the
@@ -1093,7 +1166,10 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     fingerprint: string,
     descriptors: readonly AudioFolderTrackRef[],
   ) => {
+    const libraryEpoch = libraryEpochRef.current
+    const isLibraryFolder = sessionPlaylistDescriptorsRef.current.get(scope)?.sourceKind === 'folder'
     const runIsCurrent = () => !playlistSummaryDisposedRef.current
+      && (!isLibraryFolder || libraryEpochRef.current === libraryEpoch)
       && playlistSummaryRunRef.current.get(scope)?.runId === runId
     const descriptorsById = new Map(descriptors.map((descriptor) => [descriptor.id, descriptor]))
     const descriptorPaths = new Map(descriptors.map((descriptor) => [descriptor.id, descriptor.sourcePath]))
@@ -1151,23 +1227,34 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     }
   }, [commitPlaylistSummaryRows, commitPlaylistSummaryStatus])
 
-  const ensurePlaylistSummaries = useCallback((scope: string, playlistHint?: AudioFolderPlaylist) => {
+  const ensurePlaylistSummaries = useCallback((scope: string, playlistHint?: AudioFolderPlaylist, force = false) => {
     const playlist = playlistHint ?? findPlaylistForScope(scope)
     if (!playlist) return
     if (playlist.tracks.length === 0) {
+      playlistSummaryRunRef.current.delete(scope)
+      const nextRows = { ...playlistSummaryRowsRef.current }
+      delete nextRows[scope]
+      playlistSummaryRowsRef.current = nextRows
+      setPlaylistTrackSummariesByScope(nextRows)
       commitPlaylistSummaryStatus(scope, 'ready')
       return
     }
     const fingerprint = playlistDescriptorFingerprint(playlist.tracks)
+    const libraryEpoch = playlist.sourceKind === 'folder' ? libraryEpochRef.current : null
     const currentRun = playlistSummaryRunRef.current.get(scope)
     // Idempotent: an in-flight or already committed pass for this exact
-    // descriptor set is reused, a replaced descriptor set is re-fetched once.
-    if (currentRun?.fingerprint === fingerprint) return
+    // descriptor set and library lifetime is reused. Clearing invalidates even
+    // an identical descriptor set, because its previous pass cannot publish.
+    if (!force && currentRun?.fingerprint === fingerprint && currentRun.libraryEpoch === libraryEpoch) return
+    if (!force && currentRun?.fingerprint === fingerprint && playlistSummaryStatusRef.current[scope] === 'ready') {
+      playlistSummaryRunRef.current.set(scope, { ...currentRun, libraryEpoch })
+      return
+    }
 
     const runId = playlistSummaryRunIdRef.current + 1
     playlistSummaryRunIdRef.current = runId
-    playlistSummaryRunRef.current.set(scope, { runId, fingerprint })
-    if (currentRun) {
+    playlistSummaryRunRef.current.set(scope, { runId, fingerprint, libraryEpoch })
+    if (currentRun && (force || currentRun.fingerprint !== fingerprint)) {
       const nextRows = { ...playlistSummaryRowsRef.current }
       delete nextRows[scope]
       playlistSummaryRowsRef.current = nextRows
@@ -1176,6 +1263,18 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     commitPlaylistSummaryStatus(scope, 'loading')
     void runPlaylistSummaryPass(scope, runId, fingerprint, playlist.tracks)
   }, [commitPlaylistSummaryStatus, findPlaylistForScope, runPlaylistSummaryPass])
+
+  useEffect(() => {
+    if (libraryStatus !== 'error') return
+    // A failed clear retains the library, but its earlier epoch has already
+    // cancelled tag reads. Resume only those invalidated scopes, including an
+    // active source that is not currently shown in the library category view.
+    for (const [scope, run] of playlistSummaryRunRef.current) {
+      if (run.libraryEpoch !== null && run.libraryEpoch !== libraryEpochRef.current) {
+        ensurePlaylistSummaries(scope)
+      }
+    }
+  }, [libraryStatus, ensurePlaylistSummaries])
 
   useEffect(() => {
     let disposed = false
@@ -1215,53 +1314,165 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     return () => { disposed = true }
   }, [ensurePlaylistSummaries, enqueueCoverWarmup])
 
+  const rescanSelectedLibraryFolders = useCallback(async () => {
+    if (playlistSummaryDisposedRef.current || libraryImportPendingRef.current
+      || libraryRestorePendingRef.current || libraryStatusRef.current === 'clearing') return
+    const paths = folderSettingsRef.current?.roots.filter(isRootSelectionActive).map(root => root.path) ?? []
+    if (!paths.length) return
+    const runId = ++libraryImportRunRef.current
+    libraryImportPendingRef.current = true
+    setLibraryImportPending(true)
+    setLibraryRescanPending(true)
+    const epoch = libraryEpochRef.current
+    const isCurrent = () => !playlistSummaryDisposedRef.current && libraryEpochRef.current === epoch
+    let cursor = 0
+    let failures = 0
+    try {
+      const scanNext = async () => {
+        while (isCurrent() && cursor < paths.length) {
+          const path = paths[cursor++]
+          try {
+            const source = await scanLibraryFolder(path)
+            if (!isCurrent()) return
+            if (source.sourceKind !== 'folder') throw new Error('返回的歌曲来源不是文件夹')
+            rememberLibraryPlaylist(source, epoch)
+            ensurePlaylistSummaries(playlistScope(source), source, true)
+            enqueueCoverWarmup(source)
+            setLibraryFolderErrors(previous => {
+              if (!(path in previous)) return previous
+              const next = { ...previous }
+              delete next[path]
+              return next
+            })
+          } catch (error) {
+            if (!isCurrent()) return
+            failures += 1
+            setLibraryFolderErrors(previous => ({ ...previous, [path]: commandError(error).message }))
+          }
+        }
+      }
+      await Promise.all([scanNext(), scanNext()])
+      if (isCurrent() && failures) toast.error(`重新扫描完成，${failures} 个文件夹扫描失败`)
+    } finally {
+      if (libraryImportRunRef.current === runId) libraryImportPendingRef.current = false
+      if (isCurrent() && libraryImportRunRef.current === runId) {
+        setLibraryImportPending(false)
+        setLibraryRescanPending(false)
+      }
+    }
+  }, [rememberLibraryPlaylist, ensurePlaylistSummaries, enqueueCoverWarmup])
+
   const selectFolders = useCallback(async () => {
-    if (libraryImportPendingRef.current || deletePendingRef.current) return
+    if (deletePendingRef.current || playlistSummaryDisposedRef.current || libraryImportPendingRef.current
+      || libraryRestorePendingRef.current || libraryStatusRef.current === 'clearing') return
+    const refreshed = pendingFolderSettingsRef.current
+    if (refreshed) commitFolderSettings(refreshed)
+    setFolderSelectionError(undefined)
+    setFolderSelectionOpen(true)
+  }, [commitFolderSettings])
+
+  const saveFolderSelection = useCallback(async (input: ReplaceLibraryFoldersInput) => {
+    if (deletePendingRef.current || playlistSummaryDisposedRef.current || libraryImportPendingRef.current
+      || libraryRestorePendingRef.current || libraryStatusRef.current === 'clearing') throw new Error('媒体库正在更新，请稍后保存')
+    const runId = ++libraryImportRunRef.current
+    const saveEpoch = libraryEpochRef.current
+    librarySavePendingRef.current = true
+    libraryImportPendingRef.current = true
+    setLibraryImportPending(true)
+    setFolderSelectionSaving(true)
+    setFolderSelectionError(undefined)
+    let scanScheduled = false
+    try {
+      const settings = await replaceLibraryFolders(input)
+      if (playlistSummaryDisposedRef.current) return
+      commitFolderSettings(settings)
+      const epoch = ++libraryEpochRef.current
+      coverWarmupQueueRef.current = []
+      await cancelLibraryCoverWarmup().catch(() => undefined)
+      if (playlistSummaryDisposedRef.current || libraryEpochRef.current !== epoch) return
+      const registered = new Set(settings.roots.map(root => folderSelectionPath(root.path)))
+      setLibraryFolderPlaylists(previous => previous.filter(source => registered.has(folderSelectionPath(source.sourcePath))))
+      setLibraryFolderErrors(previous => Object.fromEntries(Object.entries(previous).filter(([path]) => registered.has(folderSelectionPath(path)))))
+      const activeScope = folderPlaylistRef.current ? playlistScope(folderPlaylistRef.current) : null
+      const removedScopes = new Set<string>()
+      for (const [scope, source] of sessionPlaylistDescriptorsRef.current) {
+        if (source.sourceKind === 'folder' && !registered.has(folderSelectionPath(source.sourcePath)) && scope !== activeScope) {
+          sessionPlaylistDescriptorsRef.current.delete(scope)
+          playlistSummaryRunRef.current.delete(scope)
+          removedScopes.add(scope)
+        }
+      }
+      if (removedScopes.size) {
+        playlistSummaryRowsRef.current = Object.fromEntries(Object.entries(playlistSummaryRowsRef.current).filter(([scope]) => !removedScopes.has(scope)))
+        playlistSummaryStatusRef.current = Object.fromEntries(Object.entries(playlistSummaryStatusRef.current).filter(([scope]) => !removedScopes.has(scope)))
+        setPlaylistTrackSummariesByScope(playlistSummaryRowsRef.current)
+        setPlaylistSummaryStatusByScope(playlistSummaryStatusRef.current)
+      }
+      const paths = settings.roots.filter(isRootSelectionActive).map(root => root.path)
+      let cursor = 0
+      const current = () => !playlistSummaryDisposedRef.current && libraryEpochRef.current === epoch
+      const scanNext = async () => {
+        while (current() && cursor < paths.length) {
+          const path = paths[cursor++]
+          try {
+            const source = await scanLibraryFolder(path)
+            if (!current()) return
+            if (source.sourceKind !== 'folder') throw new Error('返回的歌曲来源不是文件夹')
+            rememberLibraryPlaylist(source, epoch)
+            ensurePlaylistSummaries(playlistScope(source), source, true)
+            enqueueCoverWarmup(source)
+          } catch (error) {
+            if (current()) setLibraryFolderErrors(previous => ({ ...previous, [path]: commandError(error).message }))
+          }
+        }
+      }
+      scanScheduled = true
+      void Promise.all([scanNext(), scanNext()]).finally(() => {
+        if (current() && libraryImportRunRef.current === runId) {
+          libraryImportPendingRef.current = false
+          setLibraryImportPending(false)
+        }
+      })
+      libraryStatusRef.current = 'ready'
+      setLibraryStatus('ready')
+      setFolderSelectionOpen(false)
+    } catch (error) {
+      const failure = commandError(error)
+      if (!playlistSummaryDisposedRef.current) setFolderSelectionError(failure.message)
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'LIBRARY_SETTINGS_CONFLICT') {
+        try {
+          const refreshed = await getLibraryFolders()
+          // Keep this mounted editor's committed view, draft and base revision
+          // intact. Only the next editor session consumes the newer registry.
+          if (!playlistSummaryDisposedRef.current && libraryImportRunRef.current === runId
+            && libraryEpochRef.current === saveEpoch) pendingFolderSettingsRef.current = refreshed
+        } catch {
+          // Retain the original conflict; an unavailable refresh must not turn
+          // a failed CAS into a successful save or alter committed state.
+        }
+      }
+      throw error
+    } finally {
+      if (libraryImportRunRef.current === runId) librarySavePendingRef.current = false
+      if (!playlistSummaryDisposedRef.current) setFolderSelectionSaving(false)
+      if (!scanScheduled && libraryImportRunRef.current === runId) {
+        libraryImportPendingRef.current = false
+        if (!playlistSummaryDisposedRef.current) setLibraryImportPending(false)
+      }
+    }
+  }, [commitFolderSettings, rememberLibraryPlaylist, ensurePlaylistSummaries, enqueueCoverWarmup])
+
+  const importPlaylist = useCallback(async () => {
+    if (deletePendingRef.current || playlistSummaryDisposedRef.current || libraryImportPendingRef.current
+      || libraryRestorePendingRef.current || libraryStatusRef.current === 'clearing') return
+    const runId = ++libraryImportRunRef.current
     libraryImportPendingRef.current = true
     setLibraryImportPending(true)
     const epoch = libraryEpochRef.current
     try {
-      const paths = await selectLibraryFolders()
-      if (paths === null || libraryEpochRef.current !== epoch) return
-      const seen = new Set<string>()
-      for (const path of paths) {
-        if (libraryEpochRef.current !== epoch) return
-        const key = normalizeAudioSourcePath(path)
-        if (seen.has(key)) continue
-        seen.add(key)
-        try {
-          const source = await scanLibraryFolder(path)
-          if (libraryEpochRef.current !== epoch) return
-          if (source.sourceKind !== 'folder') throw new Error('返回的歌曲来源不是文件夹')
-          await registerLibraryPlaylist(source, epoch)
-          if (libraryEpochRef.current !== epoch) return
-          enqueueCoverWarmup(source)
-          if (sessionPlaylistDescriptorsRef.current.get(playlistScope(source)) === source) {
-            ensurePlaylistSummaries(playlistScope(source), source)
-          }
-        } catch (error) {
-          if (libraryEpochRef.current !== epoch) return
-          const message = commandError(error).message
-          setLibraryFolderErrors((previous) => ({ ...previous, [path]: message }))
-          toast.error(`无法添加文件夹：${message}`)
-        }
-      }
-    } catch (error) {
-      if (libraryEpochRef.current === epoch) toast.error(`无法选择文件夹：${commandError(error).message}`)
-    } finally {
-      libraryImportPendingRef.current = false
-      setLibraryImportPending(false)
-    }
-  }, [ensurePlaylistSummaries, registerLibraryPlaylist, enqueueCoverWarmup])
-
-  const importPlaylist = useCallback(async () => {
-    if (libraryImportPendingRef.current || deletePendingRef.current) return
-    libraryImportPendingRef.current = true
-    setLibraryImportPending(true)
-    const mutationGeneration = descriptorMutationGenerationRef.current
-    try {
+      const mutationGeneration = descriptorMutationGenerationRef.current
       const playlist = await importAudioPlaylist()
-      if (playlist === null || playlistSummaryDisposedRef.current || mutationGeneration !== descriptorMutationGenerationRef.current) return
+      if (playlist === null || playlistSummaryDisposedRef.current || libraryEpochRef.current !== epoch || mutationGeneration !== descriptorMutationGenerationRef.current) return
       if (playlist.sourceKind !== 'm3u8') throw new Error('返回的来源不是 M3U8 播放列表')
       const scope = playlistScope(playlist)
       registeredM3uScopesRef.current.add(scope)
@@ -1272,10 +1483,12 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       ensurePlaylistSummaries(scope, playlist)
       enqueueCoverWarmup(playlist)
     } catch (error) {
-      if (!playlistSummaryDisposedRef.current) toast.error(`无法导入播放列表：${commandError(error).message}`)
+      if (!playlistSummaryDisposedRef.current && libraryEpochRef.current === epoch) toast.error(`无法导入播放列表：${commandError(error).message}`)
     } finally {
-      libraryImportPendingRef.current = false
-      setLibraryImportPending(false)
+      if (libraryImportRunRef.current === runId) {
+        libraryImportPendingRef.current = false
+        if (!playlistSummaryDisposedRef.current && libraryEpochRef.current === epoch) setLibraryImportPending(false)
+      }
     }
   }, [ensurePlaylistSummaries, enqueueCoverWarmup])
 
@@ -1296,13 +1509,27 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     return scope
   }, [ensurePlaylistSummaries])
 
+  // Library scans contain the complete tree; user-selected roots and exclusions
+  // define the rows that may participate in all-songs operations.
+  const selectedLibraryTracks = useCallback(() => libraryFolderPlaylistsRef.current.flatMap(source => {
+    const root = folderSettingsRef.current?.roots.find(item => folderSelectionPath(item.path) === folderSelectionPath(source.sourcePath))
+    return root && isRootSelectionActive(root) ? projectSelectedFolder(source, root).tracks : []
+  }), [])
+
+  const selectableSourceTracks = useCallback((source: AudioFolderPlaylist | undefined) => {
+    if (!source) return []
+    if (source.sourceKind !== 'folder' || !libraryPlaylistObjectsRef.current.has(source)) return source.tracks
+    const root = folderSettingsRef.current?.roots.find(item => folderSelectionPath(item.path) === folderSelectionPath(source.sourcePath))
+    return root && isRootSelectionActive(root) ? projectSelectedFolder(source, root).tracks : []
+  }, [])
+
   const createPlaylist = useCallback((name: string, songKeys: readonly string[]): string | null => {
-    const descriptors = new Map(libraryFolderPlaylists.flatMap((source) => source.tracks.map((item) => [normalizeAudioSourcePath(item.sourcePath), item] as const)))
+    const descriptors = new Map(selectedLibraryTracks().map(item => [normalizeAudioSourcePath(item.sourcePath), item] as const))
     return createPlaylistFromTracks(name, [...new Set(songKeys)].flatMap(key => {
       const track = descriptors.get(key)
       return track ? [track] : []
     }))
-  }, [libraryFolderPlaylists, createPlaylistFromTracks])
+  }, [selectedLibraryTracks, createPlaylistFromTracks])
 
   const activatePlaylistScope = useCallback((incoming: AudioFolderPlaylist, summarySeed?: Readonly<Record<string, PlaylistTrackRow>>) => {
     const playlist = applyFolderManualOrder(incoming)
@@ -1390,6 +1617,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     playlistVisualRetryTimersRef.current.clear()
     playlistImageErrorCountsRef.current.clear()
     playlistVisualFailedRef.current.clear()
+    playlistVisualStaleIdsRef.current.clear()
     for (const pending of playlistPendingReplacementRef.current.values()) {
       for (const older of pending.olderVisuals) {
         if (older.visual.coverThumbnail) URL.revokeObjectURL(older.visual.coverThumbnail.src)
@@ -1754,6 +1982,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
             if (
               jobIsStale()
               || (playlistTrackVisualsRef.current[job.trackId]
+                && !playlistVisualStaleIdsRef.current.has(job.trackId)
                 && (playlistVisualEdgeRef.current.get(job.trackId) ?? 0) >= job.maxEdge)
             ) {
               if (coverThumbnail) URL.revokeObjectURL(coverThumbnail.src)
@@ -1776,6 +2005,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
             }
             const nextVisuals = { ...playlistTrackVisualsRef.current, [job.trackId]: visual }
             playlistTrackVisualsRef.current = nextVisuals
+            playlistVisualStaleIdsRef.current.delete(job.trackId)
             if (!hasUnrenderableCover) playlistVisualEdgeRef.current.set(job.trackId, edge)
             playlistVisualSourceRef.current.set(job.trackId, job.normalizedSourcePath)
             publishPlaylistVisuals(nextVisuals)
@@ -1804,6 +2034,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
             }
           })()
           .catch((error: unknown) => {
+            if (playlistVisualGenerationRef.current !== job.generation) return
             const code = isAudioCoverPixelsError(error) ? error.code : 'WORKER_FAILED'
             const retryable = loadingSource
               ? (isAudioCommandError(error) ? error.code === 'INTERNAL_ERROR' && error.recoverable : code === 'WORKER_FAILED')
@@ -1826,9 +2057,11 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
             const timer = setTimeout(() => {
               playlistVisualRetryTimersRef.current.delete(job.trackId)
               if (
-                playlistScopeEpochRef.current !== job.playlistEpoch
+                playlistVisualGenerationRef.current !== job.generation
+                || playlistScopeEpochRef.current !== job.playlistEpoch
                 || !playlistVisualDesiredIdsRef.current.has(job.trackId)
                 || (playlistTrackVisualsRef.current[job.trackId]
+                  && !playlistVisualStaleIdsRef.current.has(job.trackId)
                   && (playlistVisualEdgeRef.current.get(job.trackId) ?? 0) >= job.maxEdge)
               ) return
               if (playlistVisualHydrationActiveJobsRef.current.has(job.trackId)) return
@@ -1951,7 +2184,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     const targetEdgeFor = (id: string): 256 | 512 => {
       if (id === firstTrackId) {
         const firstVisual = playlistTrackVisualsRef.current[id]
-        return firstVisual?.coverThumbnail && visibleArtworkSettled ? 512 : 256
+        return firstVisual?.coverThumbnail && !playlistVisualStaleIdsRef.current.has(id) && visibleArtworkSettled ? 512 : 256
       }
       // List cards use the persisted 256px thumbnail regardless of display
       // scaling; only the first-track hero needs the original 512px lane.
@@ -2071,6 +2304,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
           || playlistVisualFailedRef.current.get(descriptor.id) === normalizeAudioSourcePath(descriptor.sourcePath)
           || playlistVisualRetryTimersRef.current.has(descriptor.id)
           || (playlistTrackVisualsRef.current[descriptor.id]
+            && !playlistVisualStaleIdsRef.current.has(descriptor.id)
             && (playlistVisualEdgeRef.current.get(descriptor.id) ?? 0) >= targetEdgeFor(descriptor.id))
           || (activeJob?.generation === generation
             && activeJob.normalizedSourcePath === normalizeAudioSourcePath(descriptor.sourcePath))
@@ -3409,7 +3643,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
           // library roots disambiguate those existing sessions.
           try {
             const libraryFolders = await getLibraryFolders()
-            folderMode = libraryFolders.folders.some((path) => normalizeAudioSourcePath(path)
+            folderMode = libraryFolders.roots.some((root) => normalizeAudioSourcePath(root.path)
               === normalizeAudioSourcePath(saved.playlist.sourcePath)) ? 'library' : 'file'
           } catch {
             // Prefer the recursive source when the registry cannot be read: it
@@ -3950,7 +4184,11 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       if (!source) {
         const playlist = findPlaylistForScope(entry.scope)
         if (!playlist) return false
-        source = new Map(playlist.tracks.map((item) => [item.id, item]))
+        const root = playlist.sourceKind === 'folder' ? folderSettingsRef.current?.roots.find(root => folderSelectionPath(root.path) === folderSelectionPath(playlist.sourcePath)) : undefined
+        const libraryFolder = libraryPlaylistObjectsRef.current.has(playlist)
+        if (libraryFolder && (!root || !isRootSelectionActive(root))) return false
+        const candidates = libraryFolder && root ? projectSelectedFolder(playlist, root) : playlist
+        source = new Map(candidates.tracks.map((item) => [item.id, item]))
         sources.set(entry.scope, source)
       }
       const descriptor = source.get(entry.trackId)
@@ -4001,7 +4239,11 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       if (!source) {
         const playlist = findPlaylistForScope(entry.scope)
         if (!playlist) return false
-        source = new Map(playlist.tracks.map((item) => [item.id, item]))
+        const root = playlist.sourceKind === 'folder' ? folderSettingsRef.current?.roots.find(root => folderSelectionPath(root.path) === folderSelectionPath(playlist.sourcePath)) : undefined
+        const libraryFolder = libraryPlaylistObjectsRef.current.has(playlist)
+        if (libraryFolder && (!root || !isRootSelectionActive(root))) return false
+        const candidates = libraryFolder && root ? projectSelectedFolder(playlist, root) : playlist
+        source = new Map(candidates.tracks.map((item) => [item.id, item]))
         sources.set(entry.scope, source)
       }
       const descriptor = source.get(entry.trackId)
@@ -4069,14 +4311,13 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     const captured = playlistAddSnapshotsRef.current.get(snapshot)
     if (captured) return captured
     const source = snapshot.scope ? findPlaylistForScope(snapshot.scope) : undefined
-    const tracks = snapshot.scope ? source?.tracks ?? []
-      : [...sessionPlaylistDescriptorsRef.current.values()].filter(item => item.sourceKind === 'folder').flatMap(item => item.tracks)
+    const tracks = snapshot.scope ? selectableSourceTracks(source) : selectedLibraryTracks()
     const byKey = new Map(tracks.map(item => [snapshot.scope ? item.id : normalizeAudioSourcePath(item.sourcePath), item]))
     return new Map([...new Set(snapshot.songKeys)].flatMap(key => {
       const track = byKey.get(key)
       return track ? [[key, track] as const] : []
     }))
-  }, [findPlaylistForScope])
+  }, [findPlaylistForScope, selectableSourceTracks, selectedLibraryTracks])
 
   const preparePlaylistAdd = useCallback((snapshot: PlaylistAddSnapshot): PlaylistAddRequest | undefined => {
     if (deletePendingRef.current || libraryImportPendingRef.current || libraryRestorePending || playlistRestorePending
@@ -4285,7 +4526,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     setDeletePending(true)
     try {
       if (request.scope === null) {
-        const base = [...new Map(libraryFolderPlaylistsRef.current.flatMap(source => source.tracks)
+        const base = [...new Map(selectedLibraryTracks()
           .map(item => [normalizeAudioSourcePath(item.sourcePath), item] as const)).values()]
         const membership = base.map(item => normalizeAudioSourcePath(item.sourcePath))
         if (!isSongOrderPermutation(membership, request.expectedKeys)) return failed('列表已更改，请重新拖动排序。')
@@ -4300,10 +4541,14 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
         return { ok: true }
       }
       const target = findPlaylistForScope(request.scope)
-      if (!target || !sameSongOrder(target.tracks.map(item => item.id), request.expectedKeys)) return failed('列表已更改，请重新拖动排序。')
+      if (!target || !sameSongOrder(selectableSourceTracks(target).map(item => item.id), request.expectedKeys)) return failed('列表已更改，请重新拖动排序。')
       if (sameSongOrder(request.expectedKeys, request.orderedKeys)) return { ok: true }
       const byId = new Map(target.tracks.map(item => [item.id, item]))
-      const tracks = request.orderedKeys.map(key => byId.get(key)!)
+      // A selected library folder may hide descendants. Keep their positions
+      // while reordering the visible members of the same source.
+      const mergedKeys = mergeFilteredSongOrder(target.tracks.map(item => item.id), request.expectedKeys, request.orderedKeys)
+      if (!mergedKeys) return failed('列表已更改，请重新拖动排序。')
+      const tracks = mergedKeys.map(key => byId.get(key)!)
       let updated = { ...target, tracks }
       const queue = playbackQueueOrigin(target)
       if (!queue && target.sourceKind === 'm3u8' && registeredM3uScopesRef.current.has(request.scope)) {
@@ -4339,7 +4584,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       deletePendingRef.current = false
       setDeletePending(false)
     }
-  }, [commitReorderedPlaylist, findPlaylistForScope, libraryRestorePending, playlistRestorePending, libraryStatus])
+  }, [commitReorderedPlaylist, findPlaylistForScope, selectableSourceTracks, selectedLibraryTracks, libraryRestorePending, playlistRestorePending, libraryStatus])
 
   const deleteSongs = useCallback<PlaylistDeleteAction>(async (snapshot, mode) => {
     const keys = [...new Set(snapshot.songKeys)]
@@ -4353,8 +4598,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     const canRemove = source && !playbackQueueOrigin(source)
       && (source.sourceKind === 'custom' || source.sourceKind === 'm3u8')
     if (mode === 'list' && !canRemove) return failed('文件夹扫描视图不支持仅移除条目，请选择删除文件。')
-    const known = snapshot.scope ? source?.tracks ?? []
-      : [...sessionPlaylistDescriptorsRef.current.values()].filter(item => item.sourceKind === 'folder').flatMap(item => item.tracks)
+    const known = snapshot.scope ? selectableSourceTracks(source) : selectedLibraryTracks()
     const descriptors = new Map(known.map(item => [snapshot.scope ? item.id : normalizeAudioSourcePath(item.sourcePath), item]))
     const pathsByKey = new Map(keys.flatMap(key => {
       const descriptor = descriptors.get(key)
@@ -4464,7 +4708,13 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       setTransportBusy(transportCommandRunningRef.current || activePlaybackTransitionRef.current !== null
         || Boolean(latestAudioStateRef.current?.transportTransition))
     }
-  }, [activatePlaylistScope, applyAudioState, ensurePlaylistSummaries, findPlaylistForScope, libraryRestorePending, playlistRestorePending, libraryStatus])
+  }, [activatePlaylistScope, applyAudioState, ensurePlaylistSummaries, findPlaylistForScope, selectableSourceTracks, selectedLibraryTracks, libraryRestorePending, playlistRestorePending, libraryStatus])
+  const activeFolderPaths = useMemo(() => folderSettings?.roots.filter(isRootSelectionActive).map(root => root.path) ?? [], [folderSettings])
+  const visibleSessionPlaylists = useMemo(() => sessionPlaylists.filter(source => source.sourceKind !== 'folder'), [sessionPlaylists])
+  const visibleLibraryFolderPlaylists = useMemo(() => libraryFolderPlaylists.flatMap(source => {
+    const root = folderSettings?.roots.find(root => folderSelectionPath(root.path) === folderSelectionPath(source.sourcePath))
+    return root && isRootSelectionActive(root) ? [projectSelectedFolder(source, root)] : []
+  }), [folderSettings, libraryFolderPlaylists])
 
   return {
     startupRestoreReady,
@@ -4483,13 +4733,25 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     // The duration channel must see the list as soon as it is known, not only
     // after the first track finishes loading.
     playlistDurationTracks: folderPlaylist?.tracks ?? pendingDurationPlaylist?.tracks,
-    sessionPlaylists,
-    libraryFolderPlaylists,
+    sessionPlaylists: visibleSessionPlaylists,
+    libraryFolderPlaylists: visibleLibraryFolderPlaylists,
+    isLibraryFolderScope,
+    folderSelection: {
+      isOpen: folderSelectionOpen, committed: folderSettings, isSaving: folderSelectionSaving,
+      error: folderSelectionError,
+      onOpenChange: (open: boolean) => { if (!folderSelectionSaving) setFolderSelectionOpen(open) },
+      onPickFolders: selectLibraryFolders,
+      onListDirectories: listLibraryFolderDirectories,
+      onSave: saveFolderSelection,
+    },
+    activeFolderPaths,
     selectedFolderPaths,
     libraryFolderErrors,
     libraryStatus,
     libraryRestorePending,
     libraryImportPending,
+    libraryRescanPending,
+    rescanSelectedLibraryFolders,
     playlistRestorePending,
     selectFolders,
     importPlaylist,

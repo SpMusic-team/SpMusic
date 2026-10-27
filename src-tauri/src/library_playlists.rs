@@ -510,6 +510,7 @@ impl StoredPlaylist {
             source_name: self.source_name,
             directory_path: self.directory_path,
             directory_name: self.directory_name,
+            directory_paths: None,
             selected_index: 0,
             tracks: self
                 .tracks
@@ -1370,7 +1371,7 @@ mod tests {
             .upsert(&list(&root, "chosen", "missing.mp3\n"))
             .unwrap();
         folders.clear().unwrap();
-        assert!(folders.get().unwrap().folders.is_empty());
+        assert!(folders.get().unwrap().roots.is_empty());
         assert_eq!(LibraryPlaylistRegistry::new(&root).get().unwrap().len(), 1);
         fs::remove_dir_all(root).unwrap();
     }

@@ -68,7 +68,7 @@ pub(crate) fn read_metadata(
     lyrics_cache: Option<&LyricsCache>,
 ) -> AudioTrackMetadata {
     let started_at = std::time::Instant::now();
-    match read_embedded_metadata(path, cover_cache_dir) {
+    let mut metadata = match read_embedded_metadata(path, cover_cache_dir) {
         Ok(mut metadata) => {
             let had_embedded_lyrics = metadata.lyrics.is_some();
             if metadata.lyrics.is_none() {
@@ -106,7 +106,17 @@ pub(crate) fn read_metadata(
                 ..Default::default()
             }
         }
+    };
+    if metadata.cover_art.is_none() {
+        // The existing hydration cache argument is the audio cache root.
+        // Without it the validated image uses the bounded dataURL fallback.
+        match super::folder_cover::sibling_cover_art(&path.to_string_lossy(), cover_cache_dir) {
+            Ok(cover) => metadata.cover_art = cover,
+            Err(error) => tracing::debug!(path = %path.display(), code = ?error.code,
+                "directory artwork unavailable while reading metadata"),
+        }
     }
+    metadata
 }
 
 /// Resolves sidecar lyrics through the cache when available, otherwise reads

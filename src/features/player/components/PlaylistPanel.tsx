@@ -1,6 +1,7 @@
+import { useCollectionDetailPresence } from '../hooks/useCollectionDetailPresence'
 import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type SyntheticEvent } from 'react'
 import { PLAYLIST_SONG_LAYOUTS, PLAYLIST_LAYOUT_STORAGE_KEY, defaultPlaylistSongLevel, type PlaylistSongLayoutDescriptor } from '@/features/player/model/playlistSongLayouts'
-import { motion, useAnimationControls, usePresence } from 'motion/react'
+import { motion, useIsPresent } from 'motion/react'
 import { CornerLeftUp } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty'
@@ -9,16 +10,16 @@ import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { getShuffleModePresentation, showPlaybackModeToast } from '@/features/player/components/playbackModePresentation'
 import { PlaylistActionButtons } from '@/features/player/components/PlaylistActionButtons'
-import { IconButton } from '@/features/player/components/IconButton'
 import { PlaylistCard } from '@/features/player/components/PlaylistCard'
 import { PlaylistCoverImage } from '@/features/player/components/PlaylistCoverImage'
 import { PlaylistPlaybackDock } from '@/features/player/components/PlaylistPlaybackDock'
 import { PlaylistLibrarySidebar } from '@/features/player/components/PlaylistLibrarySidebar'
 import { useCollectionLayout } from '@/features/player/hooks/useCollectionLayout'
-import { usePlaylistOverscroll } from '@/features/player/hooks/usePlaylistOverscroll'
-import { usePlaylistControllerMotion } from '@/features/player/hooks/usePlaylistControllerMotion'
 import { usePlaylistSongReorder } from '@/features/player/hooks/usePlaylistSongReorder'
 import { mergeFilteredSongOrder } from '@/features/player/model/manualSongOrderStorage'
+import { CollectionHero } from '@/features/player/components/CollectionHero'
+import { PlaylistHeroMoreMenu } from '@/features/player/components/PlaylistHeroMoreMenu'
+import { useCollectionHeroMotion, useCollectionHeroVisibility } from '@/features/player/hooks/useCollectionHeroMotion'
 import { LibraryDockContext, useLibraryDockBinding } from '@/features/player/hooks/useLibraryDockBinding'
 import { LibraryChromeTransitionContext } from '@/features/player/hooks/useLibraryChromeTransition'
 import { readLibraryLayoutRect } from '@/features/player/model/libraryNavigationGeometry'
@@ -276,7 +277,6 @@ export function PlaylistPanel({
   totalDurationDetail,
   onShufflePlay,
   isOpenAudioDisabled,
-  onOpenAudio,
   onTrackSelect,
   onVisibleTrackIdsChange,
   artworkSource,
@@ -297,9 +297,7 @@ export function PlaylistPanel({
   // Motion registers shared nodes at mount. Mode-specific keys below unmount
   // those nodes while their layoutId still identifies the old projection stack.
   const [heroOffscreen, setHeroOffscreen] = useState(false)
-  const [isPresent, safeToRemove] = usePresence()
-  const safeToRemoveRef = useRef(safeToRemove)
-  useLayoutEffect(() => { safeToRemoveRef.current = safeToRemove }, [safeToRemove])
+  const isPresent = useIsPresent()
   const onEntrySettledRef = useRef(onEntrySettled)
   useLayoutEffect(() => { onEntrySettledRef.current = onEntrySettled }, [onEntrySettled])
   const entryMotionSettledRef = useRef(false)
@@ -314,11 +312,8 @@ export function PlaylistPanel({
   useEffect(() => {
     if (isPresent && metadataStatus !== 'loading') reportEntrySettled()
   }, [isPresent, metadataStatus, reportEntrySettled])
-  const sectionControls = useAnimationControls()
   const chromeTransition = useContext(LibraryChromeTransitionContext)
   const publishDetailVisibility = chromeTransition.publishDetailVisibility
-  // Use a 250ms default, preserving theme scaling and the presence cleanup budget.
-  const returnTransition = useMemo(() => ({ ...appearanceMotion.layoutTransition, duration: Math.min((appearanceMotion.layoutTransition.duration ?? 0) * (5 / 6), 0.55) }), [appearanceMotion.layoutTransition])
   const sharedScope = appearanceMotion.disabled || heroOffscreen ? undefined : library?.currentScope
   const handledEntryPositionIdRef = useRef<number | undefined>(undefined)
   const [selectMode, setSelectMode] = useState(false)
@@ -437,17 +432,14 @@ export function PlaylistPanel({
     status: totalDurationStatus, totalSeconds: totalDurationSeconds,
   }, tracks.length)
 
-  usePlaylistOverscroll(panelRef, appearanceMotion.disabled, `${playlistName}:${layoutLevel}:${filteredTrackIdsKey}:${searchOpen}:${selectMode}`)
-  const controllerMotion = usePlaylistControllerMotion(
+  const { controllerMotion, returnTransition } = useCollectionHeroMotion({
     panelRef,
-    playbackDockRef,
-    controllerMode,
-    selectMode || timeline.interaction === 'seeking' || timeline.interaction === 'previewing',
-    `${playlistName}:${layoutLevel}:${filteredTrackIdsKey}:${searchOpen}:${selectMode}`,
-    controllerActionsVisible,
-    appearanceMotion.layoutTransition,
-    isPresent && (!dockContext || dockContext.activeRouteKey === dockRouteKey),
-  )
+    dockRef: playbackDockRef, mode: controllerMode,
+    seeking: selectMode || timeline.interaction === 'seeking' || timeline.interaction === 'previewing',
+    layoutKey: `${playlistName}:${layoutLevel}:${filteredTrackIdsKey}:${searchOpen}:${selectMode}`,
+    controllerEnabled: Boolean(isPresent && (!dockContext || dockContext.activeRouteKey === dockRouteKey)),
+    actionsPassed: controllerActionsVisible,
+  })
   const rebaseController = controllerMotion.rebase
   useLayoutEffect(() => { if (selectMode && isPresent) rebaseController({ reveal: true }) }, [selectMode, isPresent, rebaseController])
 
@@ -553,35 +545,10 @@ export function PlaylistPanel({
     onTrackSelect?.(target, filteredTracks.map((track) => track.id))
   }, [onTrackSelect, filteredTracks, unavailable])
 
-  useLayoutEffect(() => {
-    let cancelled = false
-    const resting = { opacity: 1, x: 0, y: 0, scale: 1 }
-    if (isPresent) {
-      void sectionControls.start(resting, returnTransition).then(() => {
-        if (cancelled) return
-        entryMotionSettledRef.current = true
-        reportEntrySettled()
-      })
-    } else if (appearanceMotion.disabled) {
-      sectionControls.set(resting)
-      safeToRemoveRef.current?.()
-    } else {
-      const leave = () => {
-        if (cancelled) return
-        const pose = { opacity: 0, x: 0, y: 0, scale: 1 }
-        void sectionControls.start(chromeTransition.offscreenReturn ? 'exit' : pose,
-          chromeTransition.offscreenReturn ? appearanceMotion.libraryNavigation.transition : returnTransition).then(() => {
-          if (!cancelled) safeToRemoveRef.current?.()
-        })
-      }
-      leave()
-    }
-    return () => {
-      cancelled = true
-      sectionControls.stop()
-    }
-  }, [isPresent, appearanceMotion.disabled, appearanceMotion.libraryNavigation.transition,
-    chromeTransition.offscreenReturn, reportEntrySettled, returnTransition, sectionControls])
+  const { sectionControls } = useCollectionDetailPresence(chromeTransition.offscreenReturn, returnTransition, () => {
+    entryMotionSettledRef.current = true
+    reportEntrySettled()
+  })
 
   useLayoutEffect(() => {
     const panel = panelRef.current
@@ -631,55 +598,13 @@ export function PlaylistPanel({
     rebaseController()
   }, [layoutLevel, filteredTrackIdsKey, searchOpen, selectMode, rebaseController])
 
-  useLayoutEffect(() => {
-    const panel = panelRef.current
-    const heroActions = heroActionsRef.current
-    const heroArtwork = heroArtworkRef.current
-    if (!panel || !heroActions || !heroArtwork || !isPresent) return
-    let disposed = false
 
-    const measureVisibility = () => {
-      if (disposed) return
-      const heroRect = heroActions.getBoundingClientRect()
-      const panelRect = panel.getBoundingClientRect()
-      const offscreen = heroArtwork.getBoundingClientRect().bottom <= Math.max(0, panelRect.top + panel.clientTop)
-      setHeroOffscreen(offscreen)
-      publishDetailVisibility?.(dockRouteKey, offscreen)
-      // A row below the viewport (for example in a short window) must not
-      // summon its duplicate. Only a fully scrolled-past upper edge does.
-      const visible = heroRect.height > 0 && heroRect.bottom <= Math.max(0, panelRect.top)
-      if (!visible) {
-        const compact = controllerActionsRef.current
-        const focused = document.activeElement
-        if (compact && focused instanceof HTMLElement && compact.contains(focused)) {
-          const buttons = [...compact.querySelectorAll('button')]
-          const index = buttons.indexOf(focused as HTMLButtonElement)
-          const target = index > 0 ? heroActions.querySelectorAll('button')[index - 1] : null
-          if (target && !target.disabled) target.focus({ preventScroll: true })
-          else panel.focus({ preventScroll: true })
-        }
-      }
-      setControllerActionsVisible((previous) => previous === visible ? previous : visible)
-    }
-
-    // Run after the current-song/search positioning layout effects above so
-    // reopening a scrolled playlist starts in the correct state before paint.
-    measureVisibility()
-    const observer = new IntersectionObserver(measureVisibility, { root: panel, threshold: 0 })
-    observer.observe(heroActions)
-    observer.observe(heroArtwork)
-    const resizeObserver = new ResizeObserver(measureVisibility)
-    resizeObserver.observe(panel)
-    resizeObserver.observe(heroActions)
-    window.addEventListener('resize', measureVisibility)
-    return () => {
-      disposed = true
-      observer.disconnect()
-      resizeObserver.disconnect()
-      window.removeEventListener('resize', measureVisibility)
-    }
-  }, [currentTrackId, filteredTrackIdsKey, searchOpen, layoutLevel, isPresent, heroOffscreen,
-    publishDetailVisibility, dockRouteKey])
+  useCollectionHeroVisibility({ panelRef, artworkRef: heroArtworkRef, actionsRef: heroActionsRef,
+    compactActionsRef: controllerActionsRef, present: Boolean(isPresent), heroOffscreen,
+    onHeroOffscreen: setHeroOffscreen, onActionsPassed: setControllerActionsVisible,
+    visibilityKey: `${currentTrackId}:${filteredTrackIdsKey}:${searchOpen}:${layoutLevel}`,
+    routeKey: dockRouteKey, publishDetailVisibility,
+  })
 
   useEffect(() => {
     const panel = panelRef.current
@@ -870,10 +795,6 @@ export function PlaylistPanel({
 
   const shufflePresentation = getShuffleModePresentation('shuffle-all', systemIcons)
 
-  const handleMore = useCallback(() => {
-    onOpenAudio?.()
-  }, [onOpenAudio])
-
   const firstTrack = tracks[0]
   const firstTrackCoverSource = firstTrack?.coverImage ?? firstTrack?.coverImageFallback
   const handleHeroCoverError = useCallback((event: SyntheticEvent<HTMLImageElement>) => {
@@ -909,10 +830,15 @@ export function PlaylistPanel({
       onCoverFailed={handleCoverFailed}
       onActivate={handleActivate}
       onToggleSelect={handleToggleSelect}
-      onEnterSelectMode={isPresent ? handleEnterSelectMode : undefined}
+      // Deliberately independent of presence. `useIsPresent` flips on the exact
+      // frame this panel starts leaving AnimatePresence, so routing it through
+      // this prop invalidated the memo on every one of N cards and made exit
+      // animation start with a full-list reconciliation. Long-press during exit
+      // is still impossible: the section is `inert` while `!isPresent`.
+      onEnterSelectMode={handleEnterSelectMode}
     />
   )), [displayedTracks, artworkSource, fallbackArtworkSource, currentTrackId, unavailable, onTrackSelect, selectMode, selectedIds,
-    artworkWindowIds, showExtendedMetadata, handleActivate, handleToggleSelect, handleEnterSelectMode, isPresent,
+    artworkWindowIds, showExtendedMetadata, handleActivate, handleToggleSelect, handleEnterSelectMode,
     contentShapes, failedCoverSources, handleCoverFailed])
 
   function renderPlaylistActions(compact = false) {
@@ -955,7 +881,9 @@ export function PlaylistPanel({
           onPlay={handlePlay} playDisabled={!playableTrackId || !onTrackSelect} playbackLocked={isOpenAudioDisabled}
           searchOpen={searchOpen} onSearch={handleSearchToggle}
           selectMode={selectMode} onSelect={handleSelectModeToggle}
-          more={<IconButton className="playlist-hero-icon playlist-hero-more-button" icon={systemIcons.more} label={appCopy.playlistPage.more} data-playback-command-lock={isOpenAudioDisabled || undefined} disabled={isOpenAudioDisabled || !onOpenAudio} onClick={handleMore} />}
+          more={<PlaylistHeroMoreMenu title={playlistName ?? appCopy.playlistPage.title} count={tracks.length} totalClock={totalClock} durationDetail={totalDurationDetail}
+            artwork={firstTrack?.coverThumbnail ? <PlaylistCoverImage image={firstTrack.coverThumbnail} />
+              : firstTrackCoverSource ? <img src={firstTrackCoverSource} alt="" decoding="async" onError={handleHeroCoverError} /> : null} />}
         />
       </motion.div>
     )
@@ -1013,47 +941,23 @@ export function PlaylistPanel({
         aria-label={appCopy.playlistPage.title}
         tabIndex={-1}
       >
-      <header className="playlist-hero">
-        <motion.div key={heroOffscreen ? 'hero-artwork-local' : 'hero-artwork-shared'} ref={heroArtworkRef} className="playlist-hero-artwork" aria-hidden="true"
-          layoutId={sharedScope ? `playlist-library-cover:${sharedScope}` : undefined}
-          layoutCrossfade={false}
-          transition={{ layout: returnTransition }}>
-          {firstTrack?.coverThumbnail ? (
-            <PlaylistCoverImage className="playlist-hero-image" image={firstTrack.coverThumbnail} />
-          ) : firstTrackCoverSource ? (
-            <img className="playlist-hero-image" src={firstTrackCoverSource} alt="" aria-hidden="true" decoding="async" onError={handleHeroCoverError} />
-          ) : null}
-        </motion.div>
-        <Button
-          type="button"
-          className="playlist-hero-category"
-          size="sm"
-          variant="ghost"
-          aria-current="page"
-          aria-label={library ? "返回播放列表管理" : undefined}
-          onClick={library?.onOpen ?? (() => panelRef.current?.focus({ preventScroll: true }))}
-        >
-          <CornerLeftUp data-icon="inline-start" aria-hidden="true" />
-          {appCopy.playlistPage.title}
-        </Button>
-        <button type="button" className="playlist-close" aria-label={library ? "返回播放列表管理" : appCopy.playlistPage.close} onClick={library?.onOpen ?? onClose}>
-          <systemIcons.close />
-        </button>
-        <div className="playlist-hero-copy">
-          <motion.h1 className="playlist-hero-title"
-            key={heroOffscreen ? 'hero-title-local' : 'hero-title-shared'}
-            layout={heroOffscreen ? undefined : 'position'}
-            layoutId={sharedScope ? `playlist-library-name:${sharedScope}` : undefined}
-            transition={{ layout: returnTransition }}>{playlistName ?? appCopy.playlistPage.title}</motion.h1>
-          <p className="playlist-hero-meta">
-            <systemIcons.music aria-hidden="true" />
-            <span className="playlist-hero-count" aria-label={appCopy.playlistPage.count(tracks.length)}>{tracks.length}</span>
-            <span className="playlist-hero-meta-sep" aria-hidden="true">|</span>
-            <span className="playlist-hero-total" aria-live="polite" title={totalDurationDetail}>{totalClock}</span>
-          </p>
-          {renderPlaylistActions()}
-        </div>
-      </header>
+      <CollectionHero artworkRef={heroArtworkRef} localProjection={heroOffscreen}
+        artworkLayoutId={sharedScope ? `playlist-library-cover:${sharedScope}` : undefined}
+        titleLayoutId={sharedScope ? `playlist-library-name:${sharedScope}` : undefined}
+        transition={returnTransition}
+        artwork={firstTrack?.coverThumbnail ? <PlaylistCoverImage className="playlist-hero-image" image={firstTrack.coverThumbnail} />
+          : firstTrackCoverSource ? <img className="playlist-hero-image" src={firstTrackCoverSource} alt="" aria-hidden="true" decoding="async" onError={handleHeroCoverError} /> : null}
+        category={<Button type="button" className="playlist-hero-category" size="sm" variant="ghost" aria-current="page"
+          aria-label={library ? "返回播放列表管理" : undefined} onClick={library?.onOpen ?? (() => panelRef.current?.focus({ preventScroll: true }))}>
+          <CornerLeftUp data-icon="inline-start" aria-hidden="true" />{appCopy.playlistPage.title}
+        </Button>}
+        close={<button type="button" className="playlist-close" aria-label={library ? "返回播放列表管理" : appCopy.playlistPage.close} onClick={library?.onOpen ?? onClose}><systemIcons.close /></button>}
+        title={playlistName ?? appCopy.playlistPage.title}
+        metadata={<p className="playlist-hero-meta"><systemIcons.music aria-hidden="true" />
+          <span className="playlist-hero-count" aria-label={appCopy.playlistPage.count(tracks.length)}>{tracks.length}</span>
+          <span className="playlist-hero-meta-sep" aria-hidden="true">|</span>
+          <span className="playlist-hero-total" aria-live="polite" title={totalDurationDetail}>{totalClock}</span></p>}
+        actions={renderPlaylistActions()} />
 
       {searchOpen ? (
         <div className="playlist-filter">

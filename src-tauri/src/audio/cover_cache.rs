@@ -67,7 +67,7 @@ struct PlaylistCoverDirectory {
     _guards: Vec<File>,
 }
 
-fn guard_directory(path: &Path) -> Option<File> {
+pub(super) fn guard_directory(path: &Path) -> Option<File> {
     let mut options = OpenOptions::new();
     options.read(true);
     #[cfg(windows)]
@@ -80,7 +80,11 @@ fn guard_directory(path: &Path) -> Option<File> {
     (ordinary(&metadata) && metadata.is_dir()).then_some(file)
 }
 
-fn playlist_cover_directory(app_cache_dir: &Path) -> Option<PlaylistCoverDirectory> {
+fn playlist_cover_directory(app_cache_dir: &Path, parts: &[&str]) -> Option<PlaylistCoverDirectory> {
+    for ancestor in app_cache_dir.ancestors() {
+        let metadata = fs::symlink_metadata(ancestor).ok()?;
+        if !ordinary(&metadata) || !metadata.is_dir() { return None; }
+    }
     let root_metadata = fs::symlink_metadata(app_cache_dir).ok()?;
     if !ordinary(&root_metadata) || !root_metadata.is_dir() {
         return None;
@@ -88,7 +92,7 @@ fn playlist_cover_directory(app_cache_dir: &Path) -> Option<PlaylistCoverDirecto
     let mut guards = vec![guard_directory(app_cache_dir)?];
     let root = fs::canonicalize(app_cache_dir).ok()?;
     let mut directory = root.clone();
-    for part in ["audio", "covers"] {
+    for part in parts {
         directory.push(part);
         match fs::create_dir(&directory) {
             Ok(()) => {}
@@ -147,7 +151,10 @@ fn existing_playlist_cover(path: &Path, expected: &[u8]) -> bool {
 }
 
 fn cache_playlist_cover(app_cache_dir: &Path, mime_type: &str, data: &[u8]) -> Option<String> {
-    let directory = playlist_cover_directory(app_cache_dir)?;
+    cache_playlist_cover_in_directory(playlist_cover_directory(app_cache_dir, &["audio", "covers"] )?, mime_type, data)
+}
+
+fn cache_playlist_cover_in_directory(directory: PlaylistCoverDirectory, mime_type: &str, data: &[u8]) -> Option<String> {
     let target = directory.path.join(format!(
         "{}.{}",
         blake3::hash(data).to_hex(),
@@ -184,6 +191,26 @@ fn cache_playlist_cover(app_cache_dir: &Path, mime_type: &str, data: &[u8]) -> O
 fn select_cover_art(tag: &Tag) -> Option<&Picture> {
     tag.get_picture_type(PictureType::CoverFront)
         .or_else(|| tag.pictures().first())
+}
+
+/// A validated directory image uses the same bounded, content-addressed
+/// publication as playlist artwork; external source paths are never exposed.
+pub(super) fn directory_cover_from_bytes(
+    data: &[u8],
+    mime_type: &str,
+    audio_cache_dir: Option<&Path>,
+) -> Option<AudioCoverArt> {
+    if data.is_empty() || data.len() > MAX_PLAYLIST_COVER_BYTES { return None; }
+    let file_path = audio_cache_dir.and_then(|root| {
+        let directory = playlist_cover_directory(root, &["covers"])?;
+        cache_playlist_cover_in_directory(directory, mime_type, data)
+    });
+    Some(AudioCoverArt {
+        data_url: file_path.is_none().then(|| cover_art_data_url(mime_type, data)),
+        file_path,
+        mime_type: mime_type.to_owned(),
+        byte_len: data.len(),
+    })
 }
 
 pub(super) fn cover_art_from_tag(

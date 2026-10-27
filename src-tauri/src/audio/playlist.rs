@@ -134,6 +134,7 @@ fn load_recursive_library_playlist(root: &Path) -> Result<AudioFolderPlaylist, A
     let mut visited = HashSet::new();
     let mut sources = HashSet::new();
     let mut tracks = Vec::new();
+    let mut directory_paths = Vec::new();
     while let Some(directory) = pending.pop() {
         if !visited.insert(directory.clone()) {
             continue;
@@ -152,6 +153,7 @@ fn load_recursive_library_playlist(root: &Path) -> Result<AudioFolderPlaylist, A
                 continue;
             }
         };
+        directory_paths.push(directory.to_string_lossy().into_owned());
         for entry in entries {
             let entry = match entry {
                 Ok(entry) => entry,
@@ -199,17 +201,12 @@ fn load_recursive_library_playlist(root: &Path) -> Result<AudioFolderPlaylist, A
             .then_with(|| left.file_name.cmp(&right.file_name))
             .then_with(|| left.source_path.cmp(&right.source_path))
     });
-    if tracks.is_empty() {
-        return Err(audio_error(
-            AudioErrorCode::UnsupportedFormat,
-            "Folder does not contain supported local audio files",
-            true,
-        ));
-    }
+    directory_paths.sort();
     let name = directory_display_name(root);
     Ok(AudioFolderPlaylist {
         directory_path: root.to_string_lossy().into_owned(),
         directory_name: name.clone(),
+        directory_paths: Some(directory_paths),
         source_kind: AudioPlaylistSourceKind::Folder,
         source_path: root.to_string_lossy().into_owned(),
         source_name: name,
@@ -315,6 +312,7 @@ fn load_directory_audio_playlist(
     Ok(AudioFolderPlaylist {
         directory_path: directory.to_string_lossy().into_owned(),
         directory_name: directory_name.clone(),
+        directory_paths: None,
         source_kind: AudioPlaylistSourceKind::Folder,
         source_path: directory.to_string_lossy().into_owned(),
         source_name: directory_name,
@@ -479,6 +477,7 @@ fn load_m3u8_playlist(
     Ok(AudioFolderPlaylist {
         directory_path: directory.to_string_lossy().into_owned(),
         directory_name,
+        directory_paths: None,
         source_kind: AudioPlaylistSourceKind::M3u8,
         source_path: playlist_path.to_string_lossy().into_owned(),
         source_name,
@@ -607,7 +606,7 @@ fn directory_display_name(directory: &Path) -> String {
         .unwrap_or_else(|| directory.to_string_lossy().into_owned())
 }
 
-fn has_supported_audio_extension(path: &Path) -> bool {
+pub(super) fn has_supported_audio_extension(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| {

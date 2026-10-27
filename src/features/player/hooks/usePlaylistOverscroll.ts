@@ -2,7 +2,8 @@ import { useEffect, useRef, type RefObject } from 'react'
 
 // Playlist input stays on the fixed scrollport. Only its contents move, so an
 // elastic edge cannot move out from under the pointer or affect the sidebar.
-export function usePlaylistOverscroll(panelRef: RefObject<HTMLElement | null>, disabled: boolean, scopeKey: string) {
+export function usePlaylistOverscroll(panelRef: RefObject<HTMLElement | null>, disabled: boolean, scopeKey: string, options: { rowSelector?: string } = {}) {
+  const rowSelector = options.rowSelector ?? '.playlist-grid > *'
   const suppressClickRef = useRef(false)
   useEffect(() => {
     const panel = panelRef.current
@@ -11,7 +12,8 @@ export function usePlaylistOverscroll(panelRef: RefObject<HTMLElement | null>, d
     let offset = 0
     let rawPull = 0
     const stretchedCards = new Map<HTMLElement, { factor: number; previousTranslate: string }>()
-    const contents = [...panel.children].filter((child): child is HTMLElement => child instanceof HTMLElement && child !== hero && !child.classList.contains('playlist-grid'))
+    const contents = [...panel.children].filter((child): child is HTMLElement => child instanceof HTMLElement
+      && child !== hero && !child.matches(rowSelector) && !child.querySelector(rowSelector))
     const previousTranslations = new Map([...contents, hero].map((element) => [element, element.style.translate]))
     let visualFrame: number | null = null
     let metricsReady = false
@@ -96,7 +98,7 @@ export function usePlaylistOverscroll(panelRef: RefObject<HTMLElement | null>, d
       let row = 0
       // A viewport of buffer hides the transition to the untouched tail. Its
       // geometry remains stationary, so a long playlist cannot grow its range.
-      const cards = panel.querySelector('.playlist-grid')?.children ?? []
+      const cards = panel.querySelectorAll<HTMLElement>(rowSelector)
       const rows: { card: HTMLElement; factor: number }[] = []
       const buffer = Math.max(180, bounds.height)
       const upper = bounds.top - buffer
@@ -967,5 +969,5 @@ export function usePlaylistOverscroll(panelRef: RefObject<HTMLElement | null>, d
         else element.style.removeProperty('translate')
       }
     }
-  }, [panelRef, disabled, scopeKey])
+  }, [panelRef, disabled, scopeKey, rowSelector])
 }

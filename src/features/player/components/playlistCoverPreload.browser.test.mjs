@@ -148,7 +148,12 @@ try {
   } else {
     await waitReady(page, 12)
     const before = await page.evaluate(() => ({...window.readFixture(),requests:window.calls.filter(c=>['audio_load_playlist_cover_pixels','audio_load_track_thumbnail'].includes(c.command)).length,maxActive:window.maxActive}))
-    assert.equal(before.maxActive, 1, 'shared thumbnail scheduler serializes native pixel loads')
+    // This fixture leaves `pixelGate` closed, so every mocked native load
+    // settles inside its own microtask and overlap is impossible here by
+    // construction. Only the ceiling is meaningful at this boundary; the
+    // "more than one in flight" proof lives in playlistCoverScheduler.test.mjs
+    // and in playlistCoverPreload's own gated case further down this file.
+    assert(before.maxActive <= 4, 'shared thumbnail scheduler stays within its admission ceiling')
     assert.equal(before.requests, 13, 'first-track persisted thumbnail is upgraded for the hero after the list')
     assert.equal(await page.locator('img').count(), 0, 'preload does not mount playlist DOM')
     await page.evaluate(() => window.showFixture())
@@ -181,10 +186,16 @@ try {
 
     const {page: sourceBlocked,errors:sourceBlockedErrors}=await open()
     await select(sourceBlocked,{sourceGate:true})
-    await sourceBlocked.waitForFunction(()=>window.pendingSources.length===1)
+    await sourceBlocked.waitForFunction(()=>window.pendingSources.length>=1)
     const sourceHydrationsBefore=await sourceBlocked.evaluate(()=>window.calls.filter(call=>call.command==='audio_hydrate_track').length)
     await sourceBlocked.evaluate(()=>window.player.setVisiblePlaylistTrackIds(window.readFixture().ids,true,true,{visibleIds:window.readFixture().ids,prefetchIds:[],coverCssPixels:128,dpr:1}))
-    assert.equal(await sourceBlocked.evaluate(()=>window.pendingSources.length),1,'shared native lane waits behind the gated thumbnail')
+    // The probe lane is concurrent now, so viewport registration legitimately
+    // adds more gated source reads while the first one is still held. Assert the
+    // lane grew (it is not serialised behind the first probe) and stays inside
+    // the admission ceiling.
+    const heldSources = await sourceBlocked.evaluate(()=>window.pendingSources.length)
+    assert(heldSources > 1, 'shared native lane keeps probing while a source read is gated')
+    assert(heldSources <= 8, 'gated source reads stay within the probe admission ceiling')
     await sourceBlocked.waitForFunction(()=>Object.keys(window.player.playlistTrackSummariesByScope[window.player.activePlaylistScope]??{}).length===12&&window.durationData.durationsByScope.get(window.player.playlistDurationScope)?.size===12)
     assert.equal(await sourceBlocked.evaluate(()=>window.readFixture().ready.length),0,'summary/duration completion does not wait for cover source')
     assert.equal(await sourceBlocked.evaluate(()=>window.calls.filter(call=>call.command==='audio_hydrate_track').length),sourceHydrationsBefore,'source blocking cannot add full player hydration through viewport registration')
@@ -237,7 +248,7 @@ try {
 
     const { page: fast, errors: fastErrors } = await open()
     await select(fast, {pixelGate:true})
-    await fast.waitForFunction(() => window.pendingPixels.length===1)
+    await fast.waitForFunction(() => window.pendingPixels.length >= 1)
     await fast.evaluate(() => window.showFixture())
     await fast.waitForFunction(() => document.querySelectorAll('[data-placeholder]').length===12)
     assert.equal(await fast.locator('main').getAttribute('data-view'), 'playlist', 'early entry remains immediate')
@@ -277,7 +288,11 @@ try {
     await waitReady(retry,12)
     const retries=await retry.evaluate(()=>({requests:window.calls.filter(c=>['audio_load_playlist_cover_pixels','audio_load_track_thumbnail'].includes(c.command)).length,maxActive:window.maxActive}))
     assert.equal(retries.requests,15)
-    assert.equal(retries.maxActive, 1)
+    // Recoverable failures must release their slot so the bounded pool keeps
+    // refilling; the request count above proves refilling, and the ceiling
+    // proves it never exceeds the admission bound. Ungated responses cannot
+    // overlap here, so no lower bound is asserted.
+    assert(retries.maxActive <= 4, 'retries stay within the admission ceiling')
     assert.deepEqual(retryErrors,[])
     report.push({case:'recoverable pixel errors',...retries})
     await retry.close()
@@ -291,8 +306,14 @@ try {
     })
     const budget=await bounded.evaluate(()=>({ready:window.readFixture().ready.length,bytes:Object.values(window.player.playlistTrackVisuals).reduce((sum,v)=>sum+(v.coverThumbnail?v.coverThumbnail.encodedBytes+v.coverThumbnail.width*v.coverThumbnail.height*4:0),0),maxActive:window.maxActive}))
     assert(budget.ready>100&&budget.ready<1000,'all-list eligibility is limited by bytes rather than a small fixed count')
-    assert(budget.bytes+2*512*512*4<=96*1024*1024,'resident images leave existing inflight reservation')
-    assert.equal(budget.maxActive, 1)
+    // The inflight reservation covers every slot the shared scheduler may have
+    // in flight (MAX_CONCURRENT x the largest 512px edge), so resident images
+    // must leave exactly that much headroom inside the 96 MiB budget.
+    assert(budget.bytes+4*512*512*4<=96*1024*1024,'resident images leave the four-slot inflight reservation')
+    // Ungated responses settle within their own microtask here, so this only
+    // proves the lane stays bounded; the concurrency proof lives in
+    // playlistCoverScheduler.test.mjs where the native boundary is held open.
+    assert(budget.maxActive<=4,'native pixel loads stay within the admission ceiling')
     assert.deepEqual(boundedErrors,[])
     report.push({case:'large-list byte admission',...budget})
     await bounded.close()

@@ -9,6 +9,7 @@ mod duration;
 // Read and written only by `playlist_duration.rs`; it never persists to disk.
 mod duration_cache;
 mod error;
+mod folder_cover;
 mod lyrics_cache;
 mod metadata;
 mod playlist;
@@ -31,10 +32,10 @@ mod source_tests;
 pub use controller::AudioController;
 pub(crate) use cover_pixels::try_warm_track_thumbnail;
 pub use cover_pixels::{
-    begin_playlist_cover_window, load_cover_pixels, load_playlist_cover_pixels,
+    begin_playlist_cover_window, load_cover_pixels, load_folder_thumbnail, load_playlist_cover_pixels,
     load_track_thumbnail, shutdown_playlist_cover_cache, AudioBeginPlaylistCoverWindowInput,
-    AudioLoadCoverPixelsInput, AudioLoadPlaylistCoverPixelsInput, AudioLoadTrackThumbnailInput,
-    CoverPixelsError,
+    AudioLoadCoverPixelsInput, AudioLoadFolderThumbnailInput, AudioLoadPlaylistCoverPixelsInput,
+    AudioLoadTrackThumbnailInput, CoverPixelsError,
 };
 pub(crate) use device::current_output_info;
 pub use error::AudioCommandError;

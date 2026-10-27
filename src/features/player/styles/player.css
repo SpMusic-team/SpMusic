@@ -10,6 +10,7 @@
 @import "./player/volume-control.css";
 @import "./player/queue-panel.css";
 @import "./player/playlist-panel.css";
+@import "./player/playlist-hero-more-menu.css";
 @import "./player/playlist-library-sidebar.css";
 @import "./player/playlist-management.css";
 @import "./player/playlist-playback-dock.css";
@@ -18,3 +19,5 @@
 @import "./player/responsive.css";
 
 @import "./player/media-library.css";
+
+@import "./player/folder-hierarchy.css";

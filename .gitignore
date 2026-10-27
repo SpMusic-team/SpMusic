@@ -27,3 +27,10 @@ dist-ssr
 
 .claude/
 .codex/
+
+# 逆向分析工作区：仅提交 findings/REPORT 文档，排除第三方 APK、构建产物、原生库与临时备份
+.rea-analysis/*.apk
+.rea-analysis/*.bak
+.rea-analysis/*.log*
+.rea-analysis/decoded/
+.rea-analysis/natives/

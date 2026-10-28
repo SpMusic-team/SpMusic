@@ -37,6 +37,8 @@ test('a fully tagged summary keeps every field the hydrated row publishes', () =
     artist: 'Artist a',
     album: 'Album a',
     // The tag channel never publishes a duration: it stays with the hydration and
+    libraryAlbumName: 'Album a',
+    albumArtist: 'Album Artist a',
     // duration-probe channels so a tag header estimate cannot flip a total.
     durationSeconds: 0,
     fileExtension: 'flac',
@@ -68,6 +70,8 @@ test('blank tags fall back to the file name and the local defaults', () => {
   assert.equal(row.title, '1')
   assert.equal(row.artist, 'Album Artist a')
   assert.equal(row.album, '本地音频')
+  assert.equal(row.libraryAlbumName, null)
+  assert.equal(row.albumArtist, 'Album Artist a')
   assert.equal(row.durationSeconds, 0)
   assert.equal(row.audioFormat, undefined)
   assert.equal(row.fileExtension, 'flac')
@@ -114,6 +118,7 @@ test('rows compare field by field so unchanged batches are not republished', () 
   const row = playlistTrackRowFromSummary(descriptor, summary)
   assert.equal(playlistTrackRowEqual(row, playlistTrackRowFromSummary(descriptor, summary)), true)
   assert.equal(playlistTrackRowEqual(row, playlistTrackRowFromSummary(descriptor, { ...summary, artist: 'Other' })), false)
+  assert.equal(playlistTrackRowEqual(row, playlistTrackRowFromSummary(descriptor, { ...summary, albumArtist: 'Other' })), false)
   assert.equal(playlistTrackRowEqual(row, playlistTrackRowFromSummary(descriptor, { ...summary, bitDepth: 16 })), false)
 })
 

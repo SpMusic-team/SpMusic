@@ -1,0 +1,10 @@
+.album-library-content .album-list[data-folder-flow='tile'] { gap: 22px 48px; }
+.album-card { --folder-card-radius: calc(var(--app-radius-lg) * 5 / 6); }
+.album-card .folder-copy { font-weight: 400; }
+.album-cover-placeholder { display: block; width: 48px; height: 48px; background: var(--player-muted); mask-repeat: no-repeat; mask-position: center; mask-size: contain; }
+.album-card[data-folder-variant='text-single'] .folder-parent-name,
+.album-card[data-folder-variant='text-double'] .folder-parent-name { flex: 0 1 45%; }
+.album-library-content[data-has-hero] .album-songs { padding-top: 0; }
+@media (width <= 540px) {
+  .album-library-content .album-list[data-folder-flow='tile'] { column-gap: 20px; }
+}

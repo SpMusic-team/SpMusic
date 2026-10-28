@@ -14,6 +14,8 @@ export type PlaylistTrackRow = {
   title: string
   artist: string
   album: string
+  libraryAlbumName?: string | null
+  albumArtist?: string | null
   durationSeconds: number
   fileExtension?: string
   coverTone: CoverTone
@@ -90,6 +92,8 @@ export function playlistTrackRowFromSummary(
     title: nonEmptyText(summary?.title) ?? fileNameTitle(descriptor.fileName),
     artist: nonEmptyText(summary?.artist) ?? nonEmptyText(summary?.albumArtist) ?? '本地音频',
     album: nonEmptyText(summary?.album) ?? '本地音频',
+    libraryAlbumName: nonEmptyText(summary?.album) ?? null,
+    albumArtist: nonEmptyText(summary?.albumArtist) ?? null,
     // The tag channel deliberately carries no duration: a container header
     // estimate would fight the decoder-backed duration channel and could flip a
     // published playlist total. Unknown stays 0 until hydration lands.
@@ -117,6 +121,8 @@ export function playlistTrackRowEqual(left: PlaylistTrackRow, right: PlaylistTra
     && left.title === right.title
     && left.artist === right.artist
     && left.album === right.album
+    && left.libraryAlbumName === right.libraryAlbumName
+    && left.albumArtist === right.albumArtist
     && left.durationSeconds === right.durationSeconds
     && left.fileExtension === right.fileExtension
     && left.coverTone === right.coverTone

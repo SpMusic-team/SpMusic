@@ -116,6 +116,9 @@ export type PlaylistTrackItemViewModel = TrackSummary
   & Partial<Pick<Track, 'durationSeconds' | 'fileExtension' | 'coverTone' | 'coverImage' | 'coverImageFallback' | 'audioFormat'>>
   & Readonly<{
     hasLocalArtwork?: boolean
+    /** Raw library tags: undefined while pending, null when absent. */
+    libraryAlbumName?: string | null
+    albumArtist?: string | null
     coverThumbnail?: PlaylistCoverImage
   }>
 
@@ -192,6 +195,8 @@ export type PlaylistAddCallbacks = {
 }
 
 export type PlaylistLibraryViewModel = PlaylistAddCallbacks & {
+  albumLocation?: string | null
+  onAlbumLocationChange?: (key: string | null) => void
   folderRoots?: readonly { path: string; directoryPaths?: readonly string[]; status: 'loading' | 'ready' | 'error'; error?: string; selection?: RootSelection }[]
   isFolderRestorePending?: boolean
   folderError?: string

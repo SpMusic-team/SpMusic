@@ -1,10 +1,10 @@
+import { CollectionQuickIndex } from './CollectionQuickIndex'
 import { useCollectionEntryProjection } from '../hooks/useCollectionEntryProjection'
 import { CollectionManagementHeader } from '@/features/player/components/CollectionManagementHeader'
 import { LibraryRootMenu } from '@/features/player/components/LibraryRootMenu'
 import { useCollectionManagementChrome } from '@/features/player/hooks/useCollectionManagementChrome'
 import { mediaLibraryCategories } from '@/features/player/model/mediaLibraryCategories'
 import { memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from 'react'
 import { LibraryChromeTransitionContext } from '@/features/player/hooks/useLibraryChromeTransition'
 import { motion, useIsPresent } from 'motion/react'
 import { LibraryDockContext, useLibraryDockBinding } from '@/features/player/hooks/useLibraryDockBinding'
@@ -19,7 +19,7 @@ import { usePlaylistSongReorder } from '@/features/player/hooks/usePlaylistSongR
 import { mergeFilteredSongOrder } from '@/features/player/model/manualSongOrderStorage'
 import { useCollectionLayout } from '@/features/player/hooks/useCollectionLayout'
 import { useAllSongsCoverUrl, useAllSongsWindow, type AllSongsCoverStore } from '@/features/player/hooks/useAllSongsWindow'
-import { compareByQuickIndex, quickIndexKey } from '@/features/player/model/quickIndex'
+import { compareByQuickIndex } from '@/features/player/model/quickIndex'
 import { PlaylistCard } from '@/features/player/components/PlaylistCard'
 import { PlaylistMetadataLoading } from '@/features/player/components/PlaylistPanel'
 import { PLAYLIST_SONG_LAYOUTS, ALL_SONGS_LAYOUT_STORAGE_KEY, defaultAllSongsLevel } from '@/features/player/model/playlistSongLayouts'
@@ -45,9 +45,6 @@ const ALL_SONGS_LAYOUT_SELECTORS = {
   getId: (element: HTMLElement) => element.dataset.songKey,
 }
 const MotionEmpty = motion.create(Empty)
-const QUICK_INDEX_KEYS = ['0', ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ', '#'] as const
-const QUICK_INDEX_COUNT = QUICK_INDEX_KEYS.length + 1
-
 type Props = {
   controllerMode?: PlaylistControllerMode
   entryPosition?: PlayerPlaylistViewModel['entryPosition']
@@ -130,11 +127,6 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
   const [playlistName, setPlaylistName] = useState('')
   const [createError, setCreateError] = useState('')
   const playlistNameId = useId()
-  const [activeQuickIndex, setActiveQuickIndex] = useState<string | null>(null)
-  const [quickIndexPreview, setQuickIndexPreview] = useState<{ key: string; top: number; visible: boolean } | null>(null)
-  const quickIndexPointer = useRef<number | null>(null)
-  const quickIndexPointerKey = useRef<string | null>(null)
-  const quickIndexPreviewTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   const panelRef = useRef<HTMLElement | null>(null)
   const gridRef = useRef<HTMLDivElement | null>(null)
@@ -165,9 +157,9 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
     selectors: ALL_SONGS_LAYOUT_SELECTORS,
     announce: (nextLayout) => `歌曲视图已切换为${nextLayout.label}`,
   })
-  const visible = categoryItems
+  const visible = useMemo(() => categoryItems
     .filter((item) => item.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
-    .sort((left, right) => compareByQuickIndex(left.name, right.name))
+    .sort((left, right) => compareByQuickIndex(left.name, right.name)), [categoryItems, query])
   // `library.allSongs` gets a fresh array whenever a row is republished (a cover,
   // a duration, a bit of metadata). The quick-index view is decided only by the
   // row keys and their titles, so keep the sorted key order while those are
@@ -320,16 +312,6 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
   // Jump targets and the play/shuffle candidates are derived from the list, not
   // from the scroll window; keep them off the render path so a window step does
   // not rescan the whole library.
-  const quickIndexTargets = useMemo(() => {
-    const targets = new Map<string, number>()
-    const add = (name: string, index: number) => {
-      const key = quickIndexKey(name)
-      if (!targets.has(key)) targets.set(key, index)
-    }
-    if (isSongs) displayedSongs.forEach((item, index) => add(item.track.title, index))
-    else visible.forEach((item, index) => add(item.name, index))
-    return targets
-  }, [displayedSongs, isSongs, visible])
   const selectedItems = visible.filter((item) => selected.has(item.scope))
   const playTarget = selectMode ? selectedItems[0] : visible[0]
   const selectedSongs = useMemo(() => (library.allSongs ?? []).filter((item) => selected.has(item.key) && item.available)
@@ -345,9 +327,6 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
       searchRef.current?.focus()
     }
   }, [searchRequestId, searchOpen])
-  useEffect(() => () => {
-    if (quickIndexPreviewTimer.current) clearTimeout(quickIndexPreviewTimer.current)
-  }, [])
   const showSearch = hasDataSource && (searchOpen || searchRequestId > dismissedSearchRequestId)
   const controllerActive = isSongs && isPresent && dockContext?.activeRouteKey === dockRouteKey
   const controllerMotion = usePlaylistControllerMotion(panelRef, dockContext?.dockRef ?? fallbackDockRef,
@@ -414,16 +393,15 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
       queueMicrotask(() => searchRef.current?.focus())
     }
   }
-  function jumpToIndex(key: string) {
+  const quickIndexNames = useMemo(() => isSongs ? displayedSongs.map(item => item.track.title) : visible.map(item => item.name), [isSongs, displayedSongs, visible])
+  function jumpToIndex(key: string, index: number | undefined) {
     if (pendingEntryPosition.current) pendingEntryPosition.current.cancelled = true
-    setActiveQuickIndex(key)
     const panel = panelRef.current
     if (!panel) return
     if (key === 'top') {
       panel.scrollTop = 0
       return
     }
-    const index = quickIndexTargets.get(key)
     if (isSongs && songsWindow.enabled && index !== undefined && songsSpaceRef.current) {
       panel.scrollTop += songsSpaceRef.current.getBoundingClientRect().top - panel.getBoundingClientRect().top + Math.floor(index / songsLayout.columns) * songsWindow.stride
       return
@@ -431,52 +409,6 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
     const card = index === undefined ? null : (isSongs ? songsListRef.current : gridRef.current)?.children.item(index)
     if (!card) return
     panel.scrollTop += card.getBoundingClientRect().top - panel.getBoundingClientRect().top - 8
-  }
-  function showQuickIndexPreview(key: string, clientY: number, nav: HTMLElement) {
-    if (quickIndexPreviewTimer.current) clearTimeout(quickIndexPreviewTimer.current)
-    const navRect = nav.getBoundingClientRect()
-    const panelRect = nav.parentElement!.getBoundingClientRect()
-    const previewSize = 100
-    const dockTop = document.querySelector<HTMLElement>('.playlist-playback-dock:not([data-dock-superseded])')?.getBoundingClientRect().top
-    const previewBottom = Math.min(navRect.bottom, dockTop ?? navRect.bottom)
-    const maxTop = Math.max(navRect.top, previewBottom - previewSize)
-    const top = Math.max(navRect.top, Math.min(clientY - previewSize / 2, maxTop)) - panelRect.top
-    setQuickIndexPreview({ key, top, visible: true })
-  }
-  function hideQuickIndexPreview() {
-    if (quickIndexPreviewTimer.current) clearTimeout(quickIndexPreviewTimer.current)
-    quickIndexPreviewTimer.current = setTimeout(() => {
-      setQuickIndexPreview((previous) => previous ? { ...previous, visible: false } : null)
-      quickIndexPreviewTimer.current = null
-    }, 240)
-  }
-  function updateQuickIndexPointer(event: ReactPointerEvent<HTMLElement>) {
-    const nav = event.currentTarget
-    const rect = nav.getBoundingClientRect()
-    const position = Math.max(0, Math.min(QUICK_INDEX_COUNT - 1,
-      Math.floor((event.clientY - rect.top) / (rect.height / QUICK_INDEX_COUNT))))
-    const key = position === 0 ? 'top' : QUICK_INDEX_KEYS[position - 1]
-    showQuickIndexPreview(key, event.clientY, nav)
-    if (key !== quickIndexPointerKey.current) {
-      quickIndexPointerKey.current = key
-      jumpToIndex(key)
-    }
-  }
-  function endQuickIndexPointer(event: ReactPointerEvent<HTMLElement>) {
-    if (quickIndexPointer.current !== event.pointerId) return
-    quickIndexPointer.current = null
-    quickIndexPointerKey.current = null
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
-    hideQuickIndexPreview()
-  }
-  function activateQuickIndexByKeyboard(key: string, event: ReactMouseEvent<HTMLButtonElement>) {
-    if (event.detail !== 0) return
-    const nav = event.currentTarget.parentElement
-    if (!nav) return
-    const rect = event.currentTarget.getBoundingClientRect()
-    jumpToIndex(key)
-    showQuickIndexPreview(key, rect.top + rect.height / 2, nav)
-    hideQuickIndexPreview()
   }
   const playSongs = useCallback(() => {
     const candidates = selectMode ? selectedSongs : playableSongs
@@ -680,30 +612,6 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
         selectMode={selectMode} onSelect={toggleSelection} selectDisabled={!library.allSongs?.length}
         more={renderMore(true)} />
     </motion.div> : null}
-    {<>
-    {quickIndexPreview ? <div className="playlist-management-quick-index-preview" data-visible={quickIndexPreview.visible} style={{ top: quickIndexPreview.top }} aria-hidden="true">
-      {quickIndexPreview.key === 'top' ? <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m2 7 6-6 6 6M2 14l6-6 6 6" /></svg> : quickIndexPreview.key}
-    </div> : null}
-    <nav className="playlist-management-quick-index" aria-label={isSongs ? '歌曲快速查找' : category.label + '快速查找'}
-      onPointerDown={(event) => {
-        if (!event.isPrimary || event.button !== 0) return
-        event.preventDefault()
-        quickIndexPointer.current = event.pointerId
-        quickIndexPointerKey.current = null
-        event.currentTarget.setPointerCapture(event.pointerId)
-        updateQuickIndexPointer(event)
-      }}
-      onPointerMove={(event) => { if (quickIndexPointer.current === event.pointerId) updateQuickIndexPointer(event) }}
-      onPointerUp={endQuickIndexPointer} onPointerCancel={endQuickIndexPointer}
-      onLostPointerCapture={(event) => { if (quickIndexPointer.current === event.pointerId) endQuickIndexPointer(event) }}>
-      <button type="button" aria-label="返回列表顶部" aria-current={activeQuickIndex === 'top' ? 'true' : undefined} title="返回顶部" onClick={(event) => activateQuickIndexByKeyboard('top', event)}>
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <path d="m2 7 6-6 6 6M2 14l6-6 6 6" />
-        </svg>
-      </button>
-      {QUICK_INDEX_KEYS.map((key) => <button key={key} type="button" aria-label={key === '0' ? `查找数字开头的${isSongs ? '歌曲' : '播放列表'}` : key === '#' ? `查找其他字符开头的${isSongs ? '歌曲' : '播放列表'}` : `查找 ${key} 开头的${isSongs ? '歌曲' : '播放列表'}`}
-        aria-current={activeQuickIndex === key ? 'true' : undefined} title={key === '0' ? '数字' : key === '#' ? '其他字符' : key}
-        onClick={(event) => activateQuickIndexByKeyboard(key, event)}>{key}</button>)}
-    </nav></>}
+    <CollectionQuickIndex panelRef={panelRef} names={quickIndexNames} label={isSongs ? '歌曲' : category.label} onJump={jumpToIndex} />
   </motion.div>
 }

@@ -34,7 +34,9 @@ let state={phase:'idle',generation:null,currentTrackId:null,positionMs:0,duratio
 const large=new URLSearchParams(location.search).has('large');
 const covers=new URLSearchParams(location.search).has('cover');
 const yearScenario=new URLSearchParams(location.search).get('years');
-window.summaryYears=yearScenario?{'mix-a':2023,duet:2023,'mix-b':yearScenario==='conflict'?2024:yearScenario==='invalid'?0:null}:{};
+const crossDirectory=new URLSearchParams(location.search).has('crossDirectory');
+window.summaryYears=yearScenario&&yearScenario!=='legacy'?{'mix-a':2023,duet:2023,'mix-b':yearScenario==='conflict'?2024:yearScenario==='invalid'?0:null}:{};
+if(crossDirectory)window.summaryYears={'mix-a':2018,'extended':2019};
 const roots=['/music','/music/Box','/external','/empty','/missing','/hidden'];
 const rows=[
  ['echo-a','/music/A/one.flac','Echo','Ann','Ann'],
@@ -58,7 +60,10 @@ const rows=[
  ['hidden','/hidden/hidden.flac','Hidden','Hidden','Hidden'],
  ...Array.from({length:32},(_,i)=>['zed-'+i,'/music/Zed'+String(i).padStart(2,'0')+'/song.flac','Zed '+String(i).padStart(2,'0'),'Zed Artist','Zed Artist'])
 ];
+if(yearScenario)for(const row of rows)if(row[2]==='Mixed')row[4]='Ensemble';
+if(crossDirectory)rows.push(['extended','/external/Extended/Extended.mp3','Mixed','Singer A','Singer A']);
 if(large)rows.push(...Array.from({length:180},(_,i)=>['large-'+i,'/music/Large/'+i+'.flac','Large','Large Singer','Large Artist']));
+if(new URLSearchParams(location.search).has('gridLarge'))rows.push(...Array.from({length:180},(_,i)=>['grid-'+i,'/music/Grid/'+i+'.flac','Grid '+String(i).padStart(3,'0'),'Grid Artist',null]));
 const descriptor=([id,sourcePath])=>({id,sourcePath,fileName:sourcePath.split('/').at(-1),available:true});
 const descriptors=rows.map(descriptor);
 const all=new Map(descriptors.map(row=>[row.sourcePath,row]));
@@ -230,7 +235,7 @@ const verifyArtistEntryDesign=async()=>{
  const musicAsset=await page.evaluate(async()=>(await import('/src/assets/artist-library/24b9a.svg?import')).default)
  assert(geometry.music.mask.includes(musicAsset),'entry uses exact design music24 asset')
  assert(statSync(new URL('../../../assets/artist-library/24b9a.svg',import.meta.url)).size>0)
- assert.deepEqual([geometry.album.cover.width,geometry.album.cover.height,geometry.album.gap],[240,240,'22px 48px'])
+ assert.deepEqual([geometry.album.cover.width,geometry.album.cover.height,geometry.album.gap],[240,240,page.viewportSize().width<=650?'22px 28px':'22px 48px'])
  assert.equal(geometry.album.cover.top-geometry.row.bottom,15,'album cover follows entry with only card padding')
  assert.equal(geometry.hero.height,320);assert.equal(geometry.hero.left-geometry.panel.left,25);assert.equal(geometry.panel.right-geometry.hero.right,25);assert(geometry.order)
  assert.equal(geometry.heroMeta.left,geometry.heroTitle.left,'artist count and duration align with the title')
@@ -289,7 +294,7 @@ const verifyArtistSongsPage=async()=>{
 const verifyAlbumDetailDesign=async()=>{
  await page.goto(origin+'/__album_library_test?cover=1');await page.waitForFunction(()=>window.vm?.playlist.library.allSongs.length===50&&!window.vm.playlist.library.isImportPending)
  const hero=()=>page.locator('.album-library-content:not([inert])[data-album-detail] > .playlist-hero')
- const openMixed=async scoped=>{await selectCategory(scoped?'artist':'album');if(scoped)await artist('Singer A').click();await albums().filter({has:page.locator('.folder-name',{hasText:/^Mixed$/})}).click();await songs().first().waitFor()}
+ const openMixed=async scoped=>{await selectCategory(scoped?'artist':'album');if(scoped)await artist('Singer A').click();await albums().filter({has:page.locator('.folder-name',{hasText:/^Mixed$/})}).filter({has:page.locator('.folder-parent-name',{hasText:/^Singer A\/Singer B$/})}).click();await songs().first().waitFor()}
  for(const scoped of [false,true]){
   await openMixed(scoped)
   const geometry=await hero().evaluate(node=>{
@@ -298,21 +303,21 @@ const verifyAlbumDetailDesign=async()=>{
    return {hero:rect(node),panel:rect(node.closest('.album-library-content')),title:{...rect(text),...style(text)},author:{...rect(author),...style(author)},meta:{...rect(meta),...style(meta)},music:rect(music),actions:rect(actions),more:rect(actions.querySelector('.playlist-hero-more-button')),cover:rect(card.querySelector('.playlist-card-cover')),coverSize:getComputedStyle(grid).getPropertyValue('--playlist-cover-size').trim(),rowTitle:style(card.querySelector('.playlist-card-title')),rowArtist:style(card.querySelector('.playlist-card-artist')),rowMeta:style(card.querySelector('.playlist-card-format'))}
   })
   assert.equal(geometry.hero.height,320);assert.equal(geometry.hero.left-geometry.panel.left,25);assert.equal(geometry.panel.right-geometry.hero.right,25)
-  assert.equal(geometry.title.text,'Mixed');assert.equal(geometry.author.text,'Singer A/Singer B');assert.equal(geometry.meta.text,scoped?'2 | 6:00':'3 | 9:00')
+  assert.equal(geometry.title.text,'Mixed');assert.equal(geometry.author.text,'Singer A/Singer B');assert.equal(geometry.meta.text,'1 | 3:00')
   assert.deepEqual([geometry.title.font,geometry.title.line,geometry.title.padding],Number(process.env.SPMUSIC_TEST_WIDTH)>1024?['22px','28px','2px 15px']:['24px','32px','2px 15px'])
   for(const item of [geometry.author,geometry.meta])assert.deepEqual([item.font,item.line,item.padding],['16px','24px','2px 15px'])
   assert.equal(geometry.author.top-geometry.title.bottom,5);assert.equal(geometry.meta.top-geometry.author.bottom,5);assert.equal(geometry.actions.top-geometry.meta.bottom,5);assert.deepEqual([geometry.music.width,geometry.music.height],[16,16]);assert.deepEqual([geometry.more.width,geometry.more.height],[42,42])
   assert(!await hero().textContent().then(text=>text.includes('2023')),'missing year is not invented');assert.equal(geometry.coverSize,'135px');assert(Math.abs(geometry.cover.width-geometry.cover.height)<1)
   assert.deepEqual([geometry.rowTitle.font,geometry.rowTitle.line,geometry.rowArtist.font,geometry.rowArtist.line,geometry.rowMeta.font,geometry.rowMeta.line],['28px','36px','22px','28px','16px','24px'])
-  const before=await songIds();assert.deepEqual(before,scoped?['a.flac','duet.flac']:['a.flac','b.flac','duet.flac'])
+  const before=await songIds();assert.deepEqual(before,['duet.flac'])
   await screenshot(scoped?'artist-album-detail':'global-album-detail');console.log('ALBUM_DETAIL_DESIGN',JSON.stringify({scoped,...geometry}))
   await hero().locator('.playlist-hero-more-button').click();const menu=page.getByRole('dialog',{name:scoped?'艺术家更多操作':'专辑更多操作',exact:true});await menu.waitFor()
-  assert.equal(await menu.locator('.playlist-hero-more-info h2').textContent(),scoped?'Singer A':'Mixed');assert.match(await menu.locator('.playlist-hero-more-info p').textContent(),scoped?/4\s*\|\s*12:00/:/3\s*\|\s*9:00/);assert.equal(await page.locator('.library-root-menu').count(),0)
+  assert.equal(await menu.locator('.playlist-hero-more-info h2').textContent(),scoped?'Singer A':'Mixed');assert.match(await menu.locator('.playlist-hero-more-info p').textContent(),scoped?/4\s*\|\s*12:00/:/1\s*\|\s*3:00/);assert.equal(await page.locator('.library-root-menu').count(),0)
   const menuCoverKey=await menu.locator('.artist-menu-cover[data-cover-key]').getAttribute('data-cover-key')
   if(scoped)assert.equal(menuCoverKey,JSON.stringify(['collection-cover','artist',await page.evaluate(()=>window.vm.playlist.library.artistLocation.artistKey)]),'artist menu cover retains complete artist identity inside album')
   else assert.equal(menuCoverKey,await hero().getAttribute('data-cover-key'),'global album menu owns current album cover identity')
   const cover=menu.locator('.playlist-hero-more-artwork img');await cover.waitFor();await cover.evaluate(image=>image.decode());await screenshot(scoped?'artist-album-detail-more':'global-album-detail-more');await page.keyboard.press('Escape');assert.equal(await hero().locator('.playlist-hero-more-button').evaluate(button=>button===document.activeElement),true)
-  await hero().locator('.playlist-hero-play-button').click();await ready();assert.deepEqual(await queueIds(),scoped?['duet','mix-a']:['duet','mix-a','mix-b']);await backFromPlayer()
+  await hero().locator('.playlist-hero-play-button').click();await ready();assert.deepEqual(await queueIds(),['duet']);await backFromPlayer()
   await hero().locator('.playlist-select-toggle').click();await songs().filter({hasText:'Title duet'}).click();await hero().locator('.playlist-hero-play-button').click();await ready();assert.deepEqual(await queueIds(),['duet']);await backFromPlayer()
   await hero().locator('.playlist-hero-category').focus();await page.keyboard.press('Enter')
   if(scoped){await allArtistSongs().waitFor();assert.equal(await page.evaluate(()=>window.vm.playlist.library.artistLocation.view),'albums')}
@@ -326,12 +331,12 @@ const verifyAlbumDetailDesign=async()=>{
 const verifyAlbumYearPage=async()=>{
  const currentHero=()=>page.locator('.album-library-content:not([inert])[data-album-detail] > .playlist-hero')
  const meta=()=>currentHero().locator('.playlist-hero-meta:not(.collection-hero-parent-meta)')
- const openMixed=async scoped=>{await selectCategory(scoped?'artist':'album');if(scoped)await artist('Singer A').click();await albums().filter({has:page.locator('.folder-name',{hasText:/^Mixed$/})}).click();await songs().first().waitFor()}
+ const openMixed=async scoped=>{await selectCategory(scoped?'artist':'album');if(scoped)await artist('Singer A').click();await albums().filter({has:page.locator('.folder-name',{hasText:/^Mixed$/})}).filter({has:page.locator('.folder-parent-name',{hasText:/^Ensemble$/})}).click();await songs().first().waitFor()}
  let albumIdentity
  for(const scenario of ['unique','conflict','legacy']){
-  await page.goto(origin+'/__album_library_test?cover=1'+(scenario==='legacy'?'':'&years='+scenario));await page.waitForFunction(()=>window.vm?.playlist.library.allSongs.length===50);await selectCategory('album');await page.waitForFunction(()=>window.vm.playlist.library.allSongs.find(item=>item.trackId==='mix-a')?.track.libraryYear!==undefined)
+  await page.goto(origin+'/__album_library_test?cover=1&years='+scenario);await page.waitForFunction(()=>window.vm?.playlist.library.allSongs.length===50);await selectCategory('album');await page.waitForFunction(()=>window.vm.playlist.library.allSongs.find(item=>item.trackId==='mix-a')?.track.libraryYear!==undefined)
   await openMixed(false)
-  assert.equal(await meta().textContent(),scenario==='unique'?'3 | 9:00 | 2023':'3 | 9:00')
+  assert.equal(await meta().textContent(),scenario==='legacy'?'3 | 9:00':'3 | 9:00 | 2023')
   const key=await page.evaluate(()=>window.vm.playlist.library.albumLocation);if(albumIdentity)assert.equal(key,albumIdentity,'year-only tag changes do not change group key');albumIdentity=key
   const title=await currentHero().locator('.playlist-hero-title').evaluate(node=>[getComputedStyle(node).fontSize,getComputedStyle(node).lineHeight]);assert.deepEqual(title,Number(process.env.SPMUSIC_TEST_WIDTH)>1024?['22px','28px']:['24px','32px'])
   assert(!/年份未知|年份不一|\|\s*$/.test(await meta().textContent()))
@@ -348,12 +353,60 @@ const verifyAlbumYearPage=async()=>{
  assert.deepEqual(errors,[]);assert.deepEqual(consoleErrors,[]);console.log('album year: actual summary parser/VM/Shell, unique/conflict/legacy omission, artist members, stable identity, hydration isolation and standard title passed')
 }
 try{
- if(process.env.SPMUSIC_TEST_ALBUM_YEAR_ONLY){await verifyAlbumYearPage()}
+ if(process.env.SPMUSIC_TEST_ALBUM_GRID_ONLY){
+  await page.addInitScript(()=>{
+   const level=new URLSearchParams(location.search).get('gridLevel')??'0'
+   for(const key of ['spmusic.albums.layout-level.v1','spmusic.artist-albums.layout-level.v1'])localStorage.setItem(key,level)
+  })
+  for(const scoped of [false,true]){
+   for(const level of [0,1,2,3,9]){
+    await page.setViewportSize({width:608,height:1000})
+    await page.goto(origin+'/__album_library_test?grid=1&gridLevel='+level);await page.waitForFunction(()=>window.vm?.playlist.library.allSongs.length===50)
+    await selectCategory(scoped?'artist':'album');await page.waitForFunction(()=>window.vm.playlist.library.allSongsMetadataStatus==='ready');if(scoped){await artist('Singer A').click();await allArtistSongs().waitFor()}
+    const grid=page.locator('.album-list');await grid.waitFor()
+    for(const width of level===0?[640,624,608,540,320]:[608]){
+     await page.setViewportSize({width,height:1000});await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))))
+     const geometry=await grid.evaluate(node=>{const s=getComputedStyle(node),r=node.getBoundingClientRect(),panel=node.closest('.album-library-content');return {level:node.dataset.folderLevel,columns:s.gridTemplateColumns,gap:s.columnGap,padding:s.padding,width:r.width,panelWidth:panel.clientWidth,scrollWidth:panel.scrollWidth,cards:[...node.querySelectorAll('.album-card')].slice(0,2).map(card=>{const r=card.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,cover:card.querySelector('.folder-cover')?.getBoundingClientRect().width}})}})
+     console.log('ALBUM_GRID_GEOMETRY',JSON.stringify({scoped,viewport:width,...geometry}))
+     assert.equal(Number(geometry.level),level);assert(geometry.scrollWidth<=geometry.panelWidth+1,'grid stays within the scrollport')
+     if(level===0){assert.equal(geometry.columns.split(' ').length,width>=608?2:1);assert.equal(geometry.cards[0].cover,240);assert.equal(geometry.cards[0].width,270)}
+     if(level===1||level===2)assert(geometry.columns.split(' ').length>=2)
+     if(level===3)assert.equal(geometry.columns.split(' ').length,1)
+     const [a,b]=geometry.cards;if(Math.abs(a.y-b.y)<1)assert(a.x+a.width<=b.x+1,'adjacent cards do not overlap')
+    }
+   }
+   await page.setViewportSize({width:608,height:1000});await page.goto(origin+'/__album_library_test?gridLarge=1');await page.waitForFunction(()=>window.vm?.playlist.library.allSongs.length===230)
+   await selectCategory(scoped?'artist':'album');await page.waitForFunction(()=>window.vm.playlist.library.allSongsMetadataStatus==='ready');if(scoped){await artist('Grid Artist').click();await allArtistSongs().waitFor()}
+   await page.waitForFunction(()=>{const grid=document.querySelector('.album-list');return grid&&getComputedStyle(grid).gridTemplateColumns.split(' ').length===2&&grid.style.position==='absolute'})
+   const virtual=await page.locator('.album-list').evaluate(async grid=>{const {albumEntries}=await import('/src/features/player/model/albumLibrary.ts');const all=window.vm.playlist.library.allSongs,scoped=window.vm.playlist.library.artistLocation;const entries=albumEntries(scoped?all.filter(song=>song.track.libraryArtistName==='Grid Artist'):all),cards=[...grid.querySelectorAll('.album-card')],style=getComputedStyle(grid),stride=grid.firstElementChild.offsetHeight+parseFloat(style.rowGap);return {height:parseFloat(grid.parentElement.style.height),expected:Math.ceil(entries.length/2)*stride+50,rendered:cards.length,total:entries.length,next:entries[entries.findIndex(entry=>entry.key===cards.at(-1).dataset.albumKey)+1]?.key}})
+   assert.equal(virtual.height,virtual.expected,'virtual height uses the actual two-column grid');assert(virtual.rendered<virtual.total)
+   await page.locator('.album-list .album-card').last().evaluate(node=>node.focus({preventScroll:true}));await page.keyboard.press('Tab');await page.waitForFunction(key=>document.activeElement?.dataset.albumKey===key,virtual.next)
+  }
+  assert.deepEqual(errors,[]);assert.deepEqual(consoleErrors,[]);console.log('album grid: adaptive columns, fixed cover sizes, no overflow, virtual rows and Tab handoff passed')
+ }else if(process.env.SPMUSIC_TEST_ARTIST_MERGE_ONLY){
+  for(const scoped of [false,true]){
+  await page.goto(origin+'/__album_library_test?crossDirectory=1');await page.waitForFunction(()=>window.vm?.playlist.library.allSongs.length===51)
+  await selectCategory(scoped?'artist':'album');await page.waitForFunction(()=>window.vm.playlist.library.allSongsMetadataStatus==='ready');if(scoped){await artist('Singer A').click();await allArtistSongs().waitFor()}
+  const mixed=()=>albums().filter({has:page.locator('.folder-name',{hasText:/^Mixed$/})})
+  assert.equal(await mixed().count(),scoped?2:3,'complete credits distinguish solo and cooperative albums across directories')
+  if(!scoped){
+   await page.evaluate(()=>window.vm.playlist.library.onAlbumLocationChange(JSON.stringify(['Mixed',['directory','/music/Compilation']])))
+   await page.waitForFunction(()=>window.vm.playlist.library.albumLocation===null);await mixed().first().waitFor()
+  }
+  await mixed().filter({has:page.locator('.folder-parent-name',{hasText:/^Singer A$/})}).click();await songs().first().waitFor()
+  assert.deepEqual(await songIds(),['Extended.mp3','a.flac'])
+  assert.equal(await page.locator('.album-library-content > .playlist-hero .playlist-hero-meta').last().textContent(),'2 | 6:00 | 2018','merged album displays the earliest valid member year')
+  await page.locator('.album-library-content > .playlist-hero .playlist-hero-play-button').click();await ready();assert.deepEqual(await queueIds(),['extended','mix-a']);await backFromPlayer()
+  await up();await mixed().filter({has:page.locator('.folder-parent-name',{hasText:/^Singer A\/Singer B$/})}).click();await songs().first().waitFor()
+  assert.deepEqual(await songIds(),['duet.flac']);assert.deepEqual(errors,[]);assert.deepEqual(consoleErrors,[])
+  }
+  console.log('artist albums: cross-directory explicit/fallback credits merge, conflicting years, mixed codecs, complete playback queue and cooperative isolation passed')
+ }else if(process.env.SPMUSIC_TEST_ALBUM_YEAR_ONLY){await verifyAlbumYearPage()}
  else if(process.env.SPMUSIC_TEST_ALBUM_DETAIL_ONLY){await verifyAlbumDetailDesign()}
  else if(process.env.SPMUSIC_TEST_ARTIST_SONGS_ONLY){await verifyArtistSongsPage()}
  else if(process.env.SPMUSIC_TEST_ARTIST_MENU_CONTEXT_ONLY){
   await page.goto(origin+'/__album_library_test?cover=1');await page.waitForFunction(()=>window.vm?.playlist.library.allSongs.length===50);await selectCategory('artist');await artist('Singer A').click();await allArtistSongs().waitFor()
-  await albums().filter({hasText:'Mixed'}).click();await songs().first().waitFor();assert.equal(await songs().count(),2)
+  await albums().filter({hasText:'Mixed'}).filter({has:page.locator('.folder-parent-name',{hasText:/^Singer A\/Singer B$/})}).click();await songs().first().waitFor();assert.equal(await songs().count(),1)
   await verifyArtistMenuContext('artist-album-more-context');await up();await allArtistSongs().click();await songs().first().waitFor();await verifyArtistMenuContext('artist-songs-more-context')
   await page.goto(origin+'/__album_library_test?noCover=1');await page.waitForFunction(()=>window.vm?.playlist.library.allSongs.length===50);await selectCategory('artist');await artist('Singer A').click();await allArtistSongs().waitFor();await verifyArtistMenuContext('artist-no-cover-more',true)
   assert.deepEqual(errors,[]);assert.deepEqual(consoleErrors,[]);console.log('artist more context: album subset, all songs, full artist artwork scope, fallback and keyboard passed')
@@ -380,10 +433,14 @@ try{
  const order=await allArtistSongs().evaluate(node=>Boolean(node.compareDocumentPosition(document.querySelector('.album-library-content:not([inert]) .album-list'))&Node.DOCUMENT_POSITION_FOLLOWING))
  assert(order,'all songs entry precedes artist albums in the rendered document')
  await screenshot('artist-albums')
- await albums().filter({hasText:'Mixed'}).click();await page.waitForFunction(()=>window.vm.playlist.library.artistLocation?.view==='album');await songs().first().waitFor()
- assert.deepEqual(await songIds(),['a.flac','duet.flac'],'compilation excludes another artist solo')
- await page.locator('.album-library-content > .playlist-hero .playlist-hero-play-button').click();await ready();assert.deepEqual(await queueIds(),['duet','mix-a'])
+ await albums().filter({hasText:'Mixed'}).filter({has:page.locator('.folder-parent-name',{hasText:/^Singer A\/Singer B$/})}).click();await page.waitForFunction(()=>window.vm.playlist.library.artistLocation?.view==='album');await songs().first().waitFor()
+ assert.deepEqual(await songIds(),['duet.flac'],'cooperative album excludes solo tracks')
+ await page.locator('.album-library-content > .playlist-hero .playlist-hero-play-button').click();await ready();assert.deepEqual(await queueIds(),['duet'])
  await backFromPlayer();assert.equal(await page.evaluate(()=>window.vm.playlist.library.artistLocation.view),'album')
+ await up();await albums().filter({hasText:'Mixed'}).filter({has:page.locator('.folder-parent-name',{hasText:/^Singer A$/})}).click();await songs().first().waitFor()
+ assert.deepEqual(await songIds(),['a.flac'],'solo album excludes cooperative tracks')
+ assert.equal(await page.locator('.album-library-content > .playlist-hero .playlist-hero-meta').last().textContent(),'1 | 3:00')
+ await page.locator('.album-library-content > .playlist-hero .playlist-hero-play-button').click();await ready();assert.deepEqual(await queueIds(),['mix-a']);await backFromPlayer()
  await up();await allArtistSongs().focus();await page.keyboard.press('Enter');await page.waitForFunction(()=>window.vm.playlist.library.artistLocation?.view==='songs');await songs().first().waitFor()
  assert.equal(await songs().count(),4,'all songs includes album-less music and collaborations')
  assert.equal(await page.locator('.album-library-content:not([inert]) .collection-hero-parent-meta').count(),0,'artist all songs has no empty author badge')

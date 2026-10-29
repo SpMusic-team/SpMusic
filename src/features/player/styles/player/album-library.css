@@ -50,6 +50,7 @@
   .artist-library [data-artist-root] .album-list[data-folder-level='0'] { grid-template-columns: repeat(2, minmax(0, 310px)); }
   .artist-card[data-folder-variant='tile'][data-folder-size='large'] .folder-name { font-size: clamp(20px, 4.94vw, 32px); line-height: 1.25; }
 }
-@media (width <= 540px) {
-  .album-library-content .album-list[data-folder-flow='tile'] { column-gap: 20px; }
+@media (width <= 650px) {
+  /* Match folder content insets so two full-size cards fit the narrow window. */
+  .album-library-content:not([data-artist-root]) .album-list[data-folder-flow='tile'] { padding-inline: 16px; column-gap: 28px; }
 }

@@ -13,7 +13,7 @@ const quickUrl = await moduleUrl('./quickIndex.ts')
 const source = compile(await readFile(new URL('./albumLibrary.ts', import.meta.url), 'utf8')).replace("'./folderHierarchy'", JSON.stringify(hierarchyUrl)).replace("'./quickIndex'", JSON.stringify(quickUrl))
 const { albumEntries, albumKey } = await import(url(source))
 const { playlistTrackRowFromSummary, playlistTrackRowEqual, pendingPlaylistTrackRow } = await import(summaryUrl)
-const song = (id, path, name, albumArtist, artist = 'Singer') => Object.freeze({ key: path.replaceAll('\\', '/'), scope: 'scope:' + id, trackId: id, sourcePath: path, available: true, track: Object.freeze({ id, title: 'Title ' + id, artist, album: name ?? '本地音频', libraryAlbumName: name, albumArtist }) })
+const song = (id, path, name, albumArtist, artist = 'Singer') => Object.freeze({ key: path.replaceAll('\\', '/'), scope: 'scope:' + id, trackId: id, sourcePath: path, available: true, track: Object.freeze({ id, title: 'Title ' + id, artist, album: name ?? '本地音频', libraryAlbumName: name, libraryArtistName: artist === '本地音频' ? null : artist, albumArtist }) })
 
 test('album year aggregates only unique valid tags and metadata changes preserve group identity and original members', () => {
   const withYear = (id, year) => { const item = song(id, '/music/Mixed/' + id + '.flac', 'Mixed', null); return { ...item, track: { ...item.track, libraryYear: year } } }
@@ -21,7 +21,8 @@ test('album year aggregates only unique valid tags and metadata changes preserve
   assert.equal(one.year, 2023)
   const changed = albumEntries([withYear('a', 2024), withYear('b', 2024)])[0]
   assert.equal(changed.year, 2024); assert.equal(changed.key, one.key); assert.deepEqual(changed.songs.map(item => [item.scope, item.trackId]), one.songs.map(item => [item.scope, item.trackId]))
-  assert.equal(albumEntries([withYear('a', 2023), withYear('b', 2024)])[0].year, null)
+  assert.equal(albumEntries([withYear('a', 2024), withYear('b', 2023)])[0].year, 2023)
+  assert.equal(albumEntries([withYear('a', 2024), withYear('b', null), withYear('c', 0), withYear('d', 2018), withYear('e', NaN)])[0].year, 2018)
   for (const year of [undefined, null, 0, -1, 2023.5, NaN, Infinity, '2023', 4294967296]) assert.equal(albumEntries([withYear('a', year)])[0].year, null)
   for (const year of [1, 4294967295]) assert.equal(albumEntries([withYear('a', year)])[0].year, year)
 })
@@ -37,42 +38,24 @@ test('same album name by distinct album artists stays separate; multi-disc same 
   assert.equal(box.songs[0], input[2], 'original playable identity remains intact')
 })
 
-test('missing album artist joins distinct artists in source order and separates same-name folders', () => {
-  const entries = albumEntries([song('a', '/music/Mixed/a.flac', 'Mixed', null, ' Singer B '), song('b', '/music/Mixed/b.flac', 'Mixed', null, 'Singer A'), song('repeat', '/music/Mixed/repeat.flac', 'Mixed', null, 'Singer B'), song('unknown', '/music/Mixed/unknown.flac', 'Mixed', null, '本地音频'), song('c', '/other/Mixed/c.flac', 'Mixed', null, 'Singer A')])
-  assert.equal(entries.length, 2)
-  const compilation = entries.find(entry => entry.songs.length === 4)
-  assert.equal(compilation.artist, 'Singer B/Singer A', 'trim and deduplicate actual names, preserve first-seen order, omit display fallback')
-  assert.deepEqual(compilation.songs.map(item => item.trackId).sort(), ['a', 'b', 'repeat', 'unknown'])
-  assert.equal(entries.find(entry => entry.songs.length === 1).artist, 'Singer A', 'single artist has no separator')
-  assert.equal(albumEntries([song('u1', '/music/U/a.flac', 'Unknown', null, ''), song('u2', '/music/U/b.flac', 'Unknown', null, '本地音频')])[0].artist, '未知艺术家')
+test('missing album artist separates complete credits and merges matching credits across directories',()=>{
+ const a=song('a','/one/a','Mixed',null,' Singer A '),b=song('b','/two/b','Mixed',null,'Singer A'),duet=song('duet','/one/duet','Mixed',null,'Singer A/Singer B')
+ const entries=albumEntries([a,b,duet]);assert.equal(entries.length,2)
+ assert.deepEqual(entries.find(e=>e.artist==='Singer A').songs,[a,b]);assert.deepEqual(entries.find(e=>e.artist==='Singer A/Singer B').songs,[duet])
 })
 
-test('Hypersynthetic raw artist tags deduplicate names across solo tracks and slash-separated collaboration', () => {
-  // Raw labels from the three user files, independently read by the coordinator.
-  // Synthetic descriptors isolate grouping/display without reading user audio.
-  const entries = albumEntries([
-    song('ether', 'E:/Music/Hypersynthetic/Ether Strike.flac', 'Hypersynthetic', null, 'Akira Complex'),
-    song('hypersynthetic', 'E:/Music/Hypersynthetic/Hypersynthetic.flac', 'Hypersynthetic', null, 'Akira Complex'),
-    song('remix', 'E:/Music/Hypersynthetic/message within the rift (Arcien Remix).flac', 'Hypersynthetic', null, 'Akira Complex/kors k'),
-  ])
-  assert.equal(entries.length, 1)
-  assert.equal(entries[0].artist, 'Akira Complex/kors k')
-  assert.deepEqual(entries[0].songs.map(item => item.trackId).sort(), ['ether', 'hypersynthetic', 'remix'])
+test('Hypersynthetic keeps solo and cooperative tracks in their respective albums',()=>{
+ const a=song('ether','E:/Music/Hypersynthetic/Ether Strike.flac','Hypersynthetic',null,'Akira Complex'),b=song('title','E:/Other/Hypersynthetic.flac','Hypersynthetic',null,'Akira Complex'),duet=song('remix','E:/Music/Hypersynthetic/remix.flac','Hypersynthetic',null,'Akira Complex/kors k')
+ const entries=albumEntries([a,b,duet]);assert.equal(entries.length,2)
+ assert.deepEqual(entries.find(e=>e.artist==='Akira Complex').songs,[a,b]);assert.deepEqual(entries.find(e=>e.artist==='Akira Complex/kors k').songs,[duet])
 })
 
-test('slash fallback trims segments, ignores empty/default names, preserves first occurrence and album artist priority', () => {
-  const author = values => albumEntries(values.map((value, index) => song(String(index), '/music/Edge/' + index + '.flac', 'Edge', null, value)))[0].artist
-  assert.equal(author([' A / B ', 'B/C', 'C/A', '/ D /']), 'A/B/C/D')
-  assert.equal(author(['A///', ' /A/ ', '本地音频 / /', '/ B /']), 'A/B')
-  assert.equal(author(['// /本地音频//', '  /  ']), '未知艺术家')
-  assert.equal(author([' Solo ', '/Solo//']), 'Solo')
-  assert.equal(author(['A & B', 'C;D']), 'A & B/C;D', 'only slash is a separator')
-  const first = song('p1', '/music/Priority/a.flac', 'Priority', ' A / A / B ', 'X/Y')
-  const second = song('p2', '/other/Priority/b.flac', 'Priority', ' A / A / B ', 'Y/Z')
-  const entries = albumEntries([first, second])
-  assert.equal(entries.length, 1, 'album identity still uses the original album artist tag')
-  assert.equal(entries[0].artist, 'A / A / B', 'album artist remains the preferred original tag, without slash normalization')
-  assert.equal(albumKey(first), albumKey(second))
+test('credit normalization preserves slash exceptions and explicit/fallback equivalence',()=>{
+ const a=song('a','/one/a','Same',' A / A / B ','X'),b=song('b','/two/b','Same',null,'B/A')
+ const entries=albumEntries([a,b]);assert.equal(entries.length,1);assert.equal(entries[0].artist,'A/B');assert.deepEqual(entries[0].songs,[a,b]);assert.equal(albumKey(a),albumKey(b))
+ assert.equal(albumEntries([song('ac','/one/ac','Rock',null,'AC/DC')])[0].artist,'AC/DC')
+ assert.equal(albumEntries([song('plus','/one/plus','Rock',null,'+/-')])[0].artist,'+/-')
+ assert.notEqual(albumKey(song('unknown','/x/a','Same',null,'本地音频')),albumKey(song('literal','/x/b','Same',null,'未知艺术家')))
 })
 
 test('pending is excluded; completed absent album stays directory-specific and differs from literal fallback text', () => {
@@ -119,4 +102,10 @@ test('summary mapper keeps raw album tags distinct from display fallback and equ
   assert.equal(unknown.libraryAlbumName, null)
   assert.equal(unknown.albumArtist, null)
   assert.equal(pendingPlaylistTrackRow(descriptor).libraryAlbumName, undefined)
+})
+
+test('global named albums separate solo credits and merge matching cross-directory fallback and explicit credits',()=>{
+ const a=song('a','/one/a.flac','Same',null,'A'),b=song('b','/two/b.mp3','Same','A','A'),duet=song('duet','/one/duet.flac','Same',null,'A/B')
+ const groups=albumEntries([a,b,duet])
+ assert.equal(groups.length,2);assert.deepEqual(groups.find(e=>e.artist==='A').songs,[a,b]);assert.deepEqual(groups.find(e=>e.artist==='A/B').songs,[duet])
 })

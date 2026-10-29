@@ -1,4 +1,4 @@
-import { albumEntries, type AlbumEntry } from './albumLibrary'
+import { albumEntries, splitArtists, type AlbumEntry } from './albumLibrary'
 import { compareByQuickIndex } from './quickIndex'
 import type { AllSongsItem } from './playerUiViewModel'
 
@@ -8,17 +8,7 @@ export type ArtistLocation = null
 
 export type ArtistEntry = AlbumEntry
 
-/** Only the approved slash delimiter is parsed. Preserve known names containing it. */
-export function splitArtists(value: string): string[] {
-  const parts = value.split('/').map(part => part.trim())
-  const names: string[] = []
-  for (let index = 0; index < parts.length; index++) {
-    const pair = `${parts[index]}/${parts[index + 1]}`
-    if (pair === 'AC/DC' || pair === '+/-') { names.push(pair); index++ }
-    else names.push(parts[index])
-  }
-  return [...new Set(names.map(name => name.trim()).filter(Boolean))]
-}
+export { splitArtists } from './albumLibrary'
 
 export function uniqueArtistSongs(songs: readonly AllSongsItem[]): AllSongsItem[] {
   const seen = new Set<string>()

@@ -58,6 +58,8 @@ export function PlayerShell() {
   const [flatFolderLocation, setFlatFolderLocation] = useState<{ rootPath: string; directoryPath: string } | null>(null)
   const [albumLocation, setAlbumLocation] = useState<string | null>(null)
   const [artistLocation, setArtistLocation] = useState<ArtistLocation>(null)
+  const [albumArtistLocation, setAlbumArtistLocation] = useState<ArtistLocation>(null)
+  const [composerLocation, setComposerLocation] = useState<ArtistLocation>(null)
   const [folderLocation, setFolderLocation] = useState<{ rootPath: string; directoryPath: string } | null>(null)
   const [playlistArtworkSettled, setPlaylistArtworkSettled] = useState(false)
   // While the player is in front, prepare its source list for the cover's
@@ -120,6 +122,8 @@ export function PlayerShell() {
     if (categoryId === 'folder') setFlatFolderLocation(null)
     if (categoryId === 'album') setAlbumLocation(null)
     if (categoryId === 'artist') setArtistLocation(null)
+    if (categoryId === 'album-artist') setAlbumArtistLocation(null)
+    if (categoryId === 'composer') setComposerLocation(null)
     if (categoryId === 'songs') setPlaylistEntryPosition((previous) => ({ requestId: previous.requestId + 1, target: 'top' }))
   }
   const openLibrary = () => selectLibraryCategory('playlists')
@@ -140,7 +144,7 @@ export function PlayerShell() {
     if (!isBrowsingActive && browsedScope) ensurePlaylistSummaries(browsedScope)
   }, [browsedScope, ensurePlaylistSummaries, isBrowsingActive])
   useEffect(() => {
-    if (libraryRoute.view !== 'category' || !['songs', 'folders', 'folder', 'album', 'artist'].includes(libraryRoute.categoryId)) return
+    if (libraryRoute.view !== 'category' || !['songs', 'folders', 'folder', 'album', 'artist', 'album-artist', 'composer'].includes(libraryRoute.categoryId)) return
     for (const source of player.libraryFolderPlaylists) ensurePlaylistSummaries(playlistScope(source))
   }, [libraryRoute, player.libraryFolderPlaylists, ensurePlaylistSummaries])
   const handlePlaylistOpenChange = useCallback((open: boolean) => {
@@ -149,7 +153,7 @@ export function PlayerShell() {
     if (open && !isPlaylistOpen && player.track) {
       setPlaylistEntryPosition((previous) => ({ requestId: previous.requestId + 1, target: 'current-track' }))
       if (player.playbackQueueKind === 'all-songs') {
-        if (!(libraryRoute.view === 'category' && ['folders', 'folder', 'album', 'artist'].includes(libraryRoute.categoryId))) setLibraryRoute({ view: 'category', categoryId: 'songs' })
+        if (!(libraryRoute.view === 'category' && ['folders', 'folder', 'album', 'artist', 'album-artist', 'composer'].includes(libraryRoute.categoryId))) setLibraryRoute({ view: 'category', categoryId: 'songs' })
         setBrowsedScope(null)
       } else {
         setLibraryRoute({ view: 'tracks' })
@@ -240,7 +244,7 @@ export function PlayerShell() {
     setKnownScopeState({ scope: durationScope, known: activeKnownDurations, byScope })
   }
   const knownDurationsByScope = knownScopeState.byScope
-  const preferredDurationScopes = useMemo(() => libraryRoute.view === 'category' && ['songs', 'folders', 'folder', 'album', 'artist'].includes(libraryRoute.categoryId)
+  const preferredDurationScopes = useMemo(() => libraryRoute.view === 'category' && ['songs', 'folders', 'folder', 'album', 'artist', 'album-artist', 'composer'].includes(libraryRoute.categoryId)
     ? player.libraryFolderPlaylists.map(playlistScope)
     : displayScope ? [displayScope] : [],
   [libraryRoute, player.libraryFolderPlaylists, displayScope])
@@ -273,7 +277,7 @@ export function PlayerShell() {
   }, [rawPlaylistTracks, player.playlistDurationTracks, player.activePlaylistScope, durationData.durationsByScope, libraryArtwork])
   const playlistTracks = useStablePlaylistTrackRows(playlistPresentation.tracks)
   const libraryFallbackSourcePaths = playlistPresentation.fallbackSourcePaths
-  const isSongsCategoryOpen = isPlaylistOpen && libraryRoute.view === 'category' && ['songs', 'folders', 'folder', 'album', 'artist'].includes(libraryRoute.categoryId)
+  const isSongsCategoryOpen = isPlaylistOpen && libraryRoute.view === 'category' && ['songs', 'folders', 'folder', 'album', 'artist', 'album-artist', 'composer'].includes(libraryRoute.categoryId)
   const browsedTrackRows = useMemo<PlaylistTrackItemViewModel[]>(() => {
     if (isBrowsingActive) return playlistTracks
     const summaries = browsedScope ? summariesByScope[browsedScope] : undefined
@@ -336,7 +340,7 @@ export function PlayerShell() {
         || summariesByScope[player.activePlaylistScope ?? '']?.[trackId]
       const displayRow = activeRow && activeRowReady ? activeRow : sourceRow ?? activeRow ?? item.track
       // Hydration owns presentation, while the tag lane owns grouping identity.
-      const row = sourceRow ? { ...displayRow, libraryAlbumName: sourceRow.libraryAlbumName, libraryArtistName: sourceRow.libraryArtistName, libraryYear: sourceRow.libraryYear, albumArtist: sourceRow.albumArtist } : displayRow
+      const row = sourceRow ? { ...displayRow, libraryAlbumName: sourceRow.libraryAlbumName, libraryArtistName: sourceRow.libraryArtistName, libraryComposerName: sourceRow.libraryComposerName, libraryYear: sourceRow.libraryYear, albumArtist: sourceRow.albumArtist } : displayRow
       const durationMs = allSongsDurations?.get(scope)?.get(sourcePath)
       rows.push({ ...item, track: (row.durationSeconds ?? 0) > 0 || durationMs == null ? row : { ...row, durationSeconds: durationMs / 1000 } })
     }
@@ -516,6 +520,10 @@ export function PlayerShell() {
         albumLocation,
         artistLocation,
         onArtistLocationChange: setArtistLocation,
+        albumArtistLocation,
+        onAlbumArtistLocationChange: setAlbumArtistLocation,
+        composerLocation,
+        onComposerLocationChange: setComposerLocation,
         onAlbumLocationChange: setAlbumLocation,
         flatFolderLocation,
         onFlatFolderLocationChange: setFlatFolderLocation,

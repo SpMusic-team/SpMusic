@@ -21,6 +21,7 @@ pub struct AudioTrackMetadata {
     pub artist: Option<String>,
     pub album: Option<String>,
     pub album_artist: Option<String>,
+    pub composer: Option<String>,
     pub genre: Option<String>,
     pub year: Option<u32>,
     pub track_number: Option<u32>,
@@ -203,6 +204,7 @@ pub struct AudioPlaylistTrackTagSummary {
     pub artist: Option<String>,
     pub album: Option<String>,
     pub album_artist: Option<String>,
+    pub composer: Option<String>,
     #[ts(type = "number | null")]
     pub year: Option<u32>,
     // Deliberately no duration: playback duration stays authoritative on
@@ -531,6 +533,7 @@ mod tests {
 
         assert!(exported.contains("title: string | null"));
         assert!(exported.contains("albumArtist: string | null"));
+        assert!(exported.contains("composer: string | null"));
         assert!(exported.contains("coverArt: AudioCoverArt | null"));
     }
 
@@ -551,6 +554,7 @@ mod tests {
         assert!(metadata.artist.is_none());
         assert!(metadata.album.is_none());
         assert!(metadata.album_artist.is_none());
+        assert!(metadata.composer.is_none());
         assert!(metadata.genre.is_none());
         assert!(metadata.year.is_none());
         assert!(metadata.track_number.is_none());

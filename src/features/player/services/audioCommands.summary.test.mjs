@@ -24,6 +24,21 @@ test('summary year accepts u32 positive integers and degrades missing or invalid
   try {
     const rows = await probeAudioPlaylistTrackSummaries(paths)
     assert.deepEqual(rows.map(row => row.summary.year), [...Array(11).fill(null), 1, 2023, 4294967295])
-    for (const row of rows) { const { year, ...rest } = row.summary; assert.deepEqual(rest, tags); assert.equal(row.error, null); assert.equal(typeof year === 'number' || year === null, true) }
+    for (const row of rows) { const { year, ...rest } = row.summary; assert.deepEqual(rest, { ...tags, composer: null }); assert.equal(row.error, null); assert.equal(typeof year === 'number' || year === null, true) }
+  } finally { delete globalThis.summaryTestInvoke }
+})
+
+test('composer text is independent, normalizes old missing responses, and rejects malformed values', async () => {
+  const values = [undefined, null, 'Writer A / Writer B']
+  const paths = values.map((_, index) => `/music/composer-${index}.flac`)
+  globalThis.summaryTestInvoke = async () => values.map((composer, index) => ({
+    sourcePath: paths[index], summary: { artist: 'Performer', albumArtist: 'Album Credit', ...(composer === undefined ? {} : { composer }) }, error: null,
+  }))
+  try {
+    const rows = await probeAudioPlaylistTrackSummaries(paths)
+    assert.deepEqual(rows.map(row => row.summary.composer), [null, null, 'Writer A / Writer B'])
+    assert(rows.every(row => row.summary.artist === 'Performer' && row.summary.albumArtist === 'Album Credit'))
+    globalThis.summaryTestInvoke = async () => [{ sourcePath: paths[0], summary: { composer: 7 }, error: null }]
+    await assert.rejects(probeAudioPlaylistTrackSummaries([paths[0]]), /text field is invalid/)
   } finally { delete globalThis.summaryTestInvoke }
 })

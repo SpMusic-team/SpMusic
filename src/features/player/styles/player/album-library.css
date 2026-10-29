@@ -21,8 +21,6 @@
 .artist-library [data-artist-view='albums'] .playlist-hero-copy { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; }
 .artist-library [data-artist-view='albums'] .playlist-hero-meta { align-self: flex-start; }
 .artist-library [data-artist-view='albums'] .album-list[data-folder-flow='tile'] { gap: 22px 48px; padding-top: 0; padding-inline: 25px; }
-.album-library .playlist-hero-more-button { width: 42px; height: 42px; min-height: 42px; padding: 5px; }
-.album-library .playlist-hero-more-button svg { width: 32px; height: 32px; }
 .artist-menu-cover { position: relative; display: grid; width: 100%; height: 100%; place-items: center; }
 .artist-library .album-library-content[data-artist-view='songs'] { padding-inline: 0; }
 .artist-library [data-artist-view='songs'] > .playlist-hero { width: calc(100% - 50px); max-width: none; height: 320px; padding: 10px; margin-inline: 25px; }

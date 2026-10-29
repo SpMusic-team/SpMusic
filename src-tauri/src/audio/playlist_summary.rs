@@ -279,6 +279,7 @@ fn read_track_tag_summary(path: &Path) -> Result<AudioPlaylistTrackTagSummary, A
         artist: None,
         album: None,
         album_artist: None,
+        composer: None,
         year: None,
         bit_depth: properties.bit_depth(),
         sample_rate_hz: properties.sample_rate(),
@@ -299,6 +300,7 @@ fn read_track_tag_summary(path: &Path) -> Result<AudioPlaylistTrackTagSummary, A
         summary.artist = tag.artist().map(|value| value.into_owned());
         summary.album = tag.album().map(|value| value.into_owned());
         summary.album_artist = tag_text(tag, ItemKey::AlbumArtist);
+        summary.composer = tag_text(tag, ItemKey::Composer);
         summary.year = tag
             .date()
             .map(|timestamp| u32::from(timestamp.year))
@@ -431,6 +433,7 @@ mod tests {
             artist: None,
             album: None,
             album_artist: None,
+            composer: None,
             year: None,
             bit_depth: None,
             sample_rate_hz: None,
@@ -487,6 +490,7 @@ mod tests {
             assert_eq!(summary.artist, None);
             assert_eq!(summary.album, None);
             assert_eq!(summary.album_artist, None);
+            assert_eq!(summary.composer, None);
             assert_eq!(summary.year, None);
             assert_eq!(summary.sample_rate_hz, Some(8_000));
             assert_eq!(summary.bit_depth, Some(16));
@@ -600,6 +604,50 @@ mod tests {
     }
 
     #[test]
+    fn contributor_tags_remain_independent_in_summary_and_hydration_metadata() {
+        use lofty::{
+            config::WriteOptions,
+            tag::{Tag, TagExt, TagType},
+        };
+
+        let fixture = Fixture::new();
+        // ID3v2 in WAV carries all three contributor fields, unlike RIFF INFO
+        // which has no standard album-artist field.
+        for composer in [Some("作曲甲/作曲乙"), None] {
+            let mut tag = Tag::new(TagType::Id3v2);
+            tag.insert_text(ItemKey::TrackArtist, "演唱者".to_owned());
+            tag.insert_text(ItemKey::AlbumArtist, "专辑署名".to_owned());
+            if let Some(composer) = composer {
+                tag.insert_text(ItemKey::Composer, composer.to_owned());
+            }
+            tag.save_to_path(&fixture.wav, WriteOptions::default())
+                .expect("write independent contributor tags");
+            let before = fs::read(&fixture.wav).unwrap();
+            let items = probe(vec![fixture.wav_path()]);
+            let summary = items[0].summary.as_ref().expect("read contributor tags");
+            let metadata = super::super::metadata::read_embedded_metadata(&fixture.wav, None)
+                .expect("read the same tags through hydration metadata");
+
+            assert_eq!(summary.artist.as_deref(), Some("演唱者"));
+            assert_eq!(summary.album_artist.as_deref(), Some("专辑署名"));
+            assert_eq!(summary.composer.as_deref(), composer);
+            assert_eq!(metadata.artist, summary.artist);
+            assert_eq!(metadata.album_artist, summary.album_artist);
+            assert_eq!(metadata.composer, summary.composer);
+            let serialized = serde_json::to_value(&metadata).unwrap();
+            assert_eq!(
+                serialized["composer"],
+                serde_json::to_value(composer).unwrap()
+            );
+            assert_eq!(
+                fs::read(&fixture.wav).unwrap(),
+                before,
+                "tag reads never modify audio"
+            );
+        }
+    }
+
+    #[test]
     fn tagged_wav_year_is_read_from_date_and_invalid_or_absent_years_are_null() {
         use lofty::{
             config::WriteOptions,
@@ -697,6 +745,7 @@ mod tests {
             "bitDepth",
             "bitrateKbps",
             "codec",
+            "composer",
             "sampleRateHz",
             "title",
             "year",
@@ -718,6 +767,7 @@ mod tests {
         let summary_ty = AudioPlaylistTrackTagSummary::export_to_string(&Config::default())
             .expect("summary should export to TypeScript");
         assert!(summary_ty.contains("albumArtist: string | null"));
+        assert!(summary_ty.contains("composer: string | null"));
         assert!(summary_ty.contains("year: number | null"));
         assert!(summary_ty.contains("sampleRateHz: number | null"));
         assert!(

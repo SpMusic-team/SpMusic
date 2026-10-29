@@ -3,10 +3,10 @@ import { flushSync } from 'react-dom'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Separator } from '@/components/ui/separator'
+import { useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import type { MediaLibraryCategoryId } from '@/features/player/model/mediaLibraryCategories'
 import { mediaLibraryCategories } from '@/features/player/model/mediaLibraryCategories'
 import type { PlaylistLibraryViewModel } from '@/features/player/model/playerUiViewModel'
-import moreIcon from '@/assets/playlist-library/94abf.svg'
 import selectIcon from '@/assets/folder-root-menu/9b161.svg'
 import rescanIcon from '@/assets/folder-root-menu/9b2af.svg'
 import pinIcon from '@/assets/folder-root-menu/b969c.svg'
@@ -84,6 +84,7 @@ function actionsFor(id: MediaLibraryCategoryId): Action[] {
 }
 
 export function LibraryRootMenu({ categoryId, library }: { categoryId: MediaLibraryCategoryId; library: PlaylistLibraryViewModel }) {
+  const icons = useSystemIcons()
   const [open, setOpen] = useState(false)
   const [transferring, setTransferring] = useState(false)
   const [notice, setNotice] = useState<Action | null>(null)
@@ -107,7 +108,7 @@ export function LibraryRootMenu({ categoryId, library }: { categoryId: MediaLibr
     if (action.kind === 'rescan') library.onRescanFolders?.()
   }
   return <Dialog open={open} onOpenChange={value => { setTransferring(false); setNotice(null); setOpen(value) }}>
-    <DialogTrigger render={<Button ref={trigger} className="playlist-management-more" variant="outline" aria-label="更多列表操作"><img src={moreIcon} alt="" /></Button>} />
+    <DialogTrigger render={<Button ref={trigger} className="playlist-hero-icon playlist-hero-more-button" variant="ghost" size="icon" aria-label="更多列表操作"><icons.more aria-hidden="true" /></Button>} />
     {!transferring && (notice ? <DialogContent finalFocus={trigger} className="library-root-menu-notice">
       <DialogHeader><DialogTitle>{notice.label}</DialogTitle><DialogDescription>{notice.description}</DialogDescription></DialogHeader>
       <DialogFooter><Button variant="outline" onClick={() => setNotice(null)}>返回更多操作</Button><Button onClick={() => setOpen(false)}>知道了</Button></DialogFooter>

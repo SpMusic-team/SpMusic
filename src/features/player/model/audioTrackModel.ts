@@ -57,6 +57,7 @@ export function audioFolderTrackPlaceholder(track: AudioFolderTrackRef): AudioTr
       artist: null,
       album: null,
       albumArtist: null,
+      composer: null,
       genre: null,
       year: null,
       trackNumber: null,

@@ -3,8 +3,8 @@ import { flushSync } from 'react-dom'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Separator } from '@/components/ui/separator'
+import { useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import folderIcon from '@/assets/playlist-library/cbd63.svg'
-import moreIcon from '@/assets/playlist-library/94abf.svg'
 import selectFoldersIcon from '@/assets/folder-root-menu/9b161.svg'
 import rescanIcon from '@/assets/folder-root-menu/9b2af.svg'
 import pinIcon from '@/assets/folder-root-menu/b969c.svg'
@@ -21,6 +21,7 @@ type Props = {
 }
 
 export function FolderHierarchyRootMenu({ onSelectFolders, onRescan, onTogglePinned, busy = false, rescanDisabled = false, pinned = false, detail }: Props) {
+  const icons = useSystemIcons()
   const [open, setOpen] = useState(false)
   const [transferring, setTransferring] = useState(false)
   const trigger = useRef<HTMLButtonElement | null>(null)
@@ -41,7 +42,7 @@ export function FolderHierarchyRootMenu({ onSelectFolders, onRescan, onTogglePin
     } else transfer()
   }
   return <Dialog open={open} onOpenChange={value => { setTransferring(false); setOpen(value) }}>
-    <DialogTrigger render={<Button ref={trigger} className={detail ? "playlist-hero-icon playlist-hero-more-button" : "playlist-management-more"} variant={detail ? "ghost" : "outline"} size={detail ? "icon" : "default"} aria-label="更多文件夹操作">{detail ? detail.triggerIcon : <img src={moreIcon} alt="" />}</Button>} />
+    <DialogTrigger render={<Button ref={trigger} className="playlist-hero-icon playlist-hero-more-button" variant="ghost" size="icon" aria-label="更多文件夹操作">{detail ? detail.triggerIcon : <icons.more aria-hidden="true" />}</Button>} />
     {!transferring && <DialogContent className={detail ? "folder-root-menu folder-detail-menu" : "folder-root-menu"} overlayClassName="folder-root-menu-overlay" showCloseButton={false} aria-describedby={undefined}>
       <header className={detail ? "folder-root-menu-header folder-detail-menu-header" : "folder-root-menu-header"}>
         {detail ? <><span className="folder-detail-menu-artwork">{detail.artwork}</span><div className="folder-detail-menu-info"><DialogTitle className="folder-root-menu-title">{detail.title}</DialogTitle><p className="folder-detail-menu-parent">{detail.parent}</p><p className="folder-detail-menu-metadata">{detail.metadata}</p></div></> : <><span className="folder-root-menu-category"><img src={folderIcon} alt="" /></span><DialogTitle className="folder-root-menu-title">文件夹层次结构</DialogTitle></>}

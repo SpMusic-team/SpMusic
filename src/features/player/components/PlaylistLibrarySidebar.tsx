@@ -42,10 +42,11 @@ export function PlaylistLibrarySidebar({ playlistName, trackCount, totalClock, c
       animate="animate"
       exit={atomicOverview ? 'exit' : stationaryHandoff ? 'animate' : 'exit'}
     >
-      <div className="playlist-library-brand">
+      <Button className="playlist-library-brand" variant="ghost" aria-label="SPMusic，返回媒体库"
+        title="返回媒体库" onClick={library?.onOpenOverview}>
         <img className="playlist-library-logo" src={logo} alt="" />
         <span>SPMusic</span>
-      </div>
+      </Button>
       <nav className="playlist-library-categories" aria-label="媒体库分类" tabIndex={0}>
         {sidebarLibraryCategories(library?.pinnedCategoryIds ?? library?.foldersPinnedInSidebar ?? false).map((category) => {
           const current = library?.route?.view === 'category' ? library.route.categoryId === category.id : category.id === 'playlists'

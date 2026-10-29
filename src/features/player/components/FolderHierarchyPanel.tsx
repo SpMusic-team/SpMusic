@@ -177,14 +177,14 @@ function FolderHierarchyScene({ categoryId = 'folders', playlist, allSongsCoverS
   const { controllerMotion, returnTransition } = useCollectionHeroMotion({
     panelRef,
     dockRef: dockContext?.dockRef ?? fallbackDockRef, mode: controllerMode,
-    seeking: timelineInteraction === 'seeking' || timelineInteraction === 'previewing',
+    seeking: !location && currentSelection.active || timelineInteraction === 'seeking' || timelineInteraction === 'previewing',
     layoutKey,
-    controllerEnabled: Boolean(location && present && (!dockContext || dockContext.activeRouteKey === `category:${categoryId}`)),
+    controllerEnabled: Boolean(present && (!dockContext || dockContext.activeRouteKey === `category:${categoryId}`)),
     actionsPassed,
     rowSelector: '.folder-directory-list > .folder-row, .folder-songs > .folder-song-slot',
   })
   useLibraryDockBinding(`category:${categoryId}`, { searchOpen: showSearch, onSearchToggle: toggleSearch,
-    controllerOffsetY: location ? controllerMotion.offsetY : undefined, controllerHidden: location ? controllerMotion.hidden : undefined })
+    controllerOffsetY: controllerMotion.offsetY, controllerHidden: controllerMotion.hidden })
   const songWindow = useAllSongsRenderWindow(visibleSongs.length, layout, panelRef, songsRef, spaceRef, metadataLoading)
   const renderedSongs = useMemo(() => visibleSongs.slice(songWindow.first, songWindow.end), [visibleSongs, songWindow.first, songWindow.end])
   useLayoutEffect(() => {
@@ -210,13 +210,14 @@ function FolderHierarchyScene({ categoryId = 'folders', playlist, allSongsCoverS
     if (panel) panel.scrollTop = scrollPositions.current.get(locationKey) ?? 0
   }, [locationKey, scrollPositions])
   useLayoutEffect(() => { if (showSearch) searchRef.current?.focus() }, [showSearch])
-  useCollectionHeroVisibility({ panelRef, artworkRef: heroArtworkRef, actionsRef: heroActionsRef,
+  useCollectionHeroVisibility({ panelRef, artworkRef: location ? heroArtworkRef : managementChrome.toolbarRef,
+    actionsRef: location ? heroActionsRef : managementChrome.toolbarRef,
     compactActionsRef, present, heroOffscreen, onHeroOffscreen: setHeroOffscreen,
     onActionsPassed: setActionsPassed, visibilityKey: layoutKey, routeKey,
-    publishDetailVisibility: chrome.publishDetailVisibility,
+    publishDetailVisibility: location ? chrome.publishDetailVisibility : undefined,
   })
   const rebaseController = controllerMotion.rebase
-  useLayoutEffect(() => { if (showSearch) rebaseController({ reveal: true }) }, [showSearch, rebaseController])
+  useLayoutEffect(() => { if (showSearch || !location && currentSelection.active) rebaseController({ reveal: true }) }, [showSearch, location, currentSelection.active, rebaseController])
   const toggleSelect = (key: string) => setSelection(previous => { const keys = new Set(previous.keys); if (keys.has(key)) keys.delete(key); else keys.add(key); return { ...previous, keys } })
   const candidates = useMemo(() => {
     const candidates = location ? [...visibleSongs] : []
@@ -260,12 +261,12 @@ function FolderHierarchyScene({ categoryId = 'folders', playlist, allSongsCoverS
   const renderHeroActions = (compact = false) => <motion.div ref={compact ? compactActionsRef : heroActionsRef}
     className={compact ? 'playlist-hero-actions playlist-controller-actions' : 'playlist-hero-actions'}
     role="group" aria-label="文件夹歌曲操作"
-    aria-hidden={compact && (!location || !actionsPassed || !present) || undefined}
-    inert={compact && (!location || !actionsPassed || !present) || undefined}
-    data-actions-visible={compact ? String(Boolean(location && actionsPassed && present)) : undefined}
+    aria-hidden={compact && (!actionsPassed || !present) || undefined}
+    inert={compact && (!actionsPassed || !present) || undefined}
+    data-actions-visible={compact ? String(Boolean(actionsPassed && present)) : undefined}
     custom={compact ? returnGeometry : undefined}
     variants={compact ? { ...appearance.variants.controllerActions, ...appearance.libraryNavigation.detailReturn.controllerOutgoing } : undefined}
-    initial={compact ? 'hidden' : false} animate={compact ? returning ? 'exit' : location && actionsPassed && present ? 'visible' : 'hidden' : undefined}
+    initial={compact ? 'hidden' : false} animate={compact ? returning ? 'exit' : actionsPassed && present ? 'visible' : 'hidden' : undefined}
     transition={compact ? returning ? appearance.libraryNavigation.transition : appearance.layoutTransition : { layout: returnTransition }}
     style={compact ? { y: controllerMotion.offsetY } : undefined}>
     <PlaylistActionButtons compact={compact} onBack={compact ? goUp : undefined}
@@ -274,12 +275,12 @@ function FolderHierarchyScene({ categoryId = 'folders', playlist, allSongsCoverS
       shuffleDisabled={playlist.isOpenAudioDisabled || metadataLoading || !candidates.length || !library.onShufflePlay}
       onPlay={() => play()} playDisabled={playlist.isOpenAudioDisabled || metadataLoading || !candidates.length || !library.onPlaySong}
       playbackLocked={playlist.isOpenAudioDisabled} searchOpen={showSearch} onSearch={toggleSearch}
-      selectMode={currentSelection.active} onSelect={() => setSelection(previous => ({ ...previous, active: !previous.active, keys: new Set() }))}
+      selectMode={currentSelection.active} selectDisabled={!location && !visibleDirectories.length} onSelect={() => setSelection(previous => ({ ...previous, active: !previous.active, keys: new Set() }))}
       more={location ? <FolderHierarchyRootMenu onSelectFolders={library.onSelectFolders}
         busy={library.isImportPending || library.isFolderRestorePending || library.isFolderRescanPending}
         detail={{ title: folderName(location.directoryPath), parent: folderName(parentFolder(location.directoryPath)),
           artwork: <Cover item={heroCover} store={store} />, triggerIcon: <icons.more aria-hidden="true" />,
-          metadata: <><icons.music aria-hidden="true" />{recursiveSongs.length}{totalClock(recursiveSongs) ? ` | ${totalClock(recursiveSongs)}` : ''}</> }} /> : null} />
+          metadata: <><icons.music aria-hidden="true" />{recursiveSongs.length}{totalClock(recursiveSongs) ? ` | ${totalClock(recursiveSongs)}` : ''}</> }} /> : renderRootMore()} />
   </motion.div>
   const { sectionControls } = useCollectionDetailPresence(chrome.offscreenReturn, returnTransition, undefined, Boolean(location))
   const category = mediaLibraryCategories.find(item => item.id === categoryId)!
@@ -348,6 +349,6 @@ function FolderHierarchyScene({ categoryId = 'folders', playlist, allSongsCoverS
       </div>
     </motion.section>
     {!location && present ? <CollectionQuickIndex panelRef={panelRef} names={visibleDirectories.map(item => item.name)} /> : null}
-    {location ? renderHeroActions(true) : null}
+    {renderHeroActions(true)}
   </>
 }

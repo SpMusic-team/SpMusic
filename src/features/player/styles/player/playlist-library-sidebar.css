@@ -19,7 +19,11 @@
     display: flex;
     flex: 0 0 auto;
     align-items: center;
+    justify-content: flex-start;
+    height: auto;
     gap: 24px;
+    border: 0;
+    padding-inline: 0;
     padding-block: 16px 24px;
     color: var(--player-blue);
     font-size: 45px;
@@ -27,6 +31,8 @@
     line-height: 52px;
     white-space: nowrap;
   }
+  .playlist-library-brand:hover { background: var(--player-surface-variant); color: var(--player-blue); }
+  .playlist-library-brand:focus-visible { outline: 3px solid var(--player-blue); outline-offset: -3px; }
   .playlist-library-logo {
     width: 82px;
     height: 82px;

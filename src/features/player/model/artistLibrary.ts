@@ -8,6 +8,14 @@ export type ArtistLocation = null
 
 export type ArtistEntry = AlbumEntry
 
+export type ContributorCategoryId = 'artist' | 'album-artist' | 'composer'
+
+export const CONTRIBUTOR_LABELS: Record<ContributorCategoryId, string> = {
+  artist: '艺术家',
+  'album-artist': '专辑艺术家',
+  composer: '作曲家',
+}
+
 export { splitArtists } from './albumLibrary'
 
 export function uniqueArtistSongs(songs: readonly AllSongsItem[]): AllSongsItem[] {
@@ -15,15 +23,16 @@ export function uniqueArtistSongs(songs: readonly AllSongsItem[]): AllSongsItem[
   return songs.filter(song => { if (seen.has(song.key)) return false; seen.add(song.key); return true })
 }
 
-export function artistEntries(songs: readonly AllSongsItem[]): ArtistEntry[] {
+export function artistEntries(songs: readonly AllSongsItem[], categoryId: ContributorCategoryId = 'artist'): ArtistEntry[] {
   const groups = new Map<string, { name: string; songs: AllSongsItem[] }>()
   for (const song of uniqueArtistSongs(songs)) {
-    const raw = song.track.libraryArtistName
+    const raw = categoryId === 'artist' ? song.track.libraryArtistName
+      : categoryId === 'album-artist' ? song.track.albumArtist : song.track.libraryComposerName
     if (raw === undefined) continue
     const names = raw ? splitArtists(raw) : []
     for (const name of names.length ? names : [null]) {
-      const key = JSON.stringify(['artist', name])
-      const group = groups.get(key) ?? { name: name ?? '未知艺术家', songs: [] }
+      const key = JSON.stringify([categoryId, name])
+      const group = groups.get(key) ?? { name: name ?? `未知${CONTRIBUTOR_LABELS[categoryId]}`, songs: [] }
       group.songs.push(song)
       groups.set(key, group)
     }
@@ -38,6 +47,6 @@ export function artistAlbums(artist: ArtistEntry | undefined): AlbumEntry[] {
   return artist ? albumEntries(artist.songs) : []
 }
 
-export function artistRoute(location: ArtistLocation): string {
-  return location ? `artist:${JSON.stringify(location)}` : 'category:artist'
+export function artistRoute(location: ArtistLocation, categoryId: ContributorCategoryId = 'artist'): string {
+  return location ? `${categoryId}:${JSON.stringify(location)}` : `category:${categoryId}`
 }

@@ -173,6 +173,7 @@ fn metadata_from_tag(tag: &Tag, cover_cache_dir: Option<&Path>) -> AudioTrackMet
         artist: tag.artist().map(cow_to_string),
         album: tag.album().map(cow_to_string),
         album_artist: tag_text(tag, ItemKey::AlbumArtist),
+        composer: tag_text(tag, ItemKey::Composer),
         genre: tag.genre().map(cow_to_string),
         year: tag.date().map(|timestamp| u32::from(timestamp.year)),
         track_number: tag.track(),

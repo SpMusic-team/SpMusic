@@ -73,6 +73,7 @@ export type AudioTrackMetadata = {
   artist: string | null
   album: string | null
   albumArtist: string | null
+  composer?: string | null
   genre: string | null
   year: number | null
   trackNumber: number | null
@@ -177,6 +178,7 @@ export type PlaylistTrackTagSummary = {
   artist: string | null
   album: string | null
   albumArtist: string | null
+  composer?: string | null
   year: number | null
   bitDepth: number | null
   sampleRateHz: number | null
@@ -228,6 +230,7 @@ function parsePlaylistTrackTagSummary(value: unknown): PlaylistTrackTagSummary {
     artist: nullableSummaryText(summary.artist),
     album: nullableSummaryText(summary.album),
     albumArtist: nullableSummaryText(summary.albumArtist),
+    composer: nullableSummaryText(summary.composer),
     year: nullableSummaryYear(summary.year),
     bitDepth: nullableSummaryNumber(summary.bitDepth),
     sampleRateHz: nullableSummaryNumber(summary.sampleRateHz),

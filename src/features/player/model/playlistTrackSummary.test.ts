@@ -40,6 +40,7 @@ test('a fully tagged summary keeps every field the hydrated row publishes', () =
     // The tag channel never publishes a duration: it stays with the hydration and
     libraryAlbumName: 'Album a',
     libraryArtistName: 'Artist a',
+    libraryComposerName: null,
     albumArtist: 'Album Artist a',
     libraryYear: null,
     // duration-probe channels so a tag header estimate cannot flip a total.

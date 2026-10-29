@@ -42,3 +42,6 @@ dist-ssr
 !.rea-analysis/decoded/res/values/
 .rea-analysis/decoded/res/values/*
 !.rea-analysis/decoded/res/values/strings.xml
+# 其它分析副产物（LevelDB 快照、内存采样 CSV），不属于文档证据
+.rea-analysis/ls-snapshot/
+.rea-analysis/*.csv

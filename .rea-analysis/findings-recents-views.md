@@ -196,6 +196,61 @@ mUpdatePlayedTimesAndLastPosSt   : SQLiteStatement
 mUpdateDurationSt                : SQLiteStatement
 ```
 
+### 5.1 `b0.initSql()` 原文（G1 已闭环）
+
+```java
+private void initSql() {
+    SQLiteDatabase writableDatabase = this.mContentProvider.getWritableDatabase();
+    this.mDb = writableDatabase;
+    this.mUpdatePlayedAtSt = writableDatabase.compileStatement(
+        "UPDATE folder_files SET played_at=? WHERE _id=?");
+    this.mUpdatePlayedTimesAndLastPosSt = writableDatabase.compileStatement(
+        "UPDATE folder_files SET played_times=played_times+1, total_played_times=total_played_times+1, last_pos=?, played_fully_at=played_at WHERE _id=?");
+    this.mRawFileSt = writableDatabase.compileStatement(/* 未读尽 */);
+    this.mQueueUnplayedCountSt = writableDatabase.compileStatement(
+        "SELECT COUNT(*) FROM queue INNER JOIN folder_files ON folder_files._id=queue.folder_file_id WHERE folder_files.played_at < queue.created_at");
+    this.mTrackMetaProcessor = new s(this.mContext, this.mSafCtx);
+}
+```
+
+`ev_fd42efda8d8e41a6f75d386450eb2791e97d07d28403f4c8834d16b4787d45a1`
+
+### 5.2 两个懒加载 getter 原文
+
+```java
+public SQLiteStatement getUpdateLastPosSt() {
+    if (this.mUpdateLastPosSt == null) {
+        this.mUpdateLastPosSt = this.mContentProvider.getWritableDatabase().compileStatement(
+            "UPDATE folder_files SET last_pos=?, played_fully_at=played_at WHERE _id=?");
+    }
+    return this.mUpdateLastPosSt;
+}
+
+public SQLiteStatement getUpdateLastPosNoPlayedFullyAtSt() {
+    if (this.mUpdateLastPosNoPlayedFullyAtSt == null) {
+        this.mUpdateLastPosNoPlayedFullyAtSt = this.mContentProvider.getWritableDatabase().compileStatement(
+            "UPDATE folder_files SET last_pos=? WHERE _id=?");
+    }
+    return this.mUpdateLastPosNoPlayedFullyAtSt;
+}
+```
+
+`ev_05fe2ece21da6a0fe29d1ace1ccb66764a2be7a01c6f154c9e0341ec462fb52d`
+
+### 5.3 四条语句对照（实证）
+
+| 语句 | SQL | 语义 |
+| --- | --- | --- |
+| `mUpdatePlayedAtSt` | `SET played_at=?` | **唯一时钟写入点** |
+| `mUpdatePlayedTimesAndLastPosSt` | `SET played_times+1, total_played_times+1, last_pos=?, **played_fully_at=played_at**` | 计数 + 认定 |
+| `getUpdateLastPosSt` | `SET last_pos=?, **played_fully_at=played_at**` | 仅认定，不计数 |
+| `getUpdateLastPosNoPlayedFullyAtSt` | `SET last_pos=?` | **不**认定 |
+
+**⇒ `played_fully_at` 恒为 `played_at` 的快照拷贝，从不写当前时间。**
+系统只有一个时钟源，两列不可能出现逻辑倒挂。
+
+**⇒ 队列未播数** = `played_at < queue.created_at` 的行数，即"入队之后未再播过"，无需额外布尔列。
+
 `b0.updateTrackPlayedAtAsNeeded(g0)` 原文：
 
 ```java
@@ -306,20 +361,74 @@ public void updateTrackPlayedAtAsNeeded(g0 g0Var) {
 | **`q3.X0`** | `ev_f0c45a19a733e79c85ebe21467b2d0b4602c4ab9aa7f288c529612b26477f177` |
 | **`h3.X0`** | `ev_52798c423715873f6291f94a8e476c5d3038e997c727f74eef2ba33ced6cd9ed` |
 | `h3.mo2437` | `ev_85eacab488b395c8dd39cc92c45ef8550236a28d37d60af9fc9d33339f6d9ea4` |
+| `q3.mo2437` | `ev_11f0eecbfa7d1f77fa54e743a24a0a9fe05e20718ad7ee73ffa7aaa4bd9fba11` |
+| **`h3.d`（强制模式 6）** | `ev_f3df9ecc8a1c4388159a6293d79f64d9ad92458c323e6180657f94eea2d2ac9b` |
+| **`b0.initSql`（4 条语句）** | `ev_fd42efda8d8e41a6f75d386450eb2791e97d07d28403f4c8834d16b4787d45a1` |
+| **`b0.getUpdateLastPosSt`** | `ev_05fe2ece21da6a0fe29d1ace1ccb66764a2be7a01c6f154c9e0341ec462fb52d` |
 | `b0.updateTrackPlayedAtAsNeeded` | `ev_d0b474c2b56135d2569818e53e19cf9d9af14fbabb2a9771c8fca35b2fa1b7c8` |
 | `C0742` 类摘要 | `ev_90ee531e61575a22aa66995833544192dbe7e62f9e6d758dff9beb7aa1d39fef` |
 | `C0742.<clinit>` | `ev_0fe14e74dc505f456d7050484d28ee88d265d30f42a11f25f03d35465f41bb67` |
 
 ---
 
-## 9. 未取项
+## 9. 补充实证（本轮闭环 G1 / G2 / G3 / G5）
+
+### 9.1 G2：`q3.mo2437()` 原文
+
+```java
+@Override // com.maxmpz.audioplayer.rest.library.d2
+/* JADX INFO: renamed from: с */
+public final int mo2437() {
+    return Math.max(2, C0742.i0.f3810);
+}
+```
+
+⇒ `recently_added_files_limit`，下限 2。**与原推断一致**。
+
+### 9.2 G3：`h3.d()` 原文
+
+```java
+@Override // com.maxmpz.audioplayer.rest.library.p0, com.maxmpz.audioplayer.rest.library.m2
+public final int d() {
+    return (C0742.V.f3810 & 1073741824) | 6;
+}
+```
+
+⇒ `C0742.V` = `most_played_files_sort`。**只保留 DESC 位（`0x40000000`），再 `| 6` 强制排序维度为模式 6**。
+⇒ 「最多播放」页不允许用户更换排序维度，只能切升降序。
+
+### 9.3 G5：三个 long 窗口偏好无默认参数
+
+`C0742.<clinit>` 中不同偏好类型的工厂签名不同：
+
+| 类型 | 工厂调用 | 是否带默认值 |
+| --- | --- | --- |
+| int `fastprefs.w` | `invoke-virtual {v0, v3, v1}, m;->р(ILjava/lang/String;)L...w;` | **有**（`v3` 为默认 int） |
+| long `fastprefs.z` | `invoke-static {v0, v1}, m;->O(Lcom/maxmpz/preference/fastprefs/m;Ljava/lang/String;)L...z;` | **无**（仅 registry + key） |
+
+三个窗口偏好 `recently_played_from` / `recently_added_from` / `most_played_ts_from`
+**全部走 long 工厂** ⇒ **默认值 = 0**。
+
+语义后果：
+
+| 页 | 默认 0 时 |
+| --- | --- |
+| `r3` | `played_fully_at > 0` ⇒ 所有曾完整播放过的曲目，按时间倒序取前 N |
+| `q3` | 条件不加入 ⇒ 全库按 `file_created_at DESC` 取前 N |
+| `h3` | `played_times > 0 AND played_fully_at > 0` ⇒ 所有曾完整播放过的曲目，按次数倒序取前 N |
+
+⇒ **默认配置下「最近」不含时间跨度限制，只有条数限制。**
+也解释了为何 `res/xml/*.xml` 里搜不到这三个偏好：它们是列表内筛选状态，不是设置页项。
+
+---
+
+## 10. 未取项
 
 | 项 | 原因 |
 | --- | --- |
-| `q3.mo2437()` 方法体 | 本轮未读取（推断为 `max(2, i0)`） |
-| `h3.d()` 方法体 | `h3.X0` 用 `O(d())` 而非直接读偏好；未确认 `d()` 是否返回 `C0742.V` |
-| `r3` / `q3` / `h3` 的 `O(int)` | 三者均未声明，继承自父类 |
-| `b0.initSql()` 里各 `mUpdate*St` 的 SQL 文本 | 未读取；`played_fully_at` 的赋值条件据此确定 |
+| `r3` / `q3` / `h3` 的 `O(int)` | 三者均未声明，继承自 `p0`；模式 6 对应的 ORDER BY 表达式未读 |
+| `b0.mRawFileSt` / `mUpdateDurationSt` 的 SQL | `initSql` 中一处未读尽、一处在别处懒加载 |
 | `C0742.f3413`–`f3418`（7 个 boolean）的键 | 存在于类摘要但不在 `<clinit>` 体内（该方法体被反编译截断） |
 | `p0.f3367` / `p0.x` / `p0.y` / `p0.X` / `p0.f3368` 数组内容 | 需读 `p0.<clinit>` |
 | `g0Var.V.s1()` 语义 | 推断为「虚拟/CUE 条目」判定 |
+| 三个 `*_from` 偏好的**写入方** | 默认 0 表示不限；UI 上设置时间筛选的入口未找到 |

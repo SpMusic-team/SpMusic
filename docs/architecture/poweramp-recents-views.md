@@ -43,14 +43,25 @@ ORDER BY <用户排序偏好>
 
 区别只在三个变量：**用哪个时间列**、**用哪个窗口/条数偏好**、**是否附加"播放过"条件**。
 
-### 0.2 已知缺口
+### 0.2 缺口状态
+
+**本轮已闭环 4 项**（G1 / G2 / G3 / G5），均已升级为【实证·产物】：
+
+| # | 原缺口 | 现状 |
+| --- | --- | --- |
+| ~~G1~~ | `b0` 各 `mUpdate*St` 的 SQL 文本 | ✅ **已闭环**，四条 UPDATE 原文见 §7.1。核心发现：`played_fully_at` 是 `played_at` 的快照拷贝 |
+| ~~G2~~ | `q3.mo2437()` | ✅ **已闭环**：`Math.max(2, C0742.i0.f3810)` |
+| ~~G3~~ | `h3.d()` | ✅ **已闭环**：`(C0742.V.f3810 & 0x40000000) \| 6` —— 排序维度被强制锁死，见 §5.5 |
+| ~~G5~~ | 三个窗口偏好的默认值 | ✅ **已闭环**：long 偏好工厂无默认参数 ⇒ **默认 0**，见 §9.5 |
+
+**仍开放**：
 
 | # | 缺口 | 影响 |
 | --- | --- | --- |
-| G1 | `b0.initSql()` 中 `mUpdateLastPosSt` / `mUpdatePlayedTimesAndLastPosSt` 的**SQL 文本** | 无法确定 `played_fully_at` 的赋值条件（§7 的写入机制只能到字段命名级） |
-| G2 | `q3.mo2437()` 方法体 | 其限额偏好是按同构推断 |
-| G3 | `h3.d()` 方法体 | 最多播放的排序来源未确证 |
 | G4 | `C0742.f3413`–`f3418`（7 个 boolean）的键 | `<clinit>` 体反编译截断 |
+| G6 | `g0Var.V.s1()` 的确切语义 | 推断为"虚拟/CUE 条目" |
+| G7 | `r3`/`q3`/`h3` 的 `O(int)` 映射（继承自 `p0`） | 模式 6 具体映射为哪个 ORDER BY 表达式未读 |
+| G8 | 三个窗口偏好**由谁写入**（更新时机） | 默认 0 表示"不限"，但用户如何设置时间筛选的 UI 入口未找到 |
 
 ---
 
@@ -247,6 +258,18 @@ ORDER BY <recently_added_files_sort>
 **要点**：窗口为 0 时**不加时间条件**，退化为"全库按文件创建时间倒序取前 N"。
 这与最近播放不同（后者的条件恒加入）。
 
+### 4.3 限额（G2 已闭环）
+
+```java
+@Override // com.maxmpz.audioplayer.rest.library.d2
+/* JADX INFO: renamed from: с */
+public final int mo2437() {
+    return Math.max(2, C0742.i0.f3810);      // recently_added_files_limit，下限 2
+}
+```
+
+与 `r3` / `h3` 完全同构：三页的限额都是 `max(2, 各自的 *_files_limit)`。
+
 ---
 
 ## 5. 最多播放 `h3`
@@ -317,6 +340,33 @@ public final int mo2437() {
 }
 ```
 
+### 5.5 排序维度被强制锁死（`d()` 实证，G3 已闭环）
+
+`h3.X0` 的外层排序写作 `i1Var.B = O(d())`，其中：
+
+```java
+@Override // com.maxmpz.audioplayer.rest.library.p0, com.maxmpz.audioplayer.rest.library.m2
+public final int d() {
+    return (C0742.V.f3810 & 1073741824) | 6;
+}
+```
+
+拆解：
+
+| 步骤 | 作用 |
+| --- | --- |
+| `C0742.V.f3810` | 用户偏好 `most_played_files_sort` 的原始值 |
+| `& 1073741824`（`0x40000000`） | **只保留 DESC 位**，丢弃所有排序维度位 |
+| `\| 6` | **强制排序维度为模式 6** |
+
+⇒ **「最多播放」页不允许用户更换排序维度**，只能是模式 6（按播放次数），用户唯一能控制的是**升序/降序**。
+
+这个设计是自洽的：页面的内层 `ORDER BY played_times DESC` 已经按"最多播放"选出了集合，外层若允许改成"按标题"就会让页面名不副实——所以干脆锁死。
+
+> 对照：`r3`/`q3` 直接把偏好原值传给 `O(...)`（`O(C0742.Y.f3810)` / `O(C0742.W.f3810)`），用户可自由换维度。
+
+**代价**：`most_played_files_sort` 这个 int 偏好除了 DESC 位外，其余位的取值**被静默丢弃**。偏好的表达能力与实际用法不匹配。
+
 ---
 
 ## 6. 三页差异对照（核心）
@@ -327,11 +377,12 @@ public final int mo2437() {
 | 内层排序 | `played_fully_at DESC` | `file_created_at DESC` | **`played_times DESC`** |
 | 窗口偏好 | `b1` `recently_played_from` | `c1` `recently_added_from` | `d1` `most_played_ts_from` |
 | 条数偏好 | `j0` `recently_played_files_limit` | `i0` `recently_added_files_limit` | `f0` `most_played_files_limit` |
-| 排序偏好 | `Y` `recently_played_files_sort` | `W` `recently_added_files_sort` | `V`（经 `d()`）|
+| 排序偏好 | `Y` `recently_played_files_sort` | `W` `recently_added_files_sort` | `V` `most_played_files_sort`（**仅取 DESC 位，维度强制为模式 6**，§5.5）|
 | 窗口应用 | **无条件**，绑定参数 | **仅当 > 0**，绑定参数 | **无条件**，**内联字面量** |
 | 附加条件 | — | — | **`played_times > 0`** |
 | projection 断言 | 无 | 无 | **有**（禁止覆盖）|
-| 限额下限 | `max(2, …)` | `max(2, …)`【推断，G2】 | `max(2, …)` |
+| 限额下限 | `max(2, recently_played_files_limit)` | `max(2, recently_added_files_limit)` | `max(2, most_played_files_limit)` |
+| 窗口默认值 | **0**（long 偏好无默认参数，§9.5）| **0** | **0** |
 
 ### 6.1 同一概念的三种实现风格（实现不一致）
 
@@ -359,23 +410,77 @@ Poweramp 在 `folder_files` 上维护**两个**播放时间列：
 | 列 | 语义 | 写入者 |
 | --- | --- | --- |
 | `played_at` | 最后一次**开始/结束播放** | `b0.mUpdatePlayedAtSt` |
-| **`played_fully_at`** | 最后一次**完整播放**（达 `played_dur` 门槛） | 推断为 `b0.mUpdateLastPosSt`（G1） |
+| **`played_fully_at`** | 最后一次**完整播放**（达 `played_dur` 门槛） | `b0.mUpdateLastPosSt` / `mUpdatePlayedTimesAndLastPosSt`（§7.1 实证） |
 
-### 7.1 写入路径（`b0` 字段命名实证）
+### 7.1 写入路径（**SQL 原文实证，G1 已闭环**）
 
-`b0`（队列管理器）持有 5 个预编译语句：
+`b0` 有 5 个预编译语句。其中 3 个在 `initSql()` 中立即编译，另 2 个走**懒加载 getter**。
 
-| 字段 | 推断职责 |
-| --- | --- |
-| `mUpdatePlayedAtSt` | 写 `played_at` |
-| **`mUpdateLastPosSt`** | 写最后位置 **+ `played_fully_at`** |
-| **`mUpdateLastPosNoPlayedFullyAtSt`** | 写最后位置，**不含** `played_fully_at` |
-| `mUpdatePlayedTimesAndLastPosSt` | 写 `played_times` + 最后位置 |
-| `mUpdateDurationSt` | 写时长 |
+#### `b0.initSql()` 原文【实证·产物】
 
-**`NoPlayedFullyAt` 这个命名本身是关键证据**：存在一个专门的"不写 `played_fully_at`"变体，说明「是否同时认定完整播放」是一个**显式代码分支**，而非靠 SQL 表达式兜底。
+```java
+private void initSql() {
+    SQLiteDatabase writableDatabase = this.mContentProvider.getWritableDatabase();
+    this.mDb = writableDatabase;
+    this.mUpdatePlayedAtSt = writableDatabase.compileStatement(
+        "UPDATE folder_files SET played_at=? WHERE _id=?");
+    this.mUpdatePlayedTimesAndLastPosSt = writableDatabase.compileStatement(
+        "UPDATE folder_files SET played_times=played_times+1, total_played_times=total_played_times+1, last_pos=?, played_fully_at=played_at WHERE _id=?");
+    this.mRawFileSt = ...;
+    this.mQueueUnplayedCountSt = writableDatabase.compileStatement(
+        "SELECT COUNT(*) FROM queue INNER JOIN folder_files ON folder_files._id=queue.folder_file_id WHERE folder_files.played_at < queue.created_at");
+    this.mTrackMetaProcessor = new s(this.mContext, this.mSafCtx);
+}
+```
 
-> G1：两个变体的 SQL 文本在 `b0.initSql()` 中构建，本轮未读取，故 §7.1 的职责划分是**按命名推断**。
+#### 两个懒加载 getter 原文【实证·产物】
+
+```java
+public SQLiteStatement getUpdateLastPosSt() {
+    if (this.mUpdateLastPosSt == null) {
+        this.mUpdateLastPosSt = this.mContentProvider.getWritableDatabase().compileStatement(
+            "UPDATE folder_files SET last_pos=?, played_fully_at=played_at WHERE _id=?");
+    }
+    return this.mUpdateLastPosSt;
+}
+
+public SQLiteStatement getUpdateLastPosNoPlayedFullyAtSt() {
+    if (this.mUpdateLastPosNoPlayedFullyAtSt == null) {
+        this.mUpdateLastPosNoPlayedFullyAtSt = this.mContentProvider.getWritableDatabase().compileStatement(
+            "UPDATE folder_files SET last_pos=? WHERE _id=?");
+    }
+    return this.mUpdateLastPosNoPlayedFullyAtSt;
+}
+```
+
+#### 四条语句对照
+
+| 语句 | SQL | 触发语义 |
+| --- | --- | --- |
+| `mUpdatePlayedAtSt` | `SET played_at=?` | 记录"碰过" |
+| **`mUpdatePlayedTimesAndLastPosSt`** | `SET played_times+1, total_played_times+1, last_pos=?, **played_fully_at=played_at**` | 计数 + 认定完整播放 |
+| **`getUpdateLastPosSt`** | `SET last_pos=?, **played_fully_at=played_at**` | 仅认定完整播放（不加计数） |
+| **`getUpdateLastPosNoPlayedFullyAtSt`** | `SET last_pos=?` | **不**认定完整播放 |
+
+#### 核心结论：`played_fully_at` 是 `played_at` 的**快照拷贝**
+
+三条认定语句里写的都是 `played_fully_at = played_at`，**而不是 `played_fully_at = 当前时间`**。
+
+⇒ 系统只有**一个时钟写入点**（`mUpdatePlayedAtSt` 写 `played_at`），`played_fully_at` 只是把那一刻的值复制过来。
+⇒ 两列永远不可能出现"`played_fully_at` 晚于 `played_at`"的矛盾状态。
+
+`NoPlayedFullyAt` 这一对语句的存在，说明「是否认定完整播放」是**显式代码分支选不同 SQL**，而不是靠 SQL 表达式里的 CASE/IFNULL 兜底。这是一个清晰的设计。
+
+#### 附带发现：队列未播计数
+
+```sql
+SELECT COUNT(*) FROM queue
+INNER JOIN folder_files ON folder_files._id=queue.folder_file_id
+WHERE folder_files.played_at < queue.created_at
+```
+
+⇒ "队列中未播条目数" = 曲目最后播放时间**早于**该条目入队时间的行数。
+即：**入队之后再播过，就算已播**。这与 `queue` 表的 `created_at` 列配合，无需额外状态列。
 
 ### 7.2 虚拟条目被排除
 
@@ -477,6 +582,33 @@ public void updateTrackPlayedAtAsNeeded(g0 g0Var) {
 
 > 这条不是 Poweramp 的缺陷，而是**分析方法的坑**——记录下来避免后续重复踩。
 
+### 9.5 偏好默认值：long 类型无默认参数（G5 已闭环）
+
+`C0742.<clinit>` 中，不同偏好类型走**不同签名的工厂方法**：
+
+| 类型 | 工厂调用（smali 实参） | 是否有默认值 |
+| --- | --- | --- |
+| int `fastprefs.w` | `invoke-virtual {v0, v3, v1}, m;->р(ILjava/lang/String;)L...w;` | **有** —— `v3` 是显式默认 int |
+| long `fastprefs.z` | `invoke-static {v0, v1}, m;->O(Lcom/maxmpz/preference/fastprefs/m;Ljava/lang/String;)L...z;` | **无** —— 只有 (registry, key) 两个实参 |
+| boolean `fastprefs.h0` | 另见 `(ZLjava/lang/String;)` 形态 | 有（boolean 默认） |
+
+三个窗口偏好 `recently_played_from` / `recently_added_from` / `most_played_ts_from` **全部走 long 工厂**，因此：
+
+> **三者的默认值都是 `0`。**
+
+### 9.6 默认 0 的语义后果（关键）
+
+| 页 | 条件写法 | 默认 0 时的实际行为 |
+| --- | --- | --- |
+| **最近播放** `r3` | `played_fully_at > ?` **恒加入** | `played_fully_at > 0` ⇒ **所有"曾经完整播放过"的曲目**，按时间倒序取前 N |
+| **最近添加** `q3` | `if (c1.B > 0)` 才加入 | 窗口为 0 ⇒ **完全不筛时间** ⇒ 全库按 `file_created_at DESC` 取前 N |
+| **最多播放** `h3` | `played_fully_at > <字面量>` **恒加入** | `played_fully_at > 0` + `played_times > 0` ⇒ **所有"曾完整播放过"的曲目**，按播放次数倒序取前 N |
+
+⇒ **在默认配置下，"最近"并不含任何时间跨度限制**，只有条数限制。
+三个 `*_from` 偏好是**可选的收窄条件**，用户不改就是"全部历史"。
+
+这也解释了为什么在全部 `res/xml/*.xml` 里**搜不到这三个偏好**：它们不是设置页项，而是列表内的筛选状态。
+
 ---
 
 ## 10. 与 SpMusic 对照
@@ -524,6 +656,8 @@ SpMusic 若要实现，最小改动是给曲目元数据加 `played_at` / `playe
 | A5 | **`played_at` 与 `played_fully_at` 分离** | 区分"碰过"与"听完"，让"最近播放"更有意义 |
 | A6 | **投影复用「所有歌曲」** | 三页与 all-songs 返回同构数据，前端可共用渲染组件 |
 | A7 | **虚拟条目排除写入** | `g0Var.V.s1()` 提前 return，避免 CUE 虚拟曲目污染统计 |
+| A8 | **`played_fully_at = played_at` 快照式派生**（§7.1） | 只有**一个时钟写入点**（写 `played_at`），`played_fully_at` 是那一刻的拷贝。两列**永远不会出现"完整播放时间晚于最后播放时间"的矛盾状态**，也无需事务保证两列一致 |
+| A9 | **用 `played_at < queue.created_at` 算未播数**（§7.1） | 不额外维护"已播"布尔列，靠时间戳比较推导；`queue.created_at` 已在表里，零额外存储 |
 
 ### 11.2 不建议照抄
 
@@ -539,19 +673,28 @@ SpMusic 若要实现，最小改动是给曲目元数据加 `played_at` / `playe
 
 ## 12. 未解
 
+### 12.1 本轮已闭环（4 项）
+
+| # | 原问题 | 结论 | 证据位置 |
+| --- | --- | --- | --- |
+| ~~G1~~ | `b0` 各 `mUpdate*St` 的 SQL | `played_fully_at = played_at`（快照拷贝），非当前时间 | §7.1 |
+| ~~G2~~ | `q3.mo2437()` | `Math.max(2, C0742.i0.f3810)` | §4.3 更正 |
+| ~~G3~~ | `h3.d()` | `(C0742.V.f3810 & 0x40000000) \| 6` —— 强制模式 6 | §5.5 |
+| ~~G5~~（默认值部分）| 三个窗口偏好默认值 | **全部为 0**（long 工厂无默认参数） | §9.5 / §9.6 |
+
+### 12.2 仍开放
+
 | # | 问题 | 优先级 |
 | --- | --- | --- |
-| **G1** | `b0.initSql()` 中 `mUpdateLastPosSt` / `mUpdatePlayedTimesAndLastPosSt` 的 SQL 文本 —— `played_fully_at` 的确切赋值条件 | **高** |
-| G2 | `q3.mo2437()` 方法体（推断为 `max(2, recently_added_files_limit)`） | 中 |
-| G3 | `h3.d()` 方法体（是否返回 `C0742.V.f3810`） | 中 |
-| G4 | `C0742.f3413`–`f3418`（7 个 boolean）的绑定键 | 中 |
-| G5 | `C0742.b1.B` / `c1.B` / `d1.B` 的**默认值与更新时机** —— 是"上次打开该页的时间"还是"最近 N 天"？ | **高** |
-| G6 | `g0Var.V.s1()` 的确切语义（推断为"虚拟/CUE 条目"） | 中 |
-| G7 | `r3` / `q3` / `h3` 的 `O(int)` 排序映射（三者均未声明，继承自父类） | 中 |
-| G8 | `p0.f3367` 投影数组与 `p0.x`/`y`/`X`/`f3368` 过滤数组的内容 | 中 |
+| G4 | `C0742.f3413`–`f3418`（7 个 boolean）的绑定键 —— 存在于类摘要但不在 `<clinit>` 体内 | 中 |
+| G6 | `g0Var.V.s1()` 的确切语义（推断为"虚拟/CUE 条目"判定） | 中 |
+| G7 | `p0.O(int)` 的模式 6 具体映射为哪个 ORDER BY 表达式（`r3`/`q3`/`h3` 均继承） | 中 |
+| **G8** | 三个 `*_from` 窗口偏好**由谁写入、何时写入** —— 默认 0 表示"不限"，但用户在 UI 上如何设置时间筛选未找到入口 | **中** |
+| G9 | `mUpdateDurationSt` 的 SQL（唯一未读的预编译语句） | 低 |
+| G10 | `p0.f3367` 投影数组与 `p0.x`/`y`/`X`/`f3368` 过滤数组的内容 | 中 |
 
-G5 尤其关键：它决定「最近」到底是"最近一次打开页面以来"还是固定时间跨度。
-G1 可把 §7 的写入机制从字段命名级提升到 SQL 级。
+> G5 的"默认值"部分已闭环；其"更新时机"部分转记为 **G8**。
+> G1 的闭环使 §7 的写入机制从推断升级为实证，并顺带确认了 `played_fully_at` 与 `played_at` 的**派生关系**（后者是唯一时钟源）。
 
 ---
 
@@ -566,6 +709,10 @@ G1 可把 §7 的写入机制从字段命名级提升到 SQL 级。
 | **`q3.X0`（最近添加 SQL）** | `ev_f0c45a19a733e79c85ebe21467b2d0b4602c4ab9aa7f288c529612b26477f177` |
 | **`h3.X0`（最多播放 SQL）** | `ev_52798c423715873f6291f94a8e476c5d3038e997c727f74eef2ba33ced6cd9ed` |
 | `h3.mo2437`（限额） | `ev_85eacab488b395c8dd39cc92c45ef8550236a28d37d60af9fc9d33339f6d9ea4` |
+| `q3.mo2437`（限额，G2） | `ev_11f0eecbfa7d1f77fa54e743a24a0a9fe05e20718ad7ee73ffa7aaa4bd9fba11` |
+| **`h3.d`（强制排序模式，G3）** | `ev_f3df9ecc8a1c4388159a6293d79f64d9ad92458c323e6180657f94eea2d2ac9b` |
+| **`b0.initSql`（4 条语句，G1）** | `ev_fd42efda8d8e41a6f75d386450eb2791e97d07d28403f4c8834d16b4787d45a1` |
+| **`b0.getUpdateLastPosSt`（G1）** | `ev_05fe2ece21da6a0fe29d1ace1ccb66764a2be7a01c6f154c9e0341ec462fb52d` |
 | `b0.updateTrackPlayedAtAsNeeded` | `ev_d0b474c2b56135d2569818e53e19cf9d9af14fbabb2a9771c8fca35b2fa1b7c8` |
 | `C0742` 类摘要（116 字段） | `ev_90ee531e61575a22aa66995833544192dbe7e62f9e6d758dff9beb7aa1d39fef` |
 | `C0742.<clinit>` | `ev_0fe14e74dc505f456d7050484d28ee88d265d30f42a11f25f03d35465f41bb67` |

@@ -1,6 +1,6 @@
 ---
 doc_id: "ARCH-POWERAMP-RECENTS-VIEWS"
-title: "Poweramp 派生列表参考（最近播放 / 最近添加 / 最多播放）"
+title: "Poweramp 派生列表参考（最近播放 / 最近添加 / 最多播放 / 长）"
 doc_type: "architecture"
 status: "active"
 owner_agent: "Architecture Agent"
@@ -8,8 +8,8 @@ version_scope: "project"
 created: "2026-10-30"
 updated: "2026-10-30"
 source_documents:
-  - "user request: 逆向 Poweramp 媒体库下「最近播放」「最近添加」「最多播放」三页的组织与实现"
-  - "shared task: task-13"
+  - "user request: 逆向 Poweramp 媒体库下「最近播放」「最近添加」「最多播放」「长」四页的组织与实现"
+  - "shared task: task-13 / task-14"
   - ".rea-analysis/Poweramp-v3.apk :: com.maxmpz.audioplayer build-1025-uni (1025009) :: SHA-256 4467fdac3e89b98485866e454bc3b7dc2d73d788d7a1aa9c73ea1028d36b82e0"
   - ".rea-analysis/findings-recents-views.md（本轮方法体原文 + 偏好键映射）"
   - ".rea-analysis/decoded/res/xml/library.xml（played_dur 门槛设置）"
@@ -19,11 +19,20 @@ source_documents:
   - "docs/architecture/media-library-page-relationships.md（SpMusic 侧对照）"
 ---
 
-# Poweramp 派生列表参考（最近播放 / 最近添加 / 最多播放）
+# Poweramp 派生列表参考（最近播放 / 最近添加 / 最多播放 / 长）
 
 ## 0. 定位与证据分级
 
-**本文记录外部实现 Poweramp 的三个「派生列表」页面，不是 SpMusic 现状。**
+**本文记录外部实现 Poweramp 的派生列表页面，不是 SpMusic 现状。**
+
+覆盖四页，分属**两种形态**：
+
+| 形态 | 页面 | 结构特征 |
+| --- | --- | --- |
+| **Top-N 形态** | 最近播放 `r3` / 最近添加 `q3` / 最多播放 `h3` | 子查询内 `ORDER BY … LIMIT N` 截断，再 JOIN 富化，外层再排序（§2–§7） |
+| **筛选形态** | **长 `d3`** | 直接 JOIN + `duration >= 阈值`，**无子查询、无 LIMIT**（§14） |
+
+两者共用同一实体框架（`AbstractC0743` 的 `X0` 钩子）、同一投影 `p0.f3367`、同一套 flag。
 
 | 标记 | 含义 | 可信度 |
 | --- | --- | --- |
@@ -65,15 +74,16 @@ ORDER BY <用户排序偏好>
 
 ---
 
-## 1. 三页实体映射
+## 1. 实体映射
 
-| UI 文案【实证·原文】 | 访问器 | 实体 | 方法数 |
-| --- | --- | --- | --- |
-| `recently_played` = "Recently Played" | `getRecentlyPlayed()` | **`r3`** | 31 |
-| `recently_added` = "Recently Added" | `getRecentlyAdded()` | **`q3`** | 29 |
-| `most_played` = "Most Played" | `getMostPlayed()` | **`h3`** | 31 |
+| UI 文案【实证·原文】 | 访问器 | 实体 | 方法数 | 形态 |
+| --- | --- | --- | --- | --- |
+| `recently_played` = "Recently Played" | `getRecentlyPlayed()` | **`r3`** | 31 | Top-N |
+| `recently_added` = "Recently Added" | `getRecentlyAdded()` | **`q3`** | 29 | Top-N |
+| `most_played` = "Most Played" | `getMostPlayed()` | **`h3`** | 31 | Top-N |
+| `long_files` = "Long" | `getLong()` | **`d3`** | 24 | **筛选**（§14）|
 
-三者均继承 `AbstractC0743`，实现 `X0(Uri, r, String, StringBuilder, ArrayList, i1)` 钩子——与专辑/艺术家/作曲家完全同一个实体框架。
+四者均继承 `AbstractC0743`，实现 `X0(Uri, r, String, StringBuilder, ArrayList, i1)` 钩子——与专辑/艺术家/作曲家完全同一个实体框架。
 
 相关 UI 文案：
 ```
@@ -616,9 +626,12 @@ public void updateTrackPlayedAtAsNeeded(g0 g0Var) {
 ### 10.1 SpMusic 现状
 
 `src/features/player/model/mediaLibraryCategories.ts` 定义 12 个分类，含 `playlists` / `queue` 等。
-**不存在**「最近播放 / 最近添加 / 最多播放」三个分类，也无对应的播放统计存储。
+**不存在**「最近播放 / 最近添加 / 最多播放 / 长」四个分类，也无对应的播放统计存储。
 
 `playbackQueue.ts` 的 `PlaybackQueueOrigin` 只有 `'all-songs' | 'playlist'` 两种来源。
+
+> 「长」页的实现成本最低：它不需要新表、不需要新实体，本质只是「所有歌曲」加一个 `duration >= 阈值` 条件。
+> 若 SpMusic 要做，给曲目元数据筛一次时长即可复用现有 all-songs 渲染。
 
 ### 10.2 维度对照
 
@@ -711,6 +724,7 @@ SpMusic 若要实现，最小改动是给曲目元数据加 `played_at` / `playe
 | `h3.mo2437`（限额） | `ev_85eacab488b395c8dd39cc92c45ef8550236a28d37d60af9fc9d33339f6d9ea4` |
 | `q3.mo2437`（限额，G2） | `ev_11f0eecbfa7d1f77fa54e743a24a0a9fe05e20718ad7ee73ffa7aaa4bd9fba11` |
 | **`h3.d`（强制排序模式，G3）** | `ev_f3df9ecc8a1c4388159a6293d79f64d9ad92458c323e6180657f94eea2d2ac9b` |
+| **`d3.X0`（长页 SQL，类摘要 + 方法体一并返回）** | `ev_e6e824ff4c326786ea1e9ad75a813adf67f0e1834d4ba4d8ed1cd1763a49724f` |
 | **`b0.initSql`（4 条语句，G1）** | `ev_fd42efda8d8e41a6f75d386450eb2791e97d07d28403f4c8834d16b4787d45a1` |
 | **`b0.getUpdateLastPosSt`（G1）** | `ev_05fe2ece21da6a0fe29d1ace1ccb66764a2be7a01c6f154c9e0341ec462fb52d` |
 | `b0.updateTrackPlayedAtAsNeeded` | `ev_d0b474c2b56135d2569818e53e19cf9d9af14fbabb2a9771c8fca35b2fa1b7c8` |
@@ -725,11 +739,136 @@ apktool d --no-src -f -o .rea-analysis/decoded .rea-analysis/Poweramp-v3.apk
 
 ---
 
-## 14. 与既有文档的边界
+## 14. 「长」（Long）：第四种形态 —— 筛选视图
+
+**实体**：`getLong()` → **`d3`**（24 方法 / 1 字段，继承 `AbstractC0743`）
+**UI 文案**【实证·原文】：`long_files` = `"Long"`，筛选控件标签 `min_duration` = `"Min. Duration"`
+
+### 14.1 `d3.X0()` 原文【实证·产物】
+
+```java
+@Override // com.maxmpz.audioplayer.rest.library.AbstractC0743
+public final String[] X0(Uri uri, com.maxmpz.audioplayer.player.r rVar, String str,
+                         StringBuilder sb, ArrayList arrayList, i1 i1Var) {
+    String[] strArr;
+    rVar.A = "folder_files INNER  JOIN folders ON folders._id=folder_id LEFT JOIN artists ON artists._id=folder_files.artist_id LEFT JOIN albums ON albums._id=folder_files.album_id"
+        .concat(C0742.O.f3789
+            ? " LEFT JOIN album_artists ON album_artists._id=folder_files.album_artist_id"
+            : "");
+    if (!C0742.f3414.f3789) {
+        rVar.B("folder_files.cue_folder_id IS NULL");
+        rVar.B(" AND ");
+    }
+    rVar.B("folder_files.duration");
+    rVar.B(">=");
+    rVar.B(String.valueOf(C0742.a1.f3810));      // 阈值直接拼字面量
+    if (C0742.f1.f3789) {
+        strArr = C0742.f3418.f3789 ? p0.y : p0.f3368;
+    } else {
+        strArr = C0742.f3418.f3789 ? p0.x : p0.X;
+    }
+    androidx.appcompat.widget.n.m313(str, strArr, sb, arrayList);
+    i1Var.B = O(C0742.Z.f3810);                  // long_files_sort
+    return p0.f3367;                              // 与「所有歌曲」同一投影
+}
+```
+
+### 14.2 还原
+
+```sql
+SELECT <p0.f3367>
+FROM folder_files
+  INNER JOIN folders ON folders._id = folder_id
+  LEFT  JOIN artists ON artists._id = folder_files.artist_id
+  LEFT  JOIN albums  ON albums._id  = folder_files.album_id
+  [LEFT JOIN album_artists ON album_artists._id = folder_files.album_artist_id]
+WHERE [folder_files.cue_folder_id IS NULL AND]
+      folder_files.duration >= :long_files_min_duration
+  [AND <用户过滤>]
+ORDER BY <long_files_sort>
+```
+
+### 14.3 与 Top-N 形态的结构差异（核心）
+
+| 维度 | 最近播放 / 最近添加 / 最多播放 | **长** |
+| --- | --- | --- |
+| 结构 | `(SELECT … ORDER BY … LIMIT N) AS folder_files` 再 JOIN | **直接 JOIN，无子查询** |
+| 结果规模 | 固定 N 条（`max(2, *_files_limit)`） | **全部匹配项** |
+| 筛选依据 | 时间列 / 播放次数 | **`duration >= 阈值`** |
+| 分页 | SQL 内 `LIMIT` 决定 | 由外层查询框架分页 |
+
+⇒ 「长」不是 Top-N 列表，而是**整库的筛选视图**：更接近「所有歌曲」加一个 `duration` 条件。
+
+**共同点**（说明同属一个框架）：返回 `p0.f3367` 投影（song 视图）、过滤列数组四选一（`C0742.f1` × `C0742.f3418`）、`O(...)` 外层排序、受 `C0742.f3414` 与 `C0742.O` 控制。
+
+### 14.4 两个偏好
+
+| 字段 | 偏好键 | 类型 | 用途 |
+| --- | --- | --- | --- |
+| `C0742.a1` | **`long_files_min_duration`** | `w`（int） | 时长阈值 |
+| `C0742.Z` | **`long_files_sort`** | `w`（int） | 排序模式 |
+
+> ⚠️ **大小写陷阱**：`C0742.Z`（大写）= `long_files_sort`；`C0742.z`（小写）= `album_artists_sort`。两者完全不同。
+
+### 14.5 时长单位：**毫秒**（三条独立佐证）
+
+| # | 证据 | 出处 |
+| --- | --- | --- |
+| 1 | 列索引映射 `2=duration (ms)`，该映射读的正是 `folder_files.duration` | `findings-format.md:147` |
+| 2 | "`duration` via statement `e` (whole-file duration, **in ms**)" | `findings-format.md:464` |
+| 3 | CUE 计算 `duration = endMs - startMs`，全程 ms 后写入 `folder_files.duration` | `findings-format.md:471` |
+
+**并且 `d3.X0()` 里没有任何 `×1000` 换算**：
+
+```java
+rVar.B(String.valueOf(C0742.a1.f3810));   // 直接拼进 SQL
+```
+
+⇒ **`long_files_min_duration` 与 `folder_files.duration` 同为毫秒。**
+⇒ 若照抄此设计，阈值必须用 ms；用秒会导致筛选结果整体错位约 1000 倍。
+
+UI 上可能以秒展示（`pref_duration_below_s` = `"Less than (seconds): %s"` 证明有秒制格式化器），
+但**存储与比较都是毫秒**，换算只发生在展示层。
+
+### 14.6 默认值 0 的真实语义
+
+`long_files_min_duration` **在 `res/xml/*.xml` 中没有任何条目**（不同于 `played_dur` 有 `android:defaultValue="50"`）。
+而 `C0742.<clinit>` 中 **83 个 int 偏好全部复用同一寄存器 `v3`，且 `v3` 只被赋值一次 `const/4 v3, 0x0`**
+⇒ 代码层默认值为 **0**。
+
+初看 `duration >= 0` 等于"全部曲目"，但结合 CUE 处理中的哨兵可得到更合理的解释：
+
+> `findings-format.md:471`：`duration = endMs - startMs`，**`only emitted when endMs != -1 && duration > 0`**
+> ⇒ **`-1` 是"未知时长"的哨兵值。**
+
+因此默认值 0 的实际语义【推断】是：**排除时长为负（未知）的曲目**，保留所有已知时长的曲目。
+即便如此，"Long" 页在用户设定阈值前仍然近似等于全部已知时长曲目 —— 页面名与默认行为不匹配，属设计上的小瑕疵。
+
+### 14.7 实现细节与不一致
+
+| 现象 | 说明 |
+| --- | --- |
+| **阈值内联为字面量** | `String.valueOf(C0742.a1.f3810)` 直接拼进 WHERE 片段，非绑定参数。与 `h3` 同风格，与 `r3` 的绑定参数不同 —— 同一框架内**三种风格并存** |
+| **`INNER JOIN folders`** | 曲目必须属于某个文件夹才出现；Top-N 形态用的是 `LEFT JOIN folders`（其行来自子查询，不能因 JOIN 丢失） |
+| **`INNER  JOIN` 双空格** | 混淆产物残留 |
+| **无 `mo2437()` 覆写** | `d3` 未覆写限额方法，证实无 LIMIT |
+
+### 14.8 未解
+
+| # | 问题 |
+| --- | --- |
+| L1 | `long_files_min_duration` 是否有运行时代码写入默认阈值（静态证据未找到） |
+| L2 | ~~`duration` 单位~~ ✅ **已闭环：毫秒**（§14.5） |
+| L3 | `d3.O(int)` 排序映射（继承自 `p0`），`long_files_sort` 可选模式未知 |
+| L4 | "Min. Duration" 控件是否就是写 `long_files_min_duration` 的入口（文案存在，绑定关系未验证） |
+
+---
+
+## 15. 与既有文档的边界
 
 | 文档 | 边界 |
 | --- | --- |
-| `poweramp-entity-views.md` | 专辑/艺术家/专辑艺术家/作曲家。本文承接其 `X0` 钩子模型，只覆盖三个派生列表 |
+| `poweramp-entity-views.md` | 专辑/艺术家/专辑艺术家/作曲家。本文承接其 `X0` 钩子模型，覆盖最近播放/最近添加/最多播放（§2–§7）与长（§14）四个派生/筛选列表 |
 | `poweramp-library-three-views.md` | 所有歌曲/文件夹/文件夹层次结构。本文的投影 `p0.f3367` 与其「所有歌曲」同源，仅交叉引用 |
 | `poweramp-queue-runtime-reference.md` | 队列状态机。本文 §7 的写入路径在 `b0` 内，与其共用同一个队列管理器 |
 | `poweramp-search-and-queue-impact.md` | 搜索。无重叠 |

@@ -432,3 +432,100 @@ public final int d() {
 | `p0.f3367` / `p0.x` / `p0.y` / `p0.X` / `p0.f3368` 数组内容 | 需读 `p0.<clinit>` |
 | `g0Var.V.s1()` 语义 | 推断为「虚拟/CUE 条目」判定 |
 | 三个 `*_from` 偏好的**写入方** | 默认 0 表示不限；UI 上设置时间筛选的入口未找到 |
+
+---
+
+## 11. 「长」（Long）页 —— `d3`（第四种形态）
+
+**实体**：`getLong()` → `d3`（24 方法 / 1 字段 `f3300: e`，继承 `AbstractC0743`）
+
+### 11.1 `d3.X0()` 原文
+
+```java
+@Override // com.maxmpz.audioplayer.rest.library.AbstractC0743
+public final String[] X0(Uri uri, com.maxmpz.audioplayer.player.r rVar, String str,
+                         StringBuilder sb, ArrayList arrayList, i1 i1Var) {
+    String[] strArr;
+    rVar.A = "folder_files INNER  JOIN folders ON folders._id=folder_id LEFT JOIN artists ON artists._id=folder_files.artist_id LEFT JOIN albums ON albums._id=folder_files.album_id"
+        .concat(C0742.O.f3789
+            ? " LEFT JOIN album_artists ON album_artists._id=folder_files.album_artist_id"
+            : "");
+    if (!C0742.f3414.f3789) {
+        rVar.B("folder_files.cue_folder_id IS NULL");
+        rVar.B(" AND ");
+    }
+    rVar.B("folder_files.duration");
+    rVar.B(">=");
+    rVar.B(String.valueOf(C0742.a1.f3810));
+    if (C0742.f1.f3789) {
+        strArr = C0742.f3418.f3789 ? p0.y : p0.f3368;
+    } else {
+        strArr = C0742.f3418.f3789 ? p0.x : p0.X;
+    }
+    androidx.appcompat.widget.n.m313(str, strArr, sb, arrayList);
+    i1Var.B = O(C0742.Z.f3810);
+    return p0.f3367;
+}
+```
+
+`ev_e6e824ff4c326786ea1e9ad75a813adf67f0e1834d4ba4d8ed1cd1763a49724f`
+（该 Evidence 同时含类摘要与方法体，`representation: java`，`fell_back: false`）
+
+### 11.2 与 Top-N 三页的结构差异
+
+| 维度 | `r3` / `q3` / `h3` | **`d3`** |
+| --- | --- | --- |
+| 子查询 | 有（`(SELECT * FROM folder_files …) AS folder_files`）| **无** |
+| `LIMIT` | 有（`max(2, *_files_limit)`）| **无**（`d3` 未覆写 `mo2437()`）|
+| 筛选依据 | 时间列 / 播放次数 | **`folder_files.duration >= 阈值`** |
+| 主表 JOIN | `LEFT JOIN folders` | **`INNER JOIN folders`** |
+| 投影 | `p0.f3367` | `p0.f3367`（相同）|
+| 过滤列四选一 | `C0742.f1` × `C0742.f3418` | 相同 |
+
+### 11.3 偏好键
+
+| 字段 | 键 | 类型 |
+| --- | --- | --- |
+| `C0742.a1` | `long_files_min_duration` | `w`（int）|
+| `C0742.Z` | **`long_files_sort`** | `w`（int）|
+
+> 大小写：`C0742.Z`（大写）= `long_files_sort`；`C0742.z`（小写）= `album_artists_sort`。
+
+### 11.4 时长单位 = 毫秒（L2 已闭环）
+
+三条来自 `findings-format.md` 的独立佐证：
+
+| # | 证据 | 出处 |
+| --- | --- | --- |
+| 1 | 列索引映射 `2=duration (ms)`，映射读的是 `folder_files.duration` | `findings-format.md:147` |
+| 2 | "`duration` via statement `e` (whole-file duration, **in ms**)" | `findings-format.md:464` |
+| 3 | `duration = endMs - startMs`，ms 计算后写回 `folder_files.duration` | `findings-format.md:471` |
+
+`d3.X0()` 中无任何 `×1000` 换算 ⇒ **阈值与列同为毫秒**。
+
+### 11.5 默认值 0 的语义
+
+- `long_files_min_duration` 在 `res/xml/*.xml` 中**无条目**（不同于 `played_dur` 有 `defaultValue="50"`）
+- `C0742.<clinit>` 中 83 个 int 偏好全部复用寄存器 `v3`，`v3` 仅赋值一次 `const/4 v3, 0x0`
+  ⇒ 代码层默认值 **0**
+
+结合 `findings-format.md:471` 的 `endMs != -1` 哨兵：**`-1` = 未知时长**。
+⇒ 默认 `duration >= 0` 的实际效果是**排除未知时长曲目**，而非"什么都不筛"【推断】。
+
+### 11.6 `v3` 寄存器统计（方法学）
+
+| 现象 | 数据 |
+| --- | --- |
+| `invoke-virtual {v0, vN, v1}, m;->р(ILjava/lang/String;)` 首参寄存器 | **全部为 `v3`**，共 83 次 |
+| `const v3` 赋值 | 仅 2 次（转义/非转义两份副本各 1 次），均为 `const/4 v3, 0x0` |
+| `sput-object v1, …/у;` | 230 次（两份副本），约 115 个字段 |
+
+⇒ int 偏好的默认值在整个 `C0742` 中是**统一 0**；XML 的 `android:defaultValue` 是首次启动时写入的另一层。
+
+### 11.7 未取项（L 系列）
+
+| # | 项 |
+| --- | --- |
+| L1 | `long_files_min_duration` 是否有运行时代码写入默认阈值 |
+| L3 | `d3.O(int)` 排序映射（继承自 `p0`），`long_files_sort` 可选模式未知 |
+| L4 | "Min. Duration" 控件与 `long_files_min_duration` 的绑定关系未验证 |

@@ -203,6 +203,8 @@ pub struct AudioPlaylistTrackTagSummary {
     pub artist: Option<String>,
     pub album: Option<String>,
     pub album_artist: Option<String>,
+    #[ts(type = "number | null")]
+    pub year: Option<u32>,
     // Deliberately no duration: playback duration stays authoritative on
     // `audio_probe_playlist_durations` / the hydration path, so a container
     // header estimate can never flip a published playlist total. See

@@ -6,6 +6,7 @@ export type AlbumEntry = Readonly<{
   key: string
   name: string
   artist: string
+  year: number | null
   songs: readonly AllSongsItem[]
   coverSong?: AllSongsItem
 }>
@@ -34,7 +35,9 @@ export function albumEntries(songs: readonly AllSongsItem[]): AlbumEntry[] {
     const artists = new Set(items.flatMap(item => item.track.artist.split('/'))
       .map(value => value.trim()).filter(value => value && value !== '本地音频'))
     const artist = items[0].track.albumArtist?.trim() || (artists.size ? [...artists].join('/') : '未知艺术家')
-    return { key, name: items[0].track.libraryAlbumName?.trim() || '未知专辑', artist,
+    const years = new Set(items.map(item => item.track.libraryYear).filter((year): year is number =>
+      typeof year === 'number' && Number.isSafeInteger(year) && year > 0 && year <= 0xffff_ffff))
+    return { key, name: items[0].track.libraryAlbumName?.trim() || '未知专辑', artist, year: years.size === 1 ? [...years][0] : null,
       songs: [...items].sort((a, b) => compareByQuickIndex(a.track.title, b.track.title) || a.key.localeCompare(b.key)),
       coverSong: items.find(item => item.available) ?? items[0] }
   }).sort((a, b) => compareByQuickIndex(a.name, b.name) || compareByQuickIndex(a.artist, b.artist) || a.key.localeCompare(b.key))

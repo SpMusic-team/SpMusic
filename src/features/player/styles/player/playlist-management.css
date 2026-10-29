@@ -33,7 +33,7 @@
 .playlist-management-content button:hover:not(:disabled) { background: var(--player-surface-variant); color: var(--player-ink); }
 /* Parent row (72px) plus the vertically centered heading text within its 151px row. */
 /* The dock starts 224px above the viewport bottom; enter its 30px corner area. */
-.playlist-management-quick-index { position: absolute; z-index: 1; top: 114px; right: 0; bottom: 194px; display: flex; width: 16px; min-height: 0; flex-direction: column; align-items: stretch; overflow: hidden; container-type: size; touch-action: none; user-select: none; border-radius: var(--app-radius-lg) 0 0 var(--app-radius-lg); background: var(--player-surface-variant); }
+.playlist-management-quick-index { position: absolute; z-index: 1; top: 114px; right: 0; bottom: 194px; display: flex; width: 16px; min-height: 0; flex-direction: column; align-items: stretch; overflow: hidden; container-type: size; touch-action: none; user-select: none; pointer-events: auto; border-radius: var(--app-radius-lg) 0 0 var(--app-radius-lg); background: var(--player-surface-variant); }
 .playlist-management-quick-index button { display: grid; min-height: 0; flex: 1 1 0; place-items: center; padding: 0; border: 0; background: transparent; color: color-mix(in srgb, var(--primary) 45%, transparent); font-size: min(16px, 2.8cqh); line-height: 1; font-weight: 500; cursor: pointer; }
 .playlist-management-quick-index button svg { width: min(14px, 2.5cqh); height: min(14px, 2.5cqh); }
 .playlist-management-quick-index button:hover, .playlist-management-quick-index button:focus-visible { background: color-mix(in srgb, var(--primary) 12%, transparent); }
@@ -103,7 +103,7 @@
 }
 
 .all-songs-list.playlist-grid {
-  padding: 8px 40px 48px 24px;
+  padding: 8px 24px 48px;
 }
 
 /* Row layouts have an explicit minimum height. Keep offscreen descendants out
@@ -123,5 +123,5 @@
 }
 
 @media (width <= 540px) {
-  .all-songs-list.playlist-grid { padding-inline: 16px 28px; }
+  .all-songs-list.playlist-grid { padding-inline: 16px; }
 }

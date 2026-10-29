@@ -6,10 +6,13 @@ status: "active"
 owner_agent: "Architecture Agent"
 version_scope: "project"
 created: "2026-10-28"
-updated: "2026-10-28"
+updated: "2026-10-29"
 source_documents:
   - "user request: 完成媒体库专辑分类；无头图根页复用所有歌曲侧边索引"
   - "https://www.figma.com/design/V4Gbm9HJrUOsTiwXl2XcXV/SpMusic?node-id=8007-15164"
+  - "https://www.figma.com/design/V4Gbm9HJrUOsTiwXl2XcXV/SpMusic?node-id=8134-19952"
+  - "user request: 专辑详情头图对齐设计，复用头图更多菜单"
+  - "user request: 实际读取专辑年份，头图统计显示曲目数、紧凑时长与年份；未知或未标年份省略"
   - "docs/architecture/poweramp-entity-views.md"
   - "docs/architecture/media-library-page-relationships.md"
   - "docs/decisions/2026-07-09-document-metadata-standard.md"
@@ -122,3 +125,56 @@ source_documents:
 6. 封面在根/详情/播放器来回切换及缓存淘汰期间不错误串图；无封面占位有效，退出时清理监听与请求。
 7. 平铺文件夹、文件夹层次结构、所有歌曲、播放列表现有成员和导航规则无回归。
 8. Frontend Agent 自测后由 Test Agent 独立核对分组、异步状态和候选边界；主代理完成 repository lint/build。实际播放与视觉检查若环境不具备，测试报告应明确列出证据缺口。
+
+## 8. 专辑详情头图与更多菜单收口
+
+2026-10-29 用户补充专辑详情设计节点 `8134:19952`，其高保真上下文由主代理取得。全局专辑和艺术家内专辑复用同一专辑详情头图的内容列及样式：显示当前专辑真实名称、作者、成员数及总时长；全局返回专辑根，艺术家内返回当前艺术家的专辑视图。作者沿用既有 `AlbumEntry.artist` 派生规则，不从当前播放曲或展示样例反推。
+
+设计中的年份属于真实元数据。现有 `PlaylistTrackTagSummary` 不含 year，`AllSongsItem.track` 也没有可供专辑聚合的年份来源，本轮不新增 DTO 字段、后端探测或持久化，不写入 `2023` 等设计示例。未取得真实专辑级年份时省略该项；不能借当前播放曲的 hydration 年份冒充整个专辑的年份。
+
+全局专辑详情的更多按钮和弹层复用既有 `PlaylistHeroMoreMenu`，根页继续使用 `LibraryRootMenu`。使用已存在的可选 `actions` / `contextLabel`，无需增加公共接口：`contextLabel` 为“专辑”，title 为当前 album.name，count 为当前 album.songs.length，totalClock 为同一成员集合的头图总时长结果，artwork 使用同一个 heroCoverItem。菜单元数据不随当前搜索、选择或正在播放的其他来源变化。
+
+动作仍为五项：选择文件夹调用 `library.onSelectFolders`；重新扫描调用 `onRescanFolders`；封面显示未接入说明；侧栏置顶按 `pinnedCategoryIds` 显示状态并调用 `onToggleCategoryPin('album')`；列表选项显示未接入说明。选择及扫描沿用 busy 和缺少回调时禁用，pin 保留 aria-pressed，打开文件夹 Dialog 时沿用已审查的关闭与焦点交接。分类置顶不变成单个专辑的持久化入口。
+
+艺术家内专辑的更多菜单保留艺术家上下文，继续使用当前艺术家的名称、成员集合、封面及 `onToggleCategoryPin('artist')`，详见艺术家契约第 9 节；专辑头图自身仍显示当前作用域专辑数据。调用方显式选择菜单上下文，共享菜单不自行推断实体。
+
+菜单封面复用已解码的实体候选缓存，订阅与租约使用该实体 key，打开弹层及离场时不引入另一份原生封面请求来源。全局和艺术家内的 albumLocation / ArtistLocation、成员过滤、原始 `{ scope, trackId }`、all-songs 队列来源和失效位置清理规则均保持既有契约。
+
+验收核对真实专辑头图、无年份省略、两个返回路径、全局专辑五项菜单及元数据、艺术家内菜单上下文、封面租约与默认播放列表菜单不回归。前端独占业务实现，测试独立核对；无需后端、依赖或新数据接口。
+
+## 9. 真实年份摘要与头图契约
+
+用户随后明确授权真实专辑年份，并最终明确未知或未标年份直接省略。头图有唯一有效年份时显示“曲目数 | 紧凑总时长 | 专辑年份”，其余显示“曲目数 | 紧凑总时长”，不显示“年份未知”或“年份不一”。本节替代第 8 节原先“不扩展摘要”的边界；其余分组、导航、封面、菜单及队列契约继续有效。专辑头图标题继承既有标准标题尺寸，窄窗口 24px、宽窗口 22px，不新增专辑专用字号。
+
+### 9.1 跨 Rust / React 的最小扩展
+
+| 通道 | 契约 |
+| --- | --- |
+| Rust `AudioPlaylistTrackTagSummary` | 新增 `year: Option<u32>`，JSON 字段必有，缺失为 null；ts-rs 输出 `year: number | null` |
+| 摘要读取 | 沿用现有 `primary_tag().or_else(first_tag)` 的标签选择，从 `tag.date().map(|timestamp| u32::from(timestamp.year))` 读取，与 `metadata.rs` 的年份源一致；过滤 0 为 None，不添加文件名、修改时间或目录名推断 |
+| 前端 DTO | `PlaylistTrackTagSummary.year: number | null`，是 canonical 必有字段；parser 可接受旧响应未提供 year 并规范成 null |
+| 前端年份解析 | 仅接受正的 safe integer 且位于 u32 范围；缺失、null、0、负值、小数、非有限数及非数值均规范成 null，不因单个无效年份让整批标签摘要降级失败 |
+| 原始标签行 | `libraryYear?: number | null`；undefined 表示摘要未完成，null 表示完成但没有有效年份，正整数表示原始标签年份 |
+| 透传与稳定性 | 摘要 mapper、row equality、`PlaylistTrackItemViewModel`、`PlayerShell` 聚合覆盖均透传 libraryYear；hydration 和播放曲目元数据不能覆盖该字段 |
+
+不改变 full metadata 现有读取行为，不添加 command、依赖或持久化，不读取封面、歌词或 sidecar，不在摘要中重新引入 duration。年份与标题等标签同批到达，沿用现有 descriptor fingerprint、scope 和过期结果检查，不另建异步年份通道。
+
+### 9.2 专辑年份聚合
+
+年份不参与 `albumKey`，不拆分专辑，不改变成员和排序。对每个当前 `AlbumEntry.songs` 中有效 libraryYear 去重：
+
+| 有效年份集合 | 展示 |
+| --- | --- |
+| 空 | 省略年份整项及其分隔符 |
+| 唯一值，例如 `{2023}` | 2023；其他成员缺失年份不制造冲突 |
+| 两个及以上不同值 | 保守省略年份整项及其分隔符 |
+
+不取最早年份、首曲年份或当前播放曲年份来掩盖冲突。模型可提供 `year: number | null` 与 `hasMultipleYears: boolean` 或等价的明确结果；单个字符串不能承担实体身份。艺术家内专辑基于其已过滤成员聚合，全局专辑基于全局专辑成员聚合，两者继续遵守各自成员范围。缺少年份和读取失败不会阻止现有播放、选择或封面。
+
+头图信息仅在年份唯一且有效时添加年份项；总时长继续消费既有 compact formatter 及 null/加载语义，不能因年份新字段改写真实秒数。更多菜单现有 count/clock/context 不增加年份接口，除非使用当前头图现有槽位自然展示；不扩大为通用元数据面板。
+
+### 9.3 所有权与验证
+
+Rust/Tauri Agent 独占 `src-tauri/src/audio/types.rs`、`playlist_summary.rs` 及同模块 Rust 测试或必要 Rust-only 编译修复。Frontend Agent 独占 `src/features/player/services/audioCommands.ts`、前端原始标签/VM/相等比较/聚合覆盖、专辑模型及头图样式；Rust Agent 不写 src/ 或 TypeScript 生成物。当前没有需维护的 checked-in ts-rs 绑定文件，Rust 通过现有 `export_to_string` 契约测试验证输出；若实际生成新文件须先确定单一 owner，再顺序处理。
+
+验证至少覆盖：真实日期标签读取年、无标签与 0/非法年份、JSON 字段存在及 null、ts-rs number/null；前端 parser 兼容旧响应且无效年份不污染其他字段；libraryYear 单独改变时 equality 和 Shell 透传生效；单年、缺失、混合缺失、冲突年份聚合；艺术家内与全局专辑范围；活动播放 hydration 不覆盖年份；标题标准字号、有效年份三项信息及缺失或冲突年份时仅两项信息。年份变化不得改变 albumKey、成员、返回路径和原始播放 scope/trackId。Test Agent 独立核对跨层契约，主代理执行 Rust 检查及 repository lint/build。

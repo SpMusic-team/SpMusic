@@ -1,3 +1,5 @@
+const naturalCollator = new Intl.Collator(undefined, { numeric: true })
+
 export function quickIndexKey(name: string): string {
   const trimmed = name.trimStart()
   const firstCode = trimmed.charCodeAt(0)
@@ -32,5 +34,5 @@ export function compareByQuickIndex(left: string, right: string): number {
     const rightIsAscii = rightCode <= 127
     if (leftIsAscii !== rightIsAscii) return leftIsAscii ? -1 : 1
   }
-  return group || left.localeCompare(right, undefined, { numeric: true })
+  return group || naturalCollator.compare(left, right)
 }

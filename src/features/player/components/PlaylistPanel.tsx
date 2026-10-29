@@ -2,7 +2,7 @@ import { useCollectionDetailPresence } from '../hooks/useCollectionDetailPresenc
 import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type SyntheticEvent } from 'react'
 import { PLAYLIST_SONG_LAYOUTS, PLAYLIST_LAYOUT_STORAGE_KEY, defaultPlaylistSongLevel, type PlaylistSongLayoutDescriptor } from '@/features/player/model/playlistSongLayouts'
 import { motion, useIsPresent } from 'motion/react'
-import { CornerLeftUp } from 'lucide-react'
+import { CollectionReturnIcon } from './CollectionReturnIcon'
 import { Button } from '@/components/ui/button'
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty'
 import { Input } from '@/components/ui/input'
@@ -949,7 +949,7 @@ export function PlaylistPanel({
           : firstTrackCoverSource ? <img className="playlist-hero-image" src={firstTrackCoverSource} alt="" aria-hidden="true" decoding="async" onError={handleHeroCoverError} /> : null}
         category={<Button type="button" className="playlist-hero-category" size="sm" variant="ghost" aria-current="page"
           aria-label={library ? "返回播放列表管理" : undefined} onClick={library?.onOpen ?? (() => panelRef.current?.focus({ preventScroll: true }))}>
-          <CornerLeftUp data-icon="inline-start" aria-hidden="true" />{appCopy.playlistPage.title}
+          <CollectionReturnIcon data-icon="inline-start" aria-hidden="true" />{appCopy.playlistPage.title}
         </Button>}
         close={<button type="button" className="playlist-close" aria-label={library ? "返回播放列表管理" : appCopy.playlistPage.close} onClick={library?.onOpen ?? onClose}><systemIcons.close /></button>}
         title={playlistName ?? appCopy.playlistPage.title}

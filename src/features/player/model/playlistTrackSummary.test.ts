@@ -26,6 +26,7 @@ test('a fully tagged summary keeps every field the hydrated row publishes', () =
     artist: 'Artist a',
     album: 'Album a',
     albumArtist: 'Album Artist a',
+    year: null,
     bitDepth: 24,
     sampleRateHz: 96000,
     bitrateKbps: 2304,
@@ -38,7 +39,9 @@ test('a fully tagged summary keeps every field the hydrated row publishes', () =
     album: 'Album a',
     // The tag channel never publishes a duration: it stays with the hydration and
     libraryAlbumName: 'Album a',
+    libraryArtistName: 'Artist a',
     albumArtist: 'Album Artist a',
+    libraryYear: null,
     // duration-probe channels so a tag header estimate cannot flip a total.
     durationSeconds: 0,
     fileExtension: 'flac',
@@ -62,6 +65,7 @@ test('blank tags fall back to the file name and the local defaults', () => {
     artist: '',
     album: '\t',
     albumArtist: 'Album Artist a',
+    year: null,
     bitDepth: null,
     sampleRateHz: null,
     bitrateKbps: null,
@@ -83,6 +87,7 @@ test('a fully tagless file still produces a readable row, and a failed item prod
     artist: null,
     album: null,
     albumArtist: null,
+    year: null,
     bitDepth: null,
     sampleRateHz: null,
     bitrateKbps: null,
@@ -110,6 +115,7 @@ test('rows compare field by field so unchanged batches are not republished', () 
     artist: 'Artist a',
     album: 'Album a',
     albumArtist: null,
+    year: null,
     bitDepth: 24,
     sampleRateHz: 96000,
     bitrateKbps: null,
@@ -119,7 +125,19 @@ test('rows compare field by field so unchanged batches are not republished', () 
   assert.equal(playlistTrackRowEqual(row, playlistTrackRowFromSummary(descriptor, summary)), true)
   assert.equal(playlistTrackRowEqual(row, playlistTrackRowFromSummary(descriptor, { ...summary, artist: 'Other' })), false)
   assert.equal(playlistTrackRowEqual(row, playlistTrackRowFromSummary(descriptor, { ...summary, albumArtist: 'Other' })), false)
+  assert.equal(playlistTrackRowEqual(row, playlistTrackRowFromSummary(descriptor, { ...summary, year: 2023 })), false)
   assert.equal(playlistTrackRowEqual(row, playlistTrackRowFromSummary(descriptor, { ...summary, bitDepth: 16 })), false)
+})
+
+test('raw year distinguishes pending from known absence and survives a year-only metadata change', () => {
+  const tags = { title: 'Same title', artist: 'Singer', album: 'Album', albumArtist: null, year: 2023, bitDepth: null, sampleRateHz: null, bitrateKbps: null, codec: null }
+  assert.equal('libraryYear' in pendingPlaylistTrackRow(descriptor), false)
+  const row = playlistTrackRowFromSummary(descriptor, tags)
+  assert.equal(row.libraryYear, 2023)
+  assert.equal(playlistTrackRowFromSummary(descriptor, null).libraryYear, null)
+  assert.equal(playlistTrackRowFromSummary(descriptor, { ...tags, year: null }).libraryYear, null)
+  assert.equal(playlistTrackRowEqual(row, { ...row, libraryYear: 2024 }), false)
+  assert.equal(playlistTrackRowEqual(row, { ...row }), true)
 })
 
 test('probe batching is bounded, ordered and de-duplicates source paths', () => {

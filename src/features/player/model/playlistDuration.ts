@@ -77,7 +77,7 @@ export function resolvePlaylistDuration(
   }
 }
 
-function formatDurationClock(totalSeconds?: number): string | null {
+export function formatDurationClock(totalSeconds?: number): string | null {
   if (totalSeconds == null || !Number.isFinite(totalSeconds) || totalSeconds < 0) return null
   const seconds = Math.floor(totalSeconds)
   const hours = Math.floor(seconds / 3600)

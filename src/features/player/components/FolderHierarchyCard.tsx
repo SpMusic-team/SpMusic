@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button'
 import { useCollectionCoverUrl, type AllSongsCoverStore, type AllSongsCoverItem } from '../hooks/useAllSongsWindow'
 import type { FolderHierarchyEntry } from '../model/folderHierarchy'
 import type { FolderCardLayout } from '../model/folderCardLayouts'
+import { formatDurationClock } from '../model/playlistDuration'
 import folder48 from '@/assets/playlist-library/fece3.svg'
 import folder32 from '@/assets/playlist-library/1633d.svg'
 import folder16 from '@/assets/playlist-library/ba3db.svg'
@@ -34,7 +35,8 @@ function summary(directory: FolderHierarchyEntry) {
   const count = directory.songs.length
   if (directory.songs.some(item => item.available && !(Number(item.track.durationSeconds) > 0))) return String(count)
   const seconds = Math.floor(directory.songs.reduce((sum, item) => sum + (item.available ? item.track.durationSeconds ?? 0 : 0), 0))
-  return `${count} | ${Math.floor(seconds / 3600)}:${String(Math.floor(seconds / 60) % 60).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`
+  const duration = formatDurationClock(seconds)
+  return duration === null ? String(count) : `${count} | ${duration}`
 }
 
 export function FolderHierarchyCard({ flat = false, navigationKey, sharedProjection, projectionKey, transition, directory, layout, coverItem, store, selectMode, selected, onActivate }: Props) {

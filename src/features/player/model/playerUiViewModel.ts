@@ -118,6 +118,8 @@ export type PlaylistTrackItemViewModel = TrackSummary
     hasLocalArtwork?: boolean
     /** Raw library tags: undefined while pending, null when absent. */
     libraryAlbumName?: string | null
+    libraryArtistName?: string | null
+    libraryYear?: number | null
     albumArtist?: string | null
     coverThumbnail?: PlaylistCoverImage
   }>
@@ -195,6 +197,8 @@ export type PlaylistAddCallbacks = {
 }
 
 export type PlaylistLibraryViewModel = PlaylistAddCallbacks & {
+  artistLocation?: import('./artistLibrary').ArtistLocation
+  onArtistLocationChange?: (location: import('./artistLibrary').ArtistLocation) => void
   albumLocation?: string | null
   onAlbumLocationChange?: (key: string | null) => void
   folderRoots?: readonly { path: string; directoryPaths?: readonly string[]; status: 'loading' | 'ready' | 'error'; error?: string; selection?: RootSelection }[]

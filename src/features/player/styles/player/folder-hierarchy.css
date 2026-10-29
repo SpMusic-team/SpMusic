@@ -152,6 +152,6 @@
 
 .folder-detail-menu .folder-root-menu-action[data-slot="button"]:disabled { opacity: .45; }
 
-[data-folder-category='folder'] .folder-directory-list[data-folder-flow='tile'] { column-gap: 48px; row-gap: 22px; }
+[data-folder-category='folder'] .folder-directory-list[data-folder-flow='tile'] { column-gap: 28px; row-gap: 22px; }
 [data-folder-kind='flat'][data-folder-variant='tile'] .folder-copy { font-weight: 400; }
 [data-folder-kind='flat'] { --folder-card-radius: calc(var(--app-radius-lg) * 5 / 6); }

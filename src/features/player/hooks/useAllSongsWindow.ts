@@ -8,16 +8,19 @@ import { orderPlaylistArtworkRows, type PlaylistArtworkDirection } from '@/featu
 
 export type FolderCoverItem = Readonly<{ kind: 'folder'; key: string; rootPath: string; directoryPath: string; available: boolean }>
 type TrackCoverItem = Pick<AllSongsItem, 'key' | 'trackId' | 'sourcePath' | 'available' | 'artworkRevision'>
-export type AllSongsCoverItem = TrackCoverItem | FolderCoverItem
-type WindowRow = (Readonly<{ trackId: string; sourcePath: string; artworkRevision?: number }> | Readonly<{ kind: 'folder'; rootPath: string; directoryPath: string }>) & Readonly<{ coverUrl?: string; transientFailure?: boolean }>
+export type TrackCandidatesCoverItem = Readonly<{ kind: 'track-candidates'; key: string; candidates: readonly TrackCoverItem[]; available: boolean }>
+export type AllSongsCoverItem = TrackCoverItem | FolderCoverItem | TrackCandidatesCoverItem
+type WindowRow = (Readonly<{ trackId: string; sourcePath: string; artworkRevision?: number }> | Readonly<{ kind: 'folder'; rootPath: string; directoryPath: string }> | Pick<TrackCandidatesCoverItem, 'kind' | 'candidates'>) & Readonly<{ coverUrl?: string; transientFailure?: boolean }>
 
 function coverIdentity(item: AllSongsCoverItem | WindowRow, revision = true): string {
+  if ('kind' in item && item.kind === 'track-candidates') return JSON.stringify(['track-candidates', item.candidates.map(candidate => [candidate.trackId, candidate.sourcePath, candidate.available, ...(revision ? [candidate.artworkRevision ?? 0] : [])])])
   return 'kind' in item && item.kind === 'folder'
     ? JSON.stringify(['folder', item.rootPath, item.directoryPath])
     : JSON.stringify(['track', (item as TrackCoverItem).trackId, (item as TrackCoverItem).sourcePath, ...(revision ? [(item as TrackCoverItem).artworkRevision ?? 0] : [])])
 }
 
 function cacheDescriptor(item: AllSongsCoverItem): WindowRow {
+  if ('kind' in item && item.kind === 'track-candidates') return { kind: item.kind, candidates: item.candidates }
   return 'kind' in item ? { kind: 'folder', rootPath: item.rootPath, directoryPath: item.directoryPath }
     : { trackId: item.trackId, sourcePath: item.sourcePath, ...(item.artworkRevision === undefined ? {} : { artworkRevision: item.artworkRevision }) }
 }
@@ -153,9 +156,7 @@ export function useAllSongsWindow(items: readonly AllSongsCoverItem[], panelRef:
   // Order identity only decides whether the scroll direction state is still valid.
   // Build it by concatenation: the previous nested `JSON.stringify` allocated one
   // JSON string per row on every list update.
-  const itemOrderKey = useMemo(() => items.map(item => 'kind' in item
-    ? `f\u0001${item.key}\u0001${item.rootPath}\u0001${item.directoryPath}`
-    : `t\u0001${item.key}\u0001${item.trackId}\u0001${item.sourcePath}\u0001${item.artworkRevision ?? 0}`)
+  const itemOrderKey = useMemo(() => items.map(item => `${item.key}\u0001${coverIdentity(item)}`)
     .join('\u0000'), [items])
   const directionRef = useRef<{ items: string; layout?: string; top: number; direction: PlaylistArtworkDirection } | null>(null)
   // Lets a rendered-window change update the observed card set without rebuilding
@@ -264,9 +265,27 @@ export function useAllSongsWindow(items: readonly AllSongsCoverItem[], panelRef:
             }
             if (!itemIsCurrent()) return
             const options = { priority: coverPriority(item.key), signal: runtime.controller.signal, isCurrent: itemIsCurrent }
-            const pixels = await ('kind' in item
-              ? scheduleFolderThumbnail({ clientId, rootPath: item.rootPath, directoryPath: item.directoryPath, maxEdge: 256, windowGeneration: coverGeneration }, options)
-              : scheduleTrackThumbnail({ clientId, sourcePath: item.sourcePath, maxEdge: 256, windowGeneration: coverGeneration }, options))
+            let pixels: Awaited<ReturnType<typeof scheduleTrackThumbnail>> = null
+            let candidateFailure = false
+            if ('kind' in item && item.kind === 'track-candidates') {
+              // A missing first cover does not represent the whole directory.
+              // Keep the existing scheduler and cancellation owner for every read.
+              for (const candidate of item.candidates) {
+                if (!itemIsCurrent()) return
+                if (!candidate.available) continue
+                try {
+                  pixels = await scheduleTrackThumbnail({ clientId, sourcePath: candidate.sourcePath, maxEdge: 256, windowGeneration: coverGeneration }, options)
+                } catch {
+                  candidateFailure = true
+                }
+                if (!itemIsCurrent()) return
+                if (pixels) break
+              }
+            } else {
+              pixels = await ('kind' in item
+                ? scheduleFolderThumbnail({ clientId, rootPath: item.rootPath, directoryPath: item.directoryPath, maxEdge: 256, windowGeneration: coverGeneration }, options)
+                : scheduleTrackThumbnail({ clientId, sourcePath: item.sourcePath, maxEdge: 256, windowGeneration: coverGeneration }, options))
+            }
             if (!itemIsCurrent()) return
             if (pixels) {
               if (!itemIsCurrent()) return
@@ -275,7 +294,7 @@ export function useAllSongsWindow(items: readonly AllSongsCoverItem[], panelRef:
               await decodePlaylistCover(thumbnail)
               if (!itemIsCurrent()) return
             }
-            if (itemIsCurrent() && publish(item.key, { ...cacheDescriptor(item), coverUrl })) {
+            if (itemIsCurrent() && publish(item.key, { ...cacheDescriptor(item), coverUrl, ...(!pixels && candidateFailure ? { transientFailure: true } : {}) })) {
               coverUrl = undefined
             }
           } catch {
@@ -350,12 +369,12 @@ export function useAllSongsWindow(items: readonly AllSongsCoverItem[], panelRef:
     if (!panel || !list || !runtime) return
     let observing = true
     let frame: number | null = null
-    // Collect nodes once per rendered window, then measure only IO-admitted
-    // demand on scroll. A long tile library never gains a full-library scan.
-    const nodes = new Map<string, { element: HTMLElement; domIndex: number }>()
-    for (const [domIndex, element] of [...list.querySelectorAll<HTMLElement>('[data-song-key]')].entries()) {
-      nodes.set(element.dataset.songKey!, { element, domIndex })
-    }
+    // One resource may appear in a hero, entry row and several cards. Keep DOM
+    // occurrences separate; an offscreen copy cannot cancel a visible owner.
+    const nodes = new Map<HTMLElement, { key: string; domIndex: number }>()
+    const nodesByKey = new Map<string, Set<HTMLElement>>()
+    const intersectionsByKey = new Map<string, Set<HTMLElement>>()
+    const nodeKey = (element: HTMLElement) => element.dataset.coverKey ?? element.dataset.songKey
     const identity = () => {
       const layout = list.dataset.layoutLevel
       let state = directionRef.current
@@ -373,17 +392,21 @@ export function useAllSongsWindow(items: readonly AllSongsCoverItem[], panelRef:
       const entries = []
       const unmeasured: string[] = []
       for (const key of runtime.desired) {
-        const node = nodes.get(key)
-        if (!node || !node.element.isConnected) { unmeasured.push(key); continue }
-        const rect = node.element.getBoundingClientRect()
-        const inViewport = rect.bottom > bounds.top && rect.top < bounds.bottom
-        const side: -1 | 0 | 1 = inViewport ? 0 : rect.bottom <= bounds.top ? -1 : 1
-        const viewportDistance = inViewport ? 0 : side < 0 ? bounds.top - rect.bottom : rect.top - bounds.bottom
-        entries.push({ key, domIndex: node.domIndex, rowTop: node.element.offsetTop, inViewport, side, viewportDistance })
+        let closest: { key: string; domIndex: number; rowTop: number; inViewport: boolean; side: -1 | 0 | 1; viewportDistance: number } | undefined
+        for (const element of nodesByKey.get(key) ?? []) {
+          const node = nodes.get(element)
+          if (!node || !element.isConnected) continue
+          const rect = element.getBoundingClientRect()
+          const inViewport = rect.bottom > bounds.top && rect.top < bounds.bottom
+          const side: -1 | 0 | 1 = inViewport ? 0 : rect.bottom <= bounds.top ? -1 : 1
+          const viewportDistance = inViewport ? 0 : side < 0 ? bounds.top - rect.bottom : rect.top - bounds.bottom
+          const candidate = { key, domIndex: node.domIndex, rowTop: element.offsetTop, inViewport, side, viewportDistance }
+          if (!closest || candidate.inViewport && !closest.inViewport || candidate.inViewport === closest.inViewport && candidate.viewportDistance < closest.viewportDistance) closest = candidate
+        }
+        if (closest) entries.push(closest)
+        else unmeasured.push(key)
       }
       runtime.desired = new Set([...orderPlaylistArtworkRows(entries, state.direction).map(entry => entry.key), ...unmeasured])
-      // Same pass already measured every demanded node, so the on-screen subset
-      // costs no extra layout read.
       runtime.visible = new Set(entries.filter(entry => entry.inViewport).map(entry => entry.key))
       runtime.pump()
     }
@@ -400,48 +423,58 @@ export function useAllSongsWindow(items: readonly AllSongsCoverItem[], panelRef:
     }
     const observer = new IntersectionObserver((entries) => {
       if (!observing || !runtime.mounted) return
+      const changed = new Set<string>()
       for (const entry of entries) {
-        const key = (entry.target as HTMLElement).dataset.songKey
-        if (!key) continue
-        if (entry.isIntersecting) runtime.desired.add(key)
+        const element = entry.target as HTMLElement
+        const node = nodes.get(element)
+        if (!node) continue
+        const intersections = intersectionsByKey.get(node.key) ?? new Set<HTMLElement>()
+        if (entry.isIntersecting) intersections.add(element)
+        else intersections.delete(element)
+        intersectionsByKey.set(node.key, intersections)
+        changed.add(node.key)
+      }
+      for (const key of changed) {
+        if (intersectionsByKey.get(key)?.size) runtime.desired.add(key)
         else runtime.desired.delete(key)
       }
       reorder()
     }, { root: panel, rootMargin: '150px 0px' })
-    for (const { element } of nodes.values()) observer.observe(element)
-    // Rendered rows are the list's children in window order, so a new window can be
-    // reconciled positionally against the retained node map. This is the same node
-    // set the IntersectionObserver builds, reached without rescanning the document.
+    // Reconcile actual mounted owners, including nested virtual grids and hero
+    // siblings. Descriptor count never implies a matching direct-children shape.
     const observeRendered = (nextRendered: readonly AllSongsCoverItem[]) => {
       if (!observing || !runtime.mounted) return
-      const children = list.children
-      if (!children || children.length !== nextRendered.length) return
-      for (let index = 0; index < nextRendered.length; index += 1) {
-        const key = nextRendered[index]!.key
-        const element = children[index]
-        if (!(element instanceof HTMLElement)) continue
-        const existing = nodes.get(key)
-        if (existing?.element === element) { existing.domIndex = index; continue }
-        if (existing) observer.unobserve(existing.element)
-        nodes.set(key, { element, domIndex: index })
+      const wanted = new Set(nextRendered.map(item => item.key))
+      const mounted = [...list.querySelectorAll<HTMLElement>('[data-cover-key], [data-song-key]')]
+        .filter(element => wanted.has(nodeKey(element) ?? ''))
+      const current = new Set(mounted)
+      for (const [element, node] of nodes) {
+        if (current.has(element) && nodeKey(element) === node.key) continue
+        observer.unobserve(element)
+        nodes.delete(element)
+        nodesByKey.get(node.key)?.delete(element)
+        intersectionsByKey.get(node.key)?.delete(element)
+        if (!intersectionsByKey.get(node.key)?.size) runtime.desired.delete(node.key)
+        if (!nodesByKey.get(node.key)?.size) { nodesByKey.delete(node.key); intersectionsByKey.delete(node.key) }
+      }
+      mounted.forEach((element, domIndex) => {
+        const existing = nodes.get(element)
+        if (existing) { existing.domIndex = domIndex; return }
+        const key = nodeKey(element)!
+        nodes.set(element, { key, domIndex })
+        const occurrences = nodesByKey.get(key) ?? new Set<HTMLElement>()
+        occurrences.add(element)
+        nodesByKey.set(key, occurrences)
         observer.observe(element)
-      }
-      if (nodes.size > nextRendered.length) {
-        const wanted = new Set(nextRendered.map((item) => item.key))
-        for (const [key, node] of nodes) {
-          if (wanted.has(key)) continue
-          observer.unobserve(node.element)
-          nodes.delete(key)
-        }
-      }
+      })
+      scheduleReorder()
     }
     observeRenderedRef.current = observeRendered
+    observeRendered([...itemsByKeyRef.current.values()].filter(item => renderedKeysRef.current.has(item.key)))
     panel.addEventListener('scroll', onScroll, { passive: true })
     const resize = new ResizeObserver(scheduleReorder)
     resize.observe(panel)
     resize.observe(list)
-    // Retain visibility across list-summary updates. Clearing it dropped
-    // in-flight covers and forced their full decode to run again.
     return () => {
       observing = false
       observeRenderedRef.current = null
@@ -452,11 +485,10 @@ export function useAllSongsWindow(items: readonly AllSongsCoverItem[], panelRef:
     }
   }, [itemOrderKey, panelRef, listRef, enabled, metadataLoading])
 
-  // A rendered-window change only shrinks demand and re-observes the added cards.
   useEffect(() => {
     const runtime = runtimeRef.current
     if (!enabled || !runtime) return
-    const keys = new Set(renderedItems.map((item) => item.key))
+    const keys = new Set(renderedItems.map(item => item.key))
     for (const key of runtime.desired) if (!keys.has(key)) runtime.desired.delete(key)
     observeRenderedRef.current?.(renderedItems)
   }, [enabled, renderedItems])

@@ -15,6 +15,17 @@ const { albumEntries, albumKey } = await import(url(source))
 const { playlistTrackRowFromSummary, playlistTrackRowEqual, pendingPlaylistTrackRow } = await import(summaryUrl)
 const song = (id, path, name, albumArtist, artist = 'Singer') => Object.freeze({ key: path.replaceAll('\\', '/'), scope: 'scope:' + id, trackId: id, sourcePath: path, available: true, track: Object.freeze({ id, title: 'Title ' + id, artist, album: name ?? '本地音频', libraryAlbumName: name, albumArtist }) })
 
+test('album year aggregates only unique valid tags and metadata changes preserve group identity and original members', () => {
+  const withYear = (id, year) => { const item = song(id, '/music/Mixed/' + id + '.flac', 'Mixed', null); return { ...item, track: { ...item.track, libraryYear: year } } }
+  const one = albumEntries([withYear('a', 2023), withYear('b', null)])[0]
+  assert.equal(one.year, 2023)
+  const changed = albumEntries([withYear('a', 2024), withYear('b', 2024)])[0]
+  assert.equal(changed.year, 2024); assert.equal(changed.key, one.key); assert.deepEqual(changed.songs.map(item => [item.scope, item.trackId]), one.songs.map(item => [item.scope, item.trackId]))
+  assert.equal(albumEntries([withYear('a', 2023), withYear('b', 2024)])[0].year, null)
+  for (const year of [undefined, null, 0, -1, 2023.5, NaN, Infinity, '2023', 4294967296]) assert.equal(albumEntries([withYear('a', year)])[0].year, null)
+  for (const year of [1, 4294967295]) assert.equal(albumEntries([withYear('a', year)])[0].year, year)
+})
+
 test('same album name by distinct album artists stays separate; multi-disc same album artist joins across directories', () => {
   const input = [song('a', '/music/A/one.flac', 'Echo', 'Ann'), song('b', '/other/B/one.flac', 'Echo', 'Bob'), song('d1', '/music/Box/Disc1/a.flac', 'Box', 'Ensemble', 'Singer A'), song('d2', '/music/Box/Disc2/b.flac', 'Box', 'Ensemble', 'Singer B')]
   const entries = albumEntries(Object.freeze(input))

@@ -15,6 +15,8 @@ export type PlaylistTrackRow = {
   artist: string
   album: string
   libraryAlbumName?: string | null
+  libraryArtistName?: string | null
+  libraryYear?: number | null
   albumArtist?: string | null
   durationSeconds: number
   fileExtension?: string
@@ -37,6 +39,10 @@ export type PlaylistPendingTrackRow = {
 export function nonEmptyText(value: string | null | undefined): string | undefined {
   const trimmed = value?.trim()
   return trimmed || undefined
+}
+
+function nonEmptyYear(value: number | null | undefined): number | null {
+  return value != null && Number.isSafeInteger(value) && value > 0 && value <= 0xffff_ffff ? value : null
 }
 
 export function fileNameTitle(fileName: string): string {
@@ -93,6 +99,8 @@ export function playlistTrackRowFromSummary(
     artist: nonEmptyText(summary?.artist) ?? nonEmptyText(summary?.albumArtist) ?? '本地音频',
     album: nonEmptyText(summary?.album) ?? '本地音频',
     libraryAlbumName: nonEmptyText(summary?.album) ?? null,
+    libraryArtistName: nonEmptyText(summary?.artist) ?? null,
+    libraryYear: nonEmptyYear(summary?.year),
     albumArtist: nonEmptyText(summary?.albumArtist) ?? null,
     // The tag channel deliberately carries no duration: a container header
     // estimate would fight the decoder-backed duration channel and could flip a
@@ -122,6 +130,8 @@ export function playlistTrackRowEqual(left: PlaylistTrackRow, right: PlaylistTra
     && left.artist === right.artist
     && left.album === right.album
     && left.libraryAlbumName === right.libraryAlbumName
+    && left.libraryArtistName === right.libraryArtistName
+    && left.libraryYear === right.libraryYear
     && left.albumArtist === right.albumArtist
     && left.durationSeconds === right.durationSeconds
     && left.fileExtension === right.fileExtension

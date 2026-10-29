@@ -7,17 +7,18 @@
 
 .playlist-hero-more-menu[data-slot='dialog-content'] {
   --playlist-hero-more-shadow: 0 4px 4px rgba(0, 0, 0, var(--player-controls-shadow));
-  --more-scrollbar-outline-variant: var(--player-progress-unplayed);
   --playlist-hero-more-radius: calc(var(--app-radius-lg) * 2.5);
   display: flex;
   flex-direction: column;
   gap: 0;
   width: min(564px, calc(100vw - 32px));
   max-width: calc(100vw - 32px);
-  height: 592px;
+  height: auto;
   max-height: calc(100svh - 32px);
   padding: 0 0 24px;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   border: 0;
   border-radius: var(--playlist-hero-more-radius);
   background: var(--player-dock);
@@ -39,12 +40,7 @@
 .playlist-hero-more-info p > img { flex: 0 0 auto; }
 .playlist-hero-more-info p > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .playlist-hero-more-divider[data-slot='separator'] { flex: 0 0 1.5px; width: calc(100% - 54px); height: 1.5px; margin-inline: 27px; background: var(--player-progress-unplayed); }
-.playlist-hero-more-scroll { display: flex; min-height: 0; flex: 1 1 auto; flex-direction: column; gap: 42px; margin-right: 5px; padding: 42px 27px 0; overflow: auto; overscroll-behavior: contain; scrollbar-width: none; }
-.playlist-hero-more-scroll::-webkit-scrollbar { display: none; }
-.playlist-hero-more-scrollbar { position: absolute; top: var(--playlist-hero-more-radius); bottom: var(--playlist-hero-more-radius); right: 5px; width: 10px; touch-action: none; user-select: none; visibility: hidden; }
-.playlist-hero-more-scrollbar[data-overflow] { visibility: visible; }
-.playlist-hero-more-scrollbar:focus-visible { outline: 2px solid var(--player-blue-ink); outline-offset: 2px; border-radius: var(--app-radius-pill); }
-.playlist-hero-more-scrollbar-thumb { width: 2.5px; height: 18px; margin-left: auto; }
+.playlist-hero-more-scroll { display: flex; flex: 0 0 auto; flex-direction: column; gap: 42px; padding: 42px 27px 0; }
 .playlist-hero-more-action[data-slot='button'] { display: flex; flex: 0 0 auto; width: 100%; min-height: 48px; height: 48px; justify-content: start; gap: 18px; padding: 0; border: 0; border-radius: var(--app-radius-sm); color: var(--player-blue-ink); font-size: calc(22px * var(--app-font-scale)); line-height: 28px; font-weight: 500; text-align: left; }
 .playlist-hero-more-action img { flex: 0 0 auto; }
 .playlist-hero-more-action span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

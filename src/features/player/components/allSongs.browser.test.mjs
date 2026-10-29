@@ -343,10 +343,15 @@ try {
     assert.match(await page.locator('.all-songs-list .playlist-card').filter({ hasText: 'A Song' }).innerText(), /FLAC/i, 'medium row retains format metadata')
     const geometry = await page.evaluate(() => {
       const row = document.querySelector('.all-songs-list .playlist-card').getBoundingClientRect()
-      const index = document.querySelector('.playlist-management-quick-index').getBoundingClientRect()
-      return { rowRight: row.right, indexLeft: index.left, scrollWidth: document.documentElement.scrollWidth, viewport: innerWidth }
+      const index = document.querySelector('.playlist-management-quick-index')
+      const position = getComputedStyle(index).position
+      index.style.display = 'none'
+      const withoutIndex = document.querySelector('.all-songs-list .playlist-card').getBoundingClientRect()
+      index.style.display = ''
+      return { row: [row.x, row.y, row.width, row.height], withoutIndex: [withoutIndex.x, withoutIndex.y, withoutIndex.width, withoutIndex.height], position, scrollWidth: document.documentElement.scrollWidth, viewport: innerWidth }
     })
-    assert(geometry.rowRight <= geometry.indexLeft, 'song rows leave space for quick index')
+    assert.equal(geometry.position, 'absolute', 'quick index overlays the song list')
+    assert.deepEqual(geometry.row, geometry.withoutIndex, 'quick index does not change song row geometry')
     assert(geometry.scrollWidth <= geometry.viewport, 'layout does not overflow horizontally')
     await page.locator('.all-songs-list .playlist-card').first().hover()
     await page.keyboard.down('Control')

@@ -16,14 +16,15 @@ type Props = {
   titleLayoutId?: string
   transition: Transition
   songKey?: string
+  coverKey?: string
   className?: string
 }
 
 // Both collection pages share the same frame, crop, inverse stretch and slots.
 // Data, playback commands and cover ownership stay with the page.
 export function CollectionHero({ artwork, artworkRef, category, title, metadata, actions, close, extraMetadata,
-  localProjection, artworkLayoutId, titleLayoutId, transition, songKey, className }: Props) {
-  return <header className={cn('playlist-hero', className)} data-song-key={songKey}>
+  localProjection, artworkLayoutId, titleLayoutId, transition, songKey, coverKey, className }: Props) {
+  return <header className={cn('playlist-hero', className)} data-song-key={songKey} data-cover-key={coverKey}>
     <motion.div key={localProjection ? 'hero-artwork-local' : 'hero-artwork-shared'} ref={artworkRef}
       className="playlist-hero-artwork" aria-hidden="true" layoutId={artworkLayoutId}
       layoutCrossfade={false} transition={{ layout: transition }}>{artwork}</motion.div>

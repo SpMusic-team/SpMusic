@@ -1,8 +1,19 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { AUDIO_PLAYLIST_DURATION_BATCH_LIMIT, aggregatePlaylistDuration, createPlaylistDurationScanner, formatPlaylistDurationLabel, resolvePlaylistDuration, type PlaylistDurationProbeItem, type PlaylistDurationScanResult } from './playlistDuration.ts'
+import { AUDIO_PLAYLIST_DURATION_BATCH_LIMIT, aggregatePlaylistDuration, createPlaylistDurationScanner, formatDurationClock, formatPlaylistDurationLabel, resolvePlaylistDuration, type PlaylistDurationProbeItem, type PlaylistDurationScanResult } from './playlistDuration.ts'
 
 const noMetadata = new Map<string, number>()
+test('shared duration clock omits zero hours, preserves total hours and rejects unknown input', () => {
+  for (const [seconds, expected] of [[0, '0:00'], [59, '0:59'], [60, '1:00'], [1596, '26:36'], [3599, '59:59'], [3600, '1:00:00'], [5196, '1:26:36'], [90061, '25:01:01']] as const) {
+    assert.equal(formatDurationClock(seconds), expected)
+    assert.equal(formatPlaylistDurationLabel({ status: 'ready', totalSeconds: seconds }, 1), expected)
+  }
+  for (const invalid of [undefined, -1, NaN, Infinity, -Infinity]) assert.equal(formatDurationClock(invalid), null)
+  assert.equal(formatDurationClock(null as unknown as number), null)
+  assert.equal(formatPlaylistDurationLabel({ status: 'loading', totalSeconds: 1596 }, 1), '统计中…')
+  assert.equal(formatPlaylistDurationLabel({ status: 'unknown' }, 1), '时长未知')
+  assert.equal(formatPlaylistDurationLabel({ status: 'error' }, 1), '统计失败')
+})
 function requireScan(result: PlaylistDurationScanResult | null): PlaylistDurationScanResult {
   assert.ok(result, 'current scan must return its per-path evidence')
   return result

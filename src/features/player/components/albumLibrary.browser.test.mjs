@@ -162,7 +162,7 @@ try {
     const rect = cover.getBoundingClientRect()
     return { width: rect.width, height: rect.height, radius: getComputedStyle(cover).borderRadius, nameSize: getComputedStyle(name).fontSize, nameLine: getComputedStyle(name).lineHeight, artistSize: getComputedStyle(artist).fontSize, artistLine: getComputedStyle(artist).lineHeight, gap: getComputedStyle(card).gap }
   })
-  assert.deepEqual(geometry, { width: 240, height: 240, radius: '10px', nameSize: '32px', nameLine: '40px', artistSize: '24px', artistLine: '32px', gap: '26px' })
+  assert.deepEqual(geometry, { width: 240, height: 240, radius: '10px', nameSize: '16px', nameLine: '24px', artistSize: '14px', artistLine: '20px', gap: '26px' })
   console.log('ALBUM_CARD_GEOMETRY', JSON.stringify(geometry))
   await screenshot('albums-root-640')
 

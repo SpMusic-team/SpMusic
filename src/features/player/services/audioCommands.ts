@@ -177,6 +177,7 @@ export type PlaylistTrackTagSummary = {
   artist: string | null
   album: string | null
   albumArtist: string | null
+  year: number | null
   bitDepth: number | null
   sampleRateHz: number | null
   bitrateKbps: number | null
@@ -211,6 +212,10 @@ function nullableSummaryNumber(value: unknown): number | null {
   throw new PlaylistTrackSummaryProtocolError('Playlist track summary numeric field is invalid')
 }
 
+function nullableSummaryYear(value: unknown): number | null {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 && value <= 0xffff_ffff ? value : null
+}
+
 // Unknown extra fields are ignored on purpose: the command may grow additive
 // fields without forcing every playlist into the fallback path.
 function parsePlaylistTrackTagSummary(value: unknown): PlaylistTrackTagSummary {
@@ -223,6 +228,7 @@ function parsePlaylistTrackTagSummary(value: unknown): PlaylistTrackTagSummary {
     artist: nullableSummaryText(summary.artist),
     album: nullableSummaryText(summary.album),
     albumArtist: nullableSummaryText(summary.albumArtist),
+    year: nullableSummaryYear(summary.year),
     bitDepth: nullableSummaryNumber(summary.bitDepth),
     sampleRateHz: nullableSummaryNumber(summary.sampleRateHz),
     bitrateKbps: nullableSummaryNumber(summary.bitrateKbps),

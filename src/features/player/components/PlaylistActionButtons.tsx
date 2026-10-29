@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
-import { CornerLeftUp, Search } from 'lucide-react'
+import { Search } from 'lucide-react'
+import { CollectionReturnIcon } from './CollectionReturnIcon'
 import { Button } from '@/components/ui/button'
 import { useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { IconButton } from '@/features/player/components/IconButton'
@@ -29,7 +30,7 @@ export function PlaylistActionButtons({ onBack, shuffle, onShuffle, shuffleDisab
   selectDisabled, compact = false, more }: Props) {
   const icons = useSystemIcons()
   return <>
-    {onBack ? <IconButton className="playlist-hero-icon playlist-controller-back-button" icon={CornerLeftUp} label="返回" onClick={onBack} /> : null}
+    {onBack ? <IconButton className="playlist-hero-icon playlist-controller-back-button" icon={CollectionReturnIcon} label="返回" onClick={onBack} /> : null}
     <IconButton className="playlist-hero-icon playlist-hero-shuffle-button" icon={shuffle.icon} label={shuffle.label} aria-pressed={undefined} data-selected={undefined} data-playback-command-lock={playbackLocked || undefined} disabled={shuffleDisabled} onClick={onShuffle} />
     <IconButton className="playlist-hero-icon playlist-hero-play-button" icon={icons.play} label={appCopy.playlistPage.play}
       data-playback-command-lock={playbackLocked || undefined} disabled={playDisabled} pressFeedback={!compact} pressFeedbackTone="surface-variant" onClick={onPlay} />

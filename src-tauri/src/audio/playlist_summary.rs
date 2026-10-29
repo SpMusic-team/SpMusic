@@ -279,6 +279,7 @@ fn read_track_tag_summary(path: &Path) -> Result<AudioPlaylistTrackTagSummary, A
         artist: None,
         album: None,
         album_artist: None,
+        year: None,
         bit_depth: properties.bit_depth(),
         sample_rate_hz: properties.sample_rate(),
         bitrate_kbps: properties.audio_bitrate(),
@@ -298,6 +299,10 @@ fn read_track_tag_summary(path: &Path) -> Result<AudioPlaylistTrackTagSummary, A
         summary.artist = tag.artist().map(|value| value.into_owned());
         summary.album = tag.album().map(|value| value.into_owned());
         summary.album_artist = tag_text(tag, ItemKey::AlbumArtist);
+        summary.year = tag
+            .date()
+            .map(|timestamp| u32::from(timestamp.year))
+            .filter(|year| *year > 0);
     }
 
     Ok(summary)
@@ -426,6 +431,7 @@ mod tests {
             artist: None,
             album: None,
             album_artist: None,
+            year: None,
             bit_depth: None,
             sample_rate_hz: None,
             bitrate_kbps: None,
@@ -481,6 +487,7 @@ mod tests {
             assert_eq!(summary.artist, None);
             assert_eq!(summary.album, None);
             assert_eq!(summary.album_artist, None);
+            assert_eq!(summary.year, None);
             assert_eq!(summary.sample_rate_hz, Some(8_000));
             assert_eq!(summary.bit_depth, Some(16));
             assert_eq!(summary.bitrate_kbps, Some(128));
@@ -593,6 +600,39 @@ mod tests {
     }
 
     #[test]
+    fn tagged_wav_year_is_read_from_date_and_invalid_or_absent_years_are_null() {
+        use lofty::{
+            config::WriteOptions,
+            tag::{Tag, TagExt, TagType},
+        };
+
+        for (date, expected) in [
+            (Some("2023-06-15"), Some(2023)),
+            (Some("0000"), None),
+            (Some("invalid"), None),
+            (None, None),
+        ] {
+            let fixture = Fixture::new();
+            if let Some(date) = date {
+                let mut tag = Tag::new(TagType::RiffInfo);
+                tag.insert_text(ItemKey::RecordingDate, date.to_owned());
+                tag.save_to_path(&fixture.wav, WriteOptions::default())
+                    .expect("write date fixture");
+            }
+            let before = fixture.listing();
+            let items = probe(vec![fixture.wav_path()]);
+            let summary = items[0].summary.as_ref().expect("readable date fixture");
+            assert!(items[0].error.is_none());
+            assert_eq!(summary.year, expected, "date {date:?}");
+            assert_eq!(
+                serde_json::to_value(summary).unwrap()["year"],
+                serde_json::to_value(expected).unwrap(),
+            );
+            assert_eq!(fixture.listing(), before, "summary must remain read-only");
+        }
+    }
+
+    #[test]
     fn panicking_item_is_isolated_and_releases_the_batch_permit() {
         let fixture = Fixture::new();
         let poisoned = fixture.wav_path();
@@ -659,6 +699,7 @@ mod tests {
             "codec",
             "sampleRateHz",
             "title",
+            "year",
         ] {
             assert!(summary.get(field).is_some(), "{field} must be present");
             assert!(summary[field].is_null(), "{field} must be null");
@@ -677,6 +718,7 @@ mod tests {
         let summary_ty = AudioPlaylistTrackTagSummary::export_to_string(&Config::default())
             .expect("summary should export to TypeScript");
         assert!(summary_ty.contains("albumArtist: string | null"));
+        assert!(summary_ty.contains("year: number | null"));
         assert!(summary_ty.contains("sampleRateHz: number | null"));
         assert!(
             !summary_ty.contains("durationMs"),

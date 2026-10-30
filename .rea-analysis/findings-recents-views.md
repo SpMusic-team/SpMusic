@@ -527,5 +527,199 @@ public final String[] X0(Uri uri, com.maxmpz.audioplayer.player.r rVar, String s
 | # | 项 |
 | --- | --- |
 | L1 | `long_files_min_duration` 是否有运行时代码写入默认阈值 |
-| L3 | `d3.O(int)` 排序映射（继承自 `p0`），`long_files_sort` 可选模式未知 |
+| ~~L3~~ | ✅ 已闭环：`d3.O(int)` 继承自 `p0`，模式表见 §12.4 |
 | L4 | "Min. Duration" 控件与 `long_files_min_duration` 的绑定关系未验证 |
+
+---
+
+## 12. 评分两页（`e4` / `e3`）与拇指模式
+
+### 12.1 实体
+
+| 页面 | 文案 | 访问器 | 实体 | 方法数 |
+| --- | --- | --- | --- | --- |
+| 最高评分 | `top_rated` = `"Top Rated"` | `getTopRated()` | `e4` | 19 |
+| 最低评分 | `low_rated` = `"Low Rated"` | `getLowRated()` | `e3` | 17 |
+
+### 12.2 `e4.X0()` 原文
+
+```java
+@Override // com.maxmpz.audioplayer.rest.library.AbstractC0743
+public final String[] X0(Uri uri, com.maxmpz.audioplayer.player.r rVar, String str,
+                         StringBuilder sb, ArrayList arrayList, i1 i1Var) {
+    String[] strArr;
+    String str2 = i1Var.f3334;
+    if (str2 != null && str2.length() != 0) {
+        throw new AssertionError(i1Var.f3334);
+    }
+    StringBuilder sb2 = new StringBuilder("(SELECT * FROM folder_files WHERE ");
+    if (!C0742.f3414.f3789) {
+        sb2.append("folder_files.cue_folder_id IS NULL AND ");
+    }
+    sb2.append("rating>1 ORDER BY rating DESC ");
+    int iMo2437 = mo2437();
+    if (iMo2437 != Integer.MAX_VALUE) {
+        sb2.append(" LIMIT ");
+        sb2.append(iMo2437);
+    }
+    sb2.append(") AS folder_files LEFT  JOIN folders ON folders._id=folder_id LEFT JOIN artists ON artists._id=folder_files.artist_id LEFT JOIN albums ON albums._id=folder_files.album_id");
+    if (C0742.O.f3789) {
+        sb2.append(" LEFT JOIN album_artists ON album_artists._id=folder_files.album_artist_id");
+    }
+    rVar.A = sb2.toString();
+    if (C0742.f1.f3789) { strArr = C0742.f3418.f3789 ? p0.y : p0.f3368; }
+    else { strArr = C0742.f3418.f3789 ? p0.x : p0.X; }
+    androidx.appcompat.widget.n.m313(str, strArr, sb, arrayList);
+    i1Var.B = O(5);
+    return p0.f3367;
+}
+```
+
+`ev_adee2652eac06d255e5c5c0e2e6055c61bc0086836701fd729e40c7a01d65449`
+
+### 12.3 `e3.X0()` 原文（差异）
+
+```java
+    // 同样的 assertion / JOIN / 四选一过滤列 / 投影
+    sb2.append("rating=1");                 // 精确等于 1
+    int iMo2437 = mo2437();
+    if (iMo2437 != Integer.MAX_VALUE) { sb2.append(" LIMIT "); sb2.append(iMo2437); }
+    // ★ 无 ORDER BY
+    i1Var.B = O(1);
+```
+
+`ev_3df5bec0faf6e496f8094fc37a9a719fe5d0f2ac16710358e9223a939fea5037`
+
+**互补关系**：Top = `rating > 1`（2–5），Low = `rating = 1`（恰 1），未评分 `rating = 0` 都不进。
+⇒ 不重叠且合起来覆盖所有已评分曲目；`0` 是"未评分"哨兵。
+
+### 12.4 `p0.O(int)` 排序映射（G7 / L3 一并闭环）
+
+```java
+public String O(int i) {
+    boolean z = (1073741824 & i) != 0;      // 0x40000000 = DESC 位
+    switch (i & (-1073741825)) {
+        case 0:  return !z ? "track_number, title_tag COLLATE NOCASE" : "track_number DESC, title_tag COLLATE NOCASE DESC";
+        case 1:  return !z ? "title_tag COLLATE NOCASE" : "title_tag COLLATE NOCASE DESC";
+        case 2:  return !z ? "folder_files.name COLLATE NOCASE" : "folder_files.name COLLATE NOCASE DESC";
+        case 3:  return !z ? "folder_files.year, title_tag" : "folder_files.year DESC, title_tag";
+        case 4:  return !z ? "file_created_at DESC, title_tag" : "file_created_at, title_tag";
+        case 5:  return !z ? "rating DESC, title_tag" : "rating, title_tag";
+        case 6:  return !z ? "folder_files.played_times DESC, title_tag" : "folder_files.played_times, title_tag";
+        case 7:  return !z ? "folder_files.played_fully_at DESC, title_tag" : "folder_files.played_fully_at, title_tag";
+        case 8:  /* artist + album，含 C0742.O / C0742.f3413 三档降级 */;
+        case 9:  /* album + track_number */;
+        case 10: return !z ? "folder_files.duration DESC, title_tag COLLATE NOCASE" : "folder_files.duration, title_tag COLLATE NOCASE DESC";
+        case 11: return !z ? "folder_files.shuffle_order" : "folder_files.shuffle_order DESC";
+        case 12: return !z ? "folder_files.created_at DESC, title_tag" : "folder_files.created_at, title_tag";
+        case 13: /* disc, track_number */;
+        case 14: /* rtrim(path,'/'), folder_files.name */;
+        case 15: /* folder_files.year + album + track_number */;
+        default: return !z ? "track_number, title_tag COLLATE NOCASE" : "track_number DESC, title_tag COLLATE NOCASE DESC";
+    }
+}
+```
+
+`ev_1e2ad4fc55f8ecfe280c5a39e15f01d4b8a9ebb36614e813f6eda9b98db832da`
+
+模式 4/5/6/7/10/12 **默认方向本身就是降序**，置 DESC 位反而变升序 —— 若误当"降序开关"会正好反向。
+
+### 12.5 限额
+
+```java
+// e4
+public final int mo2437() { return Math.max(2, C0742.g0.f3810); }   // top_rated_files_limit
+// e3
+public final int mo2437() { return Math.max(2, C0742.h0.f3810); }   // low_rated_files_limit
+```
+
+五页限额偏好全线实证：`j0` recently_played / `i0` recently_added / `f0` most_played / `g0` top_rated / `h0` low_rated。
+
+### 12.6 评分模式
+
+`res/xml/ui_player.xml`：
+
+```xml
+<TagListPreference android:title="@string/pref_rating_type" android:key="rating_type"
+    android:defaultValue="1" w:entries="@array/pref_rating_type_entries" />
+```
+
+`pref_rating_type_entries` = `["Disabled", "Like/Unlike (thumbs)", "5 stars", "5 stars (menu/lists only)"]`
+⇒ 默认 **1 = 拇指模式**。`rating_type` **不在 `C0742`** 中。
+
+### 12.7 `RatingBar` 关键方法原文
+
+`e()`（变更上报，无 JADX 警告）：
+
+```java
+public final void e() {
+    com.maxmpz.widget.list.e1 e1Var = (com.maxmpz.widget.list.e1) AUtils.O(this, com.maxmpz.widget.list.e1.class, null);
+    if (e1Var != null) {
+        long jMo2940 = ((AAItemView) e1Var).D.mo2940();
+        if (jMo2940 != 0) {
+            MsgBusHelper.fromContextOrThrow(getContext(), this.p).mo2748(this, this.f3943, this.O, 0, Long.valueOf(jMo2940));
+        }
+    }
+}
+```
+
+`ev_169684f6953e351c49444175a51c729bdecb7e682286211d0bd5cc6d8645a07e`
+
+⇒ **`this.O`（0–5）原样传出，无 like/star 转换。控件完全不知道 `rating_type`。**
+
+`performLongClick()`（无 JADX 警告）：
+
+```java
+public final boolean performLongClick() {
+    if (this.O == 5) { this.O = 0; } else { this.O = 5; }
+    invalidate();
+    androidx.core.view.j.m654(this, 0);
+    this.g = 3;
+    super.setPressed(false);
+    i(Math.max(1, this.O));
+    ...
+    return super.performLongClick();
+}
+```
+
+`ev_2812f13b95cef72a82f50c513be79aa2e18b2a0ff913ae82dbcf9b8d6a44b8c8`
+
+`onTouchEvent()`（无 JADX 警告，见 §12.8 状态机）
+`ev_dcef6878849eabd257fb63b754115afd1253a7ef2201db459f103ecb58a92921`
+
+`d(float, boolean)`（**有 2 条 JADX block-merged 警告，`i3` 赋值失真**）
+`ev_2f2ad374680a3d4905207bcf51d28ad4bf010e6b34f3ee3146c2fa7dd8c3ed4e`
+
+类摘要（34 方法 / 28 字段）：`ev_9aa08753783b12b5f8d2ff3cb65f98c0d5f68c9628a1f1bdaba44ac2011f7282`
+
+`search_android_classes("Rating")` 仅命中 2 类：
+`android.support.v4.media.RatingCompat` 与 `com.maxmpz.widget.base.RatingBar`
+`ev_3ba50ce03b4fb15b4b06b6adb15d78149c4d01bbcb0a3b9aea034b9685f45359`
+
+### 12.8 `RatingBar` 字段与交互状态机
+
+| 字段 | 类型 | 作用 |
+| --- | --- | --- |
+| `O` | int | 当前评分 0–5 |
+| `i` | int | 按下时快照（变更检测） |
+| `g` | int | 手势状态：0 空闲 / 1 按下 / 2 拖拽 / 3 长按 |
+| `h` | float | 按下时 X |
+| `f3945` | int | 单图标宽度 px |
+| `m` | int | 布局模式：1 居中 5 星 / 5 反向 / 其他 左对齐逐个 |
+| `f3943` | int | 随消息传出（疑似 surface 标识） |
+| `p` | — | MsgBus tag |
+| `n` | `g4` | 包裹的 PowerList |
+
+```
+DOWN → 记录 h/g=1/i=O，i(5)，按压动画 0.45f
+MOVE → g==1 且 |x-h| > touchSlop*2 → g=2, cancelLongPress(); g==2 → d(x,true)
+UP   → g==1 → d(x,false); i!=O → e(); g=0; i(max(1,O)); 动画 0.2f
+```
+
+### 12.9 未取项（R 系列）
+
+| # | 项 | 说明 |
+| --- | --- | --- |
+| R1 | 拇指模式 like/unlike 落到 `rating` 哪两个值 | 推断 like→5、unlike→1；决定性证据在 MsgBus `mo2748` 订阅方 |
+| R2 | `d()` 中 2/3/4 星如何写入 | JADX 块合并导致 `i3 = z ? i4 : i4` 失真，需 smali 复核 |
+| R3 | Low Rated 子查询无 `ORDER BY` 是有意还是疏漏 | 静态证据无法区分 |

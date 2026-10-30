@@ -1,6 +1,6 @@
 ---
 doc_id: "ARCH-POWERAMP-RECENTS-VIEWS"
-title: "Poweramp 派生列表参考（最近播放 / 最近添加 / 最多播放 / 长）"
+title: "Poweramp 派生列表参考（最近播放 / 最近添加 / 最多播放 / 长 / Top Rated / Low Rated）"
 doc_type: "architecture"
 status: "active"
 owner_agent: "Architecture Agent"
@@ -19,20 +19,20 @@ source_documents:
   - "docs/architecture/media-library-page-relationships.md（SpMusic 侧对照）"
 ---
 
-# Poweramp 派生列表参考（最近播放 / 最近添加 / 最多播放 / 长）
+# Poweramp 派生列表参考（最近播放 / 最近添加 / 最多播放 / 长 / Top Rated / Low Rated）
 
 ## 0. 定位与证据分级
 
 **本文记录外部实现 Poweramp 的派生列表页面，不是 SpMusic 现状。**
 
-覆盖四页，分属**两种形态**：
+覆盖六页，分属**两种形态**：
 
 | 形态 | 页面 | 结构特征 |
 | --- | --- | --- |
-| **Top-N 形态** | 最近播放 `r3` / 最近添加 `q3` / 最多播放 `h3` | 子查询内 `ORDER BY … LIMIT N` 截断，再 JOIN 富化，外层再排序（§2–§7） |
+| **Top-N 形态** | 最近播放 `r3` / 最近添加 `q3` / 最多播放 `h3` / Top Rated `e4` / Low Rated `e3` | 子查询内 `ORDER BY … LIMIT N` 截断，再 JOIN 富化，外层再排序（§2–§6、§15） |
 | **筛选形态** | **长 `d3`** | 直接 JOIN + `duration >= 阈值`，**无子查询、无 LIMIT**（§14） |
 
-两者共用同一实体框架（`AbstractC0743` 的 `X0` 钩子）、同一投影 `p0.f3367`、同一套 flag。
+两者共用同一实体框架（`AbstractC0743` 的 `X0` 钩子）、同一投影 `p0.f3367`、同一套 flag，以及**同一个排序映射 `p0.O(int)`**（§17）。
 
 | 标记 | 含义 | 可信度 |
 | --- | --- | --- |
@@ -82,6 +82,8 @@ ORDER BY <用户排序偏好>
 | `recently_added` = "Recently Added" | `getRecentlyAdded()` | **`q3`** | 29 | Top-N |
 | `most_played` = "Most Played" | `getMostPlayed()` | **`h3`** | 31 | Top-N |
 | `long_files` = "Long" | `getLong()` | **`d3`** | 24 | **筛选**（§14）|
+| `top_rated` = "Top Rated" | `getTopRated()` | **`e4`** | 19 | Top-N（§15）|
+| `low_rated` = "Low Rated" | `getLowRated()` | **`e3`** | 17 | Top-N（§15）|
 
 四者均继承 `AbstractC0743`，实现 `X0(Uri, r, String, StringBuilder, ArrayList, i1)` 钩子——与专辑/艺术家/作曲家完全同一个实体框架。
 
@@ -626,12 +628,13 @@ public void updateTrackPlayedAtAsNeeded(g0 g0Var) {
 ### 10.1 SpMusic 现状
 
 `src/features/player/model/mediaLibraryCategories.ts` 定义 12 个分类，含 `playlists` / `queue` 等。
-**不存在**「最近播放 / 最近添加 / 最多播放 / 长」四个分类，也无对应的播放统计存储。
+**不存在**「最近播放 / 最近添加 / 最多播放 / 长 / Top Rated / Low Rated」六个分类，也无对应的播放统计或评分存储。
 
 `playbackQueue.ts` 的 `PlaybackQueueOrigin` 只有 `'all-songs' | 'playlist'` 两种来源。
 
-> 「长」页的实现成本最低：它不需要新表、不需要新实体，本质只是「所有歌曲」加一个 `duration >= 阈值` 条件。
-> 若 SpMusic 要做，给曲目元数据筛一次时长即可复用现有 all-songs 渲染。
+> 六个页面里，**「长」与两个评分页的实现成本最低**：
+> - 「长」不需要新表、不需要新实体，本质只是「所有歌曲」加一个 `duration >= 阈值` 条件；
+> - 两个评分页只需要曲目元数据上一个 `rating INTEGER 0–5` 列，配合 `> 1` / `= 1` 两个条件即可同时支撑星型与拇指两套 UI（§16.8）。
 
 ### 10.2 维度对照
 
@@ -701,10 +704,13 @@ SpMusic 若要实现，最小改动是给曲目元数据加 `played_at` / `playe
 | --- | --- | --- |
 | G4 | `C0742.f3413`–`f3418`（7 个 boolean）的绑定键 —— 存在于类摘要但不在 `<clinit>` 体内 | 中 |
 | G6 | `g0Var.V.s1()` 的确切语义（推断为"虚拟/CUE 条目"判定） | 中 |
-| G7 | `p0.O(int)` 的模式 6 具体映射为哪个 ORDER BY 表达式（`r3`/`q3`/`h3` 均继承） | 中 |
+| ~~G7~~ | ~~`p0.O(int)` 排序映射~~ ✅ **已闭环**，见 §17（六页共用总表） | — |
 | **G8** | 三个 `*_from` 窗口偏好**由谁写入、何时写入** —— 默认 0 表示"不限"，但用户在 UI 上如何设置时间筛选未找到入口 | **中** |
 | G9 | `mUpdateDurationSt` 的 SQL（唯一未读的预编译语句） | 低 |
 | G10 | `p0.f3367` 投影数组与 `p0.x`/`y`/`X`/`f3368` 过滤数组的内容 | 中 |
+| **R1** | 拇指模式下 like/unlike 落到 `rating` 列哪些值（推断 5 / 1）—— 需追 MsgBus `mo2748` 的订阅方 | **中** |
+| **R2** | `RatingBar.d(float, boolean)` 因 JADX 块合并而失真，2/3/4 星如何写入需 smali 复核 | **中** |
+| R3 | Low Rated 子查询无 `ORDER BY` 是疏漏还是有意（静态证据无法区分） | 低 |
 
 > G5 的"默认值"部分已闭环；其"更新时机"部分转记为 **G8**。
 > G1 的闭环使 §7 的写入机制从推断升级为实证，并顺带确认了 `played_fully_at` 与 `played_at` 的**派生关系**（后者是唯一时钟源）。
@@ -716,6 +722,17 @@ SpMusic 若要实现，最小改动是给曲目元数据加 `played_at` / `playe
 | 主题 | Evidence ID |
 | --- | --- |
 | `g1` 库门面（实体映射） | `ev_fefbb506fc94b86da675ec3a73b7d1aa6b3b31598f8615f20e1e2985fd94fc7b` |
+| **`e4.X0`（Top Rated SQL，类摘要 + 方法体一并返回）** | `ev_adee2652eac06d255e5c5c0e2e6055c61bc0086836701fd729e40c7a01d65449` |
+| **`e3.X0`（Low Rated SQL，同上）** | `ev_3df5bec0faf6e496f8094fc37a9a719fe5d0f2ac16710358e9223a939fea5037` |
+| `e4.mo2437`（top_rated_files_limit） | `ev_6f927d81b0a85cd5b7c075409ff9a9ed57b83362ad521978a6f7aa4b8a9299d8` |
+| `e3.mo2437`（low_rated_files_limit） | `ev_edc936beecef02672ec8ebb5e6f904babc1337969e3db679ad08434328771ebc` |
+| **`p0.O(int)`（排序映射总表，G7）** | `ev_1e2ad4fc55f8ecfe280c5a39e15f01d4b8a9ebb36614e813f6eda9b98db832da` |
+| `RatingBar` 类摘要（34 方法 / 28 字段） | `ev_9aa08753783b12b5f8d2ff3cb65f98c0d5f68c9628a1f1bdaba44ac2011f7282` |
+| **`RatingBar.onTouchEvent`（交互状态机）** | `ev_dcef6878849eabd257fb63b754115afd1253a7ef2201db459f103ecb58a92921` |
+| **`RatingBar.d`（坐标→值，⚠️ JADX 警告）** | `ev_2f2ad374680a3d4905207bcf51d28ad4bf010e6b34f3ee3146c2fa7dd8c3ed4e` |
+| **`RatingBar.performLongClick`（5↔0 切换）** | `ev_2812f13b95cef72a82f50c513be79aa2e18b2a0ff913ae82dbcf9b8d6a44b8c8` |
+| **`RatingBar.e`（MsgBus 上报）** | `ev_169684f6953e351c49444175a51c729bdecb7e682286211d0bd5cc6d8645a07e` |
+| `searched_android_classes "Rating"`（仅 2 类命中） | `ev_3ba50ce03b4fb15b4b06b6adb15d78149c4d01bbcb0a3b9aea034b9685f45359` |
 | `r3` 类摘要 | `ev_dde1c7c78d006e939cd850031763d9e788e8a8cf54e5244c9f6c08abdc1f7b9e` |
 | **`r3.X0`（最近播放 SQL）** | `ev_d830abe440a57b8df30d04a50ea7d79f4346af2519c64151d8bf623cfec24d59` |
 | `r3.mo2437`（限额） | `ev_9f96cf80a63bf47977634ea51df1a861b9198dadaae099add0b1ba8161515839` |
@@ -864,11 +881,427 @@ UI 上可能以秒展示（`pref_duration_below_s` = `"Less than (seconds): %s"`
 
 ---
 
-## 15. 与既有文档的边界
+## 15. Top Rated / Low Rated：两个评分页
+
+| 页面 | UI 文案【实证·原文】 | 访问器 | 实体 | 方法数 |
+| --- | --- | --- | --- | --- |
+| 最高评分 | `top_rated` = `"Top Rated"` | `getTopRated()` | **`e4`** | 19 |
+| 最低评分 | `low_rated` = `"Low Rated"` | `getLowRated()` | **`e3`** | 17 |
+
+两者都是 Top-N 形态。
+
+### 15.1 `e4.X0()` 原文【实证·产物】
+
+```java
+@Override // com.maxmpz.audioplayer.rest.library.AbstractC0743
+public final String[] X0(Uri uri, com.maxmpz.audioplayer.player.r rVar, String str,
+                         StringBuilder sb, ArrayList arrayList, i1 i1Var) {
+    String[] strArr;
+    String str2 = i1Var.f3334;
+    if (str2 != null && str2.length() != 0) {
+        throw new AssertionError(i1Var.f3334);          // 禁止 projection override
+    }
+    StringBuilder sb2 = new StringBuilder("(SELECT * FROM folder_files WHERE ");
+    if (!C0742.f3414.f3789) {
+        sb2.append("folder_files.cue_folder_id IS NULL AND ");
+    }
+    sb2.append("rating>1 ORDER BY rating DESC ");       // ★ 阈值 + 内层排序
+    int iMo2437 = mo2437();
+    if (iMo2437 != Integer.MAX_VALUE) {
+        sb2.append(" LIMIT ");
+        sb2.append(iMo2437);
+    }
+    sb2.append(") AS folder_files LEFT  JOIN folders ON folders._id=folder_id LEFT JOIN artists ON artists._id=folder_files.artist_id LEFT JOIN albums ON albums._id=folder_files.album_id");
+    if (C0742.O.f3789) {
+        sb2.append(" LEFT JOIN album_artists ON album_artists._id=folder_files.album_artist_id");
+    }
+    rVar.A = sb2.toString();
+    if (C0742.f1.f3789) { strArr = C0742.f3418.f3789 ? p0.y : p0.f3368; }
+    else { strArr = C0742.f3418.f3789 ? p0.x : p0.X; }
+    androidx.appcompat.widget.n.m313(str, strArr, sb, arrayList);
+    i1Var.B = O(5);                                     // ★ 排序模式硬编码
+    return p0.f3367;
+}
+```
+
+### 15.2 `e3.X0()` 原文（差异部分）【实证·产物】
+
+```java
+    // 同样的 assertion 守卫、同样的 JOIN、同样的四选一过滤列、同样的投影
+    StringBuilder sb2 = new StringBuilder("(SELECT * FROM folder_files WHERE ");
+    if (!C0742.f3414.f3789) {
+        sb2.append("folder_files.cue_folder_id IS NULL AND ");
+    }
+    sb2.append("rating=1");                             // ★ 精确等于 1
+    int iMo2437 = mo2437();
+    if (iMo2437 != Integer.MAX_VALUE) {
+        sb2.append(" LIMIT ");
+        sb2.append(iMo2437);
+    }
+    // ★ 注意：没有 ORDER BY
+    ...
+    i1Var.B = O(1);                                     // ★ 排序模式硬编码为 1
+```
+
+### 15.3 还原
+
+```sql
+-- Top Rated
+SELECT <p0.f3367> FROM (
+    SELECT * FROM folder_files
+    WHERE [folder_files.cue_folder_id IS NULL AND] rating > 1
+    ORDER BY rating DESC
+    LIMIT :top_rated_files_limit
+) AS folder_files LEFT JOIN folders/artists/albums[/album_artists]
+ORDER BY rating DESC, title_tag                 -- O(5)
+
+-- Low Rated
+SELECT <p0.f3367> FROM (
+    SELECT * FROM folder_files
+    WHERE [folder_files.cue_folder_id IS NULL AND] rating = 1
+    LIMIT :low_rated_files_limit                -- ★ 无 ORDER BY
+) AS folder_files LEFT JOIN folders/artists/albums[/album_artists]
+ORDER BY title_tag COLLATE NOCASE               -- O(1)
+```
+
+### 15.4 核心：两者恰好互补
+
+| 页面 | 条件 | 值域 |
+| --- | --- | --- |
+| Top Rated | `rating > 1` | 2 – 5 |
+| Low Rated | `rating = 1` | 恰好 1 |
+| （未评分） | `rating = 0` | 两页都不进 |
+
+⇒ **不重叠，且合起来恰好覆盖所有"已评分"曲目（rating ≥ 1）。**
+
+这是干净的设计：没有用 `rating <= 1` 或 `rating = 0`，否则"0 星既是最低分又是未评分"会产生歧义。**0 被保留为"未评分"哨兵。**
+
+### 15.5 限额（各自独立偏好）
+
+```java
+// e4
+@Override // d2 — JADX renamed from: с
+public final int mo2437() { return Math.max(2, C0742.g0.f3810); }   // top_rated_files_limit
+// e3
+@Override // d2 — JADX renamed from: с
+public final int mo2437() { return Math.max(2, C0742.h0.f3810); }   // low_rated_files_limit
+```
+
+### 15.6 Low Rated 的两个实现缺陷
+
+**① 子查询内没有 `ORDER BY`**
+
+`e3` 是 `WHERE rating=1` 后**直接 `LIMIT N`**。对比 `e4` 有 `ORDER BY rating DESC` 再 LIMIT。
+
+⇒ `LIMIT` 截取的是**任意 N 条** rating=1 的曲目（实际取决于 SQLite 扫描顺序，通常为 rowid），**不是"最低的 N 条"**。
+
+由于所有候选评分都是 1，"最低 N 条"本身也缺乏定义，但这意味着**集合成员不确定**。
+
+**② 外层按标题排序**
+
+`i1Var.B = O(1)` → 模式 1 = `title_tag`（见 §17）。
+
+⇒ 该页显示顺序与评分**完全无关**。叠加 ①，"Low Rated" 实际呈现的是：
+> 「评分 = 1 的曲目里，某 N 条，按标题排序」
+
+**无法从静态证据区分这是有意设计还是疏漏**，记为观察项。
+
+### 15.7 与其它 Top-N 页对照
+
+| 页面 | 内层 `ORDER BY` | 外层排序来源 |
+| --- | --- | --- |
+| 最近播放 `r3` | `played_fully_at DESC` | 偏好 `Y` `recently_played_files_sort`（全值）|
+| 最近添加 `q3` | `file_created_at DESC` | 偏好 `W` `recently_added_files_sort`（全值）|
+| 最多播放 `h3` | `played_times DESC` | 偏好 `V` **仅取 DESC 位** + 强制模式 6 |
+| **Top Rated `e4`** | `rating DESC` | **`O(5)` 完全硬编码** |
+| **Low Rated `e3`** | **无** | **`O(1)` 完全硬编码** |
+
+⇒ 评分两页**完全不读排序偏好**，用户无法更改排序。这是比「最多播放」（至少可切升降序）更严格的锁定。
+
+---
+
+## 16. 评分模型与拇指模式
+
+### 16.1 `rating_type`：四档显示模式
+
+`res/xml/ui_player.xml` 原文【实证·原文】：
+
+```xml
+<com.maxmpz.audioplayer.preference.TagListPreference
+    android:title="@string/pref_rating_type" android:key="rating_type"
+    android:defaultValue="1" w:entries="@array/pref_rating_type_entries" />
+```
+
+`pref_rating_type_entries` = **`["Disabled", "Like/Unlike (thumbs)", "5 stars", "5 stars (menu/lists only)"]`**
+
+| 值 | 模式 |
+| --- | --- |
+| 0 | Disabled（关闭评分） |
+| **1** | **Like/Unlike（拇指）— 默认** |
+| 2 | 5 stars |
+| 3 | 5 stars（仅菜单/列表） |
+
+`rating_type` **不在 `C0742`**（库偏好中枢）中，属 UI 偏好命名空间。
+
+### 16.2 值域：0 – 5 整数
+
+三条独立佐证：
+
+| 证据 | 出处 |
+| --- | --- |
+| `d()` 中 `if (i < 0) i4 = 0; else if (i <= 5) i4 = i;`（超出保持 5） | `RatingBar.d` |
+| 长按在 `5` 与 `0` 之间切换 | `RatingBar.performLongClick` |
+| 提示文案 "Swipe over stars… Long press to toggle between **5 or 0 stars**" | `pref_rating_type_5stars_hint` |
+
+`pref_rating_type_5stars_hint` 全文：
+> *"Swipe over stars to select rating. Touch an empty space where star should be placed for immediate rating. Long press to toggle between 5 or 0 stars"*
+
+### 16.3 核心结论：`RatingBar` 完全不知道 `rating_type` 的存在
+
+`com.maxmpz.widget.base.RatingBar`（34 方法 / 28 字段）是**评分类型无关的通用控件**，只产出一个 **0–5 整数**。
+
+其变更通知原文【实证·产物】：
+
+```java
+public final void e() {
+    com.maxmpz.widget.list.e1 e1Var = (com.maxmpz.widget.list.e1)
+        AUtils.O(this, com.maxmpz.widget.list.e1.class, null);
+    if (e1Var != null) {
+        long jMo2940 = ((AAItemView) e1Var).D.mo2940();       // 当前行的 track id
+        if (jMo2940 != 0) {
+            MsgBusHelper.fromContextOrThrow(getContext(), this.p)
+                .mo2748(this, this.f3943, this.O, 0, Long.valueOf(jMo2940));
+        }
+    }
+}
+```
+
+`this.O` 原样传出，**无任何 like/star 转换**。
+
+⇒ **拇指模式不是控件模式，而是"显示 + 解释"层。** 星型与拇指共用同一列、同一值域，只是画不同图标、读的时候按不同语义解释。
+
+这也与 `h_main_rating` 文案一致：*"Rating can be switched to `<star>` / `<like>`"* —— 是**图标切换**，不是数据模型切换。
+
+### 16.4 交互状态机（`onTouchEvent`，无 JADX 警告）
+
+字段角色：
+
+| 字段 | 作用 |
+| --- | --- |
+| `O` | 当前评分（0–5） |
+| `i` | 按下瞬间的快照值（用于变更检测） |
+| `g` | 手势状态：`0` 空闲 / `1` 按下 / `2` 拖拽 / `3` 长按 |
+| `h` | 按下时的 X 坐标 |
+| `f3945` | 单个图标宽度（px） |
+| `m` | **布局模式**：`1` 居中 5 星 / `5` 反向 / 其他 = 左对齐逐个 |
+| `f3943` | 随消息传出（疑似 surface/类型标识） |
+| `p` | MsgBus tag |
+
+```java
+ACTION_DOWN → this.n = <PowerList>; 请求父级不拦截
+              记录 this.h = x, this.g = 1, this.i = this.O（快照）, i(5)
+              启动按压动画（R.id.anim_ratingbar_pressed, 0.45f）
+ACTION_MOVE → 若 g == 1 且 |x - h| > touchSlop * 2 → g = 2, cancelLongPress()
+              若 g == 2 → d(x, true)     连续拖拽调值
+ACTION_UP   → 若 g == 1 → d(x, false)   单击定值
+              若 i != O → e()           发出变更
+              g = 0，恢复 i(max(1, O))
+```
+
+**触摸滑动阈值用 `touchSlop × 2`**（比系统默认更保守），轻点不易被误判为拖拽。
+
+### 16.5 长按 = 5 ↔ 0 切换（`performLongClick`，无 JADX 警告）
+
+```java
+@Override
+public final boolean performLongClick() {
+    if (this.O == 5) {
+        this.O = 0;
+    } else {
+        this.O = 5;
+    }
+    invalidate();
+    androidx.core.view.j.m654(this, 0);
+    this.g = 3;
+    super.setPressed(false);
+    i(Math.max(1, this.O));
+    ...
+    return super.performLongClick();
+}
+```
+
+与提示文案完全对应。这段同时证明**值域上限是 5**。
+
+### 16.6 坐标 → 值换算（`d(float, boolean)`）—— ⚠️ 反编译不可靠
+
+三种布局模式分别换算，然后硬夹到 0–5：
+
+```java
+if (this.f3945 > 0) {                                 // f3945 = 单图标宽度
+    int paddingLeft = (int) ((f - getPaddingLeft()) + 0.5f);
+    int i2 = this.m;                                  // 布局模式
+    int i3 = 0;
+    int i4 = 5;
+    if (i2 == 1) {                                    // 居中 5 星
+        float width = ((getWidth() - getPaddingLeft()) - getPaddingRight()) / 2.0f;
+        int i5 = this.f3945;
+        float f2 = width - ((i5 * 5) / 2.0f);         // 5 星组左边界
+        float f3 = paddingLeft;
+        int iCeil = (int) Math.ceil((f3 - f2) / i5);
+        z2 = f3 > f2 && f3 < (((float) this.f3945) / 2.0f) + f2;
+        i = iCeil;
+    } else if (i2 != 5) {                             // 左对齐逐个
+        int i6 = this.f3945;
+        i = (paddingLeft / i6) + 1;
+        z2 = paddingLeft < i6 / 2;
+    } else {                                          // m == 5 反向（右→左）
+        int i7 = this.f3945;
+        i = 5 - (paddingLeft / i7);
+        z2 = paddingLeft > (i7 * 5) - (i7 / 2);
+    }
+    if (i < 0) { i4 = 0; }
+    else if (i <= 5) { i4 = i; }                      // 否则 i4 保持 5
+    ...
+}
+```
+
+> ⚠️ **该方法带两条 JADX `block merged / PHI` 警告**，最终 `i3` 的赋值被折叠成
+> `i3 = z ? i4 : i4;`（三元两边相同），明显失真。
+> **2/3/4 星如何写入 `i3` 这一段不可靠**，需 SMLALI 复核才能定论。
+> 可确认的只有：值域夹 0–5、三种布局分支、"刻意的最低分是 1"这一特殊分支：
+
+```java
+if (i4 == 0 && !z /* 单击而非拖拽 */ && this.O == 0) {
+    i3 = 1;                                           // 在"0"位置单击且当前已是 0 → 抬到 1
+}
+```
+
+### 16.7 like / unlike 落到哪些值【推断，未实证】
+
+控件不区分评分类型，所以只能由消费侧映射。目前最强的支持是**两条 SQL 恰好把 0–5 切成两段**：
+
+| 页面 | 条件 | 若 like→5 / unlike→1 |
+| --- | --- | --- |
+| Top Rated | `rating > 1` | 恰为「点过赞」 |
+| Low Rated | `rating = 1` | 恰为「踩过」 |
+| 未评分 | `rating = 0` | 两页都不进 |
+
+结合 `rating_type` 是图标切换而非数据模型切换，这套解释自洽。
+
+**但决定性证据在 MsgBus 消息 `mo2748(...)` 的订阅方（真正写 `rating` 列的地方），本轮未追。**
+
+### 16.8 可借鉴 / 不建议照抄
+
+**值得借鉴**：
+
+| # | 做法 | 理由 |
+| --- | --- | --- |
+| R-A1 | **一个 0–5 列同时支撑星型与拇指两套 UI** | 零额外存储；派生列表用 `> 1` / `= 1` 两个条件即可同时适配 |
+| R-A2 | **`0` 保留为"未评分"哨兵** | 避免"0 星既是最低分又是未评分"的歧义 |
+| R-A3 | **长按 5↔0 快速切换** | 单手操作效率高，配合提示文案可发现 |
+| R-A4 | **`touchSlop × 2` 才转拖拽** | 列表内嵌控件，避免点击被误判为滑动 |
+
+**不建议照抄**：
+
+| # | 做法 | 理由 |
+| --- | --- | --- |
+| R-N1 | **把值补偿逻辑混在 View 里**（`i4==0 && !z && O==0 → 1`） | 与触摸状态机耦合，且已复杂到让反编译失真。应把"坐标→离散值"抽成纯函数 |
+| R-N2 | **变更通过 MsgBus 全局消息上报**（`mo2748`） | 隐式耦合，调用方难以静态追踪（本轮即因此无法确证 like 映射） |
+| R-N3 | **评分两页完全不读排序偏好** | 用户无法改排序；若是有意为之应写清，否则是缺失 |
+
+---
+
+## 17. 排序映射总表：`p0.O(int)`（六页共用）
+
+此前多轮未解的"排序模式编号含义"已完全还原。该方法定义在 `com.maxmpz.audioplayer.rest.library.p0`，被所有 song 视图列表共用。
+
+### 17.1 原文【实证·产物】
+
+```java
+public String O(int i) {
+    boolean z = (1073741824 & i) != 0;          // 0x40000000 = DESC 位
+    switch (i & (-1073741825)) {                // 清除 DESC 位
+        case 0:  return !z ? "track_number, title_tag COLLATE NOCASE"
+                           : "track_number DESC, title_tag COLLATE NOCASE DESC";
+        case 1:  return !z ? "title_tag COLLATE NOCASE"
+                           : "title_tag COLLATE NOCASE DESC";
+        case 2:  return !z ? "folder_files.name COLLATE NOCASE"
+                           : "folder_files.name COLLATE NOCASE DESC";
+        case 3:  return !z ? "folder_files.year, title_tag"
+                           : "folder_files.year DESC, title_tag";
+        case 4:  return !z ? "file_created_at DESC, title_tag"
+                           : "file_created_at, title_tag";
+        case 5:  return !z ? "rating DESC, title_tag"
+                           : "rating, title_tag";
+        case 6:  return !z ? "folder_files.played_times DESC, title_tag"
+                           : "folder_files.played_times, title_tag";
+        case 7:  return !z ? "folder_files.played_fully_at DESC, title_tag"
+                           : "folder_files.played_fully_at, title_tag";
+        case 8:  /* artist + album，含 C0742.O / C0742.f3413 三档降级 */;
+        case 9:  /* album + track_number */;
+        case 10: return !z ? "folder_files.duration DESC, title_tag COLLATE NOCASE"
+                           : "folder_files.duration, title_tag COLLATE NOCASE DESC";
+        case 11: return !z ? "folder_files.shuffle_order"
+                           : "folder_files.shuffle_order DESC";
+        case 12: return !z ? "folder_files.created_at DESC, title_tag"
+                           : "folder_files.created_at, title_tag";
+        case 13: /* disc, track_number */;
+        case 14: /* rtrim(path,'/'), folder_files.name */;
+        case 15: /* folder_files.year + album + track_number */;
+        default: return !z ? "track_number, title_tag COLLATE NOCASE"
+                           : "track_number DESC, title_tag COLLATE NOCASE DESC";
+    }
+}
+```
+
+### 17.2 模式对照
+
+| 模式 | 未置 DESC 位时 | 语义 |
+| --- | --- | --- |
+| 0 | `track_number, title_tag` | 音轨号（默认） |
+| 1 | `title_tag` | **标题** ← Low Rated `e3` |
+| 2 | `folder_files.name` | 文件名 |
+| 3 | `folder_files.year, title_tag` | 年份 |
+| 4 | `file_created_at DESC, title_tag` | 添加时间（**默认降序**） |
+| 5 | `rating DESC, title_tag` | **评分（默认降序）** ← Top Rated `e4` |
+| 6 | `played_times DESC, title_tag` | **播放次数（默认降序）** ← 最多播放 `h3` |
+| 7 | `played_fully_at DESC, title_tag` | **最近播放时间（默认降序）** |
+| 8 | artist + album | 艺术家 / 专辑 |
+| 9 | album + track_number | 专辑内音轨号 |
+| 10 | `duration DESC, title_tag` | 时长（**默认降序**） |
+| 11 | `shuffle_order` | 随机序 |
+| 12 | `created_at DESC, title_tag` | 创建时间（**默认降序**） |
+| 13 | `disc, track_number` | 碟号 + 音轨号 |
+| 14 | `rtrim(path,'/'), folder_files.name` | 路径 |
+| 15 | `year, album, track_number, title_tag` | 年份 + 专辑 |
+| default | 同模式 0 | 音轨号 |
+
+### 17.3 DESC 位的反直觉语义
+
+`0x40000000` **不是简单的"反转"**，而是"切换到另一个方向"。
+
+模式 **4 / 5 / 6 / 7 / 10 / 12 的默认方向本身就是降序**，所以置上 DESC 位反而是把结果变成**升序**。
+
+⇒ 若自研时把 DESC 位理解为"降序开关"，这六个模式的默认行为会正好相反。
+
+### 17.4 各页如何使用
+
+| 页面 | 传入 `O(...)` 的参数 | 用户可否改排序 |
+| --- | --- | --- |
+| 最近播放 `r3` | `C0742.Y.f3810`（偏好全值） | 可 |
+| 最近添加 `q3` | `C0742.W.f3810`（偏好全值） | 可 |
+| 最多播放 `h3` | `(C0742.V.f3810 & 0x40000000) \| 6` | **仅升降序** |
+| Top Rated `e4` | `5` | **不可** |
+| Low Rated `e3` | `1` | **不可** |
+| 长 `d3` | `C0742.Z.f3810`（偏好全值） | 可 |
+
+---
+
+## 18. 与既有文档的边界
 
 | 文档 | 边界 |
 | --- | --- |
-| `poweramp-entity-views.md` | 专辑/艺术家/专辑艺术家/作曲家。本文承接其 `X0` 钩子模型，覆盖最近播放/最近添加/最多播放（§2–§7）与长（§14）四个派生/筛选列表 |
+| `poweramp-entity-views.md` | 专辑/艺术家/专辑艺术家/作曲家。本文承接其 `X0` 钩子模型，覆盖六个派生/筛选列表：最近播放/最近添加/最多播放（§2–§6）、长（§14）、Top Rated/Low Rated（§15），以及评分模型（§16）与共用排序映射（§17） |
 | `poweramp-library-three-views.md` | 所有歌曲/文件夹/文件夹层次结构。本文的投影 `p0.f3367` 与其「所有歌曲」同源，仅交叉引用 |
 | `poweramp-queue-runtime-reference.md` | 队列状态机。本文 §7 的写入路径在 `b0` 内，与其共用同一个队列管理器 |
 | `poweramp-search-and-queue-impact.md` | 搜索。无重叠 |

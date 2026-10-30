@@ -401,7 +401,7 @@
 }
 
 .playlist-playback-toggle,
-.playlist-playback-nav-button:not(.is-active) {
+.playlist-playback-nav-button {
   color: var(--player-secondary-fix);
 }
 
@@ -427,12 +427,9 @@
 }
 
 .playlist-playback-nav-button.is-active { color: var(--player-blue); }
-.playlist-playback-nav-button.is-active svg { fill: currentColor; }
-.playlist-playback-nav-button:disabled { opacity: .22; }
-.playlist-playback-statistics-button:disabled { opacity: 1; }
-.playlist-playback-nav-button:hover { background: transparent; }
+.playlist-playback-nav-button:disabled { opacity: 1; }
+.playlist-playback-nav-button:hover { background: transparent; color: var(--player-secondary-fix); }
 .playlist-playback-nav-button.is-active:hover { color: var(--player-blue); }
-.playlist-playback-nav-button:not(.is-active):hover { color: var(--player-secondary-fix); }
 .playlist-playback-nav-button .press-feedback-button-ripple { animation-duration: 200ms; }
 
 @media (max-width: 520px) {

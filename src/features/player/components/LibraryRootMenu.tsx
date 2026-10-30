@@ -1,8 +1,11 @@
-import { useRef, useState, type CSSProperties } from 'react'
+import { useId, useRef, useState, type CSSProperties } from 'react'
 import { flushSync } from 'react-dom'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Separator } from '@/components/ui/separator'
+import { Input } from '@/components/ui/input'
+import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field'
+import { DEFAULT_LONG_TRACKS_MIN_DURATION_MS, MAX_LONG_TRACKS_MIN_DURATION_MS } from '../model/longTracks'
 import { useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import type { MediaLibraryCategoryId } from '@/features/player/model/mediaLibraryCategories'
 import { mediaLibraryCategories } from '@/features/player/model/mediaLibraryCategories'
@@ -88,11 +91,21 @@ export function LibraryRootMenu({ categoryId, library }: { categoryId: MediaLibr
   const [open, setOpen] = useState(false)
   const [transferring, setTransferring] = useState(false)
   const [notice, setNotice] = useState<Action | null>(null)
+  const [durationOptions, setDurationOptions] = useState(false)
+  const [durationMinutes, setDurationMinutes] = useState('')
+  const [durationError, setDurationError] = useState('')
+  const durationId = useId()
   const trigger = useRef<HTMLButtonElement | null>(null)
   const category = mediaLibraryCategories.find(item => item.id === categoryId)!
   const pinned = library.pinnedCategoryIds?.includes(categoryId) ?? false
   const busy = library.isImportPending || library.isFolderRescanPending
   const run = (action: Action) => {
+    if (action === settings && categoryId === 'long-tracks' && library.onLongTracksMinDurationChange) {
+      setDurationMinutes(String((library.longTracksMinDurationMs ?? DEFAULT_LONG_TRACKS_MIN_DURATION_MS) / 60000))
+      setDurationError('')
+      setDurationOptions(true)
+      return
+    }
     if (action.kind === 'placeholder') { setNotice(action); return }
     if (action.kind === 'select') {
       // The existing folder editor owns the next focus trap.
@@ -107,9 +120,30 @@ export function LibraryRootMenu({ categoryId, library }: { categoryId: MediaLibr
     if (action.kind === 'pin') library.onToggleCategoryPin?.(categoryId)
     if (action.kind === 'rescan') library.onRescanFolders?.()
   }
-  return <Dialog open={open} onOpenChange={value => { setTransferring(false); setNotice(null); setOpen(value) }}>
+  return <Dialog open={open} onOpenChange={value => { setTransferring(false); setNotice(null); setDurationOptions(false); setOpen(value) }}>
     <DialogTrigger render={<Button ref={trigger} className="playlist-hero-icon playlist-hero-more-button" variant="ghost" size="icon" aria-label="更多列表操作"><icons.more aria-hidden="true" /></Button>} />
-    {!transferring && (notice ? <DialogContent finalFocus={trigger} className="library-root-menu-notice">
+    {!transferring && (durationOptions ? <DialogContent finalFocus={trigger}>
+      <form className="flex flex-col gap-4" onSubmit={event => {
+        event.preventDefault()
+        const minutes = Number(durationMinutes)
+        if (!durationMinutes.trim() || !Number.isInteger(minutes) || minutes < 0 || minutes > Math.floor(MAX_LONG_TRACKS_MIN_DURATION_MS / 60000)) {
+          setDurationError(`请输入 0–${Math.floor(MAX_LONG_TRACKS_MIN_DURATION_MS / 60000)} 之间的整数分钟。`)
+          return
+        }
+        library.onLongTracksMinDurationChange?.(minutes * 60000)
+        setDurationOptions(false)
+        setOpen(false)
+      }}>
+        <DialogHeader><DialogTitle>长 · 列表选项</DialogTitle><DialogDescription>显示时长达到最小时长的歌曲。</DialogDescription></DialogHeader>
+        <FieldGroup><Field data-invalid={Boolean(durationError)}>
+          <FieldLabel htmlFor={durationId}>最小时长（分钟）</FieldLabel>
+          <Input id={durationId} type="number" min={0} max={Math.floor(MAX_LONG_TRACKS_MIN_DURATION_MS / 60000)} step={1} autoFocus value={durationMinutes} aria-invalid={Boolean(durationError)} onChange={event => { setDurationMinutes(event.target.value); setDurationError('') }} />
+          <FieldDescription>包含恰好达到此时长的歌曲，未知时长的歌曲不显示。</FieldDescription>
+          {durationError ? <FieldError>{durationError}</FieldError> : null}
+        </Field></FieldGroup>
+        <DialogFooter><Button type="button" variant="outline" onClick={() => setDurationOptions(false)}>取消</Button><Button type="submit">保存</Button></DialogFooter>
+      </form>
+    </DialogContent> : notice ? <DialogContent finalFocus={trigger} className="library-root-menu-notice">
       <DialogHeader><DialogTitle>{notice.label}</DialogTitle><DialogDescription>{notice.description}</DialogDescription></DialogHeader>
       <DialogFooter><Button variant="outline" onClick={() => setNotice(null)}>返回更多操作</Button><Button onClick={() => setOpen(false)}>知道了</Button></DialogFooter>
     </DialogContent> : <DialogContent className="folder-root-menu library-root-menu" overlayClassName="folder-root-menu-overlay" showCloseButton={false} aria-describedby={undefined}>

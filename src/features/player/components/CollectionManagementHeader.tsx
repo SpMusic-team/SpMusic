@@ -30,8 +30,8 @@ type Actions = {
 export function ManagementActionButtons({ shuffleLabel, shuffleDisabled, onShuffle, playLabel, playDisabled, onPlay,
   playbackLocked, searchLabel, searchOpen, onSearch, selectMode, selectDisabled, onSelect, selectedCount, extra }: Actions) {
   return <>
-    <Button variant="outline" aria-label={shuffleLabel} data-playback-command-lock={playbackLocked || undefined} disabled={shuffleDisabled} onClick={onShuffle}><img src={shuffleIcon} alt="" /></Button>
-    <Button variant="outline" aria-label={playLabel} data-playback-command-lock={playbackLocked || undefined} disabled={playDisabled} onClick={onPlay}><img src={playIcon} alt="" /></Button>
+    <Button variant="outline" aria-label={shuffleLabel} data-playback-action="shuffle" data-playback-command-lock={playbackLocked || undefined} disabled={shuffleDisabled} onClick={onShuffle}><img src={shuffleIcon} alt="" /></Button>
+    <Button variant="outline" aria-label={playLabel} data-playback-action="play" data-playback-command-lock={playbackLocked || undefined} disabled={playDisabled} onClick={onPlay}><img src={playIcon} alt="" /></Button>
     <Button variant="outline" aria-label={searchLabel} aria-expanded={searchOpen} onClick={onSearch}><img src={searchIcon} alt="" /></Button>
     <Button variant="outline" aria-pressed={selectMode} disabled={selectDisabled} onClick={onSelect}>{selectMode ? '取消选择' : '选择'}</Button>
     {selectMode ? <span role="status">已选择 {selectedCount} 项</span> : null}

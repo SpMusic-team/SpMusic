@@ -5,6 +5,7 @@ import { CollectionManagementHeader } from '@/features/player/components/Collect
 import { LibraryRootMenu } from '@/features/player/components/LibraryRootMenu'
 import { useCollectionManagementChrome } from '@/features/player/hooks/useCollectionManagementChrome'
 import { mediaLibraryCategories } from '@/features/player/model/mediaLibraryCategories'
+import { DEFAULT_LONG_TRACKS_MIN_DURATION_MS } from '@/features/player/model/longTracks'
 import { memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { LibraryChromeTransitionContext } from '@/features/player/hooks/useLibraryChromeTransition'
 import { motion, useIsPresent } from 'motion/react'
@@ -117,8 +118,9 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
   const category = mediaLibraryCategories.find((item) => item.id === categoryId)!
   const isRecentAdded = categoryId === 'recent-added'
   const isRecent = categoryId === 'recent-played' || isRecentAdded
-  const isSongs = categoryId === 'songs' || isRecent
-  const sourceSongs = isRecentAdded ? library.recentAddedSongs : isRecent ? library.recentSongs : library.allSongs
+  const isLong = categoryId === 'long-tracks'
+  const isSongs = categoryId === 'songs' || isRecent || isLong
+  const sourceSongs = isLong ? library.longSongs : isRecentAdded ? library.recentAddedSongs : isRecent ? library.recentSongs : library.allSongs
   const hasDataSource = isSongs || categoryId === 'playlists' || categoryId === 'folder'
   const categoryItems = useMemo(() => categoryId === 'playlists' ? library.items.filter((item) => item.sourceKind !== 'folder') : categoryId === 'folder' ? library.items.filter((item) => item.sourceKind === 'folder') : [], [categoryId, library.items])
   const [query, setQuery] = useState('')
@@ -264,7 +266,12 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
     navigationMotion.transition.duration ?? 0, Array.isArray(tileEase) ? `cubic-bezier(${tileEase.join(',')})` : 'ease')
   const coverStore = useAllSongsWindow(visibleSongs, panelRef, songsListRef,
     isSongs && songsLayout.showArtwork, library.allSongsMetadataStatus === 'loading', allSongsCoverStore, 8, renderedSongs)
-  const fullReorderKeys = useMemo(() => orderedSongs.map(item => item.key), [orderedSongs])
+  const fullReorderKeys = useMemo(() => {
+    if (!isLong) return orderedSongs.map(item => item.key)
+    const songs = [...library.allSongs ?? []]
+    if (!library.allSongsManualOrder) songs.sort((left, right) => compareByQuickIndex(left.track.title, right.track.title))
+    return songs.map(item => item.key)
+  }, [isLong, library.allSongs, library.allSongsManualOrder, orderedSongs])
   const reorderSourceVersion = useMemo(() => JSON.stringify(fullReorderKeys), [fullReorderKeys])
   const visibleReorderKeys = useMemo(() => visibleSongs.map(item => item.key), [visibleSongs])
   const songReorder = usePlaylistSongReorder({
@@ -438,7 +445,7 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
   function toggleSelection() { setSelectMode(!selectMode); setSelected(new Set()) }
   function openCreatePlaylist() { setPlaylistName(''); setCreateError(''); setCreateOpen(true) }
   function renderMore(compact = false) {
-    if (!compact) return <LibraryRootMenu key={categoryId} categoryId={categoryId} library={library} />
+    if (!compact || isLong) return <LibraryRootMenu key={categoryId} categoryId={categoryId} library={library} />
     return <DropdownMenu>
       <DropdownMenuTrigger render={<Button className={compact ? 'playlist-hero-icon playlist-hero-more-button' : 'playlist-management-more'}
         variant={compact ? 'ghost' : 'outline'} size={compact ? 'icon' : 'default'} aria-label="更多列表操作">
@@ -521,7 +528,7 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
       variants={offscreenEntry ? navigationMotion.detailReturn.incoming : appearanceMotion.variants.backdrop}
       transition={offscreenEntry ? navigationMotion.transition : atomicOverview ? { duration: 0 } : returnTransition}
       initial={atomicOverview ? false : 'initial'} animate={offscreenEntry ? entryControls : 'animate'} exit={atomicOverview ? 'animate' : 'exit'}>
-      <CollectionManagementHeader chrome={managementChrome} category={category} title={isSongs && !isRecent ? '全部歌曲' : category.label}
+      <CollectionManagementHeader chrome={managementChrome} category={category} title={isSongs && !isRecent && !isLong ? '全部歌曲' : category.label}
         sharedProjection={sharedProjection} onOverview={library.onOpenOverview} actionsScope={library.currentScope}
         returnTransition={returnTransition} more={renderMore()} hideActions={isSongs && selectMode}
         actions={hasDataSource ? {
@@ -540,7 +547,7 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
       {showSearch ? <motion.div className="playlist-management-search" variants={navigationMotion.chrome}
         initial={atomicOverview ? 'initial' : false} animate="animate" exit={atomicOverview ? 'exit' : 'animate'} transition={navigationMotion.transition}><Input ref={searchRef} type="search" aria-label={isSongs ? '搜索歌曲标题、艺术家或专辑' : `搜索${category.label}名称`} placeholder={isSongs ? '搜索歌曲' : `搜索${category.label}`} value={query} onChange={(event) => { if (pendingEntryPosition.current) pendingEntryPosition.current.cancelled = true; setQuery(event.target.value) }} onKeyDown={(event) => { if (event.key === 'Escape') { setQuery(''); setSearchOpen(false); setDismissedSearchRequestId(searchRequestId) } }} /></motion.div> : null}
       <span className="sr-only" role="status" aria-live="polite">{isSongs ? songsAnnouncement : announcement}</span>
-      {isSongs ? (library.allSongsMetadataStatus === 'loading' ? <PlaylistMetadataLoading layout={songsLayout} trackCount={sourceSongs?.length ?? 0} /> : visibleSongs.length ? <div ref={songsSpaceRef} style={songsWindow.spaceStyle}><p className="sr-only" aria-live="polite">{songReorder.announcement}</p><motion.div ref={songsListRef} className="playlist-grid all-songs-list" aria-label={isRecent ? `${category.label}歌曲列表` : "全部歌曲列表"}
+      {isSongs ? (library.allSongsMetadataStatus === 'loading' ? <PlaylistMetadataLoading layout={songsLayout} trackCount={sourceSongs?.length ?? 0} /> : visibleSongs.length ? <div ref={songsSpaceRef} style={songsWindow.spaceStyle}><p className="sr-only" aria-live="polite">{songReorder.announcement}</p><motion.div ref={songsListRef} className="playlist-grid all-songs-list" aria-label={isRecent || isLong ? `${category.label}歌曲列表` : "全部歌曲列表"}
         onPointerDownCapture={songReorder.onPointerDownCapture} onClickCapture={songReorder.onClickCapture} onKeyDownCapture={songReorder.onKeyDownCapture}
         data-layout-level={songsLayout.level} data-layout-flow={songsLayout.flow} data-layout-columns={songsLayout.columns}
         data-content-window={songsWindow.enabled ? 'bounded' : 'full'} data-cover-motion={appearanceMotion.disabled ? 'off' : undefined}
@@ -575,7 +582,7 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
             // card's memo on the exit animation's first frame. Long-press still
             // cannot enter selection mode while leaving; the section is `inert`.
             onToggleSelect={handleSongToggleSelect} onEnterSelectMode={handleSongEnterSelectMode} />)}
-      </motion.div></div> : <MotionEmpty className="playlist-management-empty" variants={navigationMotion.chrome} initial={false} animate="animate"><EmptyHeader><EmptyTitle>{(sourceSongs?.length ?? 0) ? '没有匹配的歌曲' : isRecent ? `暂无${category.label}` : '暂无歌曲'}</EmptyTitle><EmptyDescription>{(sourceSongs?.length ?? 0) ? '尝试其他名称，或清空搜索。' : isRecentAdded ? '选择音乐文件夹后，这里会按文件创建时间显示歌曲。' : isRecent ? '歌曲实际播放达到一半后，会显示在这里。' : '选择音乐文件夹后，这里会汇总其中及子文件夹内的歌曲；不会自动创建播放列表。下次启动会重新扫描。'}</EmptyDescription></EmptyHeader>{!isRecent || (sourceSongs?.length ?? 0) > 0 ? <Button disabled={library.isImportPending} onClick={(sourceSongs?.length ?? 0) ? () => setQuery('') : library.onSelectFolders}>{(sourceSongs?.length ?? 0) ? '清空搜索' : '选择文件夹'}</Button> : null}</MotionEmpty>) : categoryId === 'playlists' && library.isPlaylistRestorePending && !visible.length ? <Empty className="playlist-management-empty"><EmptyHeader><EmptyTitle>正在恢复播放列表</EmptyTitle><EmptyDescription>正在读取已保存的 M3U8 清单。</EmptyDescription></EmptyHeader></Empty> : visible.length ? <div ref={gridRef} className="playlist-management-grid"
+      </motion.div></div> : <MotionEmpty className="playlist-management-empty" variants={navigationMotion.chrome} initial={false} animate="animate"><EmptyHeader><EmptyTitle>{(sourceSongs?.length ?? 0) ? '没有匹配的歌曲' : isLong ? '暂无符合时长的歌曲' : isRecent ? `暂无${category.label}` : '暂无歌曲'}</EmptyTitle><EmptyDescription>{(sourceSongs?.length ?? 0) ? '尝试其他名称，或清空搜索。' : isLong ? `这里显示时长达到 ${(library.longTracksMinDurationMs ?? DEFAULT_LONG_TRACKS_MIN_DURATION_MS) / 60000} 分钟的歌曲，可在更多操作的列表选项中调整最小时长。` : isRecentAdded ? '选择音乐文件夹后，这里会按文件创建时间显示歌曲。' : isRecent ? '歌曲实际播放达到一半后，会显示在这里。' : '选择音乐文件夹后，这里会汇总其中及子文件夹内的歌曲；不会自动创建播放列表。下次启动会重新扫描。'}</EmptyDescription></EmptyHeader>{!isRecent || (sourceSongs?.length ?? 0) > 0 ? <Button disabled={library.isImportPending} onClick={(sourceSongs?.length ?? 0) ? () => setQuery('') : library.onSelectFolders}>{(sourceSongs?.length ?? 0) ? '清空搜索' : '选择文件夹'}</Button> : null}</MotionEmpty>) : categoryId === 'playlists' && library.isPlaylistRestorePending && !visible.length ? <Empty className="playlist-management-empty"><EmptyHeader><EmptyTitle>正在恢复播放列表</EmptyTitle><EmptyDescription>正在读取已保存的 M3U8 清单。</EmptyDescription></EmptyHeader></Empty> : visible.length ? <div ref={gridRef} className="playlist-management-grid"
         data-layout-level={layout.level} data-layout-flow={layout.flow} data-layout-artwork={layout.showArtwork}
         aria-label={layout.label} style={{ ...layout.style, touchAction: 'pan-y' }}>
         {visible.map((item) => <motion.div key={item.scope} className="playlist-management-card"

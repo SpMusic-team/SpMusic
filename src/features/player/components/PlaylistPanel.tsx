@@ -1028,6 +1028,8 @@ export function PlaylistPanel({
         searchOpen={searchOpen}
         onSearchToggle={handleSearchToggle}
         onClose={onClose}
+        onHome={searchOpen ? handleSearchToggle : library?.onOpenOverview}
+        homeSelected={!searchOpen}
       /> : null}
     </>
   )

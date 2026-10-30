@@ -232,8 +232,8 @@
 
 /* A transient playback command lock disables the hero actions only while the
    command settles. As with the transport-only busy lock, that is an interaction
-   lock rather than an unavailable action, so the buttons keep their material;
-   genuinely unavailable actions never carry the attribute and still dim. */
+   lock rather than an unavailable action, so the buttons keep their material.
+   Playback actions also retain their material when unavailable. */
 .playlist-hero-icon[data-playback-command-lock]:disabled {
   opacity: 1;
 }

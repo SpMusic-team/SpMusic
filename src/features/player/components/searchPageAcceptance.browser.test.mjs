@@ -106,6 +106,29 @@ const selectCategory = async category => {
 const search = () => page.locator('.search-page')
 const input = () => page.getByRole('searchbox', { name: '聚合搜索' })
 const category = id => search().locator(`[data-search-category="${id}"]`)
+const dockNavigation = () => page.locator('.playlist-playback-dock:not([data-dock-superseded])').filter({visible:true}).locator('.playlist-playback-nav')
+const sourceSnapshot = () => page.evaluate(()=>({route:window.vm.playlist.library.route,scope:window.vm.playlist.library.currentScope,
+  open:window.vm.playlist.isOpen,track:window.vm.playback.track?.id,queue:window.vm.queue.tracks.map(track=>track.id)}))
+const assertDockHighlight = async searchOpen => {
+  const buttons=dockNavigation().locator('button'),active=searchOpen?2:0,inactive=searchOpen?0:2
+  assert.equal(await buttons.nth(active).getAttribute('aria-pressed'),'true','current page navigation is selected')
+  assert.equal(await buttons.nth(inactive).getAttribute('aria-pressed'),'false','other page navigation is not selected')
+  assert.equal(await buttons.nth(active).getAttribute('aria-current'),'page','highlight identifies the current page')
+  assert.equal(await buttons.nth(active).evaluate(node=>node.classList.contains('is-active')),true,'current page receives active styling')
+  assert.equal(await buttons.nth(inactive).evaluate(node=>node.classList.contains('is-active')),false,'other page receives normal styling')
+  await page.waitForFunction(({active,inactive})=>{
+    const nav=[...document.querySelectorAll('.playlist-playback-dock:not([data-dock-superseded]) .playlist-playback-nav')].find(node=>node.getClientRects().length)
+    const buttons=nav?.querySelectorAll('button')
+    if(!buttons)return false
+    const probe=document.createElement('span');nav.append(probe)
+    probe.style.color='var(--player-blue)';const activeColor=getComputedStyle(probe).color
+    probe.style.color='var(--player-secondary-fix)';const inactiveColor=getComputedStyle(probe).color
+    probe.remove()
+    return activeColor!==inactiveColor&&getComputedStyle(buttons[active]).color===activeColor&&getComputedStyle(buttons[inactive]).color===inactiveColor
+  },{active,inactive})
+  assert.equal(await buttons.nth(active).evaluate(node=>getComputedStyle(node).opacity),'1','active icon stays fully opaque')
+  assert.equal(await buttons.nth(inactive).evaluate(node=>getComputedStyle(node).opacity),'1','inactive icon stays fully opaque')
+}
 const closeSearch = async () => {
   await page.keyboard.press('Control+f')
   await search().waitFor({state:'hidden'})
@@ -416,14 +439,34 @@ try {
   await openSearch()
   await closeSearch()
   assert.equal(await page.evaluate(()=>window.vm.playlist.isOpen),false,'player origin remains player after search')
+  await openSearch()
+  await assertDockHighlight(true)
+  await dockNavigation().locator('button').first().click()
+  await search().waitFor({state:'hidden'})
+  assert.equal(await page.evaluate(()=>window.vm.playlist.isOpen),false,'four-grid action restores the player source without opening the media library')
   await page.evaluate(()=>window.vm.playlist.library.onSelect(window.vm.playlist.library.items.find(item=>item.sourceKind!=='folder').scope))
   await page.waitForFunction(()=>window.vm.playlist.library.route.view==='tracks')
   await page.evaluate(()=>window.vm.playlist.onTrackSelect('solo'))
   await page.waitForFunction(()=>!window.vm.playback.isSelectionPending&&window.vm.playback.track?.id==='solo')
-  await openSearch()
-  await page.getByRole('button',{name:'打开当前播放列表',exact:true}).click()
-  await search().waitFor({state:'hidden'})
-  assert.equal(await page.evaluate(()=>window.vm.playlist.isOpen),true,'dock current playlist navigation exits search')
+  for (const source of ['playlist','songs']) {
+    if(source==='songs')await selectCategory('songs')
+    const beforeSearch=await sourceSnapshot()
+    await assertDockHighlight(false)
+    await openSearch()
+    await assertDockHighlight(true)
+    await dockNavigation().locator('button').first().click()
+    await search().waitFor({state:'hidden'})
+    assert.deepEqual(await sourceSnapshot(),beforeSearch,'four-grid action restores the exact '+source+' source and playback queue')
+    await assertDockHighlight(false)
+    await dockNavigation().getByRole('button',{name:'搜索',exact:true}).click()
+    await search().waitFor()
+    await dockNavigation().getByRole('button',{name:'搜索',exact:true}).click()
+    await search().waitFor({state:'hidden'})
+    assert.deepEqual(await sourceSnapshot(),beforeSearch,'search toggle still returns to the '+source+' source')
+    await dockNavigation().locator('button').first().click()
+    assert.deepEqual(await page.evaluate(()=>window.vm.playlist.library.route),{view:'overview'},'four-grid action on a source page opens the media library overview')
+    assert.deepEqual(await page.evaluate(()=>window.vm.queue.tracks.map(track=>track.id)),beforeSearch.queue,'overview navigation preserves the playback queue')
+  }
   await page.goto(origin + '/__search_acceptance_test?summaryGate=1')
   await page.waitForFunction(()=>window.vm?.playlist.library.allSongs.length===188)
   await openSearch()

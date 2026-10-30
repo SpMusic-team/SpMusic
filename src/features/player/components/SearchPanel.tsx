@@ -203,8 +203,8 @@ export function SearchPanel({ viewModel, store, controllerMode = 'movable' }: { 
       </div>
       <div ref={toolbarRef} className="search-page-actions"><div className="playlist-management-actions">
         {expanded ? <Button variant="outline" onClick={() => { setExpanded(null); setSelected(new Set()) }}>返回搜索结果</Button> : null}
-        <Button variant="outline" aria-label="随机播放搜索结果" disabled={!canPlay} onClick={shuffleResults}><icons.shuffle aria-hidden="true" /></Button>
-        <Button variant="outline" aria-label="播放搜索结果" disabled={!canPlay} onClick={() => playSongs(queueSongs)}><icons.play aria-hidden="true" /></Button>
+        <Button variant="outline" aria-label="随机播放搜索结果" data-playback-action="shuffle" disabled={!canPlay} onClick={shuffleResults}><icons.shuffle aria-hidden="true" /></Button>
+        <Button variant="outline" aria-label="播放搜索结果" data-playback-action="play" disabled={!canPlay} onClick={() => playSongs(queueSongs)}><icons.play aria-hidden="true" /></Button>
         <Button variant="outline" aria-pressed={selectMode} onClick={toggleSelection}>{selectMode ? '完成' : '选择'}</Button>
       </div>{renderViewMenu()}</div>
     </header>

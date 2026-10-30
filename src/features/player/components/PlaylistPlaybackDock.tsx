@@ -75,9 +75,8 @@ type PlaylistPlaybackDockProps = {
   searchOpen: boolean
   onSearchToggle?: () => void
   onClose: () => void
-  onOpenPlaylist?: () => void
-  playlistSelected?: boolean
-  playlistLabel?: string
+  onHome?: () => void
+  homeSelected?: boolean
   selection?: LibraryDockSelection
 }
 
@@ -462,9 +461,8 @@ export function PlaylistPlaybackDock({
   searchOpen,
   onSearchToggle,
   onClose,
-  onOpenPlaylist,
-  playlistSelected = true,
-  playlistLabel = '播放列表',
+  onHome,
+  homeSelected = false,
   selection,
 }: PlaylistPlaybackDockProps) {
   const selectionActive = Boolean(selection?.active)
@@ -759,13 +757,13 @@ export function PlaylistPlaybackDock({
           transport, progress interaction, and shared artwork nodes mounted. */}
       <nav key={controllerHidden ? 'hidden' : 'visible'} className="playlist-playback-nav" aria-label="播放列表快捷操作">
         <IconButton
-          className={cn('playlist-playback-nav-button', playlistSelected && 'is-active')}
+          className={cn('playlist-playback-nav-button', homeSelected && 'is-active')}
           icon={Grid24Filled}
-          label={playlistLabel}
-          selected={playlistSelected}
-          aria-current={playlistSelected ? 'page' : undefined}
-          disabled={!playlistSelected && !onOpenPlaylist}
-          onClick={onOpenPlaylist}
+          label={searchOpen ? '返回来源页面' : '打开媒体库'}
+          selected={homeSelected}
+          aria-current={homeSelected ? 'page' : undefined}
+          disabled={!onHome}
+          onClick={onHome}
           pressFeedback
           pressFeedbackTone="surface-variant"
         />
@@ -778,10 +776,11 @@ export function PlaylistPlaybackDock({
           pressFeedbackTone="surface-variant"
         />
         <IconButton
-          className="playlist-playback-nav-button"
+          className={cn('playlist-playback-nav-button', searchOpen && 'is-active')}
           icon={Search}
           label="搜索"
           selected={searchOpen}
+          aria-current={searchOpen ? 'page' : undefined}
           disabled={!onSearchToggle}
           pressFeedback
           pressFeedbackTone="surface-variant"

@@ -222,6 +222,9 @@ export type PlaylistLibraryViewModel = PlaylistAddCallbacks & {
   items: readonly PlaylistLibraryItem[]
   recentSongs?: readonly AllSongsItem[]
   recentAddedSongs?: readonly AllSongsItem[]
+  longSongs?: readonly AllSongsItem[]
+  longTracksMinDurationMs?: number
+  onLongTracksMinDurationChange?: (value: number) => void
   allSongs?: readonly AllSongsItem[]
   allSongsMetadataStatus?: 'loading' | 'ready'
   allSongsManualOrder?: boolean

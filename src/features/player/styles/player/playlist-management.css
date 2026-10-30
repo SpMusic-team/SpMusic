@@ -16,6 +16,10 @@
 /* An in-flight playback command locks these actions; a lock is not unavailability,
    so keep their material stable instead of flashing Base UI's disabled opacity. */
 .playlist-management-actions button[data-playback-command-lock]:disabled { opacity: 1; }
+/* Playback actions keep their material even when no playable content is available. */
+.playlist-management-actions button[data-playback-action]:disabled,
+.playlist-hero-shuffle-button:disabled,
+.playlist-hero-play-button:disabled { opacity: 1; }
 .playlist-management-more { width: 64px; height: 64px; flex: 0 0 auto; padding: 0 20px; border: 2px solid var(--player-blue); border-radius: var(--app-radius-pill); background: transparent; }
 .playlist-management-more img { width: 20px; height: 20px; }
 .playlist-management-search { padding: 12px 24px; }

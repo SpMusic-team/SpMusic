@@ -4226,7 +4226,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     const source = selection.sourceScope ? findPlaylistForScope(selection.sourceScope) : undefined
     if (selection.kind === 'playlist' && !source) return false
     const id = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
-    const name = selection.kind === 'recent-added' ? '最近添加' : selection.kind === 'recent-played' ? '最近播放' : selection.kind === 'all-songs' ? '所有歌曲' : playlistDisplayName(source!)
+    const name = selection.kind === 'long-tracks' ? '长' : selection.kind === 'recent-added' ? '最近添加' : selection.kind === 'recent-played' ? '最近播放' : selection.kind === 'all-songs' ? '所有歌曲' : playlistDisplayName(source!)
     const playlist: PlaybackQueuePlaylist = {
       sourceKind: 'custom', sourcePath: `queue:${selection.kind}:${id}`,
       sourceName: name, directoryPath: '', directoryName: name, selectedIndex: index, tracks,

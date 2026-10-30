@@ -699,6 +699,7 @@ export function PlayerSurface({
   }, [libraryRouteKey])
   const libraryDockContext = useMemo(() => ({ dockRef: libraryDockRef, activeRouteKey: libraryRouteKey, publish: publishDock }), [libraryRouteKey, publishDock])
   const dockBinding = dockRegistration?.routeKey === libraryRouteKey ? dockRegistration.binding : undefined
+  const dockSearchOpen = searchChange ? searchOpen : (dockBinding?.searchOpen ?? false)
   const { track } = playback
   const prepareTrackPreview = playback.onPrepareTrackPreview
   const commitTrackPreview = playback.onCommitTrackPreview
@@ -3037,12 +3038,12 @@ export function PlayerSurface({
               onPreviewCoverError={dockPreviewLayer ? () => markArtworkLoadError(dockPreviewLayer.id) : undefined}
               visualIsPlaying={visualPlaybackState === 'playing'} playbackTransitionPending={playbackTransitionPending}
               onPlayToggle={handlePlayToggle}
-              searchOpen={searchOpen || (dockBinding?.searchOpen ?? false)} onSearchToggle={searchChange ? toggleGlobalSearch : dockBinding?.onSearchToggle}
+              searchOpen={dockSearchOpen} onSearchToggle={searchChange ? toggleGlobalSearch : dockBinding?.onSearchToggle}
               onClose={() => { if (searchOpen) searchChange?.(false); else requestPlaylistOpenChange(false) }}
-              playlistSelected={playlist.library?.route?.view === 'tracks'}
-              playlistLabel="打开当前播放列表"
-              onOpenPlaylist={playlist.library?.items.some((item) => item.scope === playlist.library?.activeScope)
-                ? () => { if (searchOpen) searchChange?.(false); playlist.library?.onSelect(playlist.library.activeScope!) } : undefined}
+              homeSelected={!dockSearchOpen && playlist.isOpen}
+              onHome={dockSearchOpen
+                ? searchChange ? () => searchChange(false) : dockBinding?.onSearchToggle
+                : playlist.library?.onOpenOverview}
             /> : null}
           </AnimatePresence>
           <div className="search-return-page" hidden={searchOpen} inert={searchOpen || undefined}>

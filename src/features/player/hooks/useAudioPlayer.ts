@@ -1,3 +1,4 @@
+import { RecentlyPlayedTracker, readRecentlyPlayed, writeRecentlyPlayed } from '../model/recentlyPlayed'
 import { folderSelectionPath, isRootSelectionActive, projectSelectedFolder } from '@/features/player/model/folderSelection'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
@@ -185,7 +186,11 @@ function cancelOptionalArtworkIdle(handle: OptionalIdleHandle): void {
 const HYDRATED_TRACK_CACHE_CAPACITY = 8
 // Application-owned BMP URLs and in-flight RGBA buffers. Renderer/GPU memory
 // still needs Release measurement; visible minimum quality is never truncated.
-const PLAYLIST_ARTWORK_RESIDENT_BUDGET = 96 * 1024 * 1024
+// Halved from 96 MiB: the whole-list thumbnail lane is a scroll-smoothness aid,
+// while the adjacent-track decoded covers behind it (the +/-3 prefetch window
+// in prefetchAdjacentPlaylistTracks) already keep track switches instant. The
+// two budgets are independent, so lowering this one does not affect switching.
+const PLAYLIST_ARTWORK_RESIDENT_BUDGET = 48 * 1024 * 1024
 // In-flight RGBA reservations for the shared cover scheduler. The scheduler
 // admits up to MAX_CONCURRENT decodes, and the largest playlist edge it serves
 // is 512, so the reservation must cover every slot or the admission bound above
@@ -427,6 +432,9 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
   const sessionRestoreStartedRef = useRef(false)
   const startupRestoreTimedOutRef = useRef(false)
   const [startupRestoreReady, setStartupRestoreReady] = useState(savedSession === null)
+  const recentTrackerRef = useRef(new RecentlyPlayedTracker())
+  const [recentlyPlayed, setRecentlyPlayed] = useState(readRecentlyPlayed)
+  const recentlyPlayedRef = useRef(recentlyPlayed)
   const [audioState, setAudioState] = useState<AudioPlaybackState | null>(null)
   const [audioOutputInfo, setAudioOutputInfo] = useState<Awaited<ReturnType<typeof getAudioOutputInfo>>>(null)
   const [audioTrack, setAudioTrack] = useState<AudioTrackRef | null>(null)
@@ -2210,10 +2218,13 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     const activeBytes = [...playlistVisualHydrationActiveJobsRef.current.values()]
       .reduce((total, job) => total + job.maxEdge * job.maxEdge * 4, 0)
     if (requiredBytes + oldReplacementBytes + activeBytes > PLAYLIST_ARTWORK_RESIDENT_BUDGET) {
-      console.warn('Playlist artwork viewport exceeds the 96 MiB managed-resource budget', {
-        visibleCount: visibleIds.size,
-        requiredBytes,
-      })
+      console.warn(
+        `Playlist artwork viewport exceeds the ${PLAYLIST_ARTWORK_RESIDENT_BUDGET / (1024 * 1024)} MiB managed-resource budget`,
+        {
+          visibleCount: visibleIds.size,
+          requiredBytes,
+        },
+      )
     }
     let committedBytes = requiredBytes + oldReplacementBytes + activeBytes
     const currentVisuals = playlistTrackVisualsRef.current
@@ -2831,6 +2842,16 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       && nextAudioState.phase !== transportIntent
     if (!settleTransportIntent && isConflictingTransportState && !matchingPlaybackTransition) return
 
+    if (recentTrackerRef.current.sample(nextAudioState, performance.now(), acceptSeekPosition || timelineInteractionRef.current === 'seeking' || Boolean(seekTargetGuardRef.current && seekTargetGuardRef.current.trackId === nextAudioState.currentTrackId && performance.now() < seekTargetGuardRef.current.expiresAt), audioTrackRef.current?.id === nextAudioState.currentTrackId)) {
+      const track = audioTrackRef.current
+      if (track && track.id === nextAudioState.currentTrackId) {
+        const sourcePath = normalizeAudioSourcePath(track.sourcePath)
+        const next = [...recentlyPlayedRef.current.filter(item => item.sourcePath !== sourcePath), { sourcePath, lastPlayedAt: Date.now() }]
+        recentlyPlayedRef.current = next
+        try { writeRecentlyPlayed(next) } catch (error) { console.error('Failed to save recently played', error) }
+        setRecentlyPlayed(next)
+      }
+    }
     const previousAudioState = latestAudioStateRef.current
     const previousTrackId = previousAudioState?.currentTrackId ?? null
     const previousPhase = previousAudioState?.phase
@@ -3448,6 +3469,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       while (desiredTransportRequestRef.current) {
         const request = desiredTransportRequestRef.current
         desiredTransportRequestRef.current = null
+        if (request.restart) recentTrackerRef.current.restart()
         const nextState = request.phase === 'paused'
           ? await pauseAudio()
           : await playAudio({ restart: request.restart })
@@ -3948,6 +3970,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
   }
 
   function requestRealAudioSeek(nextProgress: number) {
+    recentTrackerRef.current.breakBaseline()
     const clampedProgress = Math.min(Math.max(nextProgress, 0), duration)
     const positionMs = Math.round(clampedProgress * 1000)
     const requestTrackId = latestAudioStateRef.current?.currentTrackId
@@ -4203,11 +4226,11 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     const source = selection.sourceScope ? findPlaylistForScope(selection.sourceScope) : undefined
     if (selection.kind === 'playlist' && !source) return false
     const id = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
-    const name = selection.kind === 'all-songs' ? '所有歌曲' : playlistDisplayName(source!)
+    const name = selection.kind === 'recent-added' ? '最近添加' : selection.kind === 'recent-played' ? '最近播放' : selection.kind === 'all-songs' ? '所有歌曲' : playlistDisplayName(source!)
     const playlist: PlaybackQueuePlaylist = {
       sourceKind: 'custom', sourcePath: `queue:${selection.kind}:${id}`,
       sourceName: name, directoryPath: '', directoryName: name, selectedIndex: index, tracks,
-      playbackQueue: selection.kind === 'all-songs' ? { kind: 'all-songs' }
+      playbackQueue: selection.kind !== 'playlist' ? { kind: selection.kind }
         : { kind: 'playlist', sourceScope: selection.sourceScope,
           ...(source?.sourceKind === 'custom' && !playbackQueueOrigin(source)
             ? { sourcePlaylist: { ...source, tracks: source.tracks.map((item) => ({ ...item })) } } : {}) },
@@ -4759,6 +4782,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     preparePlaylistAdd,
     createAddPlaylist,
     reorderSongs,
+    recentlyPlayed,
     allSongsManualOrder: manualOrders.has(null),
     allSongsManualPaths: manualOrders.get(null),
     addToPlaylist,

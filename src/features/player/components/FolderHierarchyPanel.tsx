@@ -1,3 +1,4 @@
+import { useLibrarySearch } from '../hooks/useLibrarySearch'
 import { LibraryRootMenu } from './LibraryRootMenu'
 import { compareByQuickIndex } from '../model/quickIndex'
 import { formatDurationClock } from '../model/playlistDuration'
@@ -32,7 +33,7 @@ import { useAllSongsRenderWindow } from '../hooks/useAllSongsRenderWindow'
 import { folderCoverRevisions, useAllSongsCoverUrl, useCollectionCoverUrl, useAllSongsCoverLease, useAllSongsWindow, type AllSongsCoverStore, type AllSongsCoverItem, type TrackCandidatesCoverItem } from '../hooks/useAllSongsWindow'
 import { flatFolderEntries, folderNavigationKey, folderEntries, folderRootSongs, folderName, folderPath, insideFolder, parentFolder, type FolderHierarchyEntry } from '../model/folderHierarchy'
 import { PLAYLIST_SONG_LAYOUTS } from '../model/playlistSongLayouts'
-import { mediaLibraryCategories } from '../model/mediaLibraryCategories'
+import { mediaLibraryCategories, type MediaLibraryCategoryId } from '../model/mediaLibraryCategories'
 import type { AllSongsItem, PlayerPlaylistViewModel } from '../model/playerUiViewModel'
 import type { PlaylistControllerMode } from '../model/playlistControllerMode'
 import type { PlayerTimelineViewModel } from '../model/playerUiViewModel'
@@ -101,10 +102,19 @@ export function FolderHierarchyPanel(props: Props) {
     offscreenReturn: outerPresent && internalBoundary ? localChrome.offscreenReturn : outerChrome.offscreenReturn,
     publishDetailVisibility: localChrome.publishDetailVisibility,
   }
+  const overlayLibrary = { ...library,
+    onOpenOverview: library.onOpenOverview ? () => { onLibrarySidebarOpenChange(false); library.onOpenOverview?.() } : undefined,
+    onSelectCategory: library.onSelectCategory ? (categoryId: MediaLibraryCategoryId) => { onLibrarySidebarOpenChange(false); library.onSelectCategory?.(categoryId) } : undefined,
+    onOpen: () => { onLibrarySidebarOpenChange(false); library.onOpen() },
+    onSelect: (scope: string) => { onLibrarySidebarOpenChange(false); library.onSelect(scope) },
+  }
   const sidebar = { playlistName: playlist.playlistName ?? '', trackCount: playlist.tracks.length, totalClock: null, onCurrentPlaylist: library.onOpen, library }
   return <motion.div className="playlist-management folder-hierarchy" inert={!outerPresent || undefined} aria-hidden={!outerPresent || undefined}>
     <PlaylistLibrarySidebar {...sidebar} />
-    <Dialog open={librarySidebarOpen} onOpenChange={onLibrarySidebarOpenChange}><DialogContent id="playlist-library-overlay" showCloseButton={false} className="playlist-library-dialog" overlayClassName="playlist-library-backdrop" aria-describedby={undefined}><DialogTitle className="sr-only">媒体库</DialogTitle><PlaylistLibrarySidebar {...sidebar} overlay /></DialogContent></Dialog>
+    <Dialog open={librarySidebarOpen} onOpenChange={onLibrarySidebarOpenChange}><DialogContent id="playlist-library-overlay" showCloseButton={false} className="playlist-library-dialog" overlayClassName="playlist-library-backdrop" style={{ translate: '0 0' }} finalFocus={() => {
+      const menu = document.getElementById('playlist-library-menu')
+      return menu?.getClientRects().length ? menu : false
+    }} aria-describedby={undefined}><DialogTitle className="sr-only">媒体库</DialogTitle><PlaylistLibrarySidebar {...sidebar} library={overlayLibrary} onCurrentPlaylist={() => { onLibrarySidebarOpenChange(false); library.onOpen() }} overlay /></DialogContent></Dialog>
     <LibraryChromeTransitionContext.Provider value={chrome}>
       <AnimatePresence mode="wait" propagate>
         <FolderHierarchyScene key={route} {...props} categoryId={categoryId} coverRevisions={coverRevisions} scrollPositions={scrollPositions} outerPresent={outerPresent} />
@@ -159,7 +169,8 @@ function FolderHierarchyScene({ categoryId = 'folders', playlist, allSongsCoverS
   if (currentSelection !== selection) setSelection(currentSelection)
   const query = currentSearch.query.trim().toLocaleLowerCase()
   const showSearch = currentSearch.open || searchRequestId > currentSearch.dismissedRequest
-  const toggleSearch = useCallback(() => setSearch(previous => ({ ...previous, open: !showSearch, dismissedRequest: searchRequestId })), [showSearch, searchRequestId])
+  const globalSearch = useLibrarySearch()
+  const toggleSearch = useCallback(() => globalSearch ? globalSearch() : setSearch(previous => ({ ...previous, open: !showSearch, dismissedRequest: searchRequestId })), [showSearch, searchRequestId, globalSearch])
   const songs = library.allSongs ?? EMPTY_SONGS
   const directories = useMemo(() => (flat ? location ? [] : flatFolderEntries(songs) : folderEntries(roots, songs, location)).sort((a, b) => compareByQuickIndex(a.name, b.name)), [flat, roots, songs, location])
   const visibleDirectories = useMemo(() => directories.filter(item => `${item.name} ${item.parentName}`.toLocaleLowerCase().includes(query)), [directories, query])
@@ -312,7 +323,7 @@ function FolderHierarchyScene({ categoryId = 'folders', playlist, allSongsCoverS
             playLabel: '播放文件夹歌曲', playDisabled: playlist.isOpenAudioDisabled || metadataLoading || !candidates.length || !library.onPlaySong,
             onPlay: () => play(), playbackLocked: playlist.isOpenAudioDisabled,
             searchLabel: '搜索文件夹和歌曲', searchOpen: showSearch,
-            onSearch: () => setSearch(previous => ({ ...previous, open: true })),
+            onSearch: globalSearch ?? (() => setSearch(previous => ({ ...previous, open: true }))),
             selectMode: currentSelection.active, selectDisabled: !visibleDirectories.length,
             onSelect: () => setSelection(previous => ({ ...previous, active: !previous.active, keys: new Set() })), selectedCount: currentSelection.keys.size,
           }} /> : null}

@@ -24,7 +24,7 @@ test('summary year accepts u32 positive integers and degrades missing or invalid
   try {
     const rows = await probeAudioPlaylistTrackSummaries(paths)
     assert.deepEqual(rows.map(row => row.summary.year), [...Array(11).fill(null), 1, 2023, 4294967295])
-    for (const row of rows) { const { year, ...rest } = row.summary; assert.deepEqual(rest, { ...tags, composer: null }); assert.equal(row.error, null); assert.equal(typeof year === 'number' || year === null, true) }
+    for (const row of rows) { const { year, ...rest } = row.summary; assert.deepEqual(rest, { ...tags, composer: null, genre: null }); assert.equal(row.error, null); assert.equal(typeof year === 'number' || year === null, true) }
   } finally { delete globalThis.summaryTestInvoke }
 })
 
@@ -39,6 +39,19 @@ test('composer text is independent, normalizes old missing responses, and reject
     assert.deepEqual(rows.map(row => row.summary.composer), [null, null, 'Writer A / Writer B'])
     assert(rows.every(row => row.summary.artist === 'Performer' && row.summary.albumArtist === 'Album Credit'))
     globalThis.summaryTestInvoke = async () => [{ sourcePath: paths[0], summary: { composer: 7 }, error: null }]
+    await assert.rejects(probeAudioPlaylistTrackSummaries([paths[0]]), /text field is invalid/)
+  } finally { delete globalThis.summaryTestInvoke }
+})
+
+test('genre accepts real text and nullable or older responses while rejecting malformed tags', async () => {
+  const values = [undefined, null, 'Jazz']
+  const paths = values.map((_, index) => `/music/genre-${index}.flac`)
+  globalThis.summaryTestInvoke = async () => values.map((genre, index) => ({ sourcePath: paths[index], summary: { title: 'Song', ...(genre === undefined ? {} : { genre }) }, error: null }))
+  try {
+    const rows = await probeAudioPlaylistTrackSummaries(paths)
+    assert.deepEqual(rows.map(row => row.summary.genre), [null, null, 'Jazz'])
+    assert(rows.every(row => row.summary.title === 'Song'))
+    globalThis.summaryTestInvoke = async () => [{ sourcePath: paths[0], summary: { genre: ['Jazz'] }, error: null }]
     await assert.rejects(probeAudioPlaylistTrackSummaries([paths[0]]), /text field is invalid/)
   } finally { delete globalThis.summaryTestInvoke }
 })

@@ -1,3 +1,5 @@
+import { SearchPanel } from './SearchPanel'
+import { LibrarySearchContext } from '../hooks/useLibrarySearch'
 import { AlbumLibraryPanel } from '@/features/player/components/AlbumLibraryPanel'
 import { FolderHierarchyPanel } from '@/features/player/components/FolderHierarchyPanel'
 import { FolderSelectionDialog } from '@/features/player/components/FolderSelectionDialog'
@@ -8,6 +10,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { flushSync } from 'react-dom'
 import { AnimatePresence, LayoutGroup, animate, motion, useMotionValue, useReducedMotion, type Easing, type MotionValue } from 'motion/react'
 import { TooltipProvider } from '@/components/ui/tooltip'
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty'
 import { useAppearance, useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { CoverPanel } from '@/features/player/components/CoverPanel'
@@ -18,6 +21,8 @@ import { LyricsPanel } from '@/features/player/components/LyricsPanel'
 import { PlaybackInfoButton } from '@/features/player/components/PlaybackInfoButton'
 import { MediaLibraryPanel } from '@/features/player/components/MediaLibraryPanel'
 import { PlaylistLibraryPanel } from '@/features/player/components/PlaylistLibraryPanel'
+import { PlaylistLibrarySidebar } from '@/features/player/components/PlaylistLibrarySidebar'
+import type { MediaLibraryCategoryId } from '@/features/player/model/mediaLibraryCategories'
 import { compareByQuickIndex } from '@/features/player/model/quickIndex'
 import { createAllSongsCoverStore, disposeAllSongsCoverStore, useAllSongsWindow } from '@/features/player/hooks/useAllSongsWindow'
 import { LibraryChromeTransitionContext, useLibraryChromeTransition } from '@/features/player/hooks/useLibraryChromeTransition'
@@ -629,6 +634,16 @@ export function PlayerSurface({
   const [allSongsCoverStore] = useState(createAllSongsCoverStore)
   useEffect(() => () => disposeAllSongsCoverStore(allSongsCoverStore), [allSongsCoverStore])
   const { playback, timeline, volume, queue, playlist, feedback } = viewModel
+  const searchOpen = viewModel.search?.isOpen ?? false
+  const searchChange = viewModel.search?.onOpenChange
+  const searchReturnFocus = useRef<HTMLElement | null>(null)
+  const toggleGlobalSearch = useCallback(() => {
+    if (!searchOpen) searchReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    searchChange?.(!searchOpen)
+  }, [searchChange, searchOpen])
+  useLayoutEffect(() => {
+    if (!searchOpen && searchReturnFocus.current?.isConnected) { searchReturnFocus.current.focus({ preventScroll: true }); searchReturnFocus.current = null }
+  }, [searchOpen])
   const preloadPanelRef = useRef<HTMLElement | null>(null)
   const preloadListRef = useRef<HTMLDivElement | null>(null)
   const warmSongs = useMemo(() => {
@@ -669,7 +684,7 @@ export function PlayerSurface({
       TRACK_CARD_CANCEL_SECONDS * 1000 * appearance.motion.durationScale + 100,
     )
   }, [appearance.motion.durationScale, appearanceMotion.trackCardCommitDurationSeconds, appearanceMotion.trackCardCommitEase])
-  const libraryRouteKey = playlist.isOpen
+  const libraryRouteKey = searchOpen ? 'search' : playlist.isOpen
       ? playlist.library?.route?.view === 'overview' ? 'overview' : playlist.library?.route?.view === 'category' ? `category:${playlist.library.route.categoryId}` : `tracks:${playlist.library?.currentScope ?? ''}`
       : null
   const chromeTransition = useLibraryChromeTransition(libraryRouteKey, !playlist.isOpen)
@@ -1054,12 +1069,15 @@ export function PlayerSurface({
       const insideModal = event.target instanceof Element && event.target.closest('[role="dialog"], [role="alertdialog"]')
       if (modalOpen || insideModal) return
       event.preventDefault()
-      if (!playlistOpen) requestPlaylistOpenChange(true)
-      setSearchRequestId(++searchRequestSequenceRef.current)
+      if (searchChange) toggleGlobalSearch()
+      else {
+        if (!playlistOpen) requestPlaylistOpenChange(true)
+        setSearchRequestId(++searchRequestSequenceRef.current)
+      }
     }
     window.addEventListener('keydown', handleSearchKeyDown)
     return () => window.removeEventListener('keydown', handleSearchKeyDown)
-  }, [requestPlaylistOpenChange, playlistOpen])
+  }, [requestPlaylistOpenChange, playlistOpen, searchChange, toggleGlobalSearch])
 
   useEffect(() => {
     if (!playlistOpen) {
@@ -1073,7 +1091,22 @@ export function PlayerSurface({
   const reduceMotion = useReducedMotion()
   const trackCardReducedMotion = Boolean(reduceMotion || appearanceMotion.disabled)
   const [nativeWindowState, setNativeWindowState] = useState<WindowLayoutState>({ maximized: false, fullscreen: false })
-  const librarySidebarOpen = playlist.isOpen && compactPlaylist && compactSidebarOpen
+  const sidebarRequested = compactPlaylist && compactSidebarOpen
+  const librarySidebarOpen = !searchOpen && playlist.isOpen && sidebarRequested
+  const searchSidebarOpen = searchOpen && sidebarRequested
+  const navigateFromSearchSidebar = (navigate?: () => void) => {
+    setCompactSidebarOpen(false)
+    searchChange?.(false)
+    navigate?.()
+  }
+  const sidebarLibrary = playlist.library
+  const searchSidebarLibrary = sidebarLibrary ? {
+    ...sidebarLibrary,
+    onOpenOverview: sidebarLibrary.onOpenOverview ? () => navigateFromSearchSidebar(sidebarLibrary.onOpenOverview) : undefined,
+    onSelectCategory: sidebarLibrary.onSelectCategory ? (categoryId: MediaLibraryCategoryId) => navigateFromSearchSidebar(() => sidebarLibrary.onSelectCategory?.(categoryId)) : undefined,
+    onSelect: (scope: string) => navigateFromSearchSidebar(() => sidebarLibrary.onSelect(scope)),
+    onOpen: () => navigateFromSearchSidebar(sidebarLibrary.onOpen),
+  } : undefined
   useEffect(() => {
     const query = window.matchMedia('(width <= 1024px)')
     const update = () => {
@@ -2764,8 +2797,8 @@ export function PlayerSurface({
         data-startup-ready={firstSurfaceReady}
         style={firstSurfaceReady ? undefined : { visibility: 'hidden' }}
         aria-hidden={!firstSurfaceReady || undefined}
-        data-library-open={playlist.isOpen || undefined}
-        data-library-overview={playlist.isOpen && playlist.library?.route?.view === 'overview' || undefined}
+        data-library-open={playlist.isOpen || searchOpen || undefined}
+        data-library-overview={searchOpen || playlist.isOpen && playlist.library?.route?.view === 'overview' || undefined}
         data-content-state={contentState}
         data-playlist-transport-only-busy={playlistTransportOnlyBusy ? '' : undefined}
         data-window-fullscreen={nativeWindowState.fullscreen}
@@ -2803,6 +2836,7 @@ export function PlayerSurface({
 
         <LibraryChromeTransitionContext.Provider value={chromeTransition}>
         <LibraryDockContext.Provider value={libraryDockContext}>
+        <LibrarySearchContext.Provider value={searchChange ? toggleGlobalSearch : undefined}>
         <LayoutGroup id="playlist-player-view-transition">
           <ResponsivePlayerLayout
             nativeWindowState={nativeWindowState}
@@ -2815,15 +2849,16 @@ export function PlayerSurface({
                 debugToolsOpen={devAudioTools?.isOpen ?? false}
                 onDebugToolsOpenChange={devAudioTools?.onOpenChange}
                 librarySettings={librarySettings}
-                playlistOpen={playlist.isOpen}
-                libraryOverview={playlist.library?.route?.view === 'overview'}
-                compactPlaylist={compactPlaylist && playlist.library?.route?.view !== 'overview'}
-                librarySidebarOpen={librarySidebarOpen}
+                playlistOpen={playlist.isOpen || searchOpen}
+                libraryOverview={!searchOpen && playlist.library?.route?.view === 'overview'}
+                compactPlaylist={compactPlaylist && (searchOpen || playlist.library?.route?.view !== 'overview')}
+                librarySidebarOpen={searchOpen ? searchSidebarOpen : librarySidebarOpen}
                 onOpenLibrarySidebar={() => setCompactSidebarOpen(true)}
-                onTogglePlaylist={() => requestPlaylistOpenChange(!playlist.isOpen)}
+                onTogglePlaylist={() => { if (searchOpen) searchChange?.(false); else requestPlaylistOpenChange(!playlist.isOpen) }}
               />
             )}
           >
+            <div className="search-return-page" hidden={searchOpen} inert={searchOpen || undefined}>
             <AnimatePresence initial={false}>
               {!playlist.isOpen ? <motion.section
             key="player-detail"
@@ -2977,14 +3012,16 @@ export function PlayerSurface({
                 onPlayToggle={handlePlayToggle}
                 visualizationMode={visualizationMode}
                 onVisualizationModeChange={setVisualizationMode}
+                onSearch={searchChange ? toggleGlobalSearch : undefined}
               />
             </div>
               </motion.section> : null}
             </AnimatePresence>
+            </div>
           </ResponsivePlayerLayout>
 
           <AnimatePresence initial={false}>
-            {playlist.isOpen ? <PlaylistPlaybackDock key="library-session-dock"
+            {playlist.isOpen || searchOpen ? <PlaylistPlaybackDock key="library-session-dock"
               controllerRef={libraryDockRef}
               controllerOffsetY={dockBinding?.controllerOffsetY}
               controllerHidden={dockBinding?.controllerHidden}
@@ -3000,14 +3037,15 @@ export function PlayerSurface({
               onPreviewCoverError={dockPreviewLayer ? () => markArtworkLoadError(dockPreviewLayer.id) : undefined}
               visualIsPlaying={visualPlaybackState === 'playing'} playbackTransitionPending={playbackTransitionPending}
               onPlayToggle={handlePlayToggle}
-              searchOpen={dockBinding?.searchOpen ?? false} onSearchToggle={dockBinding?.onSearchToggle}
-              onClose={() => requestPlaylistOpenChange(false)}
+              searchOpen={searchOpen || (dockBinding?.searchOpen ?? false)} onSearchToggle={searchChange ? toggleGlobalSearch : dockBinding?.onSearchToggle}
+              onClose={() => { if (searchOpen) searchChange?.(false); else requestPlaylistOpenChange(false) }}
               playlistSelected={playlist.library?.route?.view === 'tracks'}
               playlistLabel="打开当前播放列表"
               onOpenPlaylist={playlist.library?.items.some((item) => item.scope === playlist.library?.activeScope)
-                ? () => playlist.library?.onSelect(playlist.library.activeScope!) : undefined}
+                ? () => { if (searchOpen) searchChange?.(false); playlist.library?.onSelect(playlist.library.activeScope!) } : undefined}
             /> : null}
           </AnimatePresence>
+          <div className="search-return-page" hidden={searchOpen} inert={searchOpen || undefined}>
           <AnimatePresence initial={false}>
             {/* AnimatePresence retains this backdrop until every exiting library page
                 has unmounted. Give the backdrop its own exit so it cannot cover
@@ -3084,7 +3122,23 @@ export function PlayerSurface({
             ) : null}
           </AnimatePresence>
 
+          </div>
+          {viewModel.search ? <SearchPanel viewModel={viewModel} store={allSongsCoverStore} controllerMode={controllerMode} /> : null}
+          <Dialog open={searchSidebarOpen} onOpenChange={setCompactSidebarOpen}>
+            <DialogContent id="playlist-library-overlay" showCloseButton={false} className="playlist-library-dialog" overlayClassName="playlist-library-backdrop"
+              style={{ translate: '0 0', animationDuration: appearanceMotion.disabled ? '0s' : 'var(--app-motion-prototype-smart)' }}
+              finalFocus={() => {
+                const menu = document.getElementById('playlist-library-menu')
+                return menu?.getClientRects().length ? menu : false
+              }} aria-describedby={undefined}>
+              <DialogTitle className="sr-only">媒体库</DialogTitle>
+              <PlaylistLibrarySidebar library={searchSidebarLibrary} overlay playlistName={playlist.playlistName ?? ''}
+                trackCount={playlist.tracks.length} totalClock={null} coverTrack={playlist.playbackDockTrack}
+                onCurrentPlaylist={() => navigateFromSearchSidebar(sidebarLibrary?.onOpen)} />
+            </DialogContent>
+          </Dialog>
         </LayoutGroup>
+        </LibrarySearchContext.Provider>
         </LibraryDockContext.Provider>
         </LibraryChromeTransitionContext.Provider>
         <AnimatePresence initial={false}>

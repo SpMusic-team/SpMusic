@@ -17,6 +17,7 @@ export type PlaylistTrackRow = {
   libraryAlbumName?: string | null
   libraryArtistName?: string | null
   libraryComposerName?: string | null
+  libraryGenreName?: string | null
   libraryYear?: number | null
   albumArtist?: string | null
   durationSeconds: number
@@ -102,6 +103,7 @@ export function playlistTrackRowFromSummary(
     libraryAlbumName: nonEmptyText(summary?.album) ?? null,
     libraryArtistName: nonEmptyText(summary?.artist) ?? null,
     libraryComposerName: nonEmptyText(summary?.composer) ?? null,
+    libraryGenreName: nonEmptyText(summary?.genre) ?? null,
     libraryYear: nonEmptyYear(summary?.year),
     albumArtist: nonEmptyText(summary?.albumArtist) ?? null,
     // The tag channel deliberately carries no duration: a container header
@@ -134,6 +136,7 @@ export function playlistTrackRowEqual(left: PlaylistTrackRow, right: PlaylistTra
     && left.libraryAlbumName === right.libraryAlbumName
     && left.libraryArtistName === right.libraryArtistName
     && left.libraryComposerName === right.libraryComposerName
+    && left.libraryGenreName === right.libraryGenreName
     && left.libraryYear === right.libraryYear
     && left.albumArtist === right.albumArtist
     && left.durationSeconds === right.durationSeconds

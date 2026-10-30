@@ -88,8 +88,6 @@ const THUMBNAIL_INDEX_DIRECTORY: &str = "thumbnail-index-v1";
 const THUMBNAIL_INDEX_MAGIC: [u8; 4] = *b"SPTI";
 const THUMBNAIL_INDEX_LEN: usize = 93;
 static THUMBNAIL_INDEX_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-#[cfg(test)]
-static TRACK_THUMBNAIL_PROBES: AtomicU64 = AtomicU64::new(0);
 const THUMBNAIL_TEMP_STALE_AGE: std::time::Duration = std::time::Duration::from_secs(600);
 const THUMBNAIL_PENDING_FILES: usize = 128;
 const THUMBNAIL_PENDING_BYTES: usize = 32 * 1024 * 1024;
@@ -1404,7 +1402,7 @@ fn load_track_thumbnail_blocking_with_mode(
         return Err(CoverPixelsError::stale());
     }
     #[cfg(test)]
-    TRACK_THUMBNAIL_PROBES.fetch_add(1, Ordering::Relaxed);
+    tests::record_track_thumbnail_probe(app_cache_dir);
     let source = match super::playlist_cover::probe_playlist_cover_blocking(app_cache_dir, source_path) {
         Ok(source) => source,
         // Folder selection may continue past malformed/unsupported audio, but
@@ -2583,7 +2581,24 @@ mod tests {
     use super::*;
 
     static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-    static TRACK_INDEX_TEST_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
+    // Observe fixture ownership, including work on spawn_blocking threads. A
+    // process counter lets unrelated folder/track tests change this assertion.
+    static TRACK_PROBES: OnceLock<StdMutex<HashMap<PathBuf, u64>>> = OnceLock::new();
+
+    pub(super) fn record_track_thumbnail_probe(cache_dir: &Path) {
+        if let Some(count) = TRACK_PROBES
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap()
+            .get_mut(cache_dir)
+        {
+            *count += 1;
+        }
+    }
+
+    fn track_thumbnail_probes(cache_dir: &Path) -> u64 {
+        TRACK_PROBES.get_or_init(Default::default).lock().unwrap()[cache_dir]
+    }
 
     struct TestDirectory(PathBuf);
 
@@ -2596,6 +2611,11 @@ mod tests {
                 sequence
             ));
             fs::create_dir_all(&path).expect("create test directory");
+            TRACK_PROBES
+                .get_or_init(Default::default)
+                .lock()
+                .unwrap()
+                .insert(path.clone(), 0);
             Self(path)
         }
 
@@ -2606,6 +2626,11 @@ mod tests {
 
     impl Drop for TestDirectory {
         fn drop(&mut self) {
+            TRACK_PROBES
+                .get_or_init(Default::default)
+                .lock()
+                .unwrap()
+                .remove(&self.0);
             let _ = fs::remove_dir_all(&self.0);
         }
     }
@@ -3834,15 +3859,40 @@ mod tests {
     }
 
     #[test]
+    fn track_thumbnail_probe_counts_are_isolated_across_workers() {
+        let first = TestDirectory::new();
+        let second = TestDirectory::new();
+        let first_source = track_thumbnail_fixture(&first, false);
+        let second_source = track_thumbnail_fixture(&second, false);
+        let start = std::sync::Barrier::new(2);
+        std::thread::scope(|scope| {
+            for (directory, source) in [(&first, &first_source), (&second, &second_source)] {
+                let start = &start;
+                scope.spawn(move || {
+                    start.wait();
+                    for _ in 0..2 {
+                        assert!(load_track_thumbnail_blocking(
+                            directory.path(),
+                            source.to_str().unwrap(),
+                            256,
+                            || true,
+                        )
+                        .unwrap()
+                        .is_empty());
+                    }
+                });
+            }
+        });
+        assert_eq!(track_thumbnail_probes(first.path()), 1);
+        assert_eq!(track_thumbnail_probes(second.path()), 1);
+    }
+
+    #[test]
     fn track_thumbnail_index_survives_disk_hit_and_repairs_missing_thumbnail() {
-        let _serial = TRACK_INDEX_TEST_LOCK
-            .get_or_init(|| StdMutex::new(()))
-            .lock()
-            .unwrap();
         let directory = TestDirectory::new();
         let source = track_thumbnail_fixture(&directory, true);
         let source = source.to_str().unwrap();
-        let prior = TRACK_THUMBNAIL_PROBES.load(Ordering::Relaxed);
+        let prior = track_thumbnail_probes(directory.path());
         // Other parallel cover tests may briefly own the foreground slot.
         let warmed = tauri::async_runtime::block_on(async {
             let mut warmed = None;
@@ -3860,12 +3910,12 @@ mod tests {
             warmed.expect("background warmup never acquired an idle cover slot")
         });
         assert!(warmed.has_cover && warmed.persisted);
-        assert_eq!(TRACK_THUMBNAIL_PROBES.load(Ordering::Relaxed), prior + 1);
+        assert_eq!(track_thumbnail_probes(directory.path()), prior + 1);
         let expected =
             load_track_thumbnail_blocking(directory.path(), source, 256, || true).unwrap();
         assert!(valid_cached_spxr(&expected, 256));
         assert_eq!(
-            TRACK_THUMBNAIL_PROBES.load(Ordering::Relaxed),
+            track_thumbnail_probes(directory.path()),
             prior + 1,
             "persistent index and SPXR hit must bypass the audio probe"
         );
@@ -3886,7 +3936,7 @@ mod tests {
             expected
         );
         assert_eq!(
-            TRACK_THUMBNAIL_PROBES.load(Ordering::Relaxed),
+            track_thumbnail_probes(directory.path()),
             prior + 1,
             "disk hit works after original cover cache removal"
         );
@@ -3896,7 +3946,7 @@ mod tests {
             expected
         );
         assert_eq!(
-            TRACK_THUMBNAIL_PROBES.load(Ordering::Relaxed),
+            track_thumbnail_probes(directory.path()),
             prior + 2,
             "evicted SPXR must trigger regeneration"
         );
@@ -3907,7 +3957,7 @@ mod tests {
             expected
         );
         assert_eq!(
-            TRACK_THUMBNAIL_PROBES.load(Ordering::Relaxed),
+            track_thumbnail_probes(directory.path()),
             prior + 3,
             "corrupt SPXR must trigger regeneration"
         );
@@ -3919,7 +3969,7 @@ mod tests {
             expected
         );
         assert_eq!(
-            TRACK_THUMBNAIL_PROBES.load(Ordering::Relaxed),
+            track_thumbnail_probes(directory.path()),
             prior + 4,
             "corrupt index must trigger fresh source probe"
         );
@@ -3927,14 +3977,10 @@ mod tests {
 
     #[test]
     fn track_thumbnail_negative_index_invalidates_on_source_change() {
-        let _serial = TRACK_INDEX_TEST_LOCK
-            .get_or_init(|| StdMutex::new(()))
-            .lock()
-            .unwrap();
         let directory = TestDirectory::new();
         let source = track_thumbnail_fixture(&directory, false);
         let source = source.to_str().unwrap();
-        let prior = TRACK_THUMBNAIL_PROBES.load(Ordering::Relaxed);
+        let prior = track_thumbnail_probes(directory.path());
         assert!(
             load_track_thumbnail_blocking(directory.path(), source, 256, || true)
                 .unwrap()
@@ -3957,7 +4003,7 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        assert_eq!(TRACK_THUMBNAIL_PROBES.load(Ordering::Relaxed), prior + 1);
+        assert_eq!(track_thumbnail_probes(directory.path()), prior + 1);
         let before = source_fingerprint(source).unwrap();
         let mut file = OpenOptions::new().write(true).open(source).unwrap();
         use std::io::Seek;
@@ -3973,7 +4019,7 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        assert_eq!(TRACK_THUMBNAIL_PROBES.load(Ordering::Relaxed), prior + 2);
+        assert_eq!(track_thumbnail_probes(directory.path()), prior + 2);
     }
 
     #[test]

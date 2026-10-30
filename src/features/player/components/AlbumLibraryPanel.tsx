@@ -1,3 +1,4 @@
+import { useLibrarySearch } from '../hooks/useLibrarySearch'
 import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import { AnimatePresence, motion, useIsPresent } from 'motion/react'
 import { CollectionReturnIcon } from './CollectionReturnIcon'
@@ -30,7 +31,7 @@ import { formatDurationClock } from '../model/playlistDuration'
 import { artistEntries, artistAlbums, artistRoute, uniqueArtistSongs, CONTRIBUTOR_LABELS, type ContributorCategoryId } from '../model/artistLibrary'
 import { FOLDER_CARD_LAYOUTS } from '../model/folderCardLayouts'
 import { PLAYLIST_SONG_LAYOUTS } from '../model/playlistSongLayouts'
-import { mediaLibraryCategories } from '../model/mediaLibraryCategories'
+import { mediaLibraryCategories, type MediaLibraryCategoryId } from '../model/mediaLibraryCategories'
 import type { AllSongsItem, PlayerPlaylistViewModel, PlayerTimelineViewModel } from '../model/playerUiViewModel'
 import type { PlaylistControllerMode } from '../model/playlistControllerMode'
 import albumIcon from '@/assets/library-root-menu/afb47.svg'
@@ -137,10 +138,19 @@ export function AlbumLibraryPanel(props: Props) {
     offscreenReturn: outerPresent && internal ? localChrome.offscreenReturn : outerChrome.offscreenReturn,
     publishDetailVisibility: localChrome.publishDetailVisibility }
   const positions = useRef(new Map<string, number>())
+  const overlayLibrary = { ...library,
+    onOpenOverview: library.onOpenOverview ? () => { onLibrarySidebarOpenChange(false); library.onOpenOverview?.() } : undefined,
+    onSelectCategory: library.onSelectCategory ? (categoryId: MediaLibraryCategoryId) => { onLibrarySidebarOpenChange(false); library.onSelectCategory?.(categoryId) } : undefined,
+    onOpen: () => { onLibrarySidebarOpenChange(false); library.onOpen() },
+    onSelect: (scope: string) => { onLibrarySidebarOpenChange(false); library.onSelect(scope) },
+  }
   const sidebar = { playlistName: playlist.playlistName ?? '', trackCount: playlist.tracks.length, totalClock: null, onCurrentPlaylist: library.onOpen, library }
   return <motion.div className={`playlist-management album-library${categoryId !== 'album' ? ' artist-library' : ''}`} data-contributor-category={categoryId !== 'album' ? categoryId : undefined} inert={!outerPresent || undefined} aria-hidden={!outerPresent || undefined}>
     <PlaylistLibrarySidebar {...sidebar} />
-    <Dialog open={librarySidebarOpen} onOpenChange={onLibrarySidebarOpenChange}><DialogContent id="playlist-library-overlay" showCloseButton={false} className="playlist-library-dialog" overlayClassName="playlist-library-backdrop" aria-describedby={undefined}><DialogTitle className="sr-only">媒体库</DialogTitle><PlaylistLibrarySidebar {...sidebar} overlay /></DialogContent></Dialog>
+    <Dialog open={librarySidebarOpen} onOpenChange={onLibrarySidebarOpenChange}><DialogContent id="playlist-library-overlay" showCloseButton={false} className="playlist-library-dialog" overlayClassName="playlist-library-backdrop" style={{ translate: '0 0' }} finalFocus={() => {
+      const menu = document.getElementById('playlist-library-menu')
+      return menu?.getClientRects().length ? menu : false
+    }} aria-describedby={undefined}><DialogTitle className="sr-only">媒体库</DialogTitle><PlaylistLibrarySidebar {...sidebar} library={overlayLibrary} onCurrentPlaylist={() => { onLibrarySidebarOpenChange(false); library.onOpen() }} overlay /></DialogContent></Dialog>
     <LibraryChromeTransitionContext.Provider value={chrome}><AnimatePresence mode="wait" propagate>
       <AlbumScene key={route} {...props} albums={albums} outerPresent={outerPresent} positions={positions} />
     </AnimatePresence></LibraryChromeTransitionContext.Provider>
@@ -205,7 +215,8 @@ function AlbumScene({ albums: rootEntries, categoryId = 'album', playlist, allSo
   const visibleSongs = useMemo(() => songs.filter(item => `${item.track.title} ${item.track.artist} ${item.track.album}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())), [songs, query])
   const candidates = useMemo(() => uniqueArtistSongs(detail ? visibleSongs.filter(item => !selectMode || selected.has(item.key)) : visibleAlbums.filter(item => !selectMode || selected.has(item.key)).flatMap(item => item.songs)).filter(item => item.available), [detail, visibleSongs, visibleAlbums, selectMode, selected])
   const showSearch = searchOpen || searchRequestId > dismissedRequest
-  const toggleSearch = useCallback(() => { if (showSearch) setQuery(''); setSearchOpen(!showSearch); setDismissedRequest(searchRequestId) }, [showSearch, searchRequestId])
+  const globalSearch = useLibrarySearch()
+  const toggleSearch = useCallback(() => { if (globalSearch) { globalSearch(); return }; if (showSearch) setQuery(''); setSearchOpen(!showSearch); setDismissedRequest(searchRequestId) }, [showSearch, searchRequestId, globalSearch])
   const managementChrome = useCollectionManagementChrome(categoryId, present && !hasHero)
   const { atomicOverview, navigationMotion } = managementChrome
   const { offscreenEntry, sharedProjection, projectionKey, entryControls } = useCollectionEntryProjection(present, chrome.offscreenReturn)

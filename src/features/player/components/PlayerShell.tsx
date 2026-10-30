@@ -1,3 +1,5 @@
+import { recentlyAddedSongs } from '../model/recentlyAdded'
+import { recentlyPlayedSongs } from '../model/recentlyPlayed'
 import type { MediaLibraryCategoryId, MediaLibraryRoute } from '@/features/player/model/mediaLibraryCategories'
 import type { ArtistLocation } from '@/features/player/model/artistLibrary'
 import { useCallback, useEffect, useMemo, useState } from 'react'
@@ -39,6 +41,7 @@ function useStablePlaylistTrackRows(input: PlaylistTrackItemViewModel[]): Playli
 }
 
 export function PlayerShell() {
+  const [isSearchOpen, setIsSearchOpen] = useState(false)
   const [pinnedCategoryIds, setPinnedCategoryIds] = useState(readPinnedCategoryIds)
   const toggleCategoryPin = useCallback((id: MediaLibraryCategoryId) => {
     setPinnedCategoryIds(previous => previous.includes(id) ? previous.filter(item => item !== id) : [...previous, id])
@@ -52,8 +55,9 @@ export function PlayerShell() {
   const [libraryRoute, setLibraryRoute] = useState<MediaLibraryRoute>(() => {
     if (readStartupPage() === 'media-library') return { view: 'overview' }
     const saved = readPlaybackSession()
-    return playbackQueueOrigin(saved?.playlist.customPlaylist)?.kind === 'all-songs'
-      ? { view: 'category', categoryId: 'songs' } : { view: 'tracks' }
+    const kind = playbackQueueOrigin(saved?.playlist.customPlaylist)?.kind
+    return kind === 'all-songs' || kind === 'recent-played' || kind === 'recent-added'
+      ? { view: 'category', categoryId: kind === 'recent-added' ? 'recent-added' : kind === 'recent-played' ? 'recent-played' : 'songs' } : { view: 'tracks' }
   })
   const [flatFolderLocation, setFlatFolderLocation] = useState<{ rootPath: string; directoryPath: string } | null>(null)
   const [albumLocation, setAlbumLocation] = useState<string | null>(null)
@@ -103,7 +107,7 @@ export function PlayerShell() {
   const isBrowsingActive = (!browsedPlaylist && !missingLibrarySource)
     || (browsedPlaylist?.sourceKind !== 'folder' && browsedScope !== null && browsedScope === player.activePlaylistScope)
   const playbackSourcePlaylist = librarySources.find((item) => playlistScope(item) === player.playbackSourceScope)
-  const warmSource = !isPlaylistOpen && player.startupRestoreReady && player.playbackQueueKind !== 'all-songs'
+  const warmSource = !isPlaylistOpen && player.startupRestoreReady && (player.playbackQueueKind !== 'all-songs' && player.playbackQueueKind !== 'recent-played' && player.playbackQueueKind !== 'recent-added')
     && player.playbackSourceScope !== player.activePlaylistScope ? playbackSourcePlaylist ?? null : null
   const { rows: libraryArtwork, artworkSource: libraryArtworkSource, setVisibleTrackIds: setLibraryVisibleTrackIds, retainSourcePaths: retainLibrarySourcePaths } = useLibraryArtwork(librarySources,
     isPlaylistOpen && libraryRoute.view === 'tracks' && !isBrowsingActive ? browsedPlaylist ?? null : warmSource,
@@ -144,16 +148,16 @@ export function PlayerShell() {
     if (!isBrowsingActive && browsedScope) ensurePlaylistSummaries(browsedScope)
   }, [browsedScope, ensurePlaylistSummaries, isBrowsingActive])
   useEffect(() => {
-    if (libraryRoute.view !== 'category' || !['songs', 'folders', 'folder', 'album', 'artist', 'album-artist', 'composer'].includes(libraryRoute.categoryId)) return
-    for (const source of player.libraryFolderPlaylists) ensurePlaylistSummaries(playlistScope(source))
-  }, [libraryRoute, player.libraryFolderPlaylists, ensurePlaylistSummaries])
+    if (!isSearchOpen && (libraryRoute.view !== 'category' || !['songs', 'recent-played', 'recent-added', 'folders', 'folder', 'album', 'artist', 'album-artist', 'composer'].includes(libraryRoute.categoryId))) return
+    for (const source of librarySources) ensurePlaylistSummaries(playlistScope(source))
+  }, [isSearchOpen, libraryRoute, librarySources, ensurePlaylistSummaries])
   const handlePlaylistOpenChange = useCallback((open: boolean) => {
     setPlaylistArtworkSettled(false)
     setIsPlaylistOpen(open)
     if (open && !isPlaylistOpen && player.track) {
       setPlaylistEntryPosition((previous) => ({ requestId: previous.requestId + 1, target: 'current-track' }))
-      if (player.playbackQueueKind === 'all-songs') {
-        if (!(libraryRoute.view === 'category' && ['folders', 'folder', 'album', 'artist', 'album-artist', 'composer'].includes(libraryRoute.categoryId))) setLibraryRoute({ view: 'category', categoryId: 'songs' })
+      if ((player.playbackQueueKind === 'all-songs' || player.playbackQueueKind === 'recent-played' || player.playbackQueueKind === 'recent-added')) {
+        if (!(libraryRoute.view === 'category' && ['folders', 'folder', 'album', 'artist', 'album-artist', 'composer'].includes(libraryRoute.categoryId))) setLibraryRoute({ view: 'category', categoryId: player.playbackQueueKind === 'recent-added' ? 'recent-added' : player.playbackQueueKind === 'recent-played' ? 'recent-played' : 'songs' })
         setBrowsedScope(null)
       } else {
         setLibraryRoute({ view: 'tracks' })
@@ -244,10 +248,10 @@ export function PlayerShell() {
     setKnownScopeState({ scope: durationScope, known: activeKnownDurations, byScope })
   }
   const knownDurationsByScope = knownScopeState.byScope
-  const preferredDurationScopes = useMemo(() => libraryRoute.view === 'category' && ['songs', 'folders', 'folder', 'album', 'artist', 'album-artist', 'composer'].includes(libraryRoute.categoryId)
-    ? player.libraryFolderPlaylists.map(playlistScope)
+  const preferredDurationScopes = useMemo(() => isSearchOpen || libraryRoute.view === 'category' && ['songs', 'recent-played', 'recent-added', 'folders', 'folder', 'album', 'artist', 'album-artist', 'composer'].includes(libraryRoute.categoryId)
+    ? (isSearchOpen ? librarySources : player.libraryFolderPlaylists).map(playlistScope)
     : displayScope ? [displayScope] : [],
-  [libraryRoute, player.libraryFolderPlaylists, displayScope])
+  [isSearchOpen, libraryRoute, player.libraryFolderPlaylists, librarySources, displayScope])
   const durationData = usePlaylistLibraryDurations(durationSources, durationScope, libraryDurationSources, knownDurationsByScope, preferredDurationScopes)
   const playlistDurations = durationData.totals
   const playlistDuration = playlistDurations.get(durationScope)!
@@ -277,7 +281,7 @@ export function PlayerShell() {
   }, [rawPlaylistTracks, player.playlistDurationTracks, player.activePlaylistScope, durationData.durationsByScope, libraryArtwork])
   const playlistTracks = useStablePlaylistTrackRows(playlistPresentation.tracks)
   const libraryFallbackSourcePaths = playlistPresentation.fallbackSourcePaths
-  const isSongsCategoryOpen = isPlaylistOpen && libraryRoute.view === 'category' && ['songs', 'folders', 'folder', 'album', 'artist', 'album-artist', 'composer'].includes(libraryRoute.categoryId)
+  const isSongsCategoryOpen = isSearchOpen || isPlaylistOpen && libraryRoute.view === 'category' && ['songs', 'recent-played', 'recent-added', 'folders', 'folder', 'album', 'artist', 'album-artist', 'composer'].includes(libraryRoute.categoryId)
   const browsedTrackRows = useMemo<PlaylistTrackItemViewModel[]>(() => {
     if (isBrowsingActive) return playlistTracks
     const summaries = browsedScope ? summariesByScope[browsedScope] : undefined
@@ -313,7 +317,7 @@ export function PlayerShell() {
         if (seen.has(key)) continue
         seen.add(key)
         rows.push({ key, scope, trackId: descriptor.id, sourcePath: descriptor.sourcePath, artworkRevision,
-          available: descriptor.available, track: pendingPlaylistTrackRow(descriptor) })
+          available: descriptor.available, fileCreatedAtMs: descriptor.fileCreatedAtMs, track: pendingPlaylistTrackRow(descriptor) })
       }
     }
     return rows
@@ -340,7 +344,7 @@ export function PlayerShell() {
         || summariesByScope[player.activePlaylistScope ?? '']?.[trackId]
       const displayRow = activeRow && activeRowReady ? activeRow : sourceRow ?? activeRow ?? item.track
       // Hydration owns presentation, while the tag lane owns grouping identity.
-      const row = sourceRow ? { ...displayRow, libraryAlbumName: sourceRow.libraryAlbumName, libraryArtistName: sourceRow.libraryArtistName, libraryComposerName: sourceRow.libraryComposerName, libraryYear: sourceRow.libraryYear, albumArtist: sourceRow.albumArtist } : displayRow
+      const row = sourceRow ? { ...displayRow, libraryAlbumName: sourceRow.libraryAlbumName, libraryArtistName: sourceRow.libraryArtistName, libraryComposerName: sourceRow.libraryComposerName, libraryGenreName: sourceRow.libraryGenreName, libraryYear: sourceRow.libraryYear, albumArtist: sourceRow.albumArtist } : displayRow
       const durationMs = allSongsDurations?.get(scope)?.get(sourcePath)
       rows.push({ ...item, track: (row.durationSeconds ?? 0) > 0 || durationMs == null ? row : { ...row, durationSeconds: durationMs / 1000 } })
     }
@@ -424,13 +428,30 @@ export function PlayerShell() {
   }, [currentTrackId, toggleTrackFeedback])
   const handleDevAudioToolsClose = useCallback(() => setIsDevAudioToolsOpen(false), [])
 
+  const recentAddedSongs = useMemo(() => recentlyAddedSongs(allSongs), [allSongs])
+  const searchSongs = useMemo<AllSongsItem[]>(() => isSearchOpen ? librarySources.flatMap(source => {
+    const scope = playlistScope(source)
+    return source.tracks.map(descriptor => {
+      const row = summariesByScope[scope]?.[descriptor.id] ?? pendingPlaylistTrackRow(descriptor)
+      const durationMs = durationData.durationsByScope.get(scope)?.get(descriptor.sourcePath)
+      return { key: normalizeAudioSourcePath(descriptor.sourcePath), scope, trackId: descriptor.id, sourcePath: descriptor.sourcePath,
+        available: descriptor.available, artworkRevision: playlistArtworkRevision(source),
+        track: durationMs == null ? row : { ...row, durationSeconds: durationMs / 1000 } }
+    })
+  }) : [], [isSearchOpen, librarySources, summariesByScope, durationData.durationsByScope])
+  const searchRowsReady = !player.libraryRestorePending && !player.playlistRestorePending && librarySources.every(source => player.playlistSummaryStatusByScope[playlistScope(source)] === 'ready' && durationData.settledByScope.get(playlistScope(source)) === true)
+  const recentSongs = useMemo(() => recentlyPlayedSongs(allSongs, player.recentlyPlayed), [allSongs, player.recentlyPlayed])
   const pageOrigin: PlaybackQueueOrigin = {
-    kind: isBrowsingActive && player.playbackQueueKind === 'all-songs' ? 'all-songs' : 'playlist',
-    sourceScope: isBrowsingActive && player.playbackQueueKind === 'all-songs' ? undefined
+    kind: isBrowsingActive && (player.playbackQueueKind === 'all-songs' || player.playbackQueueKind === 'recent-played' || player.playbackQueueKind === 'recent-added') ? player.playbackQueueKind! : 'playlist',
+    sourceScope: isBrowsingActive && (player.playbackQueueKind === 'all-songs' || player.playbackQueueKind === 'recent-played' || player.playbackQueueKind === 'recent-added') ? undefined
       : isBrowsingActive ? player.playbackSourceScope ?? displayScope ?? undefined : displayScope ?? undefined,
   }
 
   const viewModel: PlayerUiViewModel = {
+    search: { isOpen: isSearchOpen, onOpenChange: setIsSearchOpen, allSongs: searchSongs, metadataStatus: searchRowsReady ? 'ready' : 'loading',
+      onPlaySong: (scope, trackId, entries) => { void player.selectPlaybackQueueTrack({ kind: 'all-songs', entries: entries ?? [{ scope, trackId }] }, trackId) },
+      onShufflePlay: entries => player.shufflePlaybackQueue({ kind: 'all-songs', entries }),
+    },
     folderSelection: player.folderSelection,
     playback: {
       track: player.track,
@@ -539,6 +560,8 @@ export function PlayerShell() {
             status: error ? 'error' as const : source ? 'ready' as const : 'loading' as const }
         }),
         allSongs,
+        recentSongs,
+        recentAddedSongs,
         allSongsManualOrder: player.allSongsManualOrder,
         onReorderSongs: player.reorderSongs,
         allSongsMetadataStatus: allSongsRowsReady ? 'ready' : 'loading',
@@ -552,9 +575,9 @@ export function PlayerShell() {
           if (track && item) void player.selectPlaybackQueueTrack({ kind: 'playlist', sourceScope: scope,
             entries: item.tracks.map((entry) => ({ scope, trackId: entry.id })) }, track.id)
         },
-        onPlaySong: (scope, trackId, orderedSongs) => { void player.selectPlaybackQueueTrack({ kind: 'all-songs',
+        onPlaySong: (scope, trackId, orderedSongs) => { void player.selectPlaybackQueueTrack({ kind: libraryRoute.view === 'category' && (libraryRoute.categoryId === 'recent-played' || libraryRoute.categoryId === 'recent-added') ? libraryRoute.categoryId : 'all-songs',
           entries: orderedSongs ?? [{ scope, trackId }] }, trackId) },
-        onShufflePlay: (entries) => player.shufflePlaybackQueue({ kind: 'all-songs', entries }),
+        onShufflePlay: (entries) => player.shufflePlaybackQueue({ kind: libraryRoute.view === 'category' && (libraryRoute.categoryId === 'recent-played' || libraryRoute.categoryId === 'recent-added') ? libraryRoute.categoryId : 'all-songs', entries }),
         onSelectFolders: () => { void player.selectFolders() },
         foldersPinnedInSidebar,
         onToggleFoldersPin: toggleFoldersPin,
@@ -579,7 +602,7 @@ export function PlayerShell() {
         || player.transportBusy
         || player.selectionPending
         || player.timelineInteraction === 'seeking',
-      deleteScope: pageOrigin.kind === 'all-songs' ? player.activePlaylistScope : displayScope,
+      deleteScope: pageOrigin.kind !== 'playlist' ? player.activePlaylistScope : displayScope,
       canRemoveFromList: Boolean(browsedPlaylist && (browsedPlaylist.sourceKind === 'm3u8' || browsedPlaylist.sourceKind === 'custom')
         && !playbackQueueOrigin(browsedPlaylist)),
       onDeleteSongs: player.deleteSongs,
@@ -643,7 +666,7 @@ export function PlayerShell() {
       {(isAvailable) => (
         <PlayerSurface
           viewModel={viewModel}
-          preloadAllSongs={Boolean(!isPlaylistOpen && player.startupRestoreReady && player.playbackQueueKind === 'all-songs')}
+          preloadAllSongs={Boolean(!isPlaylistOpen && player.startupRestoreReady && (player.playbackQueueKind === 'all-songs' || player.playbackQueueKind === 'recent-played' || player.playbackQueueKind === 'recent-added'))}
           onPlaylistNavigationSettled={() => setPlaylistArtworkSettled(true)}
           startupReady={player.startupRestoreReady && (startupRowsReady || startupRowsTimedOut)}
           startupError={startupRowsTimedOut}

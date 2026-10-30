@@ -383,12 +383,20 @@ fn sibling_pictures(source_path: &str) -> Result<SiblingPictures, CoverPixelsErr
 }
 
 fn cached_sibling_pictures(directory: &Path) -> Result<Vec<PathBuf>, CoverPixelsError> {
-    let cache = sibling_discoveries();
+    cached_sibling_pictures_with(sibling_discoveries(), directory)
+}
+
+fn cached_sibling_pictures_with(
+    cache: &SiblingDiscoveries,
+    directory: &Path,
+) -> Result<Vec<PathBuf>, CoverPixelsError> {
     if let Some(pictures) = cache.lookup(directory) {
         return Ok(pictures);
     }
     // Enumerate outside the lock: this is filesystem I/O and must not serialise
     // unrelated directories behind one mutex.
+    #[cfg(test)]
+    cache.enumerations.fetch_add(1, Ordering::Relaxed);
     let discovered = enumerate_sibling_pictures(directory)?;
     let pictures = discovered
         .files
@@ -402,10 +410,6 @@ fn cached_sibling_pictures(directory: &Path) -> Result<Vec<PathBuf>, CoverPixels
 fn enumerate_sibling_pictures(
     directory: &Path,
 ) -> Result<DiscoveredSiblingPictures, CoverPixelsError> {
-    #[cfg(test)]
-    sibling_discoveries()
-        .enumerations
-        .fetch_add(1, Ordering::Relaxed);
     // Capture the directory identity before reading it, so a change racing this
     // enumeration leaves the recorded timestamp older than the observed tree.
     let directory_metadata = fs::symlink_metadata(directory)
@@ -723,13 +727,6 @@ mod discovery_cache_tests {
             Self { base, directory }
         }
 
-        fn source(&self) -> String {
-            self.directory
-                .join("song.wav")
-                .to_string_lossy()
-                .into_owned()
-        }
-
         /// The form `sibling_pictures` passes to the cache.
         fn canonical(&self) -> PathBuf {
             fs::canonicalize(&self.directory).unwrap()
@@ -749,56 +746,96 @@ mod discovery_cache_tests {
             .collect()
     }
 
+    fn set_directory_modified(path: &Path, modified: std::time::SystemTime) {
+        #[cfg(windows)]
+        let directory = {
+            use std::os::windows::fs::OpenOptionsExt;
+            fs::OpenOptions::new()
+                .access_mode(0x100) // FILE_WRITE_ATTRIBUTES
+                .custom_flags(0x02000000) // FILE_FLAG_BACKUP_SEMANTICS
+                .open(path)
+                .unwrap()
+        };
+        #[cfg(not(windows))]
+        let directory = fs::File::open(path).unwrap();
+        directory.set_modified(modified).unwrap();
+    }
+
     #[test]
     fn repeated_requests_reuse_the_validated_discovery() {
         let fixture = Fixture::new();
+        let cache = SiblingDiscoveries::new();
+        let directory = fixture.canonical();
         fs::write(fixture.directory.join("cover.png"), b"first").unwrap();
-        let first = sibling_pictures(&fixture.source()).unwrap();
-        assert_eq!(file_names(&first.pictures), ["cover.png"]);
-        // The stored discovery still matches the filesystem, so the next request
-        // takes the cache path instead of enumerating again. Judged serially: the
-        // counter is process-global, like `TRACK_THUMBNAIL_PROBES`.
-        assert!(sibling_discoveries().lookup(&first.directory).is_some());
-        let before = sibling_discoveries().enumerations();
-        let second = sibling_pictures(&fixture.source()).unwrap();
+        let first = cached_sibling_pictures_with(&cache, &directory).unwrap();
+        assert_eq!(file_names(&first), ["cover.png"]);
+        assert!(cache.lookup(&directory).is_some());
+        let second = cached_sibling_pictures_with(&cache, &directory).unwrap();
         assert_eq!(
-            sibling_discoveries().enumerations(),
-            before,
+            cache.enumerations(),
+            1,
             "a validated discovery must not re-enumerate"
         );
-        assert_eq!(second.pictures, first.pictures);
+        assert_eq!(second, first);
     }
 
     #[test]
     fn added_replaced_and_removed_covers_invalidate_the_discovery() {
         let fixture = Fixture::new();
+        let cache = SiblingDiscoveries::new();
         let directory = fixture.canonical();
-        assert!(cached_sibling_pictures(&directory).unwrap().is_empty());
+        assert!(cached_sibling_pictures_with(&cache, &directory)
+            .unwrap()
+            .is_empty());
         // A newly written sidecar must be discovered even though "no artwork" was
         // already cached.
         let sidecar = directory.join("cover.png");
+        let before_directory = fs::metadata(&directory).unwrap().modified().unwrap();
         fs::write(&sidecar, b"first").unwrap();
+        set_directory_modified(&directory, before_directory + Duration::from_secs(2));
+        assert_ne!(
+            fs::metadata(&directory).unwrap().modified().unwrap(),
+            before_directory
+        );
+        assert!(cache.lookup(&directory).is_none());
         assert_eq!(
-            cached_sibling_pictures(&directory).unwrap(),
+            cached_sibling_pictures_with(&cache, &directory).unwrap(),
             [sidecar.clone()]
         );
+        assert_eq!(cache.enumerations(), 2);
         // Replacing the contents at an identical length must be discovered. This
         // rewrite does not touch the directory, so only the candidate's own
         // signature can detect it.
+        let before_file = fs::metadata(&sidecar).unwrap().modified().unwrap();
         fs::write(&sidecar, b"other").unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&sidecar)
+            .unwrap()
+            .set_modified(before_file + Duration::from_secs(2))
+            .unwrap();
         assert_eq!(fs::metadata(&sidecar).unwrap().len(), 5);
+        assert_ne!(
+            fs::metadata(&sidecar).unwrap().modified().unwrap(),
+            before_file
+        );
+        assert!(cache.lookup(&directory).is_none());
         assert_eq!(
-            cached_sibling_pictures(&directory).unwrap(),
+            cached_sibling_pictures_with(&cache, &directory).unwrap(),
             [sidecar.clone()]
         );
+        assert_eq!(cache.enumerations(), 3);
         // Deleting it must be discovered.
         fs::remove_file(&sidecar).unwrap();
-        assert!(cached_sibling_pictures(&directory).unwrap().is_empty());
+        assert!(cached_sibling_pictures_with(&cache, &directory)
+            .unwrap()
+            .is_empty());
+        assert_eq!(cache.enumerations(), 4);
     }
 
     #[test]
     fn discovery_cache_stays_bounded() {
-        let cache = sibling_discoveries();
+        let cache = SiblingDiscoveries::new();
         for index in 0..(SIBLING_DISCOVERY_ENTRIES + 32) {
             cache.store(
                 Path::new(&format!("bounded-discovery-{index}")),
@@ -809,6 +846,23 @@ mod discovery_cache_tests {
             );
         }
         assert!(cache.len() <= SIBLING_DISCOVERY_ENTRIES);
+    }
+
+    #[test]
+    fn expired_discovery_is_enumerated_again_without_waiting() {
+        let fixture = Fixture::new();
+        let cache = SiblingDiscoveries::new();
+        let directory = fixture.canonical();
+        assert!(cached_sibling_pictures_with(&cache, &directory)
+            .unwrap()
+            .is_empty());
+        cache.lock().entries.get_mut(&directory).unwrap().discovered_at =
+            Instant::now() - SIBLING_DISCOVERY_TTL - Duration::from_secs(1);
+        assert!(cache.lookup(&directory).is_none());
+        assert!(cached_sibling_pictures_with(&cache, &directory)
+            .unwrap()
+            .is_empty());
+        assert_eq!(cache.enumerations(), 2);
     }
 
     #[test]

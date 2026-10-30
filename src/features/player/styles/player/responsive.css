@@ -2651,6 +2651,8 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
   line-height: 28px;
 }
 
+.responsive-player-layout:is([data-player-layout="compact"], [data-player-layout="quarter"]) .player-control-search { display: none; }
+
 .responsive-player-layout[data-player-layout="compact"] .player-control-region {
   grid-area: dock;
   box-sizing: border-box;

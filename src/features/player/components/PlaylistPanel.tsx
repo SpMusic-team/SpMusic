@@ -1,3 +1,4 @@
+import { useLibrarySearch } from '../hooks/useLibrarySearch'
 import { useCollectionDetailPresence } from '../hooks/useCollectionDetailPresence'
 import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type SyntheticEvent } from 'react'
 import { PLAYLIST_SONG_LAYOUTS, PLAYLIST_LAYOUT_STORAGE_KEY, defaultPlaylistSongLevel, type PlaylistSongLayoutDescriptor } from '@/features/player/model/playlistSongLayouts'
@@ -481,12 +482,14 @@ export function PlaylistPanel({
 
   const handleClearSelection = useCallback(() => setSelectedIds(new Set()), [])
 
+  const globalSearch = useLibrarySearch()
   const handleSearchToggle = useCallback(() => {
+    if (globalSearch) { globalSearch(); return }
     setSearchOpen((previous) => {
       if (previous) setFilter('')
       return !previous
     })
-  }, [])
+  }, [globalSearch])
   const selectableTracks = filteredTracks.filter((track) => !unavailable.has(track.id))
   const selectedPlayableTracks = tracks.filter((track) => selectedIds.has(track.id) && !unavailable.has(track.id))
   const allSelected = selectableTracks.length > 0 && selectableTracks.every((track) => selectedIds.has(track.id))

@@ -52,33 +52,33 @@
   overscroll-behavior: contain;
 }
 
-/* Player menu native scrollbar; playlist detail has a full-dialog rail. */
-.more-actions-scroll {
-  margin-right: 5px;
+/* Player menu and search share the same thin native track and moving marker. */
+.more-actions-scroll { margin-right: 5px; }
+.more-actions-scroll, .search-page {
   /* Chromium must use the explicit width instead of platform `thin`. */
   scrollbar-width: auto;
   scrollbar-color: auto;
 }
-.more-actions-scroll::-webkit-scrollbar { width: 2.5px; }
-.more-actions-scroll::-webkit-scrollbar-track {
-  margin-block: calc(30 * var(--more-unit));
+.more-actions-scroll::-webkit-scrollbar, .search-page::-webkit-scrollbar { width: 2.5px; }
+.more-actions-scroll::-webkit-scrollbar-track, .search-page::-webkit-scrollbar-track {
+  margin-block: calc(30 * var(--more-unit, 1px));
   background: transparent;
 }
-.more-actions-scroll::-webkit-scrollbar-thumb, .playlist-hero-more-scrollbar-thumb {
+.more-actions-scroll::-webkit-scrollbar-thumb, .search-page::-webkit-scrollbar-thumb, .playlist-hero-more-scrollbar-thumb {
   border-radius: 999px;
-  background-image: linear-gradient(var(--more-scrollbar-outline-variant), var(--more-scrollbar-outline-variant));
+  background-image: linear-gradient(var(--more-scrollbar-outline-variant, #c1c7ce), var(--more-scrollbar-outline-variant, #c1c7ce));
 }
-.more-actions-scroll::-webkit-scrollbar-thumb {
+.more-actions-scroll::-webkit-scrollbar-thumb, .search-page::-webkit-scrollbar-thumb {
   /* Keep the player's existing native marker presentation. */
   background-size: 100% 10%;
   background-repeat: no-repeat;
   background-position: 0 calc(var(--more-scroll-progress, 0) * 100%);
 }
-.more-actions-scroll::-webkit-scrollbar-button { display: none; }
+.more-actions-scroll::-webkit-scrollbar-button, .search-page::-webkit-scrollbar-button { display: none; }
 @supports not selector(::-webkit-scrollbar) {
-  .more-actions-scroll {
+  .more-actions-scroll, .search-page {
     scrollbar-width: thin;
-    scrollbar-color: var(--more-scrollbar-outline-variant) transparent;
+    scrollbar-color: var(--more-scrollbar-outline-variant, #c1c7ce) transparent;
   }
 }
 

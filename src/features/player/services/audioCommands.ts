@@ -174,6 +174,7 @@ class PlaylistDurationProtocolError extends Error {
  * `probeAudioPlaylistDurations` / the hydration path).
  */
 export type PlaylistTrackTagSummary = {
+  genre?: string | null
   title: string | null
   artist: string | null
   album: string | null
@@ -231,6 +232,7 @@ function parsePlaylistTrackTagSummary(value: unknown): PlaylistTrackTagSummary {
     album: nullableSummaryText(summary.album),
     albumArtist: nullableSummaryText(summary.albumArtist),
     composer: nullableSummaryText(summary.composer),
+    genre: nullableSummaryText(summary.genre),
     year: nullableSummaryYear(summary.year),
     bitDepth: nullableSummaryNumber(summary.bitDepth),
     sampleRateHz: nullableSummaryNumber(summary.sampleRateHz),
@@ -322,6 +324,8 @@ export type AudioFolderTrackRef = {
   sourcePath: string
   fileName: string
   available: boolean
+  /** Filesystem creation time. Optional for older saved queues. */
+  fileCreatedAtMs?: number | null
 }
 
 export type AudioPlaylistSourceKind = 'folder' | 'm3u8' | 'custom'

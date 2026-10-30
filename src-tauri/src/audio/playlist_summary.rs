@@ -280,6 +280,7 @@ fn read_track_tag_summary(path: &Path) -> Result<AudioPlaylistTrackTagSummary, A
         album: None,
         album_artist: None,
         composer: None,
+        genre: None,
         year: None,
         bit_depth: properties.bit_depth(),
         sample_rate_hz: properties.sample_rate(),
@@ -301,6 +302,10 @@ fn read_track_tag_summary(path: &Path) -> Result<AudioPlaylistTrackTagSummary, A
         summary.album = tag.album().map(|value| value.into_owned());
         summary.album_artist = tag_text(tag, ItemKey::AlbumArtist);
         summary.composer = tag_text(tag, ItemKey::Composer);
+        summary.genre = tag
+            .genre()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty());
         summary.year = tag
             .date()
             .map(|timestamp| u32::from(timestamp.year))
@@ -434,6 +439,7 @@ mod tests {
             album: None,
             album_artist: None,
             composer: None,
+            genre: None,
             year: None,
             bit_depth: None,
             sample_rate_hz: None,
@@ -491,6 +497,7 @@ mod tests {
             assert_eq!(summary.album, None);
             assert_eq!(summary.album_artist, None);
             assert_eq!(summary.composer, None);
+            assert_eq!(summary.genre, None);
             assert_eq!(summary.year, None);
             assert_eq!(summary.sample_rate_hz, Some(8_000));
             assert_eq!(summary.bit_depth, Some(16));
@@ -648,6 +655,48 @@ mod tests {
     }
 
     #[test]
+    fn tagged_wav_genre_is_trimmed_and_blank_or_absent_genres_are_null() {
+        use lofty::{
+            config::WriteOptions,
+            tag::{Tag, TagExt, TagType},
+        };
+
+        for tag_type in [TagType::RiffInfo, TagType::Id3v2] {
+            for (genre, expected) in [
+                (Some(" Electronic "), Some("Electronic")),
+                (Some("   "), None),
+                (None, None),
+            ] {
+                let fixture = Fixture::new();
+                let mut tag = Tag::new(tag_type);
+                // Keep a tag present even for the missing-genre fixture.
+                tag.insert_text(ItemKey::TrackTitle, "genre fixture".to_owned());
+                if let Some(genre) = genre {
+                    tag.set_genre(genre.to_owned());
+                }
+                tag.save_to_path(&fixture.wav, WriteOptions::default())
+                    .expect("write genre fixture");
+                let before = fs::read(&fixture.wav).unwrap();
+                let before_listing = fixture.listing();
+                let items = probe(vec![fixture.wav_path()]);
+                let summary = items[0].summary.as_ref().expect("read genre fixture");
+                assert!(items[0].error.is_none());
+                assert_eq!(
+                    summary.genre.as_deref(),
+                    expected,
+                    "{tag_type:?}: {genre:?}"
+                );
+                assert_eq!(
+                    serde_json::to_value(summary).unwrap()["genre"],
+                    serde_json::to_value(expected).unwrap(),
+                );
+                assert_eq!(fs::read(&fixture.wav).unwrap(), before);
+                assert_eq!(fixture.listing(), before_listing, "probe stays read-only");
+            }
+        }
+    }
+
+    #[test]
     fn tagged_wav_year_is_read_from_date_and_invalid_or_absent_years_are_null() {
         use lofty::{
             config::WriteOptions,
@@ -746,6 +795,7 @@ mod tests {
             "bitrateKbps",
             "codec",
             "composer",
+            "genre",
             "sampleRateHz",
             "title",
             "year",
@@ -768,6 +818,7 @@ mod tests {
             .expect("summary should export to TypeScript");
         assert!(summary_ty.contains("albumArtist: string | null"));
         assert!(summary_ty.contains("composer: string | null"));
+        assert!(summary_ty.contains("genre: string | null"));
         assert!(summary_ty.contains("year: number | null"));
         assert!(summary_ty.contains("sampleRateHz: number | null"));
         assert!(

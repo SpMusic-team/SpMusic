@@ -3,7 +3,7 @@ import type { AudioFolderPlaylist } from '@/features/player/services/audioComman
 export type PlaybackQueueEntry = Readonly<{ scope: string; trackId: string }>
 
 export type PlaybackQueueOrigin = Readonly<{
-  kind: 'all-songs' | 'playlist'
+  kind: 'all-songs' | 'recent-played' | 'recent-added' | 'playlist'
   sourceScope?: string
   // Custom lists have no external registry to reload after an app restart.
   // Retain their complete source descriptors independently of a filtered queue.
@@ -27,7 +27,7 @@ export function playbackQueueOrigin(playlist: AudioFolderPlaylist | null | undef
 export function isPlaybackQueueOrigin(value: unknown): value is PlaybackQueueOrigin {
   if (!value || typeof value !== 'object') return false
   const origin = value as Partial<PlaybackQueueOrigin>
-  if (origin.kind === 'all-songs') return origin.sourceScope === undefined && origin.sourcePlaylist === undefined
+  if (origin.kind === 'all-songs' || origin.kind === 'recent-played' || origin.kind === 'recent-added') return origin.sourceScope === undefined && origin.sourcePlaylist === undefined
   if (origin.kind !== 'playlist' || typeof origin.sourceScope !== 'string' || !origin.sourceScope) return false
   const source = origin.sourcePlaylist
   return source === undefined || Boolean(source && source.sourceKind === 'custom'

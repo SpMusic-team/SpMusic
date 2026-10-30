@@ -190,7 +190,11 @@ fn load_recursive_library_playlist(root: &Path) -> Result<AudioFolderPlaylist, A
                 && has_supported_audio_extension(&normalized)
                 && sources.insert(normalized.clone())
             {
-                tracks.push(folder_track_ref(&normalized, true));
+                tracks.push(folder_track_ref_with_metadata(
+                    &normalized,
+                    true,
+                    Some(&metadata),
+                ));
             }
         }
     }
@@ -263,6 +267,10 @@ fn load_directory_audio_playlist(
                 source_path: path.to_string_lossy().into_owned(),
                 file_name,
                 available: true,
+                file_created_at_ms: fs::metadata(&path)
+                    .ok()
+                    .as_ref()
+                    .and_then(file_created_at_ms),
             }
         })
         .collect::<Vec<_>>();
@@ -583,12 +591,36 @@ fn is_remote_or_unsupported_uri(entry: &str) -> bool {
 }
 
 fn folder_track_ref(path: &Path, available: bool) -> AudioFolderTrackRef {
+    let metadata = available.then(|| fs::metadata(path).ok()).flatten();
+    folder_track_ref_with_metadata(path, available, metadata.as_ref())
+}
+
+fn folder_track_ref_with_metadata(
+    path: &Path,
+    available: bool,
+    metadata: Option<&fs::Metadata>,
+) -> AudioFolderTrackRef {
     AudioFolderTrackRef {
         id: track_id(path),
         source_path: path.to_string_lossy().into_owned(),
         file_name: file_name_string(path),
         available,
+        file_created_at_ms: metadata.and_then(file_created_at_ms),
     }
+}
+
+fn file_created_at_ms(metadata: &fs::Metadata) -> Option<u64> {
+    creation_time_millis(metadata.created().ok()?)
+}
+
+fn creation_time_millis(created: std::time::SystemTime) -> Option<u64> {
+    safe_timestamp_millis(created.duration_since(std::time::UNIX_EPOCH).ok()?)
+}
+
+fn safe_timestamp_millis(since_epoch: std::time::Duration) -> Option<u64> {
+    let millis = since_epoch.as_millis();
+    // Keep the wire value exactly representable in JavaScript.
+    (millis <= 9_007_199_254_740_991).then_some(millis as u64)
 }
 
 fn file_name_string(path: &Path) -> String {
@@ -624,4 +656,61 @@ fn has_supported_m3u8_extension(path: &Path) -> bool {
                 .iter()
                 .any(|supported| extension.eq_ignore_ascii_case(supported))
         })
+}
+
+#[cfg(test)]
+mod recently_added_tests {
+    use super::*;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn creation_time_is_safe_unix_millis_without_fallback() {
+        assert_eq!(creation_time_millis(UNIX_EPOCH), Some(0));
+        assert_eq!(
+            creation_time_millis(UNIX_EPOCH + Duration::from_millis(1234)),
+            Some(1234)
+        );
+        assert_eq!(
+            creation_time_millis(UNIX_EPOCH - Duration::from_secs(1)),
+            None
+        );
+        assert_eq!(
+            safe_timestamp_millis(Duration::from_millis(9_007_199_254_740_992)),
+            None
+        );
+    }
+
+    #[test]
+    fn library_scan_and_restored_descriptors_publish_filesystem_creation_time() {
+        let directory = std::env::temp_dir().join(format!(
+            "spmusic-recent-added-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&directory).unwrap();
+        let path = directory.join("track.flac");
+        fs::write(&path, b"descriptor only; no audio decode needed").unwrap();
+        let expected = file_created_at_ms(&fs::metadata(&path).unwrap());
+        let playlist = load_library_folder(&directory).unwrap();
+        assert_eq!(playlist.tracks.len(), 1);
+        assert_eq!(playlist.tracks[0].file_created_at_ms, expected);
+        let wire = serde_json::to_value(&playlist.tracks[0]).unwrap();
+        assert_eq!(
+            wire.get("fileCreatedAtMs"),
+            Some(&serde_json::json!(expected))
+        );
+        assert_eq!(
+            restore_playlist_track(path.to_str().unwrap()).file_created_at_ms,
+            expected
+        );
+        fs::remove_file(&path).unwrap();
+        assert_eq!(
+            restore_playlist_track(path.to_str().unwrap()).file_created_at_ms,
+            None
+        );
+        fs::remove_dir(&directory).unwrap();
+    }
 }

@@ -305,11 +305,14 @@ try {
       return count>100&&performance.now()-window.observedAt>250;
     })
     const budget=await bounded.evaluate(()=>({ready:window.readFixture().ready.length,bytes:Object.values(window.player.playlistTrackVisuals).reduce((sum,v)=>sum+(v.coverThumbnail?v.coverThumbnail.encodedBytes+v.coverThumbnail.width*v.coverThumbnail.height*4:0),0),maxActive:window.maxActive}))
-    assert(budget.ready>100&&budget.ready<1000,'all-list eligibility is limited by bytes rather than a small fixed count')
+    // The resident budget was halved from 96 MiB to 48 MiB, so the observable
+    // list admission count roughly halves with it. The assertion still proves
+    // byte-driven admission (more than a small fixed count) rather than a cap.
+    assert(budget.ready>50&&budget.ready<1000,'all-list eligibility is limited by bytes rather than a small fixed count')
     // The inflight reservation covers every slot the shared scheduler may have
     // in flight (MAX_CONCURRENT x the largest 512px edge), so resident images
-    // must leave exactly that much headroom inside the 96 MiB budget.
-    assert(budget.bytes+4*512*512*4<=96*1024*1024,'resident images leave the four-slot inflight reservation')
+    // must leave exactly that much headroom inside the 48 MiB budget.
+    assert(budget.bytes+4*512*512*4<=48*1024*1024,'resident images leave the four-slot inflight reservation')
     // Ungated responses settle within their own microtask here, so this only
     // proves the lane stays bounded; the concurrency proof lives in
     // playlistCoverScheduler.test.mjs where the native boundary is held open.

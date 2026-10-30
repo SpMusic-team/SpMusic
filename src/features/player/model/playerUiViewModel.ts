@@ -120,6 +120,7 @@ export type PlaylistTrackItemViewModel = TrackSummary
     libraryAlbumName?: string | null
     libraryArtistName?: string | null
     libraryComposerName?: string | null
+    libraryGenreName?: string | null
     libraryYear?: number | null
     albumArtist?: string | null
     coverThumbnail?: PlaylistCoverImage
@@ -153,6 +154,7 @@ export type AllSongsItem = Readonly<{
   scope: string
   trackId: string
   sourcePath: string
+  fileCreatedAtMs?: number | null
   track: PlaylistTrackItemViewModel
   available: boolean
   artworkRevision?: number
@@ -218,6 +220,8 @@ export type PlaylistLibraryViewModel = PlaylistAddCallbacks & {
   onSelectCategory?: (categoryId: MediaLibraryCategoryId) => void
   isOpen: boolean
   items: readonly PlaylistLibraryItem[]
+  recentSongs?: readonly AllSongsItem[]
+  recentAddedSongs?: readonly AllSongsItem[]
   allSongs?: readonly AllSongsItem[]
   allSongsMetadataStatus?: 'loading' | 'ready'
   allSongsManualOrder?: boolean
@@ -306,6 +310,14 @@ export type FolderSelectionViewModel = {
 }
 
 export type PlayerUiViewModel = {
+  search?: {
+    allSongs?: readonly AllSongsItem[]
+    metadataStatus?: 'loading' | 'ready'
+    isOpen: boolean
+    onOpenChange: (open: boolean) => void
+    onPlaySong?: PlaylistLibraryViewModel['onPlaySong']
+    onShufflePlay?: PlaylistLibraryViewModel['onShufflePlay']
+  }
   folderSelection?: FolderSelectionViewModel
   playback: PlayerPlaybackViewModel
   timeline: PlayerTimelineViewModel

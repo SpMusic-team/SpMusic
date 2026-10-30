@@ -31,14 +31,16 @@ window.playlistRequests=[];
 window.suspendCapture=value=>setGlobalShortcutsSuspended(value);
 function Fixture(){
   const [open,setOpen]=React.useState(false);
+  const [searchOpen,setSearchOpen]=React.useState(false);
   const request=React.useCallback(value=>{window.playlistRequests.push(value);setOpen(value)},[]);
   window.setPlaylistOpen=setOpen;
   const viewModel={
+    search:{isOpen:searchOpen,onOpenChange:setSearchOpen},
     playback:{track:null,contentState:'empty',isPlaying:false,shuffleMode:'none',repeatMode:'list-loop',isAudioBusy:false,isTransportBusy:false,statusText:'',onOpenAudio:noop,onPrevious:noop,onNext:noop,onPlayToggle:async r=>({requestId:r.requestId,completed:true}),onShuffleCycle:noop,onRepeatCycle:noop},
     timeline:{positionSeconds:0,durationSeconds:0,interaction:'following',onPreviewStart:noop,onPreview:noop,onCommit:noop,onCancelPreview:noop},
     volume:{valuePercent:50,isBusy:false,isDisabled:false,onChange:noop},
     queue:{tracks,isOpen:false,onToggle:noop},
-    playlist:{isOpen:open,onOpenChange:request,tracks,currentTrackId:new URLSearchParams(location.search).has('farCurrent')?'scroll-79':undefined,shuffleMode:'none',onShuffleCycle:noop,onOpenAudio:noop,onTrackSelect:noop},
+    playlist:{library:{isOpen:false,route:{view:'tracks'},items:[],allSongs:tracks.map(t=>({key:t.id,scope:'fixture',trackId:t.id,sourcePath:t.id,available:true,track:t})),onOpen:noop,onSelect:noop,onPlay:noop},isOpen:open,onOpenChange:request,tracks,currentTrackId:new URLSearchParams(location.search).has('farCurrent')?'scroll-79':undefined,shuffleMode:'none',onShuffleCycle:noop,onOpenAudio:noop,onTrackSelect:noop},
     feedback:{onToggle:noop},
   };
   return React.createElement(PlayerSurface,{viewModel});
@@ -105,10 +107,10 @@ async function check(name,run,manyTracks=false){
     console.log('PASS',name);passed++
   }finally{await page.close()}
 }
-const input=page=>page.locator('.playlist-filter-input')
+const input=page=>page.getByRole('searchbox',{name:'聚合搜索',exact:true})
 async function assertFocused(page){
   await input(page).waitFor()
-  await page.waitForFunction(()=>document.activeElement===document.querySelector('.playlist-filter-input'))
+  await page.waitForFunction(()=>document.activeElement===document.querySelector('.search-page input'))
 }
 async function dispatch(page,extra={}){
   return page.evaluate(extra=>{
@@ -118,89 +120,32 @@ async function dispatch(page,extra={}){
   },extra)
 }
 try{
-  await check('player Ctrl+F opens and focuses playlist search; repeats retain query and filtering',async page=>{
-    assert.equal(await page.locator('.playlist-panel').count(),0)
+  await check('Ctrl+F opens independent search, preserves its query and returns without changing the source page',async page=>{
     assert.equal(await dispatch(page),true)
     await assertFocused(page)
     await input(page).fill('Beta')
-    await page.waitForFunction(()=>document.querySelectorAll('.playlist-card').length===1)
-    assert.equal(await page.locator('.playlist-card').getAttribute('data-playlist-track-id'),'beta')
-    await page.locator('.playlist-hero-title').click()
+    await page.waitForFunction(()=>document.querySelectorAll('.search-songs .playlist-card').length===1)
+    assert.equal(await page.locator('.search-songs .playlist-card').getAttribute('data-playlist-track-id'),'beta')
+    assert.deepEqual(await page.evaluate(()=>window.playlistRequests),[])
+    await page.keyboard.press('Control+f')
+    await page.locator('.search-page').waitFor({state:'hidden'})
     await page.keyboard.press('Control+f')
     await assertFocused(page)
     assert.equal(await input(page).inputValue(),'Beta')
-    assert.equal(await page.locator('.playlist-card').count(),1)
-    assert.deepEqual(await page.evaluate(()=>window.playlistRequests),[true,true])
-    await input(page).fill('Singer Two')
-    assert.equal(await page.locator('.playlist-card').getAttribute('data-playlist-track-id'),'beta')
-    await input(page).fill('First Album')
-    await page.waitForFunction(()=>document.querySelector('.playlist-card')?.dataset.playlistTrackId==='alpha')
+    await page.locator('.playlist-playback-dock').getByRole('button',{name:'搜索',exact:true}).click()
+    await page.locator('.search-page').waitFor({state:'hidden'})
   })
-  await check('already-open list gains search focus and unrelated keys are ignored',async page=>{
-    for(const event of [{ctrlKey:false},{altKey:true},{shiftKey:true},{metaKey:true},{repeat:true},{isComposing:true},{key:'g',code:'KeyG'}]){
-      assert.equal(await dispatch(page,event),false,JSON.stringify(event))
-    }
-    assert.deepEqual(await page.evaluate(()=>window.playlistRequests),[])
-    assert.equal(await page.locator('.playlist-panel').count(),0)
+  await check('unrelated combinations and repeat events do not open search; source list survives a round trip',async page=>{
+    for(const event of [{ctrlKey:false},{altKey:true},{shiftKey:true},{metaKey:true},{repeat:true},{isComposing:true},{key:'g',code:'KeyG'}]) assert.equal(await dispatch(page,event),false)
+    assert.equal(await page.locator('.search-page').isVisible(),false)
     await page.evaluate(()=>window.setPlaylistOpen(true))
     await page.locator('.playlist-panel').waitFor()
-    assert.equal(await input(page).count(),0)
+    await page.keyboard.press('Control+f');await assertFocused(page)
     await page.keyboard.press('Control+f')
-    await assertFocused(page)
-    await input(page).fill('Gamma')
-    await page.keyboard.press('Control+f')
-    assert.equal(await input(page).inputValue(),'Gamma')
-    assert.equal(await page.locator('.playlist-card').getAttribute('data-playlist-track-id'),'gamma')
+    await page.locator('.search-page').waitFor({state:'hidden'})
+    assert.equal(await page.locator('.playlist-panel').isVisible(),true)
+    assert.deepEqual(await page.evaluate(()=>window.playlistRequests),[])
   })
-  await check('scrolled long playlist Ctrl+F reveals focused search and retains its query',async page=>{
-    await page.keyboard.press('Control+f')
-    await assertFocused(page)
-    await input(page).fill('Scroll')
-    await page.waitForFunction(()=>document.querySelectorAll('.playlist-card').length===80)
-    const geometry=()=>page.evaluate(()=>{
-      const panel=document.querySelector('.playlist-panel'),search=document.querySelector('.playlist-filter-input')
-      const panelRect=panel.getBoundingClientRect(),searchRect=search.getBoundingClientRect()
-      return {scrollTop:panel.scrollTop,scrollHeight:panel.scrollHeight,clientHeight:panel.clientHeight,inputTop:searchRect.top,inputBottom:searchRect.bottom,panelTop:panelRect.top,panelBottom:panelRect.bottom,viewportHeight:innerHeight,focused:document.activeElement===search}
-    })
-    for(let iteration=0;iteration<2;iteration++){
-      await page.locator('.playlist-panel').evaluate(panel=>{
-        panel.scrollTop=panel.scrollHeight-panel.clientHeight
-        panel.querySelector('.playlist-card:last-child').focus({preventScroll:true})
-      })
-      const before=await geometry()
-      assert.ok(before.scrollHeight>before.clientHeight+300,'fixture must have real overflow')
-      assert.ok(before.scrollTop>300,'real playlist container was scrolled')
-      assert.ok(before.inputBottom<before.panelTop,'search is outside the scrolled container viewport')
-      assert.equal(before.focused,false,'focus starts on a song card')
-      await page.keyboard.press('Control+f')
-      await assertFocused(page)
-      const after=await geometry()
-      console.log('SCROLL_SEARCH_EVIDENCE',JSON.stringify({iteration,before,after}))
-      assert.equal(await input(page).inputValue(),'Scroll','shortcut preserves filter')
-      assert.equal(await page.locator('.playlist-card').count(),80,'filtered songs remain')
-      assert.ok(after.inputTop>=Math.max(0,after.panelTop)&&after.inputBottom<=Math.min(after.viewportHeight,after.panelBottom),'focused search must be fully visible in playlist viewport')
-      assert.ok(after.scrollTop<before.scrollTop,'Ctrl+F returns the real scroll container toward search')
-      assert.equal(after.scrollTop,0,'Ctrl+F returns to the list header')
-    }
-    await page.locator('.playlist-panel').evaluate(panel=>{panel.scrollTop=panel.scrollHeight-panel.clientHeight})
-    await page.locator('.playlist-playback-dock').getByRole('button',{name:'搜索',exact:true}).click()
-    assert.equal(await input(page).count(),0,'ordinary search button still closes search')
-    assert.ok(await page.locator('.playlist-panel').evaluate(panel=>panel.scrollTop)>300,'closing search must not replay a consumed Ctrl+F request')
-  },true)
-  await check('long playlist current song positioning cannot hide first Ctrl+F search',async page=>{
-    await page.keyboard.press('Control+f')
-    await assertFocused(page)
-    const result=await page.evaluate(()=>{
-      const panel=document.querySelector('.playlist-panel'),search=document.querySelector('.playlist-filter-input')
-      const panelRect=panel.getBoundingClientRect(),searchRect=search.getBoundingClientRect()
-      return {scrollTop:panel.scrollTop,scrollHeight:panel.scrollHeight,clientHeight:panel.clientHeight,visible:searchRect.top>=Math.max(0,panelRect.top)&&searchRect.bottom<=Math.min(innerHeight,panelRect.bottom),current:document.querySelector('.playlist-card[data-current="true"]')?.dataset.playlistTrackId}
-    })
-    console.log('CURRENT_SEARCH_EVIDENCE',JSON.stringify(result))
-    assert.equal(result.current,'scroll-79','fixture current song is at the far end')
-    assert.ok(result.scrollHeight>result.clientHeight+300,'fixture has real overflow')
-    assert.equal(result.visible,true,'first shortcut wins over initial current-song positioning')
-    assert.equal(result.scrollTop,0)
-  },'current')
   await check('settings and recording own Ctrl+F; modal events are not hijacked',async page=>{
     await page.getByRole('button',{name:'设置',exact:true}).click()
     await page.getByRole('dialog').waitFor()
@@ -243,11 +188,11 @@ try{
     assert.equal(listeners.filter(Boolean).length,1)
     assert.ok(listeners.includes(false),'StrictMode first mount cleaned')
     await page.keyboard.press('Control+f');await assertFocused(page)
-    assert.deepEqual(await page.evaluate(()=>window.playlistRequests),[true])
+    assert.deepEqual(await page.evaluate(()=>window.playlistRequests),[])
     await page.evaluate(()=>window.unmountFixture())
     assert.equal(await page.evaluate(()=>window.keyListeners.filter(entry=>entry.active&&entry.source.includes('searchRequestSequenceRef')).length),0)
     assert.equal(await dispatch(page),false)
-    assert.deepEqual(await page.evaluate(()=>window.playlistRequests),[true])
+    assert.deepEqual(await page.evaluate(()=>window.playlistRequests),[])
   })
   console.log('LOCAL_SEARCH_RESULT',passed,'passed; real player/list UI, fixture audio and settings IPC')
 }finally{await browser.close()}

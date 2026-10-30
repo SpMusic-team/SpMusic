@@ -297,5 +297,12 @@ export function useCollectionLayout<Layout extends { label: string }>(options: O
       stopLayoutAnimations()
     }
   }, [appearanceMotion, stopLayoutAnimations, panelRef, gridRef, layouts, storageKey, selectors, gestureArea])
-  return { level, layout: layouts[level] ?? layouts[defaultLevel()]!, announcement }
+  const selectLevel = useCallback((nextLevel: number) => {
+    if (!Number.isInteger(nextLevel) || !layouts[nextLevel]) return
+    layoutLevelRef.current = nextLevel
+    setLevel(nextLevel)
+    try { window.localStorage.setItem(storageKey, String(nextLevel)) } catch { /* Storage is optional. */ }
+    setAnnouncement(callbacksRef.current.announce(layouts[nextLevel]))
+  }, [layouts, storageKey])
+  return { level, layout: layouts[level] ?? layouts[defaultLevel()]!, announcement, selectLevel }
 }

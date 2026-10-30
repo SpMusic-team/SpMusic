@@ -205,6 +205,7 @@ pub struct AudioPlaylistTrackTagSummary {
     pub album: Option<String>,
     pub album_artist: Option<String>,
     pub composer: Option<String>,
+    pub genre: Option<String>,
     #[ts(type = "number | null")]
     pub year: Option<u32>,
     // Deliberately no duration: playback duration stays authoritative on
@@ -305,6 +306,9 @@ pub struct AudioFolderTrackRef {
     pub source_path: String,
     pub file_name: String,
     pub available: bool,
+    /// Filesystem creation time, never a scan time or modification-time fallback.
+    #[ts(type = "number | null")]
+    pub file_created_at_ms: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, TS)]

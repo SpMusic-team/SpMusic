@@ -1,0 +1,476 @@
+use std::{
+    fs::{self, File, OpenOptions},
+    io::{Read, Write},
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
+};
+
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
+use lofty::{
+    picture::{Picture, PictureType},
+    tag::Tag,
+};
+
+use super::error::{audio_error, AudioCommandError, AudioErrorCode};
+use super::types::AudioCoverArt;
+
+const MAX_PLAYLIST_COVER_BYTES: usize = 16 * 1024 * 1024;
+static PLAYLIST_COVER_TEMP: AtomicU64 = AtomicU64::new(0);
+
+/// The visual path checks bounds before persistence or base64 allocation. The
+/// legacy hydrate path below keeps its existing behavior.
+pub(super) fn bounded_playlist_cover_from_tag(
+    tag: &Tag,
+    app_cache_dir: &Path,
+) -> Result<Option<AudioCoverArt>, AudioCommandError> {
+    let Some(picture) = select_cover_art(tag) else {
+        return Ok(None);
+    };
+    let data = picture.data();
+    if data.is_empty() || data.len() > MAX_PLAYLIST_COVER_BYTES {
+        return Err(audio_error(
+            AudioErrorCode::UnsupportedFormat,
+            "Playlist cover must contain 1 to 16777216 bytes",
+            true,
+        ));
+    }
+    let mime_type = picture
+        .mime_type()
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "application/octet-stream".to_owned());
+    let file_path = cache_playlist_cover(app_cache_dir, &mime_type, data);
+    Ok(Some(AudioCoverArt {
+        data_url: file_path
+            .is_none()
+            .then(|| cover_art_data_url(&mime_type, data)),
+        file_path,
+        mime_type,
+        byte_len: data.len(),
+    }))
+}
+
+fn ordinary(metadata: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & 0x400 != 0 {
+            return false;
+        }
+    }
+    !metadata.file_type().is_symlink()
+}
+
+struct PlaylistCoverDirectory {
+    path: PathBuf,
+    // On Windows retain non-delete-sharing handles while using the namespace:
+    // a checked directory cannot be replaced by a junction before publication.
+    _guards: Vec<File>,
+}
+
+pub(super) fn guard_directory(path: &Path) -> Option<File> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.custom_flags(0x02200000).share_mode(3); // BACKUP_SEMANTICS | OPEN_REPARSE_POINT; no DELETE share
+    }
+    let file = options.open(path).ok()?;
+    let metadata = file.metadata().ok()?;
+    (ordinary(&metadata) && metadata.is_dir()).then_some(file)
+}
+
+fn playlist_cover_directory(app_cache_dir: &Path, parts: &[&str]) -> Option<PlaylistCoverDirectory> {
+    for ancestor in app_cache_dir.ancestors() {
+        let metadata = fs::symlink_metadata(ancestor).ok()?;
+        if !ordinary(&metadata) || !metadata.is_dir() { return None; }
+    }
+    let root_metadata = fs::symlink_metadata(app_cache_dir).ok()?;
+    if !ordinary(&root_metadata) || !root_metadata.is_dir() {
+        return None;
+    }
+    let mut guards = vec![guard_directory(app_cache_dir)?];
+    let root = fs::canonicalize(app_cache_dir).ok()?;
+    let mut directory = root.clone();
+    for part in parts {
+        directory.push(part);
+        match fs::create_dir(&directory) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(_) => return None,
+        }
+        let metadata = fs::symlink_metadata(&directory).ok()?;
+        guards.push(guard_directory(&directory)?);
+        if !ordinary(&metadata)
+            || !metadata.is_dir()
+            || fs::canonicalize(&directory).ok()? != directory
+        {
+            return None;
+        }
+    }
+    Some(PlaylistCoverDirectory {
+        path: directory,
+        _guards: guards,
+    })
+}
+
+fn existing_playlist_cover(path: &Path, expected: &[u8]) -> bool {
+    if expected.is_empty() || expected.len() > MAX_PLAYLIST_COVER_BYTES {
+        return false;
+    }
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return false;
+    };
+    if !ordinary(&metadata) || !metadata.is_file() || metadata.len() != expected.len() as u64 {
+        return false;
+    }
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        // Keep the verified file stable while comparing the actual bytes.
+        options.custom_flags(0x00200000).share_mode(1); // OPEN_REPARSE_POINT; only READ share
+    }
+    let Ok(mut file) = options.open(path) else {
+        return false;
+    };
+    let Ok(metadata) = file.metadata() else {
+        return false;
+    };
+    if !ordinary(&metadata) || !metadata.is_file() || metadata.len() != expected.len() as u64 {
+        return false;
+    }
+    // The validated length is already known. A Take<File> read_to_end loses
+    // File's size hint and can repeatedly issue small reads while growing a
+    // buffer; read the bounded payload directly without weakening validation.
+    let mut bytes = vec![0; expected.len()];
+    file.read_exact(&mut bytes).is_ok()
+        && bytes == expected
+        && file.read(&mut [0]).is_ok_and(|count| count == 0)
+}
+
+fn cache_playlist_cover(app_cache_dir: &Path, mime_type: &str, data: &[u8]) -> Option<String> {
+    cache_playlist_cover_in_directory(playlist_cover_directory(app_cache_dir, &["audio", "covers"] )?, mime_type, data)
+}
+
+fn cache_playlist_cover_in_directory(directory: PlaylistCoverDirectory, mime_type: &str, data: &[u8]) -> Option<String> {
+    let target = directory.path.join(format!(
+        "{}.{}",
+        blake3::hash(data).to_hex(),
+        cover_extension(mime_type)
+    ));
+    if fs::symlink_metadata(&target).is_ok() {
+        return existing_playlist_cover(&target, data)
+            .then(|| target.to_string_lossy().into_owned());
+    }
+    let temporary = directory.path.join(format!(
+        ".cover-{}-{}",
+        std::process::id(),
+        PLAYLIST_COVER_TEMP.fetch_add(1, Ordering::Relaxed)
+    ));
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.share_mode(1); // Keep the temporary name and bytes owned until publication.
+    }
+    let mut file = options.open(&temporary).ok()?;
+    let write_result = file.write_all(data);
+    // A hard link publishes complete bytes without replacing another writer's
+    // entry or following an existing target link. Unsupported filesystems fall
+    // back to the bounded data URL rather than writing through an unsafe path.
+    let published = write_result.is_ok() && fs::hard_link(&temporary, &target).is_ok();
+    drop(file);
+    let _ = fs::remove_file(&temporary);
+    (published || existing_playlist_cover(&target, data))
+        .then(|| target.to_string_lossy().into_owned())
+}
+
+fn select_cover_art(tag: &Tag) -> Option<&Picture> {
+    tag.get_picture_type(PictureType::CoverFront)
+        .or_else(|| tag.pictures().first())
+}
+
+/// A validated directory image uses the same bounded, content-addressed
+/// publication as playlist artwork; external source paths are never exposed.
+pub(super) fn directory_cover_from_bytes(
+    data: &[u8],
+    mime_type: &str,
+    audio_cache_dir: Option<&Path>,
+) -> Option<AudioCoverArt> {
+    if data.is_empty() || data.len() > MAX_PLAYLIST_COVER_BYTES { return None; }
+    let file_path = audio_cache_dir.and_then(|root| {
+        let directory = playlist_cover_directory(root, &["covers"])?;
+        cache_playlist_cover_in_directory(directory, mime_type, data)
+    });
+    Some(AudioCoverArt {
+        data_url: file_path.is_none().then(|| cover_art_data_url(mime_type, data)),
+        file_path,
+        mime_type: mime_type.to_owned(),
+        byte_len: data.len(),
+    })
+}
+
+pub(super) fn cover_art_from_tag(
+    tag: &Tag,
+    cover_cache_dir: Option<&Path>,
+) -> Option<AudioCoverArt> {
+    select_cover_art(tag).map(|picture| cover_art_from_picture(picture, cover_cache_dir))
+}
+
+fn cover_art_from_picture(picture: &Picture, cover_cache_dir: Option<&Path>) -> AudioCoverArt {
+    let mime_type = picture
+        .mime_type()
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "application/octet-stream".to_string());
+    let data = picture.data();
+    let file_path =
+        cover_cache_dir.and_then(|cache_dir| cache_cover_art(cache_dir, &mime_type, data));
+    tracing::debug!(
+        operation = "audio.source.cover_art",
+        mime_type = %mime_type,
+        byte_len = data.len(),
+        cached = file_path.is_some(),
+        "loaded embedded cover art",
+    );
+
+    AudioCoverArt {
+        mime_type: mime_type.clone(),
+        data_url: file_path
+            .is_none()
+            .then(|| cover_art_data_url(&mime_type, data)),
+        file_path,
+        byte_len: data.len(),
+    }
+}
+
+pub(crate) fn cover_art_data_url(mime_type: &str, data: &[u8]) -> String {
+    format!("data:{mime_type};base64,{}", BASE64_STANDARD.encode(data))
+}
+
+fn cache_cover_art(cache_dir: &Path, mime_type: &str, data: &[u8]) -> Option<String> {
+    let covers_dir = cache_dir.join("covers");
+    if let Err(error) = fs::create_dir_all(&covers_dir) {
+        tracing::warn!(
+            operation = "audio.source.cover_art.cache",
+            path = %covers_dir.display(),
+            error = %error,
+            "failed to create cover cache directory",
+        );
+        return None;
+    }
+
+    let extension = cover_extension(mime_type);
+    let hash = blake3::hash(data);
+    let cover_path = covers_dir.join(format!("{}.{}", hash.to_hex(), extension));
+
+    if !cover_path.is_file() {
+        if let Err(error) = fs::write(&cover_path, data) {
+            tracing::warn!(
+                operation = "audio.source.cover_art.cache",
+                path = %cover_path.display(),
+                error = %error,
+                "failed to write cover cache file",
+            );
+            return None;
+        }
+    }
+
+    Some(cover_path.to_string_lossy().into_owned())
+}
+
+fn cover_extension(mime_type: &str) -> &'static str {
+    match mime_type.to_ascii_lowercase().as_str() {
+        "image/jpeg" | "image/jpg" => "jpg",
+        "image/png" => "png",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "image/bmp" => "bmp",
+        _ => "bin",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use lofty::picture::{MimeType, Picture};
+
+    use super::*;
+
+    fn playlist_tag(bytes: Vec<u8>) -> Tag {
+        let mut tag = Tag::new(lofty::tag::TagType::Id3v2);
+        tag.push_picture(
+            Picture::unchecked(bytes)
+                .pic_type(PictureType::CoverFront)
+                .mime_type(MimeType::Png)
+                .build(),
+        );
+        tag
+    }
+
+    #[test]
+    fn playlist_cover_enforces_limit_before_persist_or_fallback() {
+        let tag = playlist_tag(vec![7; MAX_PLAYLIST_COVER_BYTES + 1]);
+        let error =
+            bounded_playlist_cover_from_tag(&tag, Path::new("unavailable-cache")).unwrap_err();
+        assert_eq!(error.code, AudioErrorCode::UnsupportedFormat);
+        assert!(
+            bounded_playlist_cover_from_tag(&playlist_tag(Vec::new()), Path::new("unused"))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn playlist_cache_verifies_complete_known_length_payload() {
+        let path = std::env::temp_dir().join(format!(
+            "spmusic-cover-known-length-{}-{}",
+            std::process::id(),
+            PLAYLIST_COVER_TEMP.fetch_add(1, Ordering::Relaxed)
+        ));
+        let mut bytes = vec![7; 1024 * 1024 + 3];
+        fs::write(&path, &bytes).unwrap();
+        assert!(existing_playlist_cover(&path, &bytes));
+        let last = bytes.len() - 1;
+        bytes[last] = 8;
+        assert!(!existing_playlist_cover(&path, &bytes));
+        bytes[last] = 7;
+        assert!(!existing_playlist_cover(&path, &bytes[..last]));
+        bytes.push(7);
+        assert!(!existing_playlist_cover(&path, &bytes));
+        assert!(!existing_playlist_cover(&path, &[]));
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn playlist_cache_rejects_directory_target_and_corrupt_existing_content() {
+        let root = std::env::temp_dir().join(format!(
+            "spmusic-cover-safety-{}-{}",
+            std::process::id(),
+            PLAYLIST_COVER_TEMP.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let bytes = [1, 2, 3, 4];
+        let target = root
+            .join("audio/covers")
+            .join(format!("{}.png", blake3::hash(&bytes).to_hex()));
+        fs::create_dir_all(&target).unwrap();
+        let tag = playlist_tag(bytes.to_vec());
+        let cover = bounded_playlist_cover_from_tag(&tag, &root)
+            .unwrap()
+            .unwrap();
+        assert!(cover.file_path.is_none());
+        assert_eq!(
+            cover.data_url.unwrap(),
+            cover_art_data_url("image/png", &bytes)
+        );
+        fs::remove_dir(&target).unwrap();
+        fs::write(&target, [9, 9, 9, 9]).unwrap();
+        let cover = bounded_playlist_cover_from_tag(&tag, &root)
+            .unwrap()
+            .unwrap();
+        assert!(cover.file_path.is_none());
+        assert_eq!(fs::read(&target).unwrap(), [9, 9, 9, 9]);
+        fs::remove_file(&target).unwrap();
+        let cover = bounded_playlist_cover_from_tag(&tag, &root)
+            .unwrap()
+            .unwrap();
+        assert!(cover.file_path.is_some());
+        assert!(cover.data_url.is_none());
+        assert_eq!(fs::read(&target).unwrap(), bytes);
+        assert!(bounded_playlist_cover_from_tag(&tag, &root)
+            .unwrap()
+            .unwrap()
+            .file_path
+            .is_some());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn playlist_cache_falls_back_when_cache_root_is_unusable() {
+        let root = std::env::temp_dir().join(format!(
+            "spmusic-cover-blocked-{}-{}",
+            std::process::id(),
+            PLAYLIST_COVER_TEMP.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::write(&root, b"not a directory").unwrap();
+        let cover = bounded_playlist_cover_from_tag(&playlist_tag(vec![1]), &root)
+            .unwrap()
+            .unwrap();
+        assert!(cover.file_path.is_none());
+        assert!(cover.data_url.is_some());
+        assert_eq!(fs::read(&root).unwrap(), b"not a directory");
+        fs::remove_file(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn playlist_cache_rejects_real_junctions_without_writing_outside_root() {
+        let root = std::env::temp_dir().join(format!(
+            "spmusic-cover-junction-{}-{}",
+            std::process::id(),
+            PLAYLIST_COVER_TEMP.fetch_add(1, Ordering::Relaxed)
+        ));
+        let cache = root.join("cache");
+        let external = root.join("external");
+        fs::create_dir_all(&cache).unwrap();
+        fs::create_dir_all(&external).unwrap();
+        fs::write(external.join("sentinel"), b"unchanged").unwrap();
+        for parent in [&cache, &cache.join("audio")] {
+            fs::create_dir_all(parent).unwrap();
+            let link = parent.join(if parent == &cache { "audio" } else { "covers" });
+            let output = std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(&link)
+                .arg(&external)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "junction fixture creation failed: {:?}",
+                output.status
+            );
+            assert!(!ordinary(&fs::symlink_metadata(&link).unwrap()));
+            let cover = bounded_playlist_cover_from_tag(&playlist_tag(vec![1, 2, 3]), &cache)
+                .unwrap()
+                .unwrap();
+            assert!(cover.file_path.is_none());
+            assert!(cover.data_url.is_some());
+            assert_eq!(fs::read(external.join("sentinel")).unwrap(), b"unchanged");
+            assert_eq!(fs::read_dir(&external).unwrap().count(), 1);
+            fs::remove_dir(&link).unwrap();
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cached_cover_uses_file_path_without_duplicate_data_url() {
+        let cache_dir = std::env::temp_dir().join(format!(
+            "spmusic-cover-xor-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let picture = Picture::unchecked(vec![0xff, 0xd8, 0xff, 0xd9])
+            .pic_type(PictureType::CoverFront)
+            .mime_type(MimeType::Jpeg)
+            .build();
+
+        let cover = cover_art_from_picture(&picture, Some(&cache_dir));
+        assert!(cover.file_path.is_some());
+        assert!(cover.data_url.is_none());
+
+        std::fs::remove_dir_all(cache_dir).expect("cover cache should be removable");
+    }
+
+    #[test]
+    fn uncached_cover_falls_back_to_data_url_only() {
+        let picture = Picture::unchecked(vec![1, 2, 3])
+            .pic_type(PictureType::CoverFront)
+            .mime_type(MimeType::Png)
+            .build();
+
+        let cover = cover_art_from_picture(&picture, None);
+        assert!(cover.file_path.is_none());
+        assert!(cover.data_url.is_some());
+    }
+}

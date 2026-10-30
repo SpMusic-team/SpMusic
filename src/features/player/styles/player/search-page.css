@@ -1,0 +1,42 @@
+.search-return-page { display: contents; }
+.search-return-page[hidden] { display: contents !important; visibility: hidden; pointer-events: none; }
+.search-return-page[hidden] > * { visibility: hidden; pointer-events: none; }
+.search-page { position: absolute; inset: 40px 0 0; z-index: 30; overflow: auto; overscroll-behavior: contain; padding: 0 20px 250px; color: var(--player-ink); background: var(--player-dock); --folder-shadow: 0 4px 4px color-mix(in srgb, var(--player-ink) 25%, transparent); }
+.search-page[hidden] { display: none; }
+.search-page-header { display: flex; flex-direction: column; gap: 12px; }
+.search-page-input { display: flex; align-items: center; gap: 16px; padding: 10px 20px; min-height: 68px; border-radius: var(--app-radius-pill); background: var(--player-surface-variant); }
+.search-page-input > svg { width: 48px; height: 48px; flex: 0 0 auto; color: var(--player-muted); }
+.search-page-input input { min-width: 0; height: 48px; padding: 0; border: 0; border-radius: 0; box-shadow: none; background: transparent; color: var(--player-ink); font-size: calc(28px * var(--app-font-scale)); }
+.search-page-input input:focus-visible { outline: 0; box-shadow: none; }
+.search-page-input input::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; display: none; }
+.search-page-input:focus-within { outline: 2px solid var(--player-blue); outline-offset: -2px; }
+.search-page-input button { flex: 0 0 auto; color: var(--player-muted); border-radius: var(--app-radius-pill); }
+.search-page-input button svg { width: 28px; height: 28px; }
+.search-page-filters { display: flex; align-items: center; gap: 10px; overflow-x: auto; padding: 4px 5px; scrollbar-width: thin; }
+.search-page-filters button { height: 44px; flex: 0 0 auto; padding: 5px 15px; border: 1px solid var(--player-blue); border-radius: var(--app-radius-pill); background: transparent; color: var(--player-blue); font-weight: 400; font-size: calc(22px * var(--app-font-scale)); }
+.search-page-filters button[aria-pressed='true'] { background: color-mix(in srgb, var(--player-blue) 10%, transparent); }
+.search-page-filters button[aria-pressed='false'] { color: var(--player-muted); border-color: var(--player-muted); }
+.search-page-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-inline: 5px; }
+.search-page-actions .playlist-management-actions { flex-wrap: wrap; }
+.search-page-actions .playlist-management-actions svg { width: 28px; height: 28px; }
+.search-page-actions .playlist-management-more { width: 52px; height: 52px; padding: 12px; color: var(--player-blue); }
+.search-section-heading { display: flex; align-items: center; gap: 16px; padding: 24px 5px 12px; color: var(--player-muted); }
+.search-section-heading h2 { flex: 0 0 auto; margin: 0; font-weight: 400; font-size: calc(22px * var(--app-font-scale)); line-height: 28px; }
+.search-section-heading [data-slot='separator'] { flex: 1; background: var(--player-muted); }
+.search-collections { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; }
+.search-collection-row { --folder-card-radius: calc(var(--app-radius-lg) * 5 / 6); }
+.search-collection-row .folder-name, .search-collection-row .folder-parent-name { width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.search-cover-placeholder { width: 48px; height: 48px; opacity: .5; }
+.search-songs.playlist-grid { padding: 0; grid-template-columns: minmax(0, 1fr); gap: 20px; }
+.search-songs > div { min-width: 0; }
+.search-collections[data-layout-level='9'], .search-songs[data-layout-level='9'] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.search-page-status { padding-inline: 5px; color: var(--player-muted); }
+.search-page button:focus-visible { outline: 2px solid var(--player-blue); outline-offset: -2px; }
+@media (width <= 540px) {
+  .search-page { padding-inline: 16px; }
+  .search-page-input { gap: 10px; padding-inline: 16px; }
+  .search-page-filters button { height: 36px; font-size: calc(18px * var(--app-font-scale)); padding-inline: 12px; }
+  .search-page-filters { gap: 8px; }
+  .search-section-heading h2 { font-size: calc(18px * var(--app-font-scale)); }
+  .search-collections[data-layout-level='9'], .search-songs[data-layout-level='9'] { grid-template-columns: minmax(0, 1fr); }
+}

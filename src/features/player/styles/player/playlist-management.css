@@ -1,0 +1,127 @@
+.playlist-management { position: absolute; inset: 40px 0 0; z-index: 30; background: transparent; color: var(--player-ink); pointer-events: none; }
+.playlist-management > .playlist-library-sidebar { top: -40px; }
+.playlist-management > * { pointer-events: auto; }
+.playlist-management .playlist-library-sidebar { padding-bottom: 248px; }
+.playlist-management .playlist-library-dialog .playlist-library-sidebar { padding-bottom: 24px; }
+.playlist-management-content { position: absolute; inset: 0 0 0 320px; padding-bottom: 248px; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--app-border) transparent; }
+.playlist-management-content[data-metadata-loading="true"] { overflow-y: hidden; }
+.playlist-management-parent { display: flex; height: 72px; align-items: center; padding: 8px 24px; }
+.playlist-management-parent button { width: 180px; height: 56px; padding: 4px 6px; gap: 4px; border: 2px solid var(--player-blue); border-radius: var(--app-radius-pill); background: transparent; color: var(--player-blue); font-size: 32px; font-weight: 400; line-height: 40px; }
+.playlist-management-heading { display: flex; min-height: 151px; align-items: center; gap: 36px; padding: 16px 24px 19px; }
+.playlist-management-heading h2 { margin: 0; font-size: 57px; font-weight: 400; line-height: 64px; letter-spacing: -0.25px; }
+.playlist-management-category { display: grid; width: 84px; height: 84px; flex: 0 0 auto; place-items: center; border-radius: var(--app-radius-pill); background: var(--playlist-category-playlists, #704840); box-shadow: 0 4px 4px color-mix(in srgb, var(--player-ink) 25%, transparent); }
+.playlist-management-toolbar { display: flex; min-height: 80px; justify-content: space-between; align-items: center; gap: 16px; padding: 8px 25px; }
+.playlist-management-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.playlist-management-actions button { height: 46px; padding: 5px 15px; border: 2px solid var(--player-blue); border-radius: var(--app-radius-pill); color: var(--player-blue); background: transparent; font-size: 22px; line-height: 28px; font-weight: 400; }
+/* An in-flight playback command locks these actions; a lock is not unavailability,
+   so keep their material stable instead of flashing Base UI's disabled opacity. */
+.playlist-management-actions button[data-playback-command-lock]:disabled { opacity: 1; }
+.playlist-management-more { width: 64px; height: 64px; flex: 0 0 auto; padding: 0 20px; border: 2px solid var(--player-blue); border-radius: var(--app-radius-pill); background: transparent; }
+.playlist-management-more img { width: 20px; height: 20px; }
+.playlist-management-search { padding: 12px 24px; }
+.playlist-management-search input { max-width: 480px; font-size: 18px; }
+.playlist-management-grid { display: flex; flex-wrap: wrap; justify-content: flex-start; align-items: flex-start; align-content: start; gap: 48px; padding: 8px 16px 0 32px; }
+.playlist-management-card { width: 270px; padding: 0; border-radius: var(--app-radius-lg); background: transparent; }
+.playlist-management-card-button { display: flex; width: 100%; height: auto; flex-direction: column; align-items: stretch; gap: 48px; padding: 15px; border-radius: var(--app-radius-lg); white-space: normal; color: var(--player-ink); }
+.playlist-management-cover { position: relative; display: grid; width: 240px; height: 165px; place-items: center; overflow: hidden; border-radius: var(--app-radius-lg); background: var(--cover-placeholder-surface); color: var(--player-blue); box-shadow: 0 4px 4px color-mix(in srgb, var(--player-ink) 25%, transparent); }
+.playlist-management-cover > svg { width: 48px; height: 48px; }
+.playlist-management-name { display: block; overflow: hidden; font-size: 32px; line-height: 40px; font-weight: 400; text-align: left; white-space: nowrap; text-overflow: ellipsis; }
+.playlist-management-check { position: absolute; top: 10px; right: 10px; display: grid; width: 28px; height: 28px; place-items: center; border: 2px solid var(--player-blue); border-radius: var(--app-radius-pill); color: var(--player-blue); background: var(--player-dock); }
+.playlist-management-card-button[aria-pressed='true'] { background: var(--player-surface-variant); }
+.playlist-management-empty { margin: 48px 24px; color: var(--player-muted); }
+.playlist-management button:focus-visible { outline: 3px solid var(--player-blue); outline-offset: -3px; }
+.playlist-management-content button:hover:not(:disabled) { background: var(--player-surface-variant); color: var(--player-ink); }
+/* Parent row (72px) plus the vertically centered heading text within its 151px row. */
+/* The dock starts 224px above the viewport bottom; enter its 30px corner area. */
+.playlist-management-quick-index { position: absolute; z-index: 1; top: 114px; right: 0; bottom: 194px; display: flex; width: 16px; min-height: 0; flex-direction: column; align-items: stretch; overflow: hidden; container-type: size; touch-action: none; user-select: none; pointer-events: auto; border-radius: var(--app-radius-lg) 0 0 var(--app-radius-lg); background: var(--player-surface-variant); }
+.playlist-management-quick-index button { display: grid; min-height: 0; flex: 1 1 0; place-items: center; padding: 0; border: 0; background: transparent; color: color-mix(in srgb, var(--primary) 45%, transparent); font-size: min(16px, 2.8cqh); line-height: 1; font-weight: 500; cursor: pointer; }
+.playlist-management-quick-index button svg { width: min(14px, 2.5cqh); height: min(14px, 2.5cqh); }
+.playlist-management-quick-index button:hover, .playlist-management-quick-index button:focus-visible { background: color-mix(in srgb, var(--primary) 12%, transparent); }
+.playlist-management-quick-index button[aria-current='true'] { color: var(--primary); }
+.playlist-management-quick-index-preview { position: absolute; z-index: 2; right: 40px; display: grid; width: 100px; height: 100px; place-items: center; pointer-events: none; border-radius: var(--app-radius-lg); background: rgb(48 48 48 / 76%); color: #fff; font-size: 60px; font-weight: 700; line-height: 1; opacity: 0; transform: scale(0.88); transition: opacity 180ms ease-out, transform 180ms ease-out; }
+.playlist-management-quick-index-preview[data-visible='true'] { opacity: 1; transform: scale(1); }
+.playlist-management-quick-index-preview svg { width: 48px; height: 48px; }
+@media (width <= 1024px) {
+  .playlist-management-content { left: 0; }
+  /* 72px parent row + 24px heading inset + (72px icon - 48px title line) / 2. */
+  .playlist-management-quick-index { top: 108px; }
+  .playlist-management-heading { min-height: 0; gap: 24px; padding: 24px; }
+  .playlist-management-heading h2 { font-size: 40px; line-height: 48px; }
+  .playlist-management-category { width: 72px; height: 72px; }
+  .playlist-management-grid { gap: 24px; }
+}
+@media (width <= 540px) {
+  .playlist-management-parent { padding-inline: 16px; }
+  .playlist-management-parent button { font-size: 24px; }
+  .playlist-management-heading { padding: 20px 16px; gap: 20px; }
+  .playlist-management-heading h2 { font-size: 32px; line-height: 40px; }
+  .playlist-management-toolbar { min-height: 0; padding: 8px 25px; align-items: start; }
+  .playlist-management-more { width: 56px; height: 56px; padding: 0; }
+  .playlist-management-actions { gap: 8px; }
+  .playlist-management-actions button { padding-inline: 10px; font-size: 18px; }
+  .playlist-management-grid { gap: 16px; padding-inline: 16px; }
+}
+/* Collection layouts share the detail page's gesture and FLIP controller. */
+.playlist-management-grid {
+  --management-cover-width: 240px;
+  --management-cover-height: 165px;
+  --management-card-width: 270px;
+  --management-card-inline-padding: 15px;
+  --management-title-size: 32px;
+  --management-title-height: 40px;
+  gap: var(--management-row-gap, 20px) var(--management-column-gap, 28px);
+  overflow-anchor: none;
+}
+.playlist-management-grid .playlist-management-card { width: var(--management-card-width); min-width: 0; }
+.playlist-management-grid .playlist-management-card-button { padding: 15px var(--management-card-inline-padding); }
+.playlist-management-grid .playlist-management-cover { width: var(--management-cover-width); height: var(--management-cover-height); flex: 0 0 auto; }
+.playlist-management-copy { display: flex; min-width: 0; flex-direction: column; align-items: stretch; }
+.playlist-management-grid .playlist-management-name { font-size: var(--management-title-size); line-height: var(--management-title-height); }
+.playlist-management-meta { display: flex; min-width: 0; align-items: center; gap: var(--management-meta-gap, 16px); color: var(--player-inverse-primary, var(--player-blue)); font-size: var(--management-meta-size, 24px); line-height: var(--management-meta-height, 32px); font-weight: 400; white-space: nowrap; }
+.playlist-management-meta-icon { flex: 0 0 auto; width: var(--management-icon-size, 24px); height: var(--management-icon-size, 24px); background: currentColor; mask: url('../../../../assets/playlist-library/de6be.svg') center / contain no-repeat; }
+.playlist-management-meta > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.playlist-management-grid[data-layout-flow='tile'] .playlist-management-meta { display: none; }
+.playlist-management-grid[data-layout-flow='row'],
+.playlist-management-grid[data-layout-flow='text'] { display: grid; grid-template-columns: minmax(0, 1fr); row-gap: var(--management-row-gap, 20px); }
+.playlist-management-grid:not([data-layout-flow='tile']) .playlist-management-card { width: 100%; }
+.playlist-management-grid[data-layout-flow='row'] .playlist-management-card-button { flex-direction: row; align-items: center; gap: var(--management-item-gap, 48px); padding: var(--management-item-block-padding, 15px) 15px; }
+.playlist-management-grid[data-layout-flow='row'] .playlist-management-copy { flex: 1; gap: var(--management-copy-gap); }
+.playlist-management-grid[data-layout-flow='text'] .playlist-management-card-button { padding: 15px; }
+.playlist-management-grid[data-layout-flow='text'] .playlist-management-copy { flex-direction: row; align-items: center; justify-content: space-between; gap: 24px; width: 100%; }
+.playlist-management-grid[data-layout-flow='text'] .playlist-management-name { flex: 1; }
+.playlist-management-grid[data-layout-artwork='false'] .playlist-management-cover { display: none; }
+.playlist-management-grid[data-layout-level='9'] { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 28px; }
+/* Selection remains visible when the artwork slot is hidden. */
+.playlist-management-grid[data-layout-artwork='false'] .playlist-management-card-button[aria-pressed='true'] { outline: 2px solid var(--player-blue); outline-offset: -2px; }
+@media (width <= 900px) {
+  .playlist-management-grid[data-layout-level='9'] { grid-template-columns: minmax(0, 1fr); }
+}
+@media (width <= 540px) {
+  .playlist-management-grid[data-layout-flow='row'] .playlist-management-card-button { gap: 24px; }
+  .playlist-management-grid[data-layout-flow='row'] .playlist-management-cover { width: min(var(--management-cover-width), 35vw); height: auto; aspect-ratio: 240 / 165; }
+  .playlist-management-grid[data-layout-flow='text'] .playlist-management-copy { gap: 12px; }
+}
+
+.all-songs-list.playlist-grid {
+  padding: 8px 24px 48px;
+}
+
+/* Row layouts have an explicit minimum height. Keep offscreen descendants out
+   of paint/layout without removing searchable rows or changing scroll ownership.
+   Tile heights depend on metadata and deliberately retain normal layout. */
+.all-songs-list:not([data-layout-flow='tile']) > .playlist-card {
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto var(--playlist-card-min-height);
+}
+
+/* A bounded window already limits layout work. Its overscan rows must retain
+   real heights: intrinsic estimates are shorter than cover + padding and
+   would change the measured scroll stride when entering the viewport. */
+.all-songs-list[data-content-window='bounded'] > .playlist-card {
+  content-visibility: visible;
+  contain-intrinsic-block-size: none;
+}
+
+@media (width <= 540px) {
+  .all-songs-list.playlist-grid { padding-inline: 16px; }
+}

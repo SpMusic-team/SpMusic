@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen w:searchIndexer="com.maxmpz.audioplayer.preference.SettingsHelperAudioOutput$SearchIndexer"
+  xmlns:android="http://schemas.android.com/apk/res/android" xmlns:w="http://schemas.android.com/apk/res-auto">
+    <com.maxmpz.audioplayer.preference.RawTextPreference android:key="output_info" />
+    <PreferenceCategory android:title="@string/pref_use_for_output_devices" android:key="output_devices">
+        <com.maxmpz.audioplayer.preference.SwitchConfigPreference android:persistent="false" android:title="@string/device_headset" android:key="output_headset" />
+        <com.maxmpz.audioplayer.preference.SwitchConfigPreference android:persistent="false" android:title="@string/device_speaker" android:key="output_speaker" />
+        <com.maxmpz.audioplayer.preference.SwitchConfigPreference android:persistent="false" android:title="@string/device_bt" android:key="output_bt" />
+        <com.maxmpz.audioplayer.preference.SwitchConfigPreference android:persistent="false" android:title="@string/device_usb" android:key="output_usb" />
+        <com.maxmpz.audioplayer.preference.SwitchConfigPreference android:persistent="false" android:title="@string/device_chromecast" android:key="output_chromecast" />
+        <com.maxmpz.audioplayer.preference.SwitchConfigPreference android:persistent="false" android:title="@string/device_other" android:key="output_other" />
+    </PreferenceCategory>
+    <Preference android:title="@string/pref_restore_defaults" android:key="restore_defaults" />
+</PreferenceScreen>

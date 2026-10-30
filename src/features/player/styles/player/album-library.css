@@ -1,0 +1,54 @@
+.album-library-content .album-list[data-folder-flow='tile'] { gap: 22px 28px; }
+.album-card { --folder-card-radius: calc(var(--app-radius-lg) * 5 / 6); }
+.album-card .folder-copy { font-weight: 400; }
+.album-cover-placeholder { display: block; width: 48px; height: 48px; background: var(--player-muted); mask-repeat: no-repeat; mask-position: center; mask-size: contain; }
+.album-card[data-folder-variant='text-single'] .folder-parent-name,
+.album-card[data-folder-variant='text-double'] .folder-parent-name { flex: 0 1 45%; }
+.album-library-content[data-has-hero] .album-songs { padding-top: 0; }
+.artist-card .folder-cover { border-radius: var(--app-radius-pill); }
+.artist-card[data-folder-variant='tile'] .folder-copy { width: 100%; text-align: center; }
+.artist-card[data-folder-variant='tile'][data-folder-size='large'] .folder-cover { aspect-ratio: 1; }
+.artist-library [data-artist-root] .album-list[data-folder-level='0'] { gap: 22px 8px; padding-inline: 0; }
+.artist-all-songs { display: flex; width: 100%; height: auto; padding: 15px 40px; justify-content: start; align-items: center; gap: 15px; border: 0; border-radius: var(--app-radius-lg); color: var(--player-ink); font-weight: 400; text-align: left; }
+.artist-all-songs-cover { position: relative; display: grid; width: 125px; height: 125px; flex: 0 0 auto; place-items: center; overflow: hidden; border-radius: var(--app-radius-pill); background: var(--cover-placeholder-surface); box-shadow: var(--folder-shadow); }
+.artist-all-songs-copy { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
+.artist-all-songs-title { overflow: hidden; text-overflow: ellipsis; font-size: calc(28px * var(--app-font-scale)); line-height: 36px; white-space: nowrap; }
+.artist-song-count { display: flex; align-items: center; gap: 16px; color: var(--player-inverse-primary); font-size: calc(24px * var(--app-font-scale)); line-height: 32px; white-space: nowrap; }
+.artist-all-songs-music { display: block; width: 24px; height: 24px; flex: 0 0 auto; background: currentColor; mask-repeat: no-repeat; mask-position: center; mask-size: contain; }
+.artist-library .album-library-content[data-artist-view='albums'] { padding-inline: 0; }
+.artist-library [data-artist-view='albums'] > [data-layout-level] { margin-top: 0; }
+.artist-library [data-artist-view='albums'] > .playlist-hero { width: calc(100% - 50px); max-width: none; height: 320px; padding: 10px; margin-inline: 25px; }
+.artist-library [data-artist-view='albums'] .playlist-hero-copy { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; }
+.artist-library [data-artist-view='albums'] .playlist-hero-meta { align-self: flex-start; }
+.artist-library [data-artist-view='albums'] .album-list[data-folder-flow='tile'] { gap: 22px 48px; padding-top: 0; padding-inline: 25px; }
+.artist-menu-cover { position: relative; display: grid; width: 100%; height: 100%; place-items: center; }
+.artist-library .album-library-content[data-artist-view='songs'] { padding-inline: 0; }
+.artist-library [data-artist-view='songs'] > .playlist-hero { width: calc(100% - 50px); max-width: none; height: 320px; padding: 10px; margin-inline: 25px; }
+.artist-library [data-artist-view='songs'] .playlist-hero-copy { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; }
+.artist-library [data-artist-view='songs'] .playlist-hero-copy > .playlist-hero-actions { margin-top: 0; }
+.artist-library [data-artist-view='songs'] .playlist-hero-title { min-height: 0; padding: 2px 15px; font-weight: 500; }
+.artist-library [data-artist-view='songs'] .playlist-hero-meta { min-height: 0; align-self: flex-start; padding: 2px 15px; font-size: calc(16px * var(--app-font-scale)); line-height: 24px; }
+.artist-songs-meta-icon, .album-detail-meta-icon { display: block; width: 16px; height: 16px; flex: 0 0 auto; background: currentColor; mask-size: contain; mask-repeat: no-repeat; mask-position: center; }
+.album-library .album-library-content[data-album-detail] { padding-inline: 0; }
+.album-library [data-album-detail] > .playlist-hero { width: calc(100% - 50px); max-width: none; height: 320px; padding: 10px; margin-inline: 25px; }
+.album-library [data-album-detail] .playlist-hero-copy { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; }
+.album-library [data-album-detail] .playlist-hero-copy > .playlist-hero-actions { margin-top: 0; }
+.album-library [data-album-detail] .playlist-hero-title { min-height: 0; padding: 2px 15px; font-weight: 500; }
+.album-library [data-album-detail] .playlist-hero-meta { min-height: 0; align-self: flex-start; padding: 2px 15px; font-size: calc(16px * var(--app-font-scale)); line-height: 24px; font-weight: 500; }
+.album-library [data-album-detail] .album-songs.playlist-grid { padding-inline: 16px; }
+.album-library [data-album-detail] .album-songs[data-layout-level='3'] .playlist-card-title { font-size: calc(28px * var(--app-font-scale)); line-height: 36px; }
+.album-library [data-album-detail] .album-songs[data-layout-level='3'] .playlist-card-artist { font-size: calc(22px * var(--app-font-scale)); line-height: 28px; }
+.album-library [data-album-detail] .album-songs[data-layout-level='3'] .playlist-card-format { font-size: calc(16px * var(--app-font-scale)); line-height: 24px; }
+.artist-library [data-artist-view='songs'] .album-songs.playlist-grid { padding-inline: 16px; }
+@media (width > 1024px) {
+  .artist-library [data-artist-view='songs'] .album-songs.playlist-grid { padding-inline: 25px; }
+  .album-library [data-album-detail] .album-songs.playlist-grid { padding-inline: 25px; }
+}
+@media (width <= 650px) {
+  .artist-library [data-artist-root] .album-list[data-folder-level='0'] { grid-template-columns: repeat(2, minmax(0, 310px)); }
+  .artist-card[data-folder-variant='tile'][data-folder-size='large'] .folder-name { font-size: clamp(20px, 4.94vw, 32px); line-height: 1.25; }
+}
+@media (width <= 650px) {
+  /* Match folder content insets so two full-size cards fit the narrow window. */
+  .album-library-content:not([data-artist-root]) .album-list[data-folder-flow='tile'] { padding-inline: 16px; column-gap: 28px; }
+}

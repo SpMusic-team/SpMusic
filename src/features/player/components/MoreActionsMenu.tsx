@@ -1,8 +1,11 @@
-import { useCallback } from 'react'
+import { useCallback, useLayoutEffect, useRef, useState } from 'react'
+import { PlaylistAddDialog, PlaylistDeleteDialog } from './PlaylistSongDialogs'
+import type { PlayerMoreActions, PlaylistAddRequest, PlaylistDeleteAction, PlaylistDeleteSnapshot } from '../model/playerUiViewModel'
 import {
   AddCircle48Regular,
   Bookmark24Regular,
   Cd16Regular,
+  CheckmarkCircle48Regular,
   ClosedCaption48Regular,
   DataHistogram24Regular,
   Delete48Regular,
@@ -36,6 +39,7 @@ import { cn } from '@/lib/utils'
 import { ArtworkCanvas } from './ArtworkCanvas'
 
 type MoreActionsMenuProps = {
+  actions?: PlayerMoreActions
   track: Track
   coverSource?: ArtworkSourceView
   likeIcon: SystemIcon
@@ -71,6 +75,13 @@ function UnavailableAction({ icon: Icon, label, wide = false }: UnavailableActio
   )
 }
 
+function MenuAction({ icon: Icon, label, wide = false, onClick, reason, containsTrack }: UnavailableActionProps & { onClick?: () => void; reason?: string; containsTrack?: boolean }) {
+  return <button type="button" className={cn('more-action', wide && 'more-action-wide')} disabled={!onClick}
+    aria-label={label} data-contains-track={containsTrack} title={!onClick ? reason : undefined} onClick={onClick}>
+    <Icon aria-hidden="true" /><span className="more-action-copy"><strong>{label}</strong></span>
+  </button>
+}
+
 function syncScrollMarker(scroll: HTMLDivElement) {
   const range = scroll.scrollHeight - scroll.clientHeight
   const progress = range > 0 ? scroll.scrollTop / range : 0
@@ -78,6 +89,7 @@ function syncScrollMarker(scroll: HTMLDivElement) {
 }
 
 export function MoreActionsMenu({
+  actions: suppliedActions,
   track,
   coverSource,
   likeIcon: LikeIcon,
@@ -89,6 +101,61 @@ export function MoreActionsMenu({
   onOpenChange,
   open,
 }: MoreActionsMenuProps) {
+  const actions = suppliedActions?.trackId === track.id ? suppliedActions : undefined
+  const [deletion, setDeletion] = useState<{ snapshot: PlaylistDeleteSnapshot; action: PlaylistDeleteAction } | null>(null)
+  const [deleteMode, setDeleteMode] = useState<'list' | 'files'>('list')
+  const [busy, setBusy] = useState(false)
+  const busyRef = useRef(false)
+  const [error, setError] = useState<string | null>(null)
+  const [addition, setAddition] = useState<{ request: PlaylistAddRequest; actions: PlayerMoreActions } | null>(null)
+  const [membership, setMembership] = useState<{ trackId: string; request: PlaylistAddRequest } | null>(null)
+  const prepareAdd = actions?.onPreparePlaylistAdd
+  const addScope = actions?.addSnapshot?.scope
+  const addKey = actions?.addSnapshot?.songKeys[0]
+  // Reuse the picker request as the membership source. Resolve before paint on
+  // entry/track changes; never retain a boolean that can drift from its targets.
+  const refreshMembership = useCallback(() => {
+    if (!prepareAdd || !addKey) return
+    const request = prepareAdd({ scope: addScope ?? null, songKeys: [addKey] })
+    if (request) setMembership({ trackId: track.id, request })
+  }, [prepareAdd, addScope, addKey, track.id])
+  useLayoutEffect(() => {
+    // A closed menu is mounted for each artwork layer, including rapid track
+    // previews. Preparing its picker scans the playlist registry; defer that
+    // work until this menu is actually visible. The trigger also refreshes
+    // synchronously so the first visible frame retains the membership icon.
+    if (!open) return
+    let current = true
+    queueMicrotask(() => { if (current) refreshMembership() })
+    return () => { current = false }
+  }, [refreshMembership, open])
+  const containsTrack = membership?.trackId === track.id && membership.request.targets.some(target => target.containsAll)
+  const beginDelete = () => {
+    if (!actions?.deleteSnapshot || !actions.onDeleteSongs || actions.disabled) return
+    setDeletion({ snapshot: actions.deleteSnapshot, action: actions.onDeleteSongs })
+    setDeleteMode('list')
+    setError(null)
+  }
+  const confirmDelete = async () => {
+    if (!deletion || busyRef.current) return
+    busyRef.current = true
+    setBusy(true)
+    setError(null)
+    try {
+      const result = await deletion.action(deletion.snapshot, deleteMode)
+      if (!result.failedKeys.length && result.succeededKeys.length && !result.errorMessage) {
+        setDeletion(null)
+        onOpenChange?.(false)
+      } else setError(result.errorMessage || `${result.failedKeys.length} 项未能删除，请重试。`)
+    } catch (failure) { setError(failure instanceof Error ? failure.message : '删除失败，请重试。') }
+    finally { busyRef.current = false; setBusy(false) }
+  }
+  const beginAdd = () => {
+    if (!actions?.addSnapshot || actions.disabled) return
+    const request = actions.onPreparePlaylistAdd?.(actions.addSnapshot)
+    if (request) setAddition({ request, actions })
+  }
+  const navigate = (action: (() => void) | undefined) => action ? () => { onOpenChange?.(false); action() } : undefined
   const systemIcons = useSystemIcons()
   const measureMenu = useCallback((menu: HTMLDivElement | null) => {
     if (!menu) return
@@ -110,7 +177,7 @@ export function MoreActionsMenu({
   }, [])
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={next => { if (next) { refreshMembership(); actions?.onPrepareNavigation?.() } onOpenChange?.(next) }}>
       <Tooltip>
         <TooltipTrigger
           render={
@@ -184,8 +251,8 @@ export function MoreActionsMenu({
             <Separator />
 
             <section className="more-action-grid" aria-label={appCopy.moreMenu.title}>
-              <UnavailableAction icon={Delete48Regular} label={appCopy.moreMenu.delete} wide />
-              <UnavailableAction icon={AddCircle48Regular} label={appCopy.moreMenu.playlist} />
+              <MenuAction icon={Delete48Regular} label={appCopy.moreMenu.delete} wide onClick={actions?.deleteSnapshot && actions.onDeleteSongs && !actions.disabled ? beginDelete : undefined} />
+              <MenuAction icon={containsTrack ? CheckmarkCircle48Regular : AddCircle48Regular} label={appCopy.moreMenu.playlist} containsTrack={containsTrack} onClick={actions?.addSnapshot && actions.onPreparePlaylistAdd && !actions.disabled ? beginAdd : undefined} />
               <UnavailableAction icon={Bookmark24Regular} label={appCopy.moreMenu.bookmark} />
               <UnavailableAction icon={Image48Regular} label={appCopy.moreMenu.cover} wide />
               <UnavailableAction icon={ErrorCircle48Regular} label={appCopy.moreMenu.info} />
@@ -196,15 +263,31 @@ export function MoreActionsMenu({
           </div>
 
           <section className="more-action-grid more-action-grid-secondary" aria-label={appCopy.moreMenu.title}>
-            <UnavailableAction icon={Mic48Regular} label={appCopy.moreMenu.artist} />
-            <UnavailableAction icon={Cd16Regular} label={appCopy.moreMenu.album} />
+            <MenuAction icon={Mic48Regular} label={appCopy.moreMenu.artist} onClick={navigate(actions?.onArtist)} reason={actions?.navigationUnavailableReason} />
+            <MenuAction icon={Cd16Regular} label={appCopy.moreMenu.album} onClick={navigate(actions?.onAlbum)} reason={actions?.navigationUnavailableReason} />
             <UnavailableAction icon={Guitar24Regular} label={appCopy.moreMenu.genre} />
             <div className="more-action-spacer" aria-hidden="true" />
-            <UnavailableAction icon={Folder48Regular} label={appCopy.moreMenu.folder} />
+            <MenuAction icon={Folder48Regular} label={appCopy.moreMenu.folder} onClick={navigate(actions?.onFolder)} reason={actions?.navigationUnavailableReason} />
             <UnavailableAction icon={DataHistogram24Regular} label={appCopy.moreMenu.listeningHistory} />
           </section>
         </div>
       </DialogContent>
+      <PlaylistDeleteDialog open={Boolean(deletion)} mode={deleteMode} canRemoveFromList={deletion?.snapshot.canRemoveFromList ?? false} busy={busy} error={error}
+        onCancel={() => { setDeletion(null); setError(null) }} onModeChange={mode => { setDeleteMode(mode); setError(null) }} onConfirm={() => { void confirmDelete() }} />
+      {addition ? <PlaylistAddDialog request={addition.request} active selection={{
+        onAddToPlaylist: addition.actions.onAddToPlaylist,
+        onRemoveFromPlaylist: addition.actions.onRemoveFromPlaylist,
+        onRefreshAddToPlaylist: snapshot => {
+          const request = addition.actions.onPreparePlaylistAdd?.(snapshot)
+          if (request) setMembership({ trackId: addition.actions.trackId, request })
+          return request
+        },
+        onCreateAddPlaylist: (name, snapshot) => {
+          const request = addition.actions.onCreateAddPlaylist?.(name, snapshot)
+          if (request) setMembership({ trackId: addition.actions.trackId, request })
+          return request
+        },
+      }} onCancel={() => { setAddition(null); refreshMembership() }} onDone={() => { setAddition(null); refreshMembership() }} /> : null}
     </Dialog>
   )
 }

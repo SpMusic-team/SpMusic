@@ -33,6 +33,7 @@ export type TrackCardPreviewToken = Readonly<{
 }>
 
 export type PlayerPlaybackViewModel = {
+  moreActions?: PlayerMoreActions
   track: Track | null
   audioOutputInfo?: AudioOutputInfo | null
   artwork?: TrackArtwork | null
@@ -62,6 +63,20 @@ export type PlayerPlaybackViewModel = {
   onPlayToggle: (request: PlayerPlaybackTransitionRequest) => Promise<PlayerPlaybackTransitionResult>
   onShuffleCycle: () => void
   onRepeatCycle: () => void
+}
+
+export type PlayerMoreActions = PlaylistAddCallbacks & {
+  trackId: string
+  disabled?: boolean
+  deleteSnapshot?: PlaylistDeleteSnapshot
+  addSnapshot?: PlaylistAddSnapshot
+  onDeleteSongs?: PlaylistDeleteAction
+  onPrepareNavigation?: () => void
+  onArtist?: () => void
+  onArtistSongs?: () => void
+  onAlbum?: () => void
+  onFolder?: () => void
+  navigationUnavailableReason?: string
 }
 
 export type PlayerPlaybackTransitionRequest = {

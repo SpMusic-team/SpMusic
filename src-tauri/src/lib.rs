@@ -8,6 +8,7 @@ mod library_folder_directories;
 mod library_folders;
 mod library_playlist_addition;
 mod library_playlists;
+mod player_drag_diagnostics;
 mod webview_memory;
 mod window_state;
 
@@ -758,6 +759,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            player_drag_diagnostics::player_drag_diagnostics_export,
             global_shortcuts_get_settings,
             global_shortcuts_update_settings,
             global_shortcuts_set_suspended,
@@ -813,22 +815,37 @@ pub fn run() {
             global_shortcuts::GlobalShortcuts::initialize(app.handle(), &app_paths.config_dir);
             app.manage(LibraryFolderRegistry::new(&app_paths.data_dir));
             app.manage(LibraryPlaylistRegistry::new(&app_paths.data_dir));
-            let (window_state_tracker, main_window, restore_fullscreen) =
+            let (window_state_tracker, main_window, restore_mode) =
                 if let Some(window) = app.get_webview_window("main") {
                     // The window is configured hidden, so its saved geometry is
                     // applied before the frontend's first show() call.
-                    let restore_fullscreen = window_state::restore(&window, &app_paths.config_dir);
+                    let restore_mode = window_state::restore(&window, &app_paths.config_dir);
                     (
                         window_state::WindowStateTracker::from_window(&window),
                         Some(window),
-                        restore_fullscreen,
+                        restore_mode,
                     )
                 } else {
-                    (window_state::WindowStateTracker::default(), None, false)
+                    (
+                        window_state::WindowStateTracker::default(),
+                        None,
+                        window_state::WindowMode::default(),
+                    )
                 };
             app.manage(window_state_tracker);
-            if restore_fullscreen {
-                if let Some(window) = main_window {
+            if let Some(window) = main_window {
+                // Capture normal geometry before restoring either expanded mode,
+                // so restoring down and closing preserves the normal bounds.
+                if restore_mode.maximized {
+                    if let Err(error) = window.maximize() {
+                        tracing::warn!(
+                            operation = "window_state.restore",
+                            error = %error,
+                            "could not restore maximized state",
+                        );
+                    }
+                }
+                if restore_mode.fullscreen {
                     if let Err(error) = window.set_fullscreen(true) {
                         tracing::warn!(
                             operation = "window_state.restore",

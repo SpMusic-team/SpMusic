@@ -20,6 +20,14 @@ struct WindowState {
     monitor_name: Option<String>,
     #[serde(default)]
     fullscreen: bool,
+    #[serde(default)]
+    maximized: bool,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct WindowMode {
+    pub fullscreen: bool,
+    pub maximized: bool,
 }
 
 #[derive(Default)]
@@ -28,6 +36,13 @@ pub struct WindowStateTracker {
 }
 
 impl WindowState {
+    fn mode(&self) -> WindowMode {
+        WindowMode {
+            fullscreen: self.fullscreen,
+            maximized: self.maximized,
+        }
+    }
+
     fn is_valid(&self) -> bool {
         self.width > 0
             && self.height > 0
@@ -38,7 +53,7 @@ impl WindowState {
     }
 }
 
-pub fn restore(window: &WebviewWindow, config_dir: &Path) -> bool {
+pub fn restore(window: &WebviewWindow, config_dir: &Path) -> WindowMode {
     let path = config_dir.join(STATE_FILE);
     let state = match fs::read(&path) {
         Ok(contents) => match serde_json::from_slice::<WindowState>(&contents) {
@@ -49,7 +64,7 @@ pub fn restore(window: &WebviewWindow, config_dir: &Path) -> bool {
                     path = %path.display(),
                     "ignoring invalid saved window geometry",
                 );
-                return false;
+                return WindowMode::default();
             }
             Err(error) => {
                 tracing::warn!(
@@ -58,10 +73,10 @@ pub fn restore(window: &WebviewWindow, config_dir: &Path) -> bool {
                     error = %error,
                     "ignoring unreadable saved window geometry",
                 );
-                return false;
+                return WindowMode::default();
             }
         },
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return false,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return WindowMode::default(),
         Err(error) => {
             tracing::warn!(
                 operation = "window_state.restore",
@@ -69,10 +84,10 @@ pub fn restore(window: &WebviewWindow, config_dir: &Path) -> bool {
                 error = %error,
                 "failed to read saved window geometry",
             );
-            return false;
+            return WindowMode::default();
         }
     };
-    let fullscreen = state.fullscreen;
+    let mode = state.mode();
 
     let monitors = match window.available_monitors() {
         Ok(monitors) => monitors,
@@ -82,7 +97,7 @@ pub fn restore(window: &WebviewWindow, config_dir: &Path) -> bool {
                 error = %error,
                 "could not enumerate displays; keeping default window geometry",
             );
-            return fullscreen;
+            return mode;
         }
     };
     let monitor = state
@@ -102,7 +117,7 @@ pub fn restore(window: &WebviewWindow, config_dir: &Path) -> bool {
             operation = "window_state.restore",
             "no display is available; keeping default window geometry",
         );
-        return fullscreen;
+        return mode;
     };
 
     let scale_factor = monitor.scale_factor();
@@ -112,7 +127,7 @@ pub fn restore(window: &WebviewWindow, config_dir: &Path) -> bool {
             scale_factor,
             "display reported an invalid scale factor; keeping default window geometry",
         );
-        return fullscreen;
+        return mode;
     }
 
     let width = restored_dimension(
@@ -152,7 +167,7 @@ pub fn restore(window: &WebviewWindow, config_dir: &Path) -> bool {
             "could not restore window position",
         );
     }
-    fullscreen
+    mode
 }
 
 impl WindowStateTracker {
@@ -197,6 +212,17 @@ impl WindowStateTracker {
                 return;
             }
         };
+        let maximized = match window.is_maximized() {
+            Ok(maximized) => maximized,
+            Err(error) => {
+                tracing::warn!(
+                    operation = "window_state.save",
+                    error = %error,
+                    "could not read maximized state; preserving previous geometry file",
+                );
+                return;
+            }
+        };
         let state = match self.last_normal.lock() {
             Ok(last_normal) => last_normal.clone(),
             Err(error) => {
@@ -216,6 +242,7 @@ impl WindowStateTracker {
             return;
         };
         state.fullscreen = fullscreen;
+        state.maximized = maximized;
 
         let path = config_dir.join(STATE_FILE);
         let result = serde_json::to_vec_pretty(&state)
@@ -274,6 +301,7 @@ fn current_normal_state(window: &WebviewWindow) -> Result<Option<WindowState>, S
         scale_factor,
         monitor_name,
         fullscreen: false,
+        maximized: false,
     };
     if !state.is_valid() {
         return Err("window reported invalid geometry".into());
@@ -323,4 +351,61 @@ fn clamp_position(
         x.clamp(monitor_position.x, max_x),
         y.clamp(monitor_position.y, max_y),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn normal_geometry() -> serde_json::Value {
+        serde_json::json!({
+            "x": 120,
+            "y": 80,
+            "width": 960,
+            "height": 800,
+            "scale_factor": 1.25,
+            "monitor_name": "display-1",
+        })
+    }
+
+    #[test]
+    fn legacy_geometry_defaults_to_normal_mode() {
+        let state: WindowState = serde_json::from_value(normal_geometry()).unwrap();
+        assert!(state.is_valid());
+        assert_eq!(state.mode(), WindowMode::default());
+    }
+
+    #[test]
+    fn legacy_fullscreen_remains_compatible_without_maximized_field() {
+        let mut saved = normal_geometry();
+        saved["fullscreen"] = true.into();
+        let state: WindowState = serde_json::from_value(saved).unwrap();
+        assert_eq!(
+            state.mode(),
+            WindowMode {
+                fullscreen: true,
+                maximized: false,
+            }
+        );
+    }
+
+    #[test]
+    fn window_modes_round_trip_without_replacing_normal_geometry() {
+        for fullscreen in [false, true] {
+            for maximized in [false, true] {
+                let mut saved = normal_geometry();
+                saved["fullscreen"] = fullscreen.into();
+                saved["maximized"] = maximized.into();
+                let state: WindowState = serde_json::from_value(saved.clone()).unwrap();
+                assert_eq!(
+                    state.mode(),
+                    WindowMode {
+                        fullscreen,
+                        maximized,
+                    }
+                );
+                assert_eq!(serde_json::to_value(state).unwrap(), saved);
+            }
+        }
+    }
 }

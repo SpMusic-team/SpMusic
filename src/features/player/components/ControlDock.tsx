@@ -1,4 +1,3 @@
-import { Search24Regular } from '@fluentui/react-icons'
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type FocusEvent, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react'
 import { AnimatePresence, animate, motion, type Easing } from 'motion/react'
 import { Button } from '@/components/ui/button'
@@ -24,7 +23,6 @@ import { VolumeControl } from './VolumeControl'
 export type VisualizationMode = 'off' | 'fade' | 'fullscreen'
 
 type ControlDockProps = Pick<PlayerUiViewModel, 'playback' | 'timeline' | 'volume' | 'queue'> & {
-  onSearch?: () => void
   visualIsPlaying: boolean
   playbackTransitionPending: boolean
   playbackVisualReady: boolean
@@ -473,7 +471,6 @@ export function ControlDock({
   onPlayToggle,
   visualizationMode,
   onVisualizationModeChange,
-  onSearch,
 }: ControlDockProps) {
   const systemIcons = useSystemIcons()
   const { appearance } = useAppearance()
@@ -610,7 +607,6 @@ export function ControlDock({
           <IconButton className="control-optional" icon={repeatPresentation.icon} label={repeatPresentation.label} selected={repeatPresentation.pressed} disabled={disabled} onClick={handleRepeatCycle} />
         </div>
         <div className="control-auxiliary control-auxiliary-end">
-          {onSearch ? <IconButton className="player-control-search" icon={Search24Regular} label="搜索" onClick={onSearch} /> : null}
           <IconButton
             animated
             className="control-optional"

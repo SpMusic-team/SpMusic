@@ -92,9 +92,9 @@ async function open(width=900,height=720) {
 }
 async function metrics(page) {
   return page.evaluate(()=>{
-    const menu=document.querySelector('.more-actions-menu'),s=getComputedStyle(menu),rect=el=>{const r=el.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom}},actions=[...menu.querySelectorAll('.more-action')]
+    const menu=document.querySelector('.more-actions-menu'),scroll=menu.querySelector('.more-actions-scroll')??menu,s=getComputedStyle(scroll),rect=el=>{const r=el.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom}},actions=[...menu.querySelectorAll('.more-action')]
     const leading=menu.querySelector('.more-actions-leading')
-    return {layout:document.querySelector('[data-player-layout]').dataset.playerLayout,viewport:{width:innerWidth,height:innerHeight},menu:rect(menu),leading:leading?rect(leading):null,scroll:{height:menu.scrollHeight,client:menu.clientHeight,top:menu.scrollTop,overflow:s.overflowY},paddingBottom:parseFloat(s.paddingBottom),fontSize:parseFloat(getComputedStyle(actions[0].querySelector('strong')).fontSize),cover:rect(menu.querySelector('.more-menu-cover')),feedback:[...menu.querySelectorAll('.more-feedback-action')].map(rect),actions:actions.map(el=>({label:el.textContent,disabled:el.disabled,...rect(el)}))}
+    return {layout:document.querySelector('[data-player-layout]').dataset.playerLayout,viewport:{width:innerWidth,height:innerHeight},menu:rect(menu),leading:leading?rect(leading):null,scroll:{height:scroll.scrollHeight,client:scroll.clientHeight,top:scroll.scrollTop,overflow:s.overflowY},paddingBottom:parseFloat(s.paddingBottom),fontSize:parseFloat(getComputedStyle(actions[0].querySelector('strong')).fontSize),cover:rect(menu.querySelector('.more-menu-cover')),feedback:[...menu.querySelectorAll('.more-feedback-action')].map(rect),actions:actions.map(el=>({label:el.textContent,disabled:el.disabled,...rect(el)}))}
   })
 }
 async function settleGeometry(page) {
@@ -139,8 +139,8 @@ async function assertWheelAccess(page,name) {
   await page.mouse.move(m.menu.x+m.menu.width/2,m.menu.y+m.menu.height/2)
   await page.mouse.wheel(0,Math.max(1000,m.scroll.height))
   await page.waitForFunction(()=>{
-    const menu=document.querySelector('.more-actions-menu'),r=menu.getBoundingClientRect(),last=menu.querySelector('.more-action-grid-secondary .more-action:last-child').getBoundingClientRect()
-    return menu.scrollTop>0&&last.bottom<=r.bottom+1&&last.top>=r.top
+    const menu=document.querySelector('.more-actions-menu'),scroll=menu.querySelector('.more-actions-scroll')??menu,r=menu.getBoundingClientRect(),last=menu.querySelector('.more-action-grid-secondary .more-action:last-child').getBoundingClientRect()
+    return scroll.scrollTop>0&&last.bottom<=r.bottom+1&&last.top>=r.top
   })
   const end=await metrics(page)
   assert(end.actions.at(-1).y>=end.menu.y&&end.actions.at(-1).bottom<=end.menu.bottom+1,'wheel reaches the last secondary action')

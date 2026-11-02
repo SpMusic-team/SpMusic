@@ -1,4 +1,5 @@
 import { RecentlyPlayedTracker, readRecentlyPlayed, writeRecentlyPlayed } from '../model/recentlyPlayed'
+import { isPlayerDragDiagnosticsRecording, playerDragDiagnosticId, recordPlayerDragDiagnostic, registerPlayerDragDiagnosticSnapshot } from '@/features/player/diagnostics/playerDragDiagnostics'
 import { folderSelectionPath, isRootSelectionActive, projectSelectedFolder } from '@/features/player/model/folderSelection'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
@@ -1852,14 +1853,24 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
   ) => {
     if (requestedEpoch === playlistScopeEpochRef.current) {
       const cached = hydratedCacheGet(hydratedAudioTrackCacheRef.current, sourcePath)
-      if (cached) return Promise.resolve(cached)
+      if (cached) {
+        if (isPlayerDragDiagnosticsRecording()) recordPlayerDragDiagnostic('hydration.cache-hit', { fileId: playerDragDiagnosticId(sourcePath), trackId: playerDragDiagnosticId(cached.id) })
+        return Promise.resolve(cached)
+      }
 
       const inFlight = hydrationInFlightRef.current.get(sourcePath)
-      if (inFlight) return inFlight
+      if (inFlight) {
+        if (isPlayerDragDiagnosticsRecording()) recordPlayerDragDiagnostic('hydration.inflight-hit', { fileId: playerDragDiagnosticId(sourcePath) })
+        return inFlight
+      }
     }
 
+    const diagnosticStarted = isPlayerDragDiagnosticsRecording() ? performance.now() : null
+    let diagnosticSucceeded = false
+    if (isPlayerDragDiagnosticsRecording()) recordPlayerDragDiagnostic('hydration.start', { fileId: playerDragDiagnosticId(sourcePath), epoch: requestedEpoch, inflight: hydrationInFlightRef.current.size })
     const request = hydrateAudioTrack(sourcePath)
       .then((hydratedTrack) => {
+        diagnosticSucceeded = true
         if (requestedEpoch === playlistScopeEpochRef.current) {
           hydratedCacheSet(hydratedAudioTrackCacheRef.current, sourcePath, hydratedTrack)
           if (normalizeAudioSourcePath(hydratedTrack.sourcePath) === normalizeAudioSourcePath(sourcePath)) {
@@ -1869,6 +1880,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
         return hydratedTrack
       })
       .finally(() => {
+        if (isPlayerDragDiagnosticsRecording()) recordPlayerDragDiagnostic('hydration.settled', { fileId: playerDragDiagnosticId(sourcePath), succeeded: diagnosticSucceeded, currentEpoch: requestedEpoch === playlistScopeEpochRef.current, elapsedMs: diagnosticStarted === null ? null : performance.now() - diagnosticStarted })
         if (hydrationInFlightRef.current.get(sourcePath) === request) {
           hydrationInFlightRef.current.delete(sourcePath)
         }
@@ -3221,7 +3233,10 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       ?? latestAudioStateRef.current?.currentTrackId
       ?? audioTrackRef.current?.id
     const originIndex = originTrackId ? queueTrackIndexRef.current.get(originTrackId) : undefined
-    if (!playlist?.tracks.length || !originTrackId || originIndex === undefined) return Promise.resolve(null)
+    if (!playlist?.tracks.length || !originTrackId || originIndex === undefined) {
+      if (isPlayerDragDiagnosticsRecording()) recordPlayerDragDiagnostic('audio-preview.rejected', { reason: !playlist?.tracks.length ? 'empty-queue' : !originTrackId ? 'no-origin' : 'missing-index', direction, originId: playerDragDiagnosticId(originTrackId), queueSize: playlist?.tracks.length ?? 0 })
+      return Promise.resolve(null)
+    }
 
     const playlistEpoch = playlistScopeEpochRef.current
     const scope = playlistScope(playlist)
@@ -3234,11 +3249,15 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       shuffleMode,
       getPageShuffleSession(playlist, originTrackId),
     )
-    if (!resolved) return Promise.resolve(null)
+    if (!resolved) {
+      if (isPlayerDragDiagnosticsRecording()) recordPlayerDragDiagnostic('audio-preview.rejected', { reason: 'no-available-target', direction, originId: playerDragDiagnosticId(originTrackId), originIndex })
+      return Promise.resolve(null)
+    }
     const { index: targetIndex, track: target } = resolved
 
     const previewId = trackCardPreviewIdRef.current + 1
     trackCardPreviewIdRef.current = previewId
+    if (isPlayerDragDiagnosticsRecording()) recordPlayerDragDiagnostic('audio-preview.request', { tokenId: previewId, direction, originId: playerDragDiagnosticId(originTrackId), targetId: playerDragDiagnosticId(target.id), originIndex, targetIndex, epoch: playlistEpoch })
     preparedTrackCardPreviewRef.current = null
     const createToken = (hydratedTrack: AudioTrackRef): PreparedTrackCardPreview => {
       const previewTrack = audioTrackToTrack(hydratedTrack)
@@ -3259,6 +3278,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     if (audioTrackMatchesDescriptor(cachedTrack, target)) {
       const token = createToken(cachedTrack)
       preparedTrackCardPreviewRef.current = token
+      if (isPlayerDragDiagnosticsRecording()) recordPlayerDragDiagnostic('audio-preview.ready', { tokenId: previewId, cached: true })
       return Promise.resolve(token)
     }
     if (cachedTrack) hydratedAudioTrackCacheRef.current.delete(target.sourcePath)
@@ -3269,17 +3289,32 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
         || playlistScopeEpochRef.current !== playlistEpoch
         || playlistScopeRef.current !== scope
         || !audioTrackMatchesDescriptor(hydratedTrack, target)
-      ) return null
+      ) {
+        if (isPlayerDragDiagnosticsRecording()) recordPlayerDragDiagnostic('audio-preview.stale', { tokenId: previewId, tokenCurrent: trackCardPreviewIdRef.current === previewId, epochCurrent: playlistScopeEpochRef.current === playlistEpoch, scopeCurrent: playlistScopeRef.current === scope, descriptorMatches: audioTrackMatchesDescriptor(hydratedTrack, target) })
+        return null
+      }
       const token = createToken(hydratedTrack)
       preparedTrackCardPreviewRef.current = token
+      if (isPlayerDragDiagnosticsRecording()) recordPlayerDragDiagnostic('audio-preview.ready', { tokenId: previewId, cached: false })
       return token
     }).catch((error: unknown) => {
+      if (isPlayerDragDiagnosticsRecording()) recordPlayerDragDiagnostic('audio-preview.failed', { tokenId: previewId })
       if (trackCardPreviewIdRef.current === previewId) {
         console.debug('Track-card preview hydration failed', error)
       }
       return null
     })
   }, [getPageShuffleSession, primeTrackArtwork, queueTracks, requestHydratedAudioTrack, shuffleMode])
+  useLayoutEffect(() => registerPlayerDragDiagnosticSnapshot('audio', () => ({
+    logicalId: playerDragDiagnosticId(logicalCursorTrackIdRef.current), desiredId: playerDragDiagnosticId(desiredAudioTrackIdRef.current),
+    presentationId: playerDragDiagnosticId(presentationTrackRef.current?.id), engineId: playerDragDiagnosticId(latestAudioStateRef.current?.currentTrackId),
+    epoch: playlistScopeEpochRef.current, scopeId: playerDragDiagnosticId(playlistScopeRef.current), queueSize: folderPlaylistRef.current?.tracks.length ?? 0,
+    logicalIndex: logicalCursorTrackIdRef.current ? queueTrackIndexRef.current.get(logicalCursorTrackIdRef.current) ?? null : null,
+    hydrationCount: hydrationInFlightRef.current.size, hydrationIds: [...hydrationInFlightRef.current.keys()].slice(0, 16).map(file => playerDragDiagnosticId(file)),
+    hydrationTruncated: hydrationInFlightRef.current.size > 16, hydratedCacheSize: hydratedAudioTrackCacheRef.current.size,
+    previewSequence: trackCardPreviewIdRef.current, prepared: preparedTrackCardPreviewRef.current ? { tokenId: preparedTrackCardPreviewRef.current.id, originId: playerDragDiagnosticId(preparedTrackCardPreviewRef.current.originTrackId), targetId: playerDragDiagnosticId(preparedTrackCardPreviewRef.current.targetTrackId), epoch: preparedTrackCardPreviewRef.current.playlistEpoch } : null,
+    timeline: timelineInteractionRef.current,
+  })))
 
   const commitTrackCardPreview = useCallback((tokenId: number) => {
     const token = preparedTrackCardPreviewRef.current

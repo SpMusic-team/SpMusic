@@ -1,3 +1,4 @@
+import type { PlayerMoreActions } from '@/features/player/model/playerUiViewModel'
 import { memo, useEffect } from 'react'
 import { motion } from 'motion/react'
 import { Button } from '@/components/ui/button'
@@ -22,6 +23,7 @@ type CoverPanelProps = {
   onLoadError: () => void
   ownsPlayerViewTransition: boolean
   onMoreOpenChange?: (open: boolean) => void
+  moreActions?: PlayerMoreActions
   moreOpen?: boolean
   onCollapse: () => void
 }
@@ -38,6 +40,7 @@ export const CoverPanel = memo(function CoverPanel({
   onLoadError,
   ownsPlayerViewTransition,
   onMoreOpenChange,
+  moreActions,
   moreOpen,
   onCollapse,
 }: CoverPanelProps) {
@@ -107,6 +110,7 @@ export const CoverPanel = memo(function CoverPanel({
                 onLike={onLike}
                 onDislike={onDislike}
                 onOpenChange={onMoreOpenChange}
+                actions={moreActions}
                 open={moreOpen}
               />
             </div>

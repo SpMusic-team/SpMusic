@@ -17,6 +17,7 @@ import { usePlaylistControllerMotion } from '../hooks/usePlaylistControllerMotio
 import { PLAYLIST_SONG_LAYOUTS, type PlaylistSongLayoutDescriptor } from '../model/playlistSongLayouts'
 import { FOLDER_CARD_LAYOUTS } from '../model/folderCardLayouts'
 import { searchLibrary, SEARCH_CATEGORIES, uniqueSearchSongs, type SearchCategory, type SearchCollection, type SearchSection } from '../model/librarySearch'
+import { persistSearchCategories, readSearchCategories } from '../model/searchFilterStorage'
 import type { AllSongsItem, PlayerUiViewModel } from '../model/playerUiViewModel'
 import { PlaylistCard } from './PlaylistCard'
 import { PlaylistActionButtons } from './PlaylistActionButtons'
@@ -117,7 +118,7 @@ export function SearchPanel({ viewModel, store, controllerMode = 'movable' }: { 
   const [headerOffscreen, setHeaderOffscreen] = useState(false)
   const [toolbarPassed, setToolbarPassed] = useState(false)
   const [query, setQuery] = useState('')
-  const [categories, setCategories] = useState<readonly SearchCategory[]>(ALL_CATEGORIES)
+  const [categories, setCategories] = useState<readonly SearchCategory[]>(() => readSearchCategories(ALL_CATEGORIES))
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
   const [selectMode, setSelectMode] = useState(false)
   const [expanded, setExpanded] = useState<{ category: SearchCategory; item: SearchCollection } | null>(null)
@@ -194,12 +195,18 @@ export function SearchPanel({ viewModel, store, controllerMode = 'movable' }: { 
   </DropdownMenuRadioGroup></DropdownMenuGroup></DropdownMenuContent></DropdownMenu>
   const shuffleResults = () => { void search.onShufflePlay?.(queueSongs.filter(song => song.available).map(({ scope, trackId }) => ({ scope, trackId }))) }
   const toggleSelection = () => { setSelectMode(!selectMode); setSelected(new Set()) }
+  const updateCategories = (next: readonly SearchCategory[]) => {
+    // Only explicit user intent writes the preference, so mounting the panel or
+    // re-rendering it never touches storage.
+    setCategories(next)
+    persistSearchCategories(next, ALL_CATEGORIES)
+  }
   return <><section ref={panelRef} className="search-page folder-hierarchy-content" aria-label="聚合搜索页面" hidden={!search.isOpen} inert={!search.isOpen || undefined} tabIndex={-1}>
     <header className="search-page-header"><div ref={searchBoxRef} className="search-page-input"><Search48Regular aria-hidden="true" /><Input ref={inputRef} type="search" aria-label="聚合搜索" placeholder="搜索" value={query} onChange={event => { setQuery(event.target.value); setExpanded(null); setSelected(new Set()) }} />
       {query ? <Button variant="ghost" size="icon" aria-label="清空搜索" onClick={() => { setQuery(''); setExpanded(null); setSelected(new Set()); inputRef.current?.focus() }}><icons.close /></Button> : null}
       </div>
-      <div className="search-page-filters" role="group" aria-label="搜索分类"><Button variant="outline" aria-label="全选搜索分类" aria-pressed={categories.length === ALL_CATEGORIES.length} onClick={() => { setCategories(categories.length === ALL_CATEGORIES.length ? [] : ALL_CATEGORIES); setExpanded(null); setSelected(new Set()) }}>全选</Button>
-        {SEARCH_CATEGORIES.map(([id, label]) => <Button key={id} variant="outline" aria-label={`筛选${label}`} aria-pressed={categories.includes(id)} onClick={() => { setCategories(previous => previous.includes(id) ? previous.filter(value => value !== id) : [...previous, id]); setExpanded(null); setSelected(new Set()) }}>{label}</Button>)}
+      <div className="search-page-filters" role="group" aria-label="搜索分类"><Button variant="outline" aria-label="全选搜索分类" aria-pressed={categories.length === ALL_CATEGORIES.length} onClick={() => { updateCategories(categories.length === ALL_CATEGORIES.length ? [] : ALL_CATEGORIES); setExpanded(null); setSelected(new Set()) }}>全选</Button>
+        {SEARCH_CATEGORIES.map(([id, label]) => <Button key={id} variant="outline" aria-label={`筛选${label}`} aria-pressed={categories.includes(id)} onClick={() => { updateCategories(categories.includes(id) ? categories.filter(value => value !== id) : [...categories, id]); setExpanded(null); setSelected(new Set()) }}>{label}</Button>)}
       </div>
       <div ref={toolbarRef} className="search-page-actions"><div className="playlist-management-actions">
         {expanded ? <Button variant="outline" onClick={() => { setExpanded(null); setSelected(new Set()) }}>返回搜索结果</Button> : null}

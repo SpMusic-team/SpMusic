@@ -1,9 +1,13 @@
 import { longTracksSongs, readLongTracksMinDurationMs, writeLongTracksMinDurationMs, isLongTracksMinDurationMs } from '../model/longTracks'
+import { albumEntries } from '../model/albumLibrary'
+import { artistEntries } from '../model/artistLibrary'
+import { insideFolder, parentFolder } from '../model/folderHierarchy'
 import { recentlyAddedSongs } from '../model/recentlyAdded'
 import { recentlyPlayedSongs } from '../model/recentlyPlayed'
 import type { MediaLibraryCategoryId, MediaLibraryRoute } from '@/features/player/model/mediaLibraryCategories'
 import type { ArtistLocation } from '@/features/player/model/artistLibrary'
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { toast } from 'sonner'
 import { DevAudioToolsAvailability, DevAudioToolsSlot } from '@/features/player/components/DevAudioToolsSlot'
 import { PlayerSurface } from '@/features/player/components/PlayerSurface'
 import { playlistScope, useAudioPlayer } from '@/features/player/hooks/useAudioPlayer'
@@ -43,6 +47,8 @@ function useStablePlaylistTrackRows(input: PlaylistTrackItemViewModel[]): Playli
 
 export function PlayerShell() {
   const [isSearchOpen, setIsSearchOpen] = useState(false)
+  const [moreNavigationTrackId, setMoreNavigationTrackId] = useState<string | null>(null)
+  const [pendingArtistSongs, setPendingArtistSongs] = useState<{ trackId: string; sourcePath: string } | null>(null)
   const [longTracksMinDurationMs, setLongTracksMinDurationMs] = useState(readLongTracksMinDurationMs)
   const changeLongTracksMinDuration = useCallback((value: number) => {
     if (isLongTracksMinDurationMs(value)) setLongTracksMinDurationMs(value)
@@ -154,9 +160,9 @@ export function PlayerShell() {
     if (!isBrowsingActive && browsedScope) ensurePlaylistSummaries(browsedScope)
   }, [browsedScope, ensurePlaylistSummaries, isBrowsingActive])
   useEffect(() => {
-    if (!isSearchOpen && (libraryRoute.view !== 'category' || !['songs', 'recent-played', 'recent-added', 'long-tracks', 'folders', 'folder', 'album', 'artist', 'album-artist', 'composer'].includes(libraryRoute.categoryId))) return
+    if (!pendingArtistSongs && !isSearchOpen && (libraryRoute.view !== 'category' || !['songs', 'recent-played', 'recent-added', 'long-tracks', 'folders', 'folder', 'album', 'artist', 'album-artist', 'composer'].includes(libraryRoute.categoryId))) return
     for (const source of librarySources) ensurePlaylistSummaries(playlistScope(source))
-  }, [isSearchOpen, libraryRoute, librarySources, ensurePlaylistSummaries])
+  }, [pendingArtistSongs, isSearchOpen, libraryRoute, librarySources, ensurePlaylistSummaries])
   const handlePlaylistOpenChange = useCallback((open: boolean) => {
     setPlaylistArtworkSettled(false)
     setIsPlaylistOpen(open)
@@ -454,6 +460,55 @@ export function PlayerShell() {
       : isBrowsingActive ? player.playbackSourceScope ?? displayScope ?? undefined : displayScope ?? undefined,
   }
 
+  // Resolve grouping from raw library tags even when the visible library rows
+  // are dormant behind the player. Presentation fallbacks cannot identify albums.
+  const navigationReady = moreNavigationTrackId === currentTrackId && player.libraryFolderPlaylists.every(source =>
+    player.playlistSummaryStatusByScope[playlistScope(source)] === 'ready')
+  const navigationSongs = useMemo(() => navigationReady ? allSongDescriptors.map(song => ({ ...song,
+    track: summariesByScope[song.scope]?.[song.trackId] ?? song.track })) : [], [navigationReady, allSongDescriptors, summariesByScope])
+  const currentPath = player.track?.sourcePath ? normalizeAudioSourcePath(player.track.sourcePath) : null
+  const librarySong = navigationSongs.find(song => song.key === currentPath)
+  const currentAlbum = useMemo(() => librarySong ? albumEntries(navigationSongs).find(album => album.songs.some(song => song.key === librarySong.key)) : undefined, [librarySong, navigationSongs])
+  const currentArtist = useMemo(() => librarySong ? artistEntries(navigationSongs).find(artist => artist.songs.some(song => song.key === librarySong.key)) : undefined, [librarySong, navigationSongs])
+  const currentRoot = currentPath ? [...player.activeFolderPaths].filter(root => insideFolder(currentPath, root))
+    .sort((left, right) => right.length - left.length)[0] : undefined
+  const artistNavigationError = player.libraryFolderErrors[''] || (currentRoot ? player.libraryFolderErrors[currentRoot] : undefined)
+  const actionSource = librarySources.find(source => playlistScope(source) === player.playbackSourceScope)
+    ?? librarySources.find(source => playlistScope(source) === player.activePlaylistScope)
+  const actionTrack = actionSource?.tracks.find(track => track.id === currentTrackId)
+  const actionScope = actionTrack && actionSource ? playlistScope(actionSource) : player.activePlaylistScope
+  const actionSnapshot = actionScope && currentTrackId ? { scope: actionScope, songKeys: Object.freeze([currentTrackId]) } : undefined
+  const canRemoveCurrent = Boolean(actionTrack && actionSource && !playbackQueueOrigin(actionSource)
+    && (actionSource.sourceKind === 'custom' || actionSource.sourceKind === 'm3u8'))
+  const openCurrentCategory = (category: MediaLibraryCategoryId) => {
+    setIsSearchOpen(false)
+    selectLibraryCategory(category)
+  }
+  useEffect(() => {
+    if (!pendingArtistSongs) return
+    const stillCurrent = pendingArtistSongs.trackId === currentTrackId && pendingArtistSongs.sourcePath === currentPath
+      && !isPlaylistOpen && !isSearchOpen
+    if (stillCurrent && !artistNavigationError && (player.libraryRestorePending || !navigationReady)) return
+    let cancelled = false
+    queueMicrotask(() => {
+      if (cancelled) return
+      setPendingArtistSongs(null)
+      toast.dismiss('player-artist-songs')
+      if (!stillCurrent) return
+      if (artistNavigationError) { toast.error(`无法读取艺术家信息：${artistNavigationError}，请稍后重试。`); return }
+      if (!currentArtist) {
+        toast.error(librarySong ? '无法读取此歌曲的艺术家信息，请稍后重试。' : '此歌曲不在所选音乐文件夹中，暂无对应艺术家页面。')
+        return
+      }
+      setPlaylistArtworkSettled(false)
+      setLibraryRoute({ view: 'category', categoryId: 'artist' })
+      setArtistLocation({ artistKey: currentArtist.key, view: 'songs' })
+      setIsPlaylistOpen(true)
+    })
+    return () => { cancelled = true }
+  }, [pendingArtistSongs, currentTrackId, currentPath, isPlaylistOpen, isSearchOpen, player.libraryRestorePending, navigationReady, currentArtist, librarySong, artistNavigationError])
+  useEffect(() => () => { toast.dismiss('player-artist-songs') }, [])
+
   const viewModel: PlayerUiViewModel = {
     search: { isOpen: isSearchOpen, onOpenChange: setIsSearchOpen, allSongs: searchSongs, metadataStatus: searchRowsReady ? 'ready' : 'loading',
       onPlaySong: (scope, trackId, entries) => { void player.selectPlaybackQueueTrack({ kind: 'all-songs', entries: entries ?? [{ scope, trackId }] }, trackId) },
@@ -461,6 +516,38 @@ export function PlayerShell() {
     },
     folderSelection: player.folderSelection,
     playback: {
+      moreActions: player.track ? {
+        trackId: player.track.id,
+        disabled: player.audioBusy || player.transportBusy || player.selectionPending || player.deletePending || player.timelineInteraction === 'seeking',
+        deleteSnapshot: actionSnapshot ? { ...actionSnapshot, canRemoveFromList: canRemoveCurrent } : undefined,
+        addSnapshot: actionSnapshot,
+        onDeleteSongs: player.deleteSongs,
+        onPreparePlaylistAdd: preparePlaylistAdd,
+        onAddToPlaylist: player.addToPlaylist,
+        onRemoveFromPlaylist: player.removeFromPlaylist,
+        onCreateAddPlaylist: createAddPlaylist,
+        onPrepareNavigation: () => { setMoreNavigationTrackId(player.track!.id); for (const source of player.libraryFolderPlaylists) ensurePlaylistSummaries(playlistScope(source)) },
+        onArtist: currentArtist ? () => { openCurrentCategory('artist'); setArtistLocation({ artistKey: currentArtist.key, view: 'albums' }) } : undefined,
+        onArtistSongs: () => {
+          if (!currentTrackId || player.audioBusy || player.transportBusy || player.selectionPending || player.deletePending || player.timelineInteraction === 'seeking') return
+          if (!currentPath) { toast.error('此歌曲暂无可用的媒体库艺术家页面。'); return }
+          setMoreNavigationTrackId(currentTrackId)
+          for (const source of player.libraryFolderPlaylists) {
+            const scope = playlistScope(source)
+            const descriptor = source.tracks.find(song => normalizeAudioSourcePath(song.sourcePath) === currentPath)
+            // A failed summary pass settles as ready with missing raw tags.
+            // Retry that source explicitly; missing tags are not an unknown artist.
+            const retry = Boolean(descriptor && player.playlistSummaryStatusByScope[scope] === 'ready'
+              && summariesByScope[scope]?.[descriptor.id]?.libraryArtistName === undefined)
+            ensurePlaylistSummaries(scope, source, retry)
+          }
+          setPendingArtistSongs({ trackId: currentTrackId, sourcePath: currentPath })
+          if (!navigationReady) toast.loading('正在读取艺术家信息…', { id: 'player-artist-songs' })
+        },
+        onAlbum: currentAlbum ? () => { openCurrentCategory('album'); setAlbumLocation(currentAlbum.key) } : undefined,
+        onFolder: currentRoot && currentPath && librarySong ? () => { openCurrentCategory('folder'); setFlatFolderLocation({ rootPath: currentRoot, directoryPath: parentFolder(currentPath) }) } : undefined,
+        navigationUnavailableReason: !navigationReady ? '正在读取歌曲的媒体库标签，请稍后重试' : '此歌曲不在所选音乐文件夹中，暂无对应媒体库页面',
+      } : undefined,
       track: player.track,
       audioOutputInfo: player.audioOutputInfo,
       artwork: player.artwork,

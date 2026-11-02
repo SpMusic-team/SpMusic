@@ -1,17 +1,18 @@
 import { useLayoutEffect, useRef, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
 
-const LONG_PRESS_MS = 400
+export const LONG_PRESS_MS = 400
 
 type Options = {
   identity: string
   disabled: boolean
   selectMode: boolean
   onEnterSelectMode?: (identity: string) => void
+  onConsumedPointer?: (pointer: { pointerId: number; pointerType: string }) => void
 }
 
 // Listeners exist only for the active press. Selection state remains owned by
 // the parent; the release-click token survives that parent's selection render.
-export function usePlaylistCardLongPress({ identity, disabled, selectMode, onEnterSelectMode }: Options) {
+export function usePlaylistCardLongPress({ identity, disabled, selectMode, onEnterSelectMode, onConsumedPointer }: Options) {
   const active = useRef<{ cancel: () => void; pointerType: string } | null>(null)
   const releaseClick = useRef<{ pointerType: string } | null>(null)
   const enabled = !disabled && Boolean(onEnterSelectMode)
@@ -50,12 +51,14 @@ export function usePlaylistCardLongPress({ identity, disabled, selectMode, onEnt
       window.removeEventListener('scroll', cancel, true)
       window.removeEventListener('wheel', cancel, true)
       window.removeEventListener('blur', cancel)
+      window.removeEventListener('keydown', keyDown)
       document.removeEventListener('visibilitychange', cancel)
       button.removeEventListener('dragstart', cancel)
       button.removeEventListener('selectstart', cancel)
       if (active.current === session) active.current = null
     }
     const anotherPointer = (next: PointerEvent) => { if (next.pointerId !== pointerId) cancel() }
+    const keyDown = (next: KeyboardEvent) => { if (next.key === 'Escape') cancel() }
     const touchStart = (next: TouchEvent) => { if (next.touches.length > 1) cancel() }
     const end = (next: PointerEvent) => { if (next.pointerId === pointerId) cancel() }
     const move = (next: PointerEvent) => {
@@ -75,6 +78,7 @@ export function usePlaylistCardLongPress({ identity, disabled, selectMode, onEnt
     window.addEventListener('scroll', cancel, { capture: true, passive: true })
     window.addEventListener('wheel', cancel, { capture: true, passive: true })
     window.addEventListener('blur', cancel)
+    window.addEventListener('keydown', keyDown)
     document.addEventListener('visibilitychange', cancel)
     button.addEventListener('dragstart', cancel)
     button.addEventListener('selectstart', cancel)
@@ -86,6 +90,7 @@ export function usePlaylistCardLongPress({ identity, disabled, selectMode, onEnt
         return
       }
       releaseClick.current = { pointerType }
+      onConsumedPointer?.({ pointerId, pointerType })
       onEnterSelectMode(identity)
     }, LONG_PRESS_MS)
   }

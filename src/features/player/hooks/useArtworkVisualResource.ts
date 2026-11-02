@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { isPlayerDragDiagnosticsRecording, playerDragDiagnosticId, recordPlayerDragDiagnostic, registerPlayerDragDiagnosticSnapshot } from '@/features/player/diagnostics/playerDragDiagnostics'
 import type { Track, TrackArtwork, TrackArtworkPrefetchCandidate } from '@/features/player/model/playerTypes'
 import type { TrackCardPreviewToken, TrackSelectionVisualIntent } from '@/features/player/model/playerUiViewModel'
 import {
@@ -42,6 +43,7 @@ type ArtworkCanvasLease = {
 }
 
 type ArtworkCanvasPool = {
+  diagnosticId: number
   acquire: (
     signal: AbortSignal,
     backingEdge: AudioLoadCoverPixelsInput['maxEdge'],
@@ -85,12 +87,28 @@ const artworkLoadQueue: ArtworkLoadQueueJob[] = []
 const artworkLoadJobs = new Map<string, ArtworkLoadQueueJob>()
 let artworkLoadQueueActive = false
 let nextArtworkSchedulerScopeId = 0
+let nextDiagnosticObjectId = 0
+const diagnosticObjectIds = new WeakMap<object, number>()
+const diagnosticResourceStates = new WeakMap<OwnedArtworkResource, () => { references: number; cacheReleased: boolean; released: boolean }>()
+function diagnosticObjectId(object: object) {
+  let id = diagnosticObjectIds.get(object)
+  if (id === undefined) { id = ++nextDiagnosticObjectId; diagnosticObjectIds.set(object, id) }
+  return id
+}
+function diagnosticResource(resource: OwnedArtworkResource) {
+  return { wrapperId: diagnosticObjectId(resource), canvasId: resource.view ? diagnosticObjectId(resource.view.source) : null, ...(diagnosticResourceStates.get(resource)?.() ?? {}) }
+}
+function diagnosticReferenceChange(resource: OwnedArtworkResource, references: number, cacheReleased: boolean) {
+  if (isPlayerDragDiagnosticsRecording()) recordPlayerDragDiagnostic('artwork.resource.references', { wrapperId: diagnosticObjectId(resource), references, cacheReleased })
+}
+registerPlayerDragDiagnosticSnapshot('artwork-scheduler', () => ({ active: artworkLoadQueueActive, queued: artworkLoadQueue.length, jobsCount: artworkLoadJobs.size, truncated: artworkLoadJobs.size > 32, jobs: [...artworkLoadJobs.values()].slice(0, 32).map(job => ({ id: playerDragDiagnosticId(job.key), schedulerScope: Number(job.key.split('\u0000', 1)[0]), priority: job.priority, consumers: job.consumers.size, active: job.active, settled: job.settled })) }))
 
 function settleArtworkLoadJob(job: ArtworkLoadQueueJob): ArtworkLoadQueueConsumer[] {
   // Retire identity ownership and release the global execution gate before
   // resolving consumers. Promise continuations may schedule an immediate retry;
   // they must observe a fresh queued job, never this already-settled instance.
   job.settled = true
+  if (isPlayerDragDiagnosticsRecording()) recordPlayerDragDiagnostic('artwork.job.settled', { id: playerDragDiagnosticId(job.key), consumers: job.consumers.size })
   if (artworkLoadJobs.get(job.key) === job) artworkLoadJobs.delete(job.key)
   const consumers = [...job.consumers]
   job.consumers.clear()
@@ -110,6 +128,7 @@ function pumpArtworkLoadQueue() {
   }
   artworkLoadQueueActive = true
   job.active = true
+  if (isPlayerDragDiagnosticsRecording()) recordPlayerDragDiagnostic('artwork.job.start', { id: playerDragDiagnosticId(job.key), priority: job.priority, consumers: job.consumers.size, queued: artworkLoadQueue.length })
   void job.execute(() => job.priority === 0 ? 'foreground' : 'prefetch').then((loaded) => {
     const consumers = settleArtworkLoadJob(job)
     const deliveries = consumers.map(() => loaded ? forkLoadedArtworkResource(loaded) : null)
@@ -152,10 +171,12 @@ function forkLoadedArtworkResource(loaded: LoadedArtworkResource): LoadedArtwork
       if (released) return () => undefined
       let leaseReleased = false
       referenceCount += 1
+      diagnosticReferenceChange(resource, referenceCount, cacheReleased)
       return () => {
         if (leaseReleased) return
         leaseReleased = true
         referenceCount -= 1
+        diagnosticReferenceChange(resource, referenceCount, cacheReleased)
         releaseIfUnused()
       }
     },
@@ -163,17 +184,20 @@ function forkLoadedArtworkResource(loaded: LoadedArtworkResource): LoadedArtwork
       if (cacheReleased) return
       cacheReleased = true
       referenceCount -= 1
+      diagnosticReferenceChange(resource, referenceCount, cacheReleased)
       releaseIfUnused()
     },
     releaseCacheIfIdle: () => {
       if (cacheReleased || referenceCount !== 1) return false
       cacheReleased = true
       referenceCount = 0
+      diagnosticReferenceChange(resource, referenceCount, cacheReleased)
       releaseIfUnused()
       return true
     },
     isReleased: () => released || sharedResource.isReleased(),
   }
+  diagnosticResourceStates.set(resource, () => ({ references: referenceCount, cacheReleased, released }))
   return { resource, fallbackSource: loaded.fallbackSource }
 }
 
@@ -211,6 +235,7 @@ function scheduleArtworkLoad(
       reject,
       abort: () => {
         scheduledJob.consumers.delete(consumer)
+        if (isPlayerDragDiagnosticsRecording()) recordPlayerDragDiagnostic('artwork.job.consumer-abort', { id: playerDragDiagnosticId(scheduledJob.key), consumers: scheduledJob.consumers.size, active: scheduledJob.active })
         resolve(null)
         if (!scheduledJob.active && !scheduledJob.consumers.size) {
           const index = artworkLoadQueue.indexOf(scheduledJob)
@@ -220,6 +245,7 @@ function scheduleArtworkLoad(
       },
     }
     scheduledJob.consumers.add(consumer)
+    if (isPlayerDragDiagnosticsRecording()) recordPlayerDragDiagnostic('artwork.job.consumer-add', { id: playerDragDiagnosticId(scheduledJob.key), consumers: scheduledJob.consumers.size, purpose, active: scheduledJob.active })
     signal.addEventListener('abort', consumer.abort, { once: true })
   })
   pumpArtworkLoadQueue()
@@ -239,8 +265,11 @@ function createArtworkCanvasPool(): ArtworkCanvasPool {
   let disposed = false
   const waiters: ArtworkCanvasWaiter[] = []
   const availabilityWaiters = new Set<(available: boolean) => void>()
+  const poolId = diagnosticObjectId(entries)
+  const unregisterDiagnostic = registerPlayerDragDiagnosticSnapshot(`pool-${poolId}`, () => ({ poolId, disposed, available: available.length, acquireWaiters: waiters.length, availabilityWaiters: availabilityWaiters.size, entries: entries.map(entry => ({ canvasId: diagnosticObjectId(entry.canvas), available: available.includes(entry), edge: entry.backingEdge })) }))
 
   const publishAvailability = (isAvailable: boolean) => {
+    if (isPlayerDragDiagnosticsRecording()) recordPlayerDragDiagnostic('artwork.pool.availability', { poolId, available: isAvailable, waiters: availabilityWaiters.size })
     for (const resolve of availabilityWaiters) resolve(isAvailable)
     availabilityWaiters.clear()
   }
@@ -265,6 +294,7 @@ function createArtworkCanvasPool(): ArtworkCanvasPool {
   ): ArtworkCanvasLease => {
     prepareEntry(entry, requestedEdge)
     let active = true
+    if (isPlayerDragDiagnosticsRecording()) recordPlayerDragDiagnostic('artwork.pool.lease', { poolId, canvasId: diagnosticObjectId(entry.canvas), available: available.length, edge: requestedEdge })
     return {
       canvas: entry.canvas,
       backingEdge: entry.backingEdge,
@@ -272,6 +302,7 @@ function createArtworkCanvasPool(): ArtworkCanvasPool {
       release: () => {
         if (!active) return
         active = false
+        if (isPlayerDragDiagnosticsRecording()) recordPlayerDragDiagnostic('artwork.pool.release', { poolId, canvasId: diagnosticObjectId(entry.canvas), disposed, available: available.length, acquireWaiters: waiters.length, availabilityWaiters: availabilityWaiters.size })
         if (disposed) return
         while (waiters.length) {
           const foregroundIndex = waiters.findIndex((pending) => pending.purpose === 'foreground')
@@ -297,6 +328,7 @@ function createArtworkCanvasPool(): ArtworkCanvasPool {
   }
 
   return {
+    diagnosticId: poolId,
     acquire: (signal, backingEdge, purpose) => {
       if (disposed || signal.aborted) return Promise.resolve(null)
       const entry = available.pop()
@@ -334,11 +366,13 @@ function createArtworkCanvasPool(): ArtworkCanvasPool {
     waitForAvailable: () => {
       if (disposed) return Promise.resolve(false)
       if (available.length) return Promise.resolve(true)
+      if (isPlayerDragDiagnosticsRecording()) recordPlayerDragDiagnostic('artwork.pool.wait', { poolId, available: available.length, availabilityWaiters: availabilityWaiters.size + 1 })
       return new Promise((resolve) => { availabilityWaiters.add(resolve) })
     },
     dispose: () => {
       if (disposed) return
       disposed = true
+      unregisterDiagnostic()
       for (const pending of waiters.splice(0)) {
         pending.signal.removeEventListener('abort', pending.abort)
         pending.resolve(null)
@@ -411,7 +445,7 @@ function createOwnedArtworkResource(
     lease?.release()
   }
 
-  return {
+  const resource: OwnedArtworkResource = {
     get view() {
       if (!lease || !view) return undefined
       if (released || !lease.isActive()) {
@@ -425,10 +459,12 @@ function createOwnedArtworkResource(
       }
       let leaseReleased = false
       referenceCount += 1
+      diagnosticReferenceChange(resource, referenceCount, cacheReleased)
       return () => {
         if (leaseReleased) return
         leaseReleased = true
         referenceCount -= 1
+        diagnosticReferenceChange(resource, referenceCount, cacheReleased)
         releaseIfUnused()
       }
     },
@@ -436,17 +472,21 @@ function createOwnedArtworkResource(
       if (cacheReleased) return
       cacheReleased = true
       referenceCount -= 1
+      diagnosticReferenceChange(resource, referenceCount, cacheReleased)
       releaseIfUnused()
     },
     releaseCacheIfIdle: () => {
       if (cacheReleased || referenceCount !== 1) return false
       cacheReleased = true
       referenceCount = 0
+      diagnosticReferenceChange(resource, referenceCount, cacheReleased)
       releaseIfUnused()
       return true
     },
     isReleased: () => released,
   }
+  diagnosticResourceStates.set(resource, () => ({ references: referenceCount, cacheReleased, released }))
+  return resource
 }
 
 function artworkIdentity(track: Track, artwork: TrackArtwork): string {
@@ -704,6 +744,7 @@ export function useArtworkVisualResource(
       if (resourceRegistryRef.current.size < 8) break
     }
   }, [pinnedIdentities])
+
   // A successful selection can settle before its artwork decode creates a
   // layer, so retain the intent in the view model. The monotonically increasing
   // activity sequence prevents that retained intent from being reused by a
@@ -803,11 +844,13 @@ export function useArtworkVisualResource(
 
     if (!requestFilePath) return loadImageFallback()
     try {
+      if (isPlayerDragDiagnosticsRecording()) recordPlayerDragDiagnostic('artwork.decode.request', { fileId: playerDragDiagnosticId(requestFilePath), edge: coverMaxEdge, purpose: getPurpose() })
       const pixels = await loadAudioCoverPixels({
         filePath: requestFilePath,
         maxEdge: coverMaxEdge,
         requestId: nextCoverRequestId(),
       })
+      if (isPlayerDragDiagnosticsRecording()) recordPlayerDragDiagnostic('artwork.decode.ready', { fileId: playerDragDiagnosticId(requestFilePath), active: lease.isActive() })
       if (!lease.isActive()) {
         lease.release()
         return null
@@ -822,6 +865,7 @@ export function useArtworkVisualResource(
         fallbackSource: primary ?? secondary,
       }
     } catch (error: unknown) {
+      if (isPlayerDragDiagnosticsRecording()) recordPlayerDragDiagnostic('artwork.decode.failed', { fileId: playerDragDiagnosticId(requestFilePath), stale: isAudioCoverPixelsError(error) && error.code === 'STALE_REQUEST', active: lease.isActive() })
       if (isAudioCoverPixelsError(error) && error.code === 'STALE_REQUEST') {
         lease.release()
         return null
@@ -860,6 +904,23 @@ export function useArtworkVisualResource(
     }
     latestArtworkDetailsReadyRef.current = !detailsPending || Boolean(matchingPrefetchCandidate)
   }, [currentTransitionIntent, detailsPending, effectiveArtwork, effectiveTrack, matchingPrefetchCandidate])
+
+  useLayoutEffect(() => registerPlayerDragDiagnosticSnapshot(`artwork-${artworkSchedulerScopeRef.current}`, () => ({
+    trackId: playerDragDiagnosticId(effectiveTrack?.id), detailsPending,
+    schedulerScope: artworkSchedulerScopeRef.current, poolId: canvasPoolRef.current?.diagnosticId ?? null,
+    generation: generationRef.current, previewGeneration: previewGenerationRef.current,
+    foreground: foregroundRequestRef.current ? { identity: playerDragDiagnosticId(foregroundRequestRef.current.identity), aborted: foregroundRequestRef.current.controller.signal.aborted } : null,
+    requestAborted: requestControllerRef.current?.signal.aborted ?? null, previewAborted: previewControllerRef.current?.signal.aborted ?? null,
+    latestTrackId: playerDragDiagnosticId(latestRequestRef.current.track?.id),
+    latestIdentity: latestRequestRef.current.track && latestRequestRef.current.requestedArtwork ? playerDragDiagnosticId(artworkResourceIdentity(latestRequestRef.current.track, latestRequestRef.current.requestedArtwork)) : null,
+    registryCount: resourceRegistryRef.current.size, registryTruncated: resourceRegistryRef.current.size > 12,
+    registry: [...resourceRegistryRef.current].slice(0, 12).map(([identity, entry]) => ({ identity: playerDragDiagnosticId(identity), pinned: pinnedIdentitiesRef.current.has(identity), ...diagnosticResource(entry.resource) })),
+    layers: layersRef.current.slice(0, 8).map(layer => ({ layerId: layer.id, identity: playerDragDiagnosticId(layer.identity), phase: layer.phase, tokenId: layer.previewTokenId ?? null, painted: paintedLayerIdsRef.current.has(layer.id), ...diagnosticResource(layer.resource) })),
+    layerCount: layersRef.current.length, queued: queuedLayerRef.current ? { identity: playerDragDiagnosticId(queuedLayerRef.current.identity), ...diagnosticResource(queuedLayerRef.current.resource) } : null,
+    prepared: preparedArtworkRef.current ? { identity: playerDragDiagnosticId(preparedArtworkRef.current.identity), aborted: preparedArtworkRef.current.controller.signal.aborted, promoted: preparedArtworkRef.current.promoted, resource: preparedArtworkRef.current.resource ? diagnosticResource(preparedArtworkRef.current.resource) : null } : null,
+    promoted: promotedArtworkRef.current ? { identity: playerDragDiagnosticId(promotedArtworkRef.current.identity), aborted: promotedArtworkRef.current.controller.signal.aborted } : null,
+    previewTokenId: previewToken?.id ?? null, paintedPreviewTokenId, warmCount: adjacentWarmControllersRef.current.size,
+  })))
 
   useLayoutEffect(() => {
     let frameId: number | null = null
@@ -925,6 +986,7 @@ export function useArtworkVisualResource(
     }
     const registry = resourceRegistryRef.current
     const previous = registry.get(identity)
+    if (isPlayerDragDiagnosticsRecording()) recordPlayerDragDiagnostic('artwork.registry.set', { identity: playerDragDiagnosticId(identity), previousWrapperId: previous ? diagnosticObjectId(previous.resource) : null, ...diagnosticResource(entry.resource), registryCount: registry.size })
     if (previous && previous.resource !== entry.resource) previous.resource.releaseCache()
     registry.delete(identity)
     registry.set(identity, entry)
@@ -1141,8 +1203,16 @@ export function useArtworkVisualResource(
       replaceLayers(nextLayers)
     }
     if (!previewToken) return
+    const existingBoundPreview = layersRef.current.find((layer) => layer.previewTokenId === previewToken.id)
+    if (existingBoundPreview) {
+      // Equivalent candidate publications do not invalidate pixels already
+      // painted by this exact layer. An available source alone is not ready.
+      setPaintedPreviewTokenId(existingBoundPreview.phase === 'preview'
+        && paintedLayerIdsRef.current.has(existingBoundPreview.id)
+        && Boolean(existingBoundPreview.resource.view) ? previewToken.id : null)
+      return
+    }
     setPaintedPreviewTokenId(null)
-    if (layersRef.current.some((layer) => layer.previewTokenId === previewToken.id)) return
 
     const identity = artworkResourceIdentity(previewToken.track, previewToken.artwork)
     const paintedStandby = layersRef.current.find((layer) => (
@@ -1285,6 +1355,7 @@ export function useArtworkVisualResource(
   ])
 
   const markReady = useCallback((layerId: number) => {
+    if (isPlayerDragDiagnosticsRecording()) recordPlayerDragDiagnostic('artwork.paint.ready', { layerId })
     const currentLayers = layersRef.current
     const preview = currentLayers.find((layer) => layer.id === layerId && layer.phase === 'preview')
     if (preview?.resource.view) {
@@ -1334,6 +1405,7 @@ export function useArtworkVisualResource(
   }, [releaseLayerOwner, replaceLayers])
 
   const markLoadError = useCallback((layerId: number) => {
+    if (isPlayerDragDiagnosticsRecording()) recordPlayerDragDiagnostic('artwork.paint.failed', { layerId })
     const failedPreview = layersRef.current.find(
       (layer) => layer.id === layerId && layer.phase === 'preview' && layer.previewTokenId !== undefined,
     )
@@ -1507,6 +1579,13 @@ export function useArtworkVisualResource(
       || standbyCandidate.track.id === currentTrackId
     ) return
 
+    // The adjacent warm lane may already own this cover. Keep its registry
+    // resource shared with any preview layer instead of decoding a second lease.
+    if (registryGet(identity)) {
+      if (isPlayerDragDiagnosticsRecording()) recordPlayerDragDiagnostic('artwork.prepared.cache-hit', { identity: playerDragDiagnosticId(identity) })
+      return
+    }
+
     const controller = new AbortController()
     const nextPrepared: PreparedArtwork = {
       identity,
@@ -1547,6 +1626,7 @@ export function useArtworkVisualResource(
     prefetchRetryRevision,
     scheduleStablePrefetchRetry,
     standbyCandidate,
+    registryGet,
     registrySet,
     track?.id,
     suspended,

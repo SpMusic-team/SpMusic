@@ -20,6 +20,7 @@ const shared = readFileSync(new URL('./allSongs.browser.test.mjs', import.meta.u
 const literal = shared.match(/const fixture = (`[\s\S]*?`)\r?\nconst html/)
 assert(literal, 'reuse deterministic native fixture without running the other suite')
 const shellFixture = runInNewContext(literal[1], { dependency })
+  .replace("if(command==='library_get_folders')return {folders:window.savedLibraryFolders??[]};", "if(command==='library_get_folders')return {revision:0,roots:(new URLSearchParams(location.search).get('sources')??'many').split(',').map(choice=>({path:'/audio/'+choice,selected:true,directoryRules:[]}))};")
   .replace("ReactDOM.createRoot(document.getElementById('root')).render(", "const root=ReactDOM.createRoot(document.getElementById('root'));window.unmountFixture=()=>root.unmount();root.render(")
 const service = (await (await fetch(origin + '/src/features/player/services/audioCommands.ts')).text())
   .replace(/import \{ convertFileSrc, invoke \} from [^;]+;/, 'const invoke=(...args)=>window.backendInvoke(...args);const convertFileSrc=path=>path;')
@@ -67,20 +68,17 @@ async function open(kind = 'playlist', sources = ['many']) {
   await page.route('**/src/features/player/components/PlayerSurface.tsx*', route => route.fulfill({ contentType: 'text/javascript', body: surface }))
   await page.route('**/__long_press_surface.js', route => route.fulfill({ contentType: 'text/javascript', body: realSurface }))
   await page.route('**/__long_press_fixture.js', route => route.fulfill({ contentType: 'text/javascript', body: kind === 'card' ? cardFixture : shellFixture }))
-  await page.route('**/__long_press_test', route => route.fulfill({ contentType: 'text/html', body: html }))
+  await page.route('**/__long_press_test*', route => route.fulfill({ contentType: 'text/html', body: html }))
   try {
-    await page.goto(origin + '/__long_press_test')
+    await page.goto(origin + '/__long_press_test?sources=' + encodeURIComponent(sources.join(',')))
   } catch (error) {
     console.error('LONG_PRESS_SETUP_DIAGNOSTIC', JSON.stringify({ kind, pendingRequests: [...pendingRequests],
       ready: await page.evaluate(() => ({ state: document.readyState, app: Boolean(document.querySelector('.playlist-card')), model: Boolean(window.viewModel) })).catch(() => null) }))
     throw error
   }
   if (kind !== 'card') {
-    await page.waitForFunction(() => Boolean(window.viewModel))
-    for (const choice of sources) {
-      await page.evaluate(choice => { window.choice = choice; window.viewModel.playlist.library.onSelectFolders() }, choice)
-      await page.waitForFunction(() => !window.viewModel.playlist.library.isImportPending && !window.viewModel.playback.isAudioBusy && !window.viewModel.playback.isSelectionPending)
-    }
+    await page.waitForFunction(count => window.viewModel?.folderSelection.committed && window.viewModel.playlist.library.items.length >= count
+      && !window.viewModel.playlist.library.isImportPending && !window.viewModel.playback.isAudioBusy && !window.viewModel.playback.isSelectionPending, sources.length)
     await page.evaluate(kind => {
       if (kind === 'songs') window.viewModel.playlist.library.onSelectCategory('songs')
       else window.viewModel.playlist.library.onSelect(window.viewModel.playlist.library.items[0].scope)

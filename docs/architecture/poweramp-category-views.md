@@ -55,15 +55,25 @@ source_documents:
 - 排序偏好字段
 - JOIN 数量
 
-### 0.2 已知缺口
+### 0.2 缺口状态
+
+**本轮已闭环 4 项**（C1 / C2 / C6 / C7），均已升级为【实证·产物】：
+
+| # | 原缺口 | 现状 |
+| --- | --- | --- |
+| ~~C1~~ | `y.m3143(int)` 流派排序 | ✅ **已闭环**，见 §9.1（3 模式） |
+| ~~C2~~ | `h1.m2447(int)` 年份排序 | ✅ **已闭环**，见 §9.2 —— **并发现次级键方向缺陷** |
+| ~~C6~~ | `cat_stats.type` 取值 | ✅ **已闭环**：年份 **340**、流派 **210**，见 §9.3 |
+| ~~C7~~ | 三个排序函数是否转发到 `p0.O` | ✅ **已闭环**：**各自独立实现**，见 §9.4 |
+
+**仍开放**：
 
 | # | 缺口 | 影响 |
 | --- | --- | --- |
-| **C1** | `com.pixplicity.htmlcompat.y.m3143(int)` 的排序映射 | 流派的四层**全部**共用此函数，其模式表未读 |
-| C2 | `h1.m2447(int)` 的排序映射 | 年份首页排序，`h1` 中第四个排序函数 |
-| C3 | `a1.U()` 返回 `all_genre_songs` 是笔误还是有意 | 见 §8（`i4` 有同型缺陷） |
+| C3 | `a1.U()` / `i4.U()` 返回歌曲字符串是笔误还是有意 | 见 §8（两处同型） |
 | C4 | `genre_entries` / `genres` / `years` 表完整 DDL | `findings-db.md` 仅覆盖 `folder_files` |
-| C5 | `unknown_genre_name` 对应的哨兵 ID | 类似 `album_artist_id = 1000` 的未知哨兵 |
+| C5 | `unknown_genre_name` 对应的哨兵 ID | 类似 `album_artist_id = 1000` |
+| C8 | `h1.m2447` 的次级键方向缺陷是否有意（见 §9.2） | 仅当 `years.year` 重复时可见 |
 
 ---
 
@@ -625,9 +635,170 @@ XML 的 `android:defaultValue` 是首次启动时写入的另一层（详见 `po
 
 ---
 
-## 9. 可借鉴 / 不建议照抄
+## 9. 排序函数谱系与缺陷
 
-### 9.1 值得借鉴
+本轮补齐了三个此前未读的排序函数，并发现其中**一个是独立实现、一个存在方向缺陷**。
+
+### 9.1 `y.m3143(int)` —— 流派排序（**3 模式**）
+
+```java
+// com.pixplicity.htmlcompat.y
+/* JADX INFO: renamed from: В, reason: contains not printable characters */
+public static final String m3143(int i) {
+    String str;
+    String[] strArr = z0.y;
+    String str2 = (1073741824 & i) != 0 ? " DESC" : "";
+    int i2 = i & (-1073741825);
+    if (i2 == 0) {
+        return "genre COLLATE NOCASE ".concat(str2);
+    }
+    if (i2 == 1) {
+        str = "genres.created_at";
+    } else {
+        if (i2 != 2) {
+            return "genre COLLATE NOCASE ".concat(str2);
+        }
+        str = "genres.num_files";
+    }
+    return android.support.v4.media.A.m3(str, str2, ", genre COLLATE NOCASE ", str2);
+}
+```
+
+| 模式 | 默认方向 | 排序键 | 次级键 |
+| --- | --- | --- | --- |
+| `0` | 升 | `genre COLLATE NOCASE` | — |
+| `1` | 升 | `genres.created_at` | `genre COLLATE NOCASE` |
+| `2` | 升 | `genres.num_files` | `genre COLLATE NOCASE` |
+| `+ 0x40000000` | 降 | 主键与次级键**同步**降序 | |
+
+**次级键方向正确跟随主键**（`str2` 同时传给主键和次级键）。
+
+流派四层（`z0` / `c1` / `a1` / `b1`）**全部**经由 `z0.O(int)` → `y.m3143(i)`：
+```java
+// z0.O(int)
+@Override // m2
+public final String O(int i) { return com.pixplicity.htmlcompat.y.m3143(i); }
+```
+
+> `int i2` 的 `default` 分支回落到模式 0（`genre`），与 `p0.O` 相同。
+
+### 9.2 `h1.m2447(int)` —— 年份排序（**3 模式，次级键方向缺陷**）
+
+```java
+// com.maxmpz.audioplayer.rest.library.h1
+/* JADX INFO: renamed from: Н, reason: contains not printable characters */
+public static String m2447(int i) {
+    String str;
+    int i2 = 1073741824 & i;
+    String str2 = i2 == 0 ? " DESC" : "";      // ★ 主键：无 DESC 位 → DESC
+    String str3 = i2 != 0 ? " DESC" : "";      // ★ 次级键：有 DESC 位 → DESC
+    int i3 = i & (-1073741825);
+    if (i3 == 0) {
+        return "years.year".concat(str2);
+    }
+    if (i3 == 1) {
+        str = "years.created_at";
+    } else {
+        if (i3 != 2) {
+            return "years.year".concat(str2);
+        }
+        str = "years.num_files";
+    }
+    return android.support.v4.media.A.m3(str, str3, ", years.year", str2);
+}
+```
+
+**注意 `str2` 与 `str3` 是两个方向相反的变量**：
+
+| DESC 位 | 主键方向（`str2`/`str3` 用于主键时） | 次级键方向 |
+| --- | --- | --- |
+| **未设**（`i2 == 0`） | `str2 = " DESC"` ⇒ **降** | `str3 = ""` ⇒ **升** |
+| **设**（`i2 != 0`） | `str2 = ""` ⇒ **升** | `str3 = " DESC"` ⇒ **降** |
+
+即 **主键与次级键方向永远相反**，且**默认（无 DESC 位）是降序**。
+
+#### 与其它三个函数的对照
+
+| 函数 | 用途 | 模式数 | 无 DESC 位时主键 | 次级键方向 |
+| --- | --- | --- | --- | --- |
+| `y.m3143` | 流派 | 3 | **升** | 跟随主键 |
+| `h1.H` | 艺术家 | 3 | **升** | 跟随主键 |
+| `h1.K` | 作曲家 | 3 | **升** | 跟随主键 |
+| **`h1.m2447`** | **年份** | **3** | **降** | **与主键相反** |
+
+⇒ **`m2447` 在两个方面都与同族函数不一致**：默认方向相反、次级键方向相反。
+
+#### 实际影响
+
+| 判定 | 强度 |
+| --- | --- |
+| `str2` 与 `str3` 方向相反 | **【实证·产物】**（三行代码直接可见） |
+| 主键与次级键会输出相反方向 | **【实证·产物】** |
+| **用户实际看不到异常** | **【推断】** —— `years.year` 若恒唯一，次级键不参与排序，缺陷不可见；仅当 `years.year` 出现重复（如 NULL 年份被归一为同一值）时，排序才不稳定 |
+
+⇒ 这属于**潜伏缺陷**：默认降序恰好符合「年份从新到旧」的直觉预期，所以界面看起来正常；一旦数据异常（`year` 重复或为 NULL），排序列会退化为「主键升 / 次级键降」的错乱组合。
+
+### 9.3 `cat_stats.type` 的取值（**位掩码，非常量**）
+
+`i4` / `a1` 的 `cat_stats.type` 来自父类 `i.b1()`：
+
+```java
+// com.maxmpz.audioplayer.rest.library.i  —— 公共抽象父类
+public final int b1() {
+    return m() & 268435455;          // & 0x0FFFFFFF
+}
+```
+
+各实体覆写 `m()` 提供常量，再由 `b1()` 取低 28 位：
+
+```java
+// i4.m()
+@Override // x2
+public final int m() { return 268435796; }    // 0x10000154
+
+// a1.m()
+@Override // x2
+public final int m() { return 268435666; }    // 0x100000D2
+```
+
+| 实体 | 层级 | `m()` | `m() & 0x0FFFFFFF` | `cat_stats.type` |
+| --- | --- | --- | --- | --- |
+| **`i4`** | 年份内专辑 | `268435796` = `0x10000154` | `0x154` | **340** |
+| **`a1`** | 流派内专辑 | `268435666` = `0x100000D2` | `0xD2` | **210** |
+
+**高位 `>>28` 均为 `1`**，低 28 位落在 `0x000000D2`–`0x00000154`（210–340）区间。
+
+⇒ `cat_stats.type` **不是简单枚举 `0/1/2`**，而是一个**位域编码的分类类型号**：高位区段标志 + 低 28 位分类 id。两个并列层级（第 2B 层）**各有独立的统计类型**，互不干扰。
+
+`cat_stats(ref_id, ref_id2)` 同时绑定容器 id 与 `albums._id`，说明统计粒度是**「容器 × 专辑」**这一组合。
+
+### 9.4 三个排序函数**各自独立实现**，非转发（C7 闭环）
+
+| 函数 | 实现方式 | 与 `p0.O` 的关系 |
+| --- | --- | --- |
+| `p0.O(int)` | 16 个模式，覆盖 song 视图全部排序 | 基准 |
+| `y.m3143(int)` | 3 个模式，`genre` / `created_at` / `num_files` | **独立** |
+| `h1.m2447(int)` | 3 个模式，`years.year` / `created_at` / `num_files` | **独立** |
+| `h1.H(int)` | 3 个模式（艺术家） | **独立** |
+| `h1.K(int)` | 3 个模式（作曲家） | **独立** |
+
+**结构规律**：
+
+| 视图类型 | 排序函数 | 模式数 | 排序依据 |
+| --- | --- | --- | --- |
+| **category 视图**（容器列） | `y.m3143` / `h1.m2447` / `h1.H` / `h1.K` | **3** | 名称 / `created_at` / `num_files` |
+| **song 视图**（曲目列） | `p0.O` | **16** | 音轨号/标题/文件名/年份/添加时间/评分/播放次数/… |
+
+⇒ **不是"转发到统一实现"，而是"按视图类型分成两族，各自独立"**。
+category 视图只需要「按名称/按添加时间/按曲目数」三种就够了（容器没有音轨号、时长等概念）；song 视图需要 16 种。
+
+这也解释了为什么 `z0.O(int)` 只是简单转发 —— 它在两族之间做了一行桥接，而不是复用 `p0.O`。
+
+---
+
+## 10. 可借鉴 / 不建议照抄
+
+### 10.1 值得借鉴
 
 | # | 做法 | 理由 |
 | --- | --- | --- |
@@ -638,7 +809,7 @@ XML 的 `android:defaultValue` 是首次启动时写入的另一层（详见 `po
 | A5 | **容器过滤统一放在 `WHERE`，聚合统一用 `GROUP BY <容器>._id`** | 第 1/2B 层用 GROUP BY，第 2A/3 层不用，规则清晰 |
 | A6 | **`p0.f3367` 投影复用** | 所有 song 层共用同一投影，前端渲染组件可完全复用 |
 
-### 9.2 不建议照抄
+### 10.2 不建议照抄
 
 | # | 做法 | 理由 |
 | --- | --- | --- |
@@ -647,12 +818,15 @@ XML 的 `android:defaultValue` 是首次启动时写入的另一层（详见 `po
 | N3 | **同一个值被 `arrayList.add()` 两次**（`i4`/`a1` 的 `cat_stats.ref_id` 与容器 id） | 依赖「两处参数恰好相同」的隐式约定，可读性与健壮性差。应显式注释或分离参数 |
 | N4 | **`z0.O(int)` 与 `z0.X0()` 分别委托 `y.m3143()`** | 排序表达式构造散落在被委托类中，追踪成本高 |
 | N5 | **年份用值匹配（`folder_files.year = years.year`）** | 值匹配无法利用索引友好性；若 `year` 出现 NULL 或多值会出问题。用 `year_id` 外键更稳 |
+| **N6** | **`h1.m2447` 的次级键方向与主键相反**（见 §9.2） | 同族四个排序函数中唯一不一致者。且默认方向也与其他三个相反（默认降序）。属于潜伏缺陷：`years.year` 唯一时不可见，数据异常时排序错乱 |
+| **N7** | **同类排序函数分散在三个不同类**（`p0.O` / `y.m3143` / `h1.*`） | 两族逻辑高度相似（都是「清 DESC 位 + switch + 拼次级键」），却在三个类中重复实现。`m2447` 的方向缺陷很可能正是重复实现导致的抄写错误 |
+| **N8** | **`cat_stats.type` 用位域编码且依赖父类 `b1()` 掩码提取** | `m()` 返回魔数 `0x10000154` / `0x100000D2`，经 `& 0x0FFFFFFF` 才得到 340 / 210。可读性极差，且无法从常量字面值直观看出分类类型 |
 
 ---
 
-## 10. 与 SpMusic 对照
+## 11. 与 SpMusic 对照
 
-### 10.1 SpMusic 现状
+### 11.1 SpMusic 现状
 
 `src/features/player/model/mediaLibraryCategories.ts` 定义 12 个分类，含：
 
@@ -663,7 +837,7 @@ XML 的 `android:defaultValue` 是首次启动时写入的另一层（详见 `po
 
 **两者均只有分类定义与根菜单图标，无任何面板组件**（`components/` 下无 `Year*` / `Genre*` 组件）。
 
-### 10.2 维度对照
+### 11.2 维度对照
 
 | # | 维度 | Poweramp | SpMusic 现状 |
 | --- | --- | --- | --- |
@@ -675,7 +849,7 @@ XML 的 `android:defaultValue` 是首次启动时写入的另一层（详见 `po
 | 6 | 投影复用 | song 层统一 `p0.f3367` | — |
 | 7 | 预计算计数 | `years.num_files` / `genres.num_files` | 无 |
 
-### 10.3 核心差异与最小实现建议
+### 11.3 核心差异与最小实现建议
 
 **Poweramp 的四层模型本质是「一个容器筛选 × 两种呈现粒度」。**
 
@@ -693,24 +867,39 @@ XML 的 `android:defaultValue` 是首次启动时写入的另一层（详见 `po
 
 ---
 
-## 11. 未解
+## 12. 未解
+
+### 12.1 本轮已闭环（4 项）
+
+| # | 原问题 | 结论 | 证据位置 |
+| --- | --- | --- | --- |
+| ~~C1~~ | `y.m3143(int)` 流派排序映射 | 3 模式：`genre` / `genres.created_at` / `genres.num_files` | §9.1 |
+| ~~C2~~ | `h1.m2447(int)` 年份排序映射 | 3 模式，**且次级键方向与主键相反** | §9.2 |
+| ~~C6~~ | `cat_stats.type` 取值 | 年份 **340**、流派 **210**（`m() & 0x0FFFFFFF` 提取） | §9.3 |
+| ~~C7~~ | 三个排序函数是否转发到 `p0.O` | **各自独立实现**；分 category 族（3 模式）与 song 族（16 模式） | §9.4 |
+
+### 12.2 仍开放
 
 | # | 问题 | 优先级 |
 | --- | --- | --- |
-| **C1** | `com.pixplicity.htmlcompat.y.m3143(int)` 排序映射 —— 流派四层**全部**共用 | **高** |
-| **C2** | `h1.m2447(int)` 年份排序映射 —— `h1` 中第四个排序函数 | 中 |
-| C3 | `a1.U()` / `i4.U()` 返回歌曲字符串是否有意 | 中 |
+| C3 | `a1.U()` / `i4.U()` 返回歌曲字符串是否有意（见 §8） | 中 |
 | C4 | `genre_entries` / `genres` / `years` 表 DDL | 中 |
 | C5 | `unknown_genre_name` 的哨兵 id（对照 `album_artist_id = 1000`） | 低 |
-| C6 | `cat_stats.type` 在 `i4`/`a1` 中的具体取值（`b1()` 返回值） | 中 |
-| C7 | `y.m3143` 与 `h1.m2447` 是否只是转发到 `p0.O`，还是独立实现 | 中 |
+| **C8** | `h1.m2447` 次级键方向缺陷是否纯属笔误（见 §9.2 / N6） | 低 |
+| C9 | `cat_stats.type` 高位 `>>28 == 1` 的含义 | 低 |
+| C10 | 流派为何无 `is_unsplit` 过滤（艺术家/作曲家都有，见 §3.2） | 中 |
 
 ---
 
-## 12. Evidence ID 索引
+## 13. Evidence ID 索引
 
 | 主题 | Evidence ID |
 | --- | --- |
+| **`y.m3143`（流派排序 3 模式）+ `y` 类摘要** | `ev_45deecf8920769141b8636859f44cfd81bb3bd8e1525d30dcbbb9fbc3cbd9af5` |
+| **`h1.m2447`（年份排序 3 模式，次级键方向缺陷）** | `ev_810d4e35972ceab350ee904ac53958428a12d246c057e078aa6ec67e532ac343` |
+| **`i.b1`（`m() & 0x0FFFFFFF` 掩码提取）** | `ev_9b62b2c26e51e6b2fe25db58cdbf3f6bce24df7c83a6348fe5dc02c74399eee3` |
+| **`i4.m`（`0x10000154` ⇒ type 340）** | `ev_4de42c2d40ea47941ed2afc9b639be44c215fa7fb95feeb46da5fec93a716171` |
+| **`a1.m`（`0x100000D2` ⇒ type 210）** | `ev_859cb756e4b4ded382cb2f5bdfeb5c176938315a6eaae868a285f9de5958530d` |
 | **`h4.X0`（年份列表）+ 类摘要** | `ev_445ab65a10ede03f8c2ace43c42bdbbcdf657e62417c2f0a11f6d8b9ac37d4e8` |
 | `h4.A`（→ `i4`） | `ev_6aaf56d0c45ccd7cff1c974f0572b285208389f556159708d96d30867ed88f40` |
 | `h4.mo2427`（→ `l4`） | `ev_8e6236f09041080842e49ea1910103afb84ce5eca2602a8c78c8176b81c6b57c` |
@@ -743,7 +932,7 @@ apktool d --no-src -f -o .rea-analysis/decoded .rea-analysis/Poweramp-v3.apk
 
 ---
 
-## 13. 与既有文档的边界
+## 14. 与既有文档的边界
 
 | 文档 | 边界 |
 | --- | --- |

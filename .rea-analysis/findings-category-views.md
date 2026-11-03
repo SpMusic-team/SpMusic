@@ -459,14 +459,136 @@ string/years             0x7f0808ff
 
 ---
 
-## 11. 未取项
+## 11. 排序函数原文（C1 / C2 / C6 / C7 闭环）
+
+### 11.1 `com.pixplicity.htmlcompat.y.m3143(int)` —— 流派排序
+
+```java
+/* JADX INFO: renamed from: В, reason: contains not printable characters */
+public static final String m3143(int i) {
+    String str;
+    String[] strArr = z0.y;
+    String str2 = (1073741824 & i) != 0 ? " DESC" : "";
+    int i2 = i & (-1073741825);
+    if (i2 == 0) {
+        return "genre COLLATE NOCASE ".concat(str2);
+    }
+    if (i2 == 1) {
+        str = "genres.created_at";
+    } else {
+        if (i2 != 2) {
+            return "genre COLLATE NOCASE ".concat(str2);
+        }
+        str = "genres.num_files";
+    }
+    return android.support.v4.media.A.m3(str, str2, ", genre COLLATE NOCASE ", str2);
+}
+```
+
+`ev_45deecf8920769141b8636859f44cfd81bb3bd8e1525d30dcbbb9fbc3cbd9af5`
+
+`y` 类摘要（3 方法 / 0 字段）：`B` / `m3142` / `m3143`。
+
+**`str2` 同时用于主键与次级键 ⇒ 方向一致。**
+
+### 11.2 `com.maxmpz.audioplayer.rest.library.h1.m2447(int)` —— 年份排序
+
+```java
+/* JADX INFO: renamed from: Н, reason: contains not printable characters */
+public static String m2447(int i) {
+    String str;
+    int i2 = 1073741824 & i;
+    String str2 = i2 == 0 ? " DESC" : "";
+    String str3 = i2 != 0 ? " DESC" : "";
+    int i3 = i & (-1073741825);
+    if (i3 == 0) {
+        return "years.year".concat(str2);
+    }
+    if (i3 == 1) {
+        str = "years.created_at";
+    } else {
+        if (i3 != 2) {
+            return "years.year".concat(str2);
+        }
+        str = "years.num_files";
+    }
+    return android.support.v4.media.A.m3(str, str3, ", years.year", str2);
+}
+```
+
+`ev_810d4e35972ceab350ee904ac53958428a12d246c057e078aa6ec67e532ac343`
+
+**`str2` 与 `str3` 的判据相反**：
+
+| DESC 位 | `str2` | `str3` |
+| --- | --- | --- |
+| `== 0` | `" DESC"` | `""` |
+| `!= 0` | `""` | `" DESC"` |
+
+⇒ 主键与次级键方向**永远相反**；且默认（无 DESC 位）主键为**降序**。
+
+### 11.3 `com.maxmpz.audioplayer.rest.library.i.b1()` —— `cat_stats.type` 提取
+
+```java
+public final int b1() {
+    return m() & 268435455;          // & 0x0FFFFFFF
+}
+```
+
+`ev_9b62b2c26e51e6b2fe25db58cdbf3f6bce24df7c83a6348fe5dc02c74399eee3`
+
+`i` 类摘要（9 方法 / 0 字段）：`P` / `V0` / `W` / `a1` / `b1` / `c1` / `mo2425` / `mo2433` / `n0`。
+
+### 11.4 两个子类的 `m()` 常量
+
+```java
+// i4.m()
+@Override // x2
+public final int m() { return 268435796; }    // 0x10000154 ⇒ & 0x0FFFFFFF = 0x154 = 340
+```
+`ev_4de42c2d40ea47941ed2afc9b639be44c215fa7fb95feeb46da5fec93a716171`
+
+```java
+// a1.m()
+@Override // x2
+public final int m() { return 268435666; }    // 0x100000D2 ⇒ & 0x0FFFFFFF = 0x0D2 = 210
+```
+`ev_859cb756e4b4ded382cb2f5bdfeb5c176938315a6eaae868a285f9de5958530d`
+
+| 实体 | `m()` | hex | 低 28 位 | `cat_stats.type` | 高位 `>>28` |
+| --- | --- | --- | --- | --- | --- |
+| `i4` | `268435796` | `0x10000154` | `0x154` | **340** | `1` |
+| `a1` | `268435666` | `0x100000D2` | `0x0D2` | **210** | `1` |
+
+---
+
+## 12. 三个排序函数的独立性（C7 闭环）
+
+| 函数 | 模式数 | 排序键 | 次级键 | 与 `p0.O` |
+| --- | --- | --- | --- | --- |
+| `p0.O(int)` | 16 | 音轨号/标题/文件名/年份/… | 多变 | 基准 |
+| `y.m3143(int)` | 3 | `genre` / `genres.created_at` / `genres.num_files` | `genre` | 独立 |
+| `h1.m2447(int)` | 3 | `years.year` / `years.created_at` / `years.num_files` | `years.year` | 独立 |
+| `h1.H(int)` | 3 | `X()` / `artists.created_at` / `artists.num_files` | `X()` | 独立 |
+| `h1.K(int)` | 3 | `x()` / `composers.created_at` / `composers.num_files` | `x()` | 独立 |
+
+⇒ **category 视图族（3 模式）与 song 视图族（16 模式）分离**，`z0.O(int)` 仅做一行转发桥接。
+
+---
+
+## 13. 未取项
 
 | # | 项 | 原因 |
 | --- | --- | --- |
-| C1 | `com.pixplicity.htmlcompat.y.m3143(int)` | 未读取；流派四层排序全部经过它 |
-| C2 | `h1.m2447(int)` | 未读取；年份首页排序 |
+| ~~C1~~ | ✅ `y.m3143(int)` | 已闭环，见 §11.1 |
+| ~~C2~~ | ✅ `h1.m2447(int)` | 已闭环，见 §11.2 |
+| ~~C6~~ | ✅ `cat_stats.type` | 已闭环，见 §11.3 / §11.4 |
+| ~~C7~~ | ✅ 排序函数独立性 | 已闭环，见 §12 |
+| C3 | `a1.U()` / `i4.U()` 返回歌曲字符串是否有意 | 两处同型，见架构文档 §8 |
 | C4 | `genre_entries` / `genres` / `years` 表 DDL | `findings-db.md` 未覆盖 |
 | C5 | `unknown_genre_name` 的哨兵 id | 未定位 |
-| C6 | `b1()` 返回的 `cat_stats.type` 取值 | 未读取 |
+| C8 | `h1.m2447` 次级键方向缺陷是否笔误 | 见 §11.2 |
+| C9 | `cat_stats.type` 高位 `>>28 == 1` 的含义 | 未定位 |
+| C10 | 流派为何无 `is_unsplit` 过滤 | 见架构文档 §3.2 |
 | — | `z0.h()` / `z0.x0()` / `z0.mo2435()` | 与本文主题无直接关系 |
-| — | `j4`/`b1` 的 `P: d` 字段用途 | 未读取 |
+| — | `j4` / `b1` 的 `P: d` 字段用途 | 未读取 |

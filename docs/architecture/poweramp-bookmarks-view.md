@@ -45,16 +45,28 @@ source_documents:
 | 列表投影 | **自有 2 字段**（两个 id） | 多为 `p0.f3367` / `y` / `l.X` |
 | 播放位置 | **`bookmarks.offset_ms`** | 无此概念 |
 | 显示行 | **三段 meta 拼接**（书签 / 曲目 / EQ 预设） | 标准曲目行 |
+| **位置来源** | **URI 参数 `pos_ms`** | — |
+| **meta 内容** | **`pos_ms` 的可读格式化（`M:SS` / `H:MM:SS`）** | — |
 
 **位置字段是 `bookmarks.offset_ms`（毫秒），证据在 `a0.d1()` 的完整 SELECT 里。**
+**写入端在 `a0.u1()`，位置来自 URI 参数 `pos_ms`，同时格式化出一份 `meta`。**
 
-### 0.2 已知缺口
+### 0.2 缺口状态
+
+**本轮已闭环 B2**（写入 + 读取两端），并顺带确认 meta 语义：
+
+| # | 原缺口 | 现状 |
+| --- | --- | --- |
+| ~~B2~~ | 位置写入/消费路径 | ✅ **已闭环**，见 §4.5 / §4.6 |
+| ~~B5~~ | `bookmarks.meta` 内容格式 | ✅ **已闭环**：`Utils.A(pos_ms)` 格式化出的时长串，见 §4.6 |
+
+**仍开放**：
 
 | # | 缺口 | 影响 |
 | --- | --- | --- |
 | **B1** | `bookmarks` 表完整 DDL | `data.C0633.onUpgrade` 用变量拼 SQL（`n.n("ALTER TABLE ", str, ...)`），表名来自参数，静态无法枚举 |
-| B2 | 位置写入时机与跳转消费路径（`ContentValues` 构造方 / 播放端读取方） | 决定「书签恢复播放」的完整性 |
 | B3 | `n1()` / `r1()` / `s1()` / `v()` 四个 boolean 的语义 | 影响批量操作行为 |
+| B8 | `pos_ms` 在 UI 侧的赋值点（播放器当前进度 → URI 参数） | 见 §4.5 末 |
 | B4 | 同曲目多书签时 `x()` 无 `LIMIT` 的行为 | 见 §6.1 |
 
 ---
@@ -259,6 +271,133 @@ public final Cursor d1(SQLiteDatabase sQLiteDatabase, String[] strArr) {
 
 ⇒ **`bookmarks.offset_ms` 单位为毫秒**，与 `duration`、`offset_ms` 同一单位体系。
 
+### 4.5 写入端：`a0.u1()`（B2 闭环）
+
+这是书签**创建**的唯一路径，一次性给出了位置来源、meta 内容、sort 与 created_at 的算法。
+
+```java
+public final int u1(RestProvider restProvider, h2 h2Var, UriAndIds uriAndIds) {
+    Cursor cursorE0 = h2Var.E0(restProvider, uriAndIds, null, -1);
+    if (cursorE0 == null) return -1;
+    if (cursorE0.getCount() != 1) { cursorE0.close(); return -1; }   // 必须恰好 1 条曲目
+
+    SQLiteDatabase db = restProvider.getWritableDatabase();
+    String strO  = n.o("bookmarks.folder_file_id");
+    String strO2 = n.o("bookmarks.sort");
+    String strO3 = n.o("bookmarks.offset_ms");
+    String strO4 = n.o("bookmarks.meta");
+    String strO5 = n.o("bookmarks.created_at");
+    StringBuilder sb = A.m4("INSERT INTO bookmarks (", strO, ", ", strO2, ", ");
+    A.o(sb, strO3, ", ", strO4, ", ");
+    sb.append(strO5);
+    sb.append(") VALUES (?, ?, ?, ?, ?)");
+
+    SQLiteStatement ins = db.compileStatement(sb.toString());
+    SQLiteStatement maxSort = db.compileStatement("SELECT MAX(sort) FROM bookmarks");
+
+    db.beginTransactionNonExclusive();
+    long max = maxSort.simpleQueryForLong();
+    maxSort.close();
+    if (max < 0) max = 0;
+    long nextSort = max + 1;
+
+    int posMs = uriAndIds.x.getInt("pos_ms", 0);          // ★ 位置来自 URI 参数
+    StringBuilder metaSb = new StringBuilder();
+    long now = System.currentTimeMillis();
+    int inserted = 0;
+
+    while (cursorE0.moveToNext()) {
+        if (!cursorE0.isNull(1) && (C0742.f3414.f3789 || cursorE0.getInt(3) == 0)) {
+            long fileId = cursorE0.getLong(0);
+            Utils.A(metaSb, posMs, false);                // ★ meta = 时长格式化
+            String meta = metaSb.toString();
+
+            ins.bindLong(1, fileId);
+            ins.bindLong(2, nextSort);
+            ins.bindLong(3, posMs);                       // ★ offset_ms
+            ins.bindString(4, meta);                      // ★ meta
+            ins.bindLong(5, now);                         // ★ created_at
+            if (ins.executeInsert() > 0) inserted++;
+
+            nextSort += 1;
+        }
+    }
+    if (inserted > 0) db.setTransactionSuccessful();
+    db.endTransaction();
+    cursorE0.close();
+    ins.close();
+    return inserted;
+}
+```
+
+#### 五个字段的来源与算法
+
+| 列 | 值 | 来源 |
+| --- | --- | --- |
+| `folder_file_id` | `cursorE0.getLong(0)` | 查询游标第 0 列 |
+| `sort` | `MAX(sort) + 1`（事务内取，<0 归零） | `SELECT MAX(sort) FROM bookmarks` |
+| **`offset_ms`** | **`uriAndIds.x.getInt("pos_ms", 0)`** | **URI/Bundle 参数 `pos_ms`** |
+| `meta` | **`Utils.A(pos_ms)` 格式化结果** | 由 `pos_ms` 派生 |
+| `created_at` | `System.currentTimeMillis()` | 事务内统一取值 |
+
+#### 三个检查点
+
+1. **必须恰好命中 1 条曲目**：`cursorE0.getCount() != 1` 直接返回 `-1`。这说明书签是**单曲目**操作，不支持批量。
+2. **`pos_ms` 缺省为 0**：`getInt("pos_ms", 0)`。若调用方未传，书签会落在曲目开头（0ms）。
+3. **`sort` 在事务内取 MAX**：`beginTransactionNonExclusive()` 包住 `MAX(sort)` 与全部 insert，避免并发下 sort 重复。
+   但注意 `MAX(sort)` 查询在事务开始后、循环开始前只做了一次——若同事务内插入多条，靠 `nextSort += 1` 递增维持唯一。
+
+> **B8 未解**：`pos_ms` 由哪个调用方（UI 层）用播放器当前进度填充，本轮未追到。
+
+### 4.6 `meta` 内容：`pos_ms` 的可读时长（B5 闭环）
+
+```java
+// com.maxmpz.utils.Utils
+public static void A(StringBuilder sb, int i, boolean z) {
+    m2719(sb, (i + 500) / 1000, z);        // 毫秒 → 秒（四舍五入）
+}
+
+public static void m2719(StringBuilder sb, int i, boolean z) {
+    if (i < 0 || (i == 0 && z)) {
+        sb.append(t.f3846);                 // 占位符（如 "--:--"）
+        return;
+    }
+    int i2 = i % 60;
+    if (i < 3600) {
+        sb.append(i / 60);                  // 分钟
+        sb.append(':');
+    } else {
+        int i3 = i / 3600;
+        int i4 = (i / 60) % 60;
+        sb.append(i3); sb.append(':');
+        if (i4 < 10) sb.append('0');
+        sb.append(i4); sb.append(':');
+    }
+    if (i2 < 10) sb.append('0');
+    sb.append(i2);                          // 秒（两位数）
+}
+```
+
+#### 格式规则
+
+| 时长范围 | 输出 | 示例 |
+| --- | --- | --- |
+| `< 0` 或 `== 0 && z` | 占位符 `t.f3846` | `--:--` |
+| `< 1 小时` | `M:SS` | `3:07` |
+| `>= 1 小时` | `H:MM:SS` | `1:03:07` |
+
+#### 一个格式不一致点
+
+**秒数补零，分钟不补零**（1 小时以内时）。
+
+- `3:07` —— 分钟 3 没有前导零，秒 07 有
+- `1:03:07` —— 进入小时分支后分钟才补零
+
+⇒ 同一格式化函数在不同区间对分钟的补零规则不一致。属产品层面的细节瑕疵，不影响功能。
+
+> 该函数是**通用时长格式化器**（`Utils.m2719`），不只服务书签 —— 播放器时间显示也会走它。
+> 因此这个不一致是**全局可见**的，不是书签专有问题。
+
 ---
 
 ## 5. 显示逻辑：三段 meta 拼接
@@ -392,6 +531,9 @@ public final boolean T(RestProvider rp, Uri uri, int i) {
 | A4 | **`n0()` 用一条 SQL 拼三层 meta** | 避免 N+1 查询（书签 / 曲目 / EQ 预设） |
 | A5 | **加入 `shuffle_order` 列** | 可对书签集合单独洗牌，不影响曲目本身顺序 |
 | A6 | **`T()` 复用通用重排工具**（表/id/sort/created_at 四参数） | 与 playlist / queue 同一套，行为一致 |
+| **A7** | **`offset_ms` 与 `meta` 双写**（§4.5） | 整数列供比较/seek，文本列供直接显示。**不用为了显示而解析整数**，也不用为了 seek 而解析文本 —— 各自读各自需要的那个 |
+| **A8** | **`sort` 取 `MAX(sort)+1` 且在事务内** | 新书签追加到末尾；事务包住 `MAX` 与全部 insert，避免并发下 sort 冲突 |
+| **A9** | **强制 `cursorE0.getCount() == 1`**（§4.5） | 书签是单曲目操作，多于 1 条直接拒绝（返回 -1），避免误批量创建 |
 
 ### 8.2 不建议照抄
 
@@ -403,6 +545,10 @@ public final boolean T(RestProvider rp, Uri uri, int i) {
 | **N4** | **`x()` 无 `LIMIT`** | 同曲目多书签时返回值不确定 |
 | **N5** | **同族方法用不同日志 tag**（`RestLibraryUtils` / `RestBookmarks`） | 排障易漏 |
 | **N6** | **DDL 用变量拼 SQL，表名来自参数** | 导致无法静态审计表结构（本文即受此影响，只能代码反推 7 个列） |
+| **N7** | **`offset_ms` 与 `meta` 内容冗余**（§4.6） | `meta` 是 `offset_ms` 的格式化副本，同一信息存两份。若用户改了时长显示格式，旧 meta 不会更新，会出现「整数对、文本旧」的不一致 |
+| **N8** | **时长格式化器分钟不补零**（§4.6） | `3:07` 而非 `03:07`，但进入小时分支后又补零（`1:03:07`）。同一函数内规则不一致，且该函数是**全局通用**的（播放器时间也走它），影响面超出书签 |
+| **N9** | **`u1()` 的 `MAX(sort)` 只查一次** | 事务包住了，但同事务内多行插入靠 `nextSort += 1` 维持。若 insert 部分失败，`sort` 序列会出现空洞（虽不影响正确性） |
+| **N10** | **`pos_ms` 缺省 0 静默兜底** | 调用方漏传参数时书签落在曲目开头，无任何提示。应校验或拒绝 |
 
 ---
 
@@ -444,17 +590,27 @@ public final boolean T(RestProvider rp, Uri uri, int i) {
 
 ## 10. 未解
 
+### 10.1 本轮已闭环（2 项）
+
+| # | 原问题 | 结论 | 证据位置 |
+| --- | --- | --- | --- |
+| ~~B2~~ | `offset_ms` 写入与消费路径 | 写入端 `a0.u1()`：位置来自 URI 参数 `pos_ms`，绑定到 `offset_ms`；读取端 `a0.d1()` 第 22 列 | §4.5 / §4.1 |
+| ~~B5~~ | `bookmarks.meta` 内容格式 | `Utils.A(pos_ms)` 格式化出的时长串（`M:SS` / `H:MM:SS`），与 `offset_ms` 同源冗余 | §4.6 |
+
+### 10.2 仍开放
+
 | # | 问题 | 优先级 |
 | --- | --- | --- |
+| **B8** | `pos_ms` 在 UI 层的赋值点（播放器当前进度 → URI 参数） | **中** |
 | **B1** | `bookmarks` 表完整 DDL（`onUpgrade` 变量拼 SQL，无法静态枚举） | 中 |
-| **B2** | `offset_ms` 的写入方（`ContentValues` 构造处）与跳转消费方（播放端 seek） | **高** |
 | B3 | `n1()` / `r1()` / `s1()` / `v()` 四个 boolean 的语义 | 中 |
 | B4 | 同曲目多书签时 `x()` 的实际返回（无 `LIMIT`） | 低 |
-| B5 | `bookmarks.meta` 的内容格式（与 `offset_ms` 是否有重叠信息） | 中 |
 | B6 | `a0.d()` / `k0()` / `c()` / `s()` / `z()` 等分类元数据方法 | 低 |
-| B7 | `q0()` / `u1()` / `p()` 批量操作的行为 | 低 |
+| B7 | `q0()`（删除）/ `p()`（批量重排）的完整行为 | 低 |
+| B9 | `t.f3846` 占位符的实际文本（负值/零值时长时显示） | 低 |
 
-> B2 是把书签语义从「有位置列」推进到「能恢复播放」的最后一步。
+> B2 闭环后，书签的「创建 → 存储」链路已完全打通。
+> 剩余的 B8 是「播放器进度 → `pos_ms`」这一段的 UI 侧赋值，属调用方而非书签实体本身。
 
 ---
 
@@ -463,6 +619,12 @@ public final boolean T(RestProvider rp, Uri uri, int i) {
 | 主题 | Evidence ID |
 | --- | --- |
 | `g1` 库门面（`getBookmarks` / `getBookmarksFilesForced`） | `ev_d827238fa0be30f105438806871117c737191b025c5e7460a44c03377a4eb404` |
+| **`a0.u1`（创建路径，B2/B5 闭环）** | `ev_4fc27fa243586116503a80493a2753fc62b83c87d7d77e79b146bd219a21782f` |
+| **`Utils.A`（毫秒→秒四舍五入）** | `ev_16484cc820e2e177317992fee10cc8a0f116d060904c76baa1117b2994442c81` |
+| **`Utils.m2719`（时长格式化 `M:SS` / `H:MM:SS`）** | `ev_e5e2fa2ec2b0e9aa0e1a65921243838ffa27df99fb9a6b00430d80247efd15d8` |
+| `a0.q0`（删除路径） | `ev_5743cf276494bdb98995b6d742888d89be93c0a3adf95cbec870c0efee622065` |
+| `a0.p`（批量重排） | `ev_6157af9be3a7ec2ae08e50ddbb2637d7822341b478640f82fe2c854da1508a9b` |
+| `a0.d1`（28 列 SELECT，`bookmarks.offset_ms`） | `ev_ef7358d973fd3ceeb5c62ebcfc69871abda41c3763d34b745900b206b5adfc4b` |
 | **`a0.X0`（列表 SQL）+ 类摘要** | `ev_98758a171bb97f22b6064af0a58c67c2d31d1134e54b5182421372968821983b` |
 | `a0.Q0` | `ev_12f27c68bfff6259d318daa9d2a94798e495b39f42ebafda064e4211c963981b` |
 | **`a0.<clinit>`（2 字段投影，smali）** | `ev_c2bd8e9939f24757bf57d832a18bdce5c53c11ca823458be179a72ab2c4f2191` |

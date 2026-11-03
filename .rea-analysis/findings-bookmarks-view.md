@@ -307,14 +307,226 @@ public final void onCreate(SQLiteDatabase sQLiteDatabase) {
 
 ---
 
-## 9. 未取项
+## 9. 写入路径 `a0.u1()`（B2 / B5 闭环）
 
-| # | 项 |
-| --- | --- |
-| B1 | `bookmarks` 完整 DDL（变量拼 SQL） |
-| B2 | `offset_ms` 的写入方与播放端消费方 |
-| B3 | `n1()` / `r1()` / `s1()` / `v()` 语义 |
-| B4 | `x()` 无 LIMIT 的实际行为 |
-| B5 | `bookmarks.meta` 内容格式 |
-| B6 | `d()` / `k0()` / `c()` / `s()` / `z()` 等分类元数据方法 |
-| B7 | `q0()` / `u1()` / `p()` 批量操作 |
+```java
+public final int u1(RestProvider restProvider, h2 h2Var, UriAndIds uriAndIds) {
+    long j;
+    Cursor cursorE0 = h2Var.E0(restProvider, uriAndIds, null, -1);
+    if (cursorE0 == null) {
+        return -1;
+    }
+    int i = 1;
+    if (cursorE0.getCount() != 1) {
+        cursorE0.close();
+        return -1;
+    }
+    SQLiteDatabase writableDatabase = restProvider.getWritableDatabase();
+    Intrinsics.checkNotNull(writableDatabase);
+    String strO = androidx.appcompat.widget.n.o("bookmarks.folder_file_id");
+    String strO2 = androidx.appcompat.widget.n.o("bookmarks.sort");
+    String strO3 = androidx.appcompat.widget.n.o("bookmarks.offset_ms");
+    String strO4 = androidx.appcompat.widget.n.o("bookmarks.meta");
+    String strO5 = androidx.appcompat.widget.n.o("bookmarks.created_at");
+    StringBuilder sbM4 = android.support.v4.media.A.m4("INSERT INTO bookmarks (", strO, ", ", strO2, ", ");
+    android.support.v4.media.A.o(sbM4, strO3, ", ", strO4, ", ");
+    sbM4.append(strO5);
+    sbM4.append(") VALUES (?, ?, ?, ?, ?)");
+    SQLiteStatement sQLiteStatementCompileStatement = writableDatabase.compileStatement(sbM4.toString());
+    SQLiteStatement sQLiteStatementCompileStatement2 = writableDatabase.compileStatement("SELECT MAX(sort) FROM bookmarks");
+    writableDatabase.beginTransactionNonExclusive();
+    long jSimpleQueryForLong = sQLiteStatementCompileStatement2.simpleQueryForLong();
+    sQLiteStatementCompileStatement2.close();
+    long j2 = 0;
+    if (jSimpleQueryForLong < 0) {
+        jSimpleQueryForLong = 0;
+    }
+    long j3 = 1;
+    long j4 = jSimpleQueryForLong + 1;
+    int i2 = uriAndIds.x.getInt("pos_ms", 0);
+    StringBuilder sb = new StringBuilder();
+    long jCurrentTimeMillis = System.currentTimeMillis();
+    int i3 = 0;
+    while (cursorE0.moveToNext()) {
+        try {
+            if (cursorE0.isNull(i)) {
+                j = j2;
+            } else {
+                j = j2;
+                if (C0742.f3414.f3789 || cursorE0.getInt(3) == 0) {
+                    long j5 = j3;
+                    long j6 = cursorE0.getLong(0);
+                    Utils.A(sb, i2, false);
+                    String string = sb.toString();
+                    sQLiteStatementCompileStatement.bindLong(i, j6);
+                    long j7 = j4 + j5;
+                    sQLiteStatementCompileStatement.bindLong(2, j4);
+                    sQLiteStatementCompileStatement.bindLong(3, i2);
+                    sQLiteStatementCompileStatement.bindString(4, string);
+                    sQLiteStatementCompileStatement.bindLong(5, jCurrentTimeMillis);
+                    if (sQLiteStatementCompileStatement.executeInsert() > j) {
+                        i3++;
+                    }
+                    j2 = j;
+                    j4 = j7;
+                    j3 = j5;
+                    i = 1;
+                }
+            }
+            j2 = j;
+        } catch (Throwable th) {
+            writableDatabase.endTransaction();
+            cursorE0.close();
+            sQLiteStatementCompileStatement.close();
+            throw th;
+        }
+    }
+    if (i3 > 0) {
+        writableDatabase.setTransactionSuccessful();
+    }
+    writableDatabase.endTransaction();
+    cursorE0.close();
+    sQLiteStatementCompileStatement.close();
+    return i3;
+}
+```
+
+`ev_4fc27fa243586116503a80493a2753fc62b83c87d7d77e79b146bd219a21782f`
+
+### 9.1 字段来源
+
+| bindLong idx | 列 | 值来源 |
+| --- | --- | --- |
+| 1 | `bookmarks.folder_file_id` | `cursorE0.getLong(0)` |
+| 2 | `bookmarks.sort` | `MAX(sort) + 1`（事务内，负值归零，循环中 `+= 1`） |
+| **3** | **`bookmarks.offset_ms`** | **`uriAndIds.x.getInt("pos_ms", 0)`** |
+| 4 | `bookmarks.meta` | `Utils.A(pos_ms)` 格式化字符串 |
+| 5 | `bookmarks.created_at` | `System.currentTimeMillis()`（事务内统一） |
+
+**关键**：`pos_ms` 是 URI/Bundle 参数，缺省 `0`。
+
+---
+
+## 10. `Utils` 时长格式化（B5 闭环）
+
+```java
+// com.maxmpz.utils.Utils
+public static void A(StringBuilder sb, int i, boolean z) {
+    m2719(sb, (i + 500) / 1000, z);
+}
+```
+
+`ev_16484cc820e2e177317992fee10cc8a0f116d060904c76baa1117b2994442c81`
+
+`A(sb, posMs, false)` ⇒ 毫秒 `+500` 后整除 1000 ⇒ **四舍五入到秒**。
+
+```java
+/* JADX INFO: renamed from: х, reason: contains not printable characters */
+public static void m2719(StringBuilder sb, int i, boolean z) {
+    if (i < 0 || (i == 0 && z)) {
+        sb.append(t.f3846);
+        return;
+    }
+    int i2 = i % 60;
+    if (i < 3600) {
+        sb.append(i / 60);
+        sb.append(':');
+    } else {
+        int i3 = i / 3600;
+        int i4 = (i / 60) % 60;
+        sb.append(i3);
+        sb.append(':');
+        if (i4 < 10) {
+            sb.append('0');
+        }
+        sb.append(i4);
+        sb.append(':');
+    }
+    if (i2 < 10) {
+        sb.append('0');
+    }
+    sb.append(i2);
+}
+```
+
+`ev_e5e2fa2ec2b0e9aa0e1a65921243838ffa27df99fb9a6b00430d80247efd15d8`
+
+### 格式规则
+
+| 条件 | 输出 | 示例 |
+| --- | --- | --- |
+| `i < 0` 或 `i == 0 && z` | `t.f3846` 占位符 | `--:--` |
+| `i < 3600` | `M:SS`（分钟**不**补零） | `3:07` |
+| `i >= 3600` | `H:MM:SS`（分钟补零） | `1:03:07` |
+
+⇒ **分钟补零规则在两个分支间不一致**；秒在各分支均补零。
+
+---
+
+## 11. 其它操作方法
+
+```java
+// a0.q0 —— 删除
+public final com.maxmpz.utils.y q0(RestProvider restProvider, UriAndIds uriAndIds) throws Throwable {
+    long[] jArr = uriAndIds.A;
+    Bundle bundle = uriAndIds.x;
+    if (jArr.length != 0) {
+        if (bundle.getBoolean("force_files_deletion")) {
+            g1 g1Var = this.f3406;
+            return g1Var.getBookmarksFilesForced().mo2455(restProvider, g1Var.getBookmarksFilesForced().B0(), jArr, 0, jArr.length, bundle.getInt("num_cats", 0), uriAndIds, C0742.p.f3789);
+        }
+        int i = bundle.getInt("num_cats", 0);
+        StringBuilder sb = new StringBuilder((jArr.length * 5) + 64);
+        if (e0(uriAndIds.B, jArr, 0, jArr.length, i, sb, new StringBuilder(), false) && i == 0) {
+            restProvider.delete(uriAndIds.B, sb.toString(), null);
+            return new com.maxmpz.utils.y(jArr);
+        }
+    }
+    return null;
+}
+```
+`ev_5743cf276494bdb98995b6d742888d89be93c0a3adf95cbec870c0efee622065`
+
+```java
+// a0.p —— 批量重排
+@Override // w2
+public final boolean p(RestProvider restProvider, Uri uri, int[] iArr) {
+    Uri uriB0 = B0();
+    if (iArr.length > 1) {
+        SQLiteDatabase writableDatabase = restProvider.getWritableDatabase();
+        Intrinsics.checkNotNull(writableDatabase);
+        Cursor cursorA = restProvider.A(uriB0, new String[]{"bookmarks._id", "bookmarks.sort"}, null, null, null, false);
+        if (cursorA != null) {
+            try {
+                writableDatabase.beginTransactionNonExclusive();
+                if (!h1.m2449(writableDatabase, cursorA, iArr, this)) {
+                    return false;
+                }
+                writableDatabase.setTransactionSuccessful();
+                return true;
+            } finally {
+                cursorA.close();
+                writableDatabase.endTransaction();
+            }
+        }
+    }
+    return false;
+}
+```
+`ev_6157af9be3a7ec2ae08e50ddbb2637d7822341b478640f82fe2c854da1508a9b`
+
+---
+
+## 12. 未取项
+
+| # | 项 | 状态 |
+| --- | --- | --- |
+| B1 | `bookmarks` 完整 DDL（变量拼 SQL） | 开放 |
+| ~~B2~~ | ✅ `offset_ms` 写入方 | **已闭环，§9** |
+| B3 | `n1()` / `r1()` / `s1()` / `v()` 语义 | 开放 |
+| B4 | `x()` 无 LIMIT 的实际行为 | 开放 |
+| ~~B5~~ | ✅ `bookmarks.meta` 内容格式 | **已闭环，§10** |
+| B6 | `d()` / `k0()` / `c()` / `s()` / `z()` 等分类元数据方法 | 开放 |
+| B7 | `q0()` 删除 / `p()` 重排的完整语义 | 开放（§11 已收原文） |
+| **B8** | `pos_ms` 在 UI 侧的赋值点 | 开放 |
+| **B9** | `t.f3846` 占位符文本 | 开放 |

@@ -912,7 +912,313 @@ cast_stop_live_stream          0x7f080118
 
 ---
 
-## 20. 未取项
+## 20. 播放取源路径（S11 闭环）
+
+### 20.1 光标列布局（`p0.d1()` 投影）
+
+`smali/com/maxmpz/audioplayer/rest/library/p0.smali:1360`
+
+```sql
+SELECT COALESCE(folder_files.file_path,path||folder_files.name,folder_files.name),  -- 0
+       folder_files.title_tag,                    -- 1
+       COALESCE(albums.album, album_tag),         -- 2
+       COALESCE(artists.artist, artist_tag),      -- 3
+       folder_files.duration,                     -- 4
+       folder_files.tag_status,                   -- 5
+       folder_files.file_type,                    -- 6
+       folder_files.folder_id,                    -- 7
+       folder_files._id,                          -- 8
+       folders.is_cue,                            -- 9
+       folder_files.offset_ms,                    -- 10
+       folder_files.track_number,                 -- 11
+       folder_files.album_id,                     -- 12
+       folder_files.artist_id,                    -- 13
+       eq_preset_songs.preset_id,                 -- 14
+       folder_files.updated_at,                   -- 15
+       NULL,                                      -- 16
+       NULL,                                      -- 17
+       folder_files.rating,                       -- 18
+       album_artists.album_artist,                -- 19
+       folder_files.album_artist_id,              -- 20
+       folder_files.wave,                         -- 21
+       folder_files.last_pos,                     -- 22  ★ 播放位置
+       folder_files.url,                          -- 23  ★ 播放地址
+       folder_files.bit_rate,                     -- 24
+       folder_files.replay_gain,                  -- 25
+       (...) AS _has_lyrics,                      -- 26
+       in_playlist                                -- 27
+FROM <table>
+  LEFT JOIN folders         ON folders._id       = folder_files.folder_id
+  LEFT JOIN albums          ON albums._id        = folder_files.album_id
+  LEFT JOIN artists         ON artists._id       = folder_files.artist_id
+  LEFT JOIN album_artists   ON album_artists._id = folder_files.album_artist_id
+  LEFT JOIN eq_preset_songs ON eq_preset_songs.file_id = folder_files._id
+WHERE folder_files._id=?
+```
+
+### 20.2 `b0.getCurrentTrackCursor(...)`
+
+`smali/com/maxmpz/audioplayer/player/b0.smali`
+
+```java
+private final Cursor getCurrentTrackCursor(o0 entity, long trackId) {
+    int idx = entity.i1();
+    Cursor c = this.mTrackCursors[idx];
+    this.mTrackCursorOneArg[0] = Long.toString(trackId);
+    if (c == null) {
+        c = entity.d1(this.mDb, this.mTrackCursorOneArg);
+        this.mTrackCursors[idx] = c;
+        return c;
+    }
+    ((SQLiteCursor) c).setSelectionArguments(this.mTrackCursorOneArg);
+    if (((SQLiteCursor) c).requery()) return c;
+    return null;
+}
+```
+
+⇒ 复用缓存光标 + `requery()`，不为每次播放重新 prepare。
+
+### 20.3 取源与动态 URL 判定
+
+`b0.smali:799-880`
+
+```smali
+:try_start_0
+iget-object v8, v1, Lcom/maxmpz/audioplayer/player/b0;->mActualLoadedFilesEntity:Lcom/maxmpz/audioplayer/rest/library/o0;
+invoke-direct {v1, v8, v3, v4}, Lcom/maxmpz/audioplayer/player/b0;->getCurrentTrackCursor(...)Landroid/database/Cursor;
+move-result-object v3
+if-eqz v3, :cond_20
+invoke-interface {v3}, Landroid/database/Cursor;->moveToFirst()Z
+move-result v4
+if-eqz v4, :cond_1e
+
+invoke-interface {v3, v2}, Landroid/database/Cursor;->getString(I)Ljava/lang/String;   # v2 = 0x0 → 第 0 列 = path
+move-result-object v4
+
+const/16 v8, 0x17                                                                     # ★ 23
+invoke-interface {v3, v8}, Landroid/database/Cursor;->getString(I)Ljava/lang/String;   # 第 23 列 = url
+move-result-object v8
+
+invoke-static {v8}, Lcom/maxmpz/utils/TUtils;->isEmpty(Ljava/lang/CharSequence;)Z
+move-result v10
+if-nez v10, :cond_6
+
+const-string v10, "__dynamic_url"                                                     # ★ 魔法标记
+invoke-virtual {v10, v8}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z
+move-result v10
+if-eqz v10, :cond_5
+
+new-instance v8, Lcom/maxmpz/utils/х;
+const-class v10, Ljava/lang/String;
+const/16 v11, 0x8
+invoke-direct {v8, v6, v11, v10}, Lcom/maxmpz/utils/х;-><init>(ZILjava/lang/Class;)V
+invoke-direct {v1, v4, v8}, Lcom/maxmpz/audioplayer/player/b0;->resolveProviderDynamicUrlAndExtras(Ljava/lang/String;Lcom/maxmpz/utils/х;)Ljava/lang/String;
+move-result-object v4                                                                  # ★ 覆写 path
+```
+
+`v2` 的赋值在 `L718: const/4 v2, 0x0`，确认为 0。
+
+### 20.4 `resolveProviderDynamicUrlAndExtras`
+
+`smali/com/maxmpz/audioplayer/player/b0.smali:4198-4378`
+
+```java
+private String resolveProviderDynamicUrlAndExtras(String path, Extra out) {
+    // 常量
+    // "resolveDynamicUrl FAIL !url for path="
+    // "resolveDynamicUrl FAIL !bundle for path="
+    // tag = "RestNowPlaying"
+
+    if (!saf.х.P(path)) {
+        Log.e("RestNowPlaying", "resolveDynamicUrl FAILpath=" + path);
+        return path;
+    }
+
+    Uri uri = this.mSafCtx.у(this.mContext, path);
+    if (uri == null) {
+        Log.e("RestNowPlaying", "resolveDynamicUrl FAIL !uri for path=" + path);
+        return path;
+    }
+
+    try {
+        Bundle b = this.mContext.getContentResolver().call(
+            uri,
+            "com.maxmpz.audioplayer:get_url",
+            uri.toString(),
+            (Bundle) null);
+
+        if (b == null) {
+            Log.e("RestNowPlaying", "resolveDynamicUrl FAIL !bundle for path=" + path);
+            return path;
+        }
+
+        String url = b.getString("url");
+        if (TUtils.isEmpty(url)) {
+            Log.e("RestNowPlaying", "resolveDynamicUrl FAIL !url for path=" + path);
+            return path;
+        }
+
+        for (String k : new String[]{"headers", "cookies", "method"}) {
+            String v = b.getString(k);
+            if (v != null) {
+                out.B(k);
+                out.B(v);
+            }
+        }
+
+        if (url != null) return url;
+        return "";
+    } catch (Throwable t) {
+        return path;
+    }
+}
+```
+
+smali 关键行：
+
+```smali
+const-string v0, "resolveDynamicUrl FAIL !url for path="     # L4210
+const-string v1, "resolveDynamicUrl FAIL !bundle for path=" # L4212
+invoke-static {p1}, Lcom/maxmpz/audioplayer/data/saf/х;->P(Ljava/lang/String;)Z   # L4214
+const-string v3, "RestNowPlaying"                            # L4218
+invoke-virtual {v4, v2, v5, v6, v7}, Landroid/content/ContentResolver;->call(Landroid/net/Uri;Ljava/lang/String;Ljava/lang/String;Landroid/os/Bundle;)Landroid/os/Bundle;   # L4281
+const-string v5, "com.maxmpz.audioplayer:get_url"            # L4273
+const-string v1, "url"                                       # L4307
+const-string v0, "headers"                                   # L4334
+const-string v4, "cookies"                                   # L4336
+const-string v5, "method"                                    # L4338
+```
+
+### 20.5 `get_url` 是全库唯一调用点
+
+```
+player/b0.smali:4273   "com.maxmpz.audioplayer:get_url"   ← 仅此一处
+```
+
+⇒ Provider 实现在其它进程/插件，本 APK 内无实现（S12）。
+
+---
+
+## 21. 播放位置记忆与生命周期
+
+### 21.1 `last_pos` 写入
+
+`smali/com/maxmpz/audioplayer/player/b0.smali`
+
+```sql
+-- L2728
+UPDATE folder_files SET last_pos=? WHERE _id=?
+
+-- L2751
+UPDATE folder_files SET last_pos=?, played_fully_at=played_at,
+       total_played_times=total_played_times+1 WHERE _id=?
+
+-- L2798
+UPDATE folder_files SET played_times=played_times+1,
+       total_played_times=total_played_times+1, last_pos=?,
+       played_fully_at=played_at WHERE _id=?
+```
+
+### 21.2 `last_pos` 来源
+
+`data/х.smali`：`"last_pos"` + 日志 tag `"M87_last_position"`
+`data/migrations/B.smali:1693`：`"last_pos"`（建列/迁移）
+
+### 21.3 软引用（`k3.d1()`）
+
+`smali/com/maxmpz/audioplayer/rest/library/k3.smali:531`
+
+```sql
+SELECT CASE WHEN folder_file_id IS NULL
+              THEN COALESCE(folder_path,'')||file_name
+            ELSE COALESCE(folder_files.file_path,path||folder_files.name,folder_files.name)
+       END AS _file_name,
+       CASE WHEN folder_file_id IS NULL THEN file_name ELSE folder_files.title_tag END,
+       COALESCE(albums.album, album_tag), COALESCE(artists.artist, artist_tag),
+       folder_files.duration, folder_files.tag_status, folder_files.file_type,
+       folder_files.folder_id, folder_files._id, folders.is_cue,
+       folder_files.offset_ms, folder_files.track_number,
+       folder_files.album_id, folder_files.artist_id,
+       eq_preset_songs.preset_id, folder_files.updated_at, NULL, NULL,
+       folder_files.rating, album_artists.album_artist, folder_files.album_artist_id,
+       folder_files.wave, folder_files.last_pos, folder_files.url,
+       folder_files.bit_rate, folder_files.replay_gain,
+       (has_lyrics_tag OR lrc_files_id IS NOT NULL OR cached_lyrics_id IS NOT NULL
+        AND cached_lyrics_loading_started_at IS NULL AND file_type!=23) AS _has_lyrics,
+       in_playlist
+FROM playlist_entries
+  LEFT JOIN folder_files      ON folder_files._id      = playlist_entries.folder_file_id
+  LEFT JOIN folders           ON folders._id           = folder_files.folder_id
+  LEFT JOIN albums            ON albums._id            = folder_files.album_id
+  LEFT JOIN artists           ON artists._id           = folder_files.artist_id
+  LEFT JOIN album_artists     ON album_artists._id     = folder_files.album_artist_id
+  LEFT JOIN eq_preset_songs   ON eq_preset_songs.file_id = folder_files._id
+WHERE playlist_entries._id=?
+```
+
+### 21.4 孤儿流清理
+
+`smali/com/maxmpz/audioplayer/data/migrations/B.smali`
+
+```sql
+-- L1354 + L1356（I 方法：更新语句）
+"UPDATE folder_files SET "  +  "user_added"  +  "=1 WHERE folder_id IS NULL AND file_type=23 AND (SELECT _id FROM playlist_entries WHERE folder_file_id=folder_files._id) IS NULL"
+
+-- L1449（删除流的 genre_entries）
+"folder_file_id IN (SELECT _id FROM folder_files WHERE file_type=23)"
+```
+
+### 21.5 导出
+
+```sql
+-- preference/exportimport/х.smali:2741
+"WHERE file_type=23"
+-- :2691 / :2812 导出 SELECT 含 folder_files.name, title_tag, file_type, NULL, rating, played_at, ..., last_pos, ...
+-- :2695 / :2816 导入 INSERT INTO tracks (..., file_type, ..., last_pos, ...)
+```
+
+---
+
+## 22. 显示分支（`CASE file_type WHEN 23`）
+
+### 22.1 `p0.J0()` 艺术家显示
+
+`smali/com/maxmpz/audioplayer/rest/library/p0.smali:561`
+
+```java
+public final String J0() {
+    return "CASE file_type WHEN 23 THEN artist_tag "
+         + "ELSE (CASE artists._id WHEN 1000 THEN NULL ELSE artist END) END";
+}
+```
+
+### 22.2 `p0.f1()` 艺术家 + 专辑拼接
+
+`p0.smali:1682`
+
+```java
+public final String f1() {
+    return A.K(
+        "CASE file_type WHEN 23 THEN COALESCE(artist_tag||' - '||album_tag, artist_tag, album_tag) ELSE ",
+        e1(),
+        " END");
+}
+```
+
+### 22.3 `SelectAlbumArtActivity` 同型分支
+
+`smali/com/maxmpz/audioplayer/dialogs/SelectAlbumArtActivity.smali:1378`
+
+```sql
+CASE file_type WHEN 23 THEN artist_tag
+     ELSE (CASE artists._id WHEN 1000 THEN NULL ELSE artist END) END
+```
+
+⇒ 流不走 JOIN 出来的 `artists.artist`，直接用自己写入的 `artist_tag = "..."`。
+
+---
+
+## 23. 未取项
 
 | # | 项 | 状态 |
 | --- | --- | --- |
@@ -924,6 +1230,7 @@ cast_stop_live_stream          0x7f080118
 | S6 | `d4.r0()` 的 `C0742.X0` 偏好键名 | 开放 |
 | S7 | `d4.z()` 返回 18 的语义 | 开放 |
 | S8 | `t0()` 的 `К` 参数用途 | 开放 |
-| **S9** | `folder_files.name` 对流的实际取值格式 | 开放 |
-| **S10** | XML 分支（PLS/XSPF）解析细节与字段映射 | 开放 |
-| **S11** | 流播放时的取源路径（谁读 `playlist_entries.folder_path` 交给解码器） | 开放 |
+| S9 | `folder_files.name` 对流的实际取值格式 | 开放 |
+| S10 | XML 分支（PLS/XSPF）解析细节与字段映射 | 开放 |
+| ~~S11~~ | ✅ 流播放时的取源路径 | **已闭环，§20** |
+| **S12** | `get_url` ContentProvider 实现方（不在本 APK） | 开放 |

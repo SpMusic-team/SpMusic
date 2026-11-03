@@ -39,18 +39,24 @@ source_documents:
 
 它不是扫描出来的，是**导入 M3U/PLS 时**由解析器写进数据库的。
 
-### 0.2 两条链路
+### 0.2 三条链路
 
 ```
 【创建侧】 导入 M3U/PLS
             → 逐行解析（#EXTINF 取标题，非注释行取 URL）
             → 判定 http:// 或 https://
             → INSERT folder_files (file_type=23, meta="Stream", 无 folder_id)
-            → INSERT playlist_entries (存完整 URL)
+            → INSERT playlist_entries (存完整 URL 副本)
 
 【消费侧】 「流」页
             → SELECT ... FROM folder_files WHERE file_type=23
             → d4.X0() 全库最短的列表查询
+
+【播放侧】 见 §12
+            → 读 folder_files.url（第 23 列）
+            → 若为 "__dynamic_url" → ContentResolver.call("get_url") 动态解析
+            → 带回 url + headers + cookies + method
+            → 播放后 UPDATE folder_files SET last_pos=?
 ```
 
 ### 0.3 核心特征
@@ -60,13 +66,16 @@ source_documents:
 | 数据来源 | **`folder_files` + `file_type = 23`** | 独立表 / 分类表 / 子查询 |
 | 产生方式 | **导入播放列表时插入** | 扫描文件系统 |
 | 有无 `folder_id` | **无** | 有 |
-| 有无 `file_path` | **无**（URL 在 `playlist_entries`） | 有 |
+| 有无 `file_path` | **无** | 有 |
+| 播放地址 | **`folder_files.url`**（可含 `__dynamic_url` 标记） | `file_path` |
+| 位置记忆 | **`folder_files.last_pos`**（自动） | 同 |
 | 查询写法 | **全库最短 `X0`（4 行）** | 十几到几十行 |
 | 构建逻辑 | **完全委托 `h1.o(...)`** | 各自拼装 |
 | 排序 | **自有 `O(int)`，仅 6 模式**（全库最少） | 3–16 模式 |
 | 投影 | **`p0.f3367`（标准 song 投影）** | 多样 |
 | 过滤列 | **自有 3 列** | 4 组共用 |
 | 参与专辑/艺术家统计 | **否（显式排除）** | 是 |
+| 参与歌词功能 | **否（`file_type!=23`）** | 是 |
 
 ---
 
@@ -491,18 +500,21 @@ https://example.com/b.aac
 | `file_type` | 音频格式码 | **`23`** | SQL 字面量 |
 | `sort` | — | 在 `playlist_entries.sort` | §3.6 |
 
-### 4.2 URL 存两处
+### 4.2 URL 存三处（含动态标记）
 
 | 位置 | 内容 | 用途 |
 | --- | --- | --- |
 | `folder_files.name` | URL 派生的显示名 | 列表显示 |
-| **`playlist_entries.folder_path` / `url`** | **完整 URL** | 播放时取源 |
+| **`folder_files.url`** | **播放地址，或 `__dynamic_url` 标记** | **播放器取源主路径** |
+| `playlist_entries.folder_path` | 完整 URL 副本 | 导入原始值 / 软引用回退 |
 
-⇒ **流的真正播放地址在 `playlist_entries`，不在 `folder_files`。**
+⇒ **播放主路径读 `folder_files.url`（第 23 列），不是 `playlist_entries`。**
+详见 §12.1 / §12.2（动态 URL 机制）。
 
-这解释了两件事：
+这解释了三件事：
 1. 为什么 `folder_files` 允许无 `file_path`（流的字段留空）
-2. 为什么 `d4.t0()` 需要 `LEFT JOIN playlist_entries`（要拿 URL 和条目 id）
+2. 为什么 `d4.t0()` 需要 `LEFT JOIN playlist_entries`（要拿条目 id 做删除/重排）
+3. 为什么 `playlist_entries.folder_file_id` 允许 NULL（软引用兜底，见 §12.4）
 
 ### 4.3 为什么必须 `LEFT JOIN folders`
 
@@ -854,28 +866,280 @@ public final int b1() { return m() & 0x0FFFFFFF; }
 
 ---
 
-## 12. 运行时：流怎么被播放
+## 12. 运行时：流怎么被播放（S11 闭环）
 
-### 12.1 播放地址来源
+> 本轮把「流能显示」推进到了「流能播放」——取源路径、动态 URL 机制、位置记忆、生命周期管理全部实证。
 
-流有两个「地址」：
+### 12.1 播放地址来源：`folder_files.url` 才是真源
+
+原以为 URL 只在 `playlist_entries.folder_path`，实际**两个位置都有**，且 `folder_files.url` 是播放主路径：
 
 | 位置 | 内容 | 角色 |
 | --- | --- | --- |
-| `folder_files.name` | URL 派生的显示名 | 列表显示用 |
-| **`playlist_entries.folder_path`** | **完整 URL** | **播放时取源** |
+| `folder_files.name` | URL 派生的显示名 | 列表显示 |
+| **`folder_files.url`** | **播放地址（或 `__dynamic_url` 标记）** | **播放器取源** |
+| `playlist_entries.folder_path` | 完整 URL 副本 | 导入原始值 / 软引用回退 |
 
-⇒ 播放器需要 `playlist_entries` 的条目才能拿到真正的 URL，这解释了 `d4.t0()` 为何要 JOIN 它。
+**播放器 `b0` 从光标第 23 列取 `folder_files.url`**：
 
-### 12.2 运行时状态
+```java
+// p0.d1() 的投影（第 22 列 last_pos，第 23 列 url）
+SELECT ..., folder_files.last_pos, folder_files.url, folder_files.bit_rate, ...
+FROM ... WHERE folder_files._id=?
+```
+
+```java
+// player/b0 取源
+String path = cursor.getString(0);      // 第 0 列 = COALESCE(file_path, path||name, name)
+String url  = cursor.getString(0x17);   // ★ 第 23 列 = folder_files.url
+```
+
+### 12.2 动态 URL 机制：`__dynamic_url` 魔法标记
+
+这是流播放最关键的设计：**`folder_files.url` 的取值 `"__dynamic_url"` 表示「地址需要运行时解析」**。
+
+```java
+// player/b0 —— 位于取源主路径
+String path = cursor.getString(0);
+String url  = cursor.getString(23);              // folder_files.url
+
+if (!TUtils.isEmpty(url)) {
+    if ("__dynamic_url".equals(url)) {           // ★ 魔法标记
+        Extra e = new Extra(true, 8, String.class);
+        path = resolveProviderDynamicUrlAndExtras(path, e);   // 动态解析
+    } else {
+        path = url;                              // 直接用
+    }
+}
+```
+
+#### `resolveProviderDynamicUrlAndExtras(String path, Extra out)`
+
+```java
+private String resolveProviderDynamicUrlAndExtras(String path, Extra out) {
+    // 1. 前置校验：path 必须是可解析的 SAF URI
+    if (!saf.х.P(path)) {
+        Log.e("RestNowPlaying", "resolveDynamicUrl FAILpath=" + path);
+        return path;                                    // 降级返回原 path
+    }
+
+    // 2. path → SAF Uri
+    Uri uri = mSafCtx.у(mContext, path);
+    if (uri == null) {
+        Log.e("RestNowPlaying", "resolveDynamicUrl FAIL !uri for path=" + path);
+        return path;
+    }
+
+    // 3. 通过 ContentProvider 的 get_url 方法请求
+    Bundle b = mContext.getContentResolver().call(
+        uri,
+        "com.maxmpz.audioplayer:get_url",               // ★ 方法名
+        uri.toString(),
+        null);
+
+    if (b == null) {
+        Log.e("RestNowPlaying", "resolveDynamicUrl FAIL !bundle for path=" + path);
+        return path;
+    }
+
+    // 4. 取 url
+    String url = b.getString("url");
+    if (TUtils.isEmpty(url)) {
+        Log.e("RestNowPlaying", "resolveDynamicUrl FAIL !url for path=" + path);
+        return path;
+    }
+
+    // 5. ★ 取传输附加参数
+    for (String k : new String[]{"headers", "cookies", "method"}) {
+        String v = b.getString(k);
+        if (v != null) {
+            out.B(k);      // key
+            out.B(v);      // value
+        }
+    }
+
+    return url;
+}
+```
+
+#### 四类失败降级
+
+| 失败点 | 日志 | 行为 |
+| --- | --- | --- |
+| path 非 SAF URI | `resolveDynamicUrl FAILpath=` | 返回原 path |
+| SAF Uri 解析失败 | `resolveDynamicUrl FAIL !uri for path=` | 返回原 path |
+| Provider 返回 null Bundle | `resolveDynamicUrl FAIL !bundle for path=` | 返回原 path |
+| Bundle 中 url 为空 | `resolveDynamicUrl FAIL !url for path=` | 返回原 path |
+
+日志 tag 统一为 **`RestNowPlaying`**。
+
+#### 三个传输附加参数
+
+```java
+new String[]{"headers", "cookies", "method"}
+```
+
+⇒ 动态 URL 不只是替换地址，还会带回 **HTTP 头 / Cookie / 请求方法**。
+这说明 `__dynamic_url` 是为**需要鉴权或特殊请求的流**（如会员电台、带签名的 CDN 链接）设计的。
+
+**Provider 实现方不在本 APK 内** —— `get_url` 方法名在整个 dex 中只出现一次（调用点），说明实现在其它进程/插件，属跨进程边界。
+
+### 12.3 播放位置记忆：`folder_files.last_pos`
+
+流（以及所有曲目）的断点位置存在 `folder_files.last_pos`：
+
+```sql
+-- player/b0 三条 UPDATE
+UPDATE folder_files SET last_pos=? WHERE _id=?
+
+UPDATE folder_files SET last_pos=?, played_fully_at=played_at,
+       total_played_times=total_played_times+1 WHERE _id=?
+
+UPDATE folder_files SET played_times=played_times+1,
+       total_played_times=total_played_times+1, last_pos=?,
+       played_fully_at=played_at WHERE _id=?
+```
+
+**与书签的区别**（重要）：
+
+| 机制 | 列 | 语义 | 数量 |
+| --- | --- | --- | --- |
+| **播放位置记忆** | `folder_files.last_pos` | 每曲目**唯一**的续播点 | 1 条/曲目 |
+| **书签** | `bookmarks.offset_ms` | 用户主动收藏的**多个**位置 | N 条/曲目 |
+
+⇒ **`last_pos` 是自动的、`offset_ms` 是手动的**。两者独立存储，互不覆盖。
+
+`last_pos` 也进入导出格式（`exportimport` 的 `tracks` 表有 `last_pos` 列）。
+
+### 12.4 软引用模型：`playlist_entries.folder_file_id` 可为 NULL
+
+`k3.d1()` 揭示了播放列表条目的双轨取源：
+
+```sql
+SELECT CASE
+         WHEN folder_file_id IS NULL
+           THEN COALESCE(folder_path,'') || file_name          -- ★ 软引用：拼路径
+         ELSE COALESCE(folder_files.file_path, path||folder_files.name, folder_files.name)
+       END AS _file_name,
+       CASE WHEN folder_file_id IS NULL THEN file_name ELSE folder_files.title_tag END,
+       ...
+FROM playlist_entries
+  LEFT JOIN folder_files      ON folder_files._id      = playlist_entries.folder_file_id
+  LEFT JOIN folders           ON folders._id           = folder_files.folder_id
+  LEFT JOIN albums            ON albums._id            = folder_files.album_id
+  LEFT JOIN artists           ON artists._id           = folder_files.artist_id
+  LEFT JOIN album_artists     ON album_artists._id     = folder_files.album_artist_id
+  LEFT JOIN eq_preset_songs   ON eq_preset_songs.file_id = folder_files._id
+WHERE playlist_entries._id=?
+```
+
+**`folder_file_id IS NULL` 是软引用**：条目本身存了 `folder_path` + `file_name`，即使对应的 `folder_files` 行被删（比如重新扫描后 ID 变了），条目仍能还原路径。
+
+⇒ 这正是 §3.6 中 `у()` 同时写 `folder_file_id` 与 `url` 的原因：**双保险**。
+
+### 12.5 `_has_lyrics` 排除流
+
+所有 song 投影里都有这段：
+
+```sql
+(has_lyrics_tag OR lrc_files_id IS NOT NULL OR cached_lyrics_id IS NOT NULL
+ AND cached_lyrics_loading_started_at IS NULL AND file_type!=23) AS _has_lyrics
+```
+
+**`file_type!=23` 让流恒为「无歌词」**。
+
+⇒ 流不参与歌词功能（合理：网络流没有本地 lrc 文件，且内容不可预知）。
+
+### 12.6 显示分支：`CASE file_type WHEN 23`
+
+流的艺术家/专辑显示走独立 SQL 分支：
+
+```java
+// p0.J0() —— 艺术家显示
+public final String J0() {
+    return "CASE file_type WHEN 23 THEN artist_tag "
+         + "ELSE (CASE artists._id WHEN 1000 THEN NULL ELSE artist END) END";
+}
+```
+
+```java
+// p0.f1() —— 艺术家 + 专辑拼接
+public final String f1() {
+    return "CASE file_type WHEN 23 "
+         + "THEN COALESCE(artist_tag||' - '||album_tag, artist_tag, album_tag) "
+         + "ELSE " + e1() + " END";
+}
+```
+
+**流直接用 `artist_tag`，不走 JOIN 出来的 `artists.artist`。**
+
+原因：流的 `artist_tag = "..."`（§3.7），而 `artists.artist` 对未匹配的曲目会是 `"<unknown>"` 哨兵或其他值。用 `CASE` 显式分流保证流显示的是自己写入的占位符。
+
+`COALESCE(artist_tag||' - '||album_tag, artist_tag, album_tag)` 的三级降级：
+- 两者都有 → `"..." - "..."`（因为流的 `album_tag` 是 NULL，实际落到下一级）
+- 只有 `artist_tag` → `"..."` 
+- 只有 `album_tag` → 该值
+
+⇒ 流实际显示为 `"..."`。
+
+### 12.7 生命周期管理：孤儿流清理
+
+`data/migrations/B.I()` 的清理逻辑给出了流的**三重判定标准**：
+
+```sql
+-- 孤儿流标记：无 folder、无 playlist_entries 引用
+UPDATE folder_files SET user_added=1
+WHERE folder_id IS NULL
+  AND file_type=23
+  AND (SELECT _id FROM playlist_entries
+       WHERE folder_file_id=folder_files._id) IS NULL;
+```
+
+```sql
+-- 流的 genre_entries 全删（流无流派归属）
+DELETE FROM genre_entries
+WHERE folder_file_id IN (SELECT _id FROM folder_files WHERE file_type=23);
+```
+
+**三重判定**：
+1. `folder_id IS NULL` —— 不属于任何已扫描文件夹
+2. `file_type = 23` —— 标记为流
+3. **无 `playlist_entries` 引用** —— 不再是任何播放列表的成员
+
+⇒ 三条同时满足 = **孤儿流**（曾属于某播放列表，但该列表已被删）。
+标记 `user_added=1` 而非直接删除，给用户留了可见/可清理的余地。
+
+### 12.8 导出/导入
+
+```sql
+-- 导出：流单独处理
+WHERE file_type=23
+
+-- exportimport 的 tracks 表含 file_type 与 last_pos
+INSERT INTO tracks (path, readable_name, file_type, cue_offset_ms, rating,
+                    played_at, played_fully_at, played_times, last_pos, preset_id, ...)
+```
+
+⇒ 流的 `file_type` 与 `last_pos` 都会进备份，恢复后能还原「是流」这一属性与续播点。
+
+### 12.9 运行时状态：`state_player_track_is_stream`
 
 ```
 id/state_player_track_is_stream  0x7f0d070d
 ```
 
-这是 StateBus 的状态 id，说明「当前曲目是否为流」在播放期是**可查询的运行时属性**。UI 可据此切换图标、禁用不适用操作。
+**两个真实使用点**（不是解码器选择）：
 
-### 12.3 流的专属设置生效点
+| 位置 | 用途 |
+| --- | --- |
+| `player/router/A` | `BusDisabledForStateBehavior.y` —— **按流状态禁用某个按钮** |
+| `widget/player/t1` | UI 显示状态 |
+
+⇒ 这是 **UI 状态控制**，不是播放引擎分支。
+
+> **排查说明**：`PlayerService` 里的 `"FLAG_OPEN_IS_STREAM"` 字符串是**日志格式化**（把 `0x20000` 位翻译成可读文本），不是逻辑判断。这条线索一开始具有误导性。
+
+### 12.10 流的专属设置生效点
 
 | 设置 | 影响 |
 | --- | --- |
@@ -885,9 +1149,34 @@ id/state_player_track_is_stream  0x7f0d070d
 | `pref_stream_timeout` | 网络超时 |
 | `pref_use_stream3_player` | 用独立播放器实现（Hi-Res 输出场景） |
 
-### 12.4 排除于统计之外
+### 12.11 完整播放链路
 
-见 §4.4。流不参与专辑/艺术家/流派的计数，**这是保证分类页数据可信的关键**。
+```
+① 取光标
+   b0.getCurrentTrackCursor(entity, trackId)
+     → p0.d1(db, [trackId])
+     → SELECT ..., last_pos, url, ... FROM folder_files ... WHERE _id=?
+
+② 取源
+   path = cursor[0]      ; COALESCE(file_path, path||name, name)
+   url  = cursor[23]     ; folder_files.url
+
+③ 判定动态地址
+   if (url == "__dynamic_url")
+       path = resolveProviderDynamicUrlAndExtras(path, extra)
+                → saf.х.P(path)          ; 校验 SAF
+                → mSafCtx.у(ctx, path)   ; 取 Uri
+                → resolver.call(uri, "com.maxmpz.audioplayer:get_url", ...)
+                → b.getString("url")
+                → 附带 headers / cookies / method
+   else path = url
+
+④ 交给解码器
+   path (+ extras) → 播放引擎
+
+⑤ 记录位置
+   UPDATE folder_files SET last_pos=? WHERE _id=?
+```
 
 ---
 
@@ -934,6 +1223,11 @@ id/state_player_track_is_stream  0x7f0d070d
 | **A8** | **`artist_tag = "..."` 显式占位而非 NULL**（§3.7） | UI 不会因 NULL 崩溃，视觉上明确是占位。比 NULL 更防错 |
 | **A9** | **导入前先建 `playlists` 行再解析条目**（§3.2） | 每个条目立即能绑定 playlistId，无需二次回填 |
 | **A10** | **`#EXTINF` 解析只取逗号后部分**（§3.4） | 流的 duration 恒为 0，无需解析 `-1` 这类占位值 |
+| **A11** | **`__dynamic_url` 魔法标记 + ContentResolver 按需解析**（§12.2） | 静态地址直接存，动态地址（鉴权/签名 CDN）延迟到播放时解析。列表页无需触网，播放时才付出代价 |
+| **A12** | **动态解析带回 `headers` / `cookies` / `method`**（§12.2） | 不止替换 URL，还携带完整请求上下文。支持需要鉴权的流而不污染数据模型 |
+| **A13** | **四类失败均降级返回原 path**（§12.2） | 动态解析失败时退化为直接播放原地址，不会因 Provider 异常导致流完全不可播 |
+| **A14** | **`playlist_entries.folder_file_id` 允许 NULL + 存 `folder_path`/`file_name`**（§12.4） | 软引用兜底：重新扫描后 ID 变了，条目仍能还原路径 |
+| **A15** | **`last_pos` 与 `bookmarks.offset_ms` 分离**（§12.3） | 自动续播点与手动书签互不干扰，两种语义共存 |
 
 ### 14.2 不建议照抄
 
@@ -949,6 +1243,9 @@ id/state_player_track_is_stream  0x7f0d070d
 | **N8** | **URL 存两处**（`folder_files.name` + `playlist_entries.folder_path`） | 冗余存储，需保证两处同步。仅存 `playlist_entries` 更清晰 |
 | **N9** | **`.m3u` 条目也被当作流插入**（§3.5 的 `goto stream`） | 嵌套播放列表引用与真实流共用 `file_type=23`，语义混杂 |
 | **N10** | **`#EXTINF` 的 duration 被丢弃** | 已知 `duration=0` 不可靠，但至少可存原始声明值供调试 |
+| **N11** | **`__dynamic_url` 是字符串魔法值，无类型区分**（§12.2） | URL 列既要存地址又要存标记，语义重载。应用独立布尔列或前缀方案 |
+| **N12** | **动态解析的 Provider 实现在其它进程，调用无契约文档**（§12.2） | `get_url` 只出现一次调用点，返回 Bundle 的字段名 `url`/`headers`/`cookies`/`method` 是隐式协议，改一侧即崩 |
+| **N13** | **孤儿流标记 `user_added=1` 复用了无关列**（§12.7） | `user_added` 原本语义是「用户手动添加」，现在兼作「孤儿流」标记，语义污染 |
 
 ---
 
@@ -1001,22 +1298,44 @@ id/state_player_track_is_stream  0x7f0d070d
 
 ## 16. 未解
 
+### 16.1 本轮已闭环（S11）
+
+| # | 原问题 | 结论 | 证据位置 |
+| --- | --- | --- | --- |
+| ~~S11~~ | 流播放时的取源路径 | `b0` 从光标第 23 列读 `folder_files.url`；若为 `__dynamic_url` 则经 ContentResolver 的 `get_url` 动态解析（带回 headers/cookies/method） | §12.1 §12.2 |
+
+**附带闭环的四个发现**（原文档未覆盖）：
+
+| 主题 | 结论 | 位置 |
+| --- | --- | --- |
+| 播放位置记忆 | `folder_files.last_pos`（自动，与书签手动机制独立） | §12.3 |
+| 软引用模型 | `playlist_entries.folder_file_id` 可为 NULL，用 `folder_path`+`file_name` 兜底 | §12.4 |
+| 歌词排除 | `_has_lyrics` 表达式含 `file_type!=23`，流恒为无歌词 | §12.5 |
+| 显示分支 | `CASE file_type WHEN 23 THEN artist_tag` 走独立 SQL 分支 | §12.6 |
+| 孤儿清理 | 三重判定：`folder_id IS NULL AND file_type=23 AND 无 playlist_entries 引用` | §12.7 |
+
+### 16.2 仍开放
+
 | # | 问题 | 优先级 |
 | --- | --- | --- |
-| **S1** | `file_type` 完整枚举（23 之外的取值） | 中 |
-| **S3** | `stream_files` 是否为 VIEW（`i()` 返回它但查询用 `folder_files`） | 中 |
-| **S8** | `t0()` 的 `К` 参数（`com.maxmpz.audioplayer.data.api.К`）用途 | 中 |
+| **S12** | `get_url` ContentProvider 的实现方（不在本 APK，需插件/其它进程） | 中 |
 | **S9** | `folder_files.name` 对流的实际取值格式（URL 原文？去协议？截断？） | 中 |
 | **S10** | XML 分支（PLS/XSPF）的解析细节与字段映射 | 中 |
-| **S11** | 流播放时的实际取源路径（哪个方法读 `playlist_entries.folder_path` 交给解码器） | **高** |
+| **S1** | `file_type` 完整枚举（23 之外的取值） | 中 |
+| **S3** | `stream_files` 是否为 VIEW | 中 |
+| **S8** | `t0()` 的 `К` 参数用途 | 中 |
 | S2 | `h1.o()` 的 `z2` 参数确切语义（推断为前置 AND 控制） | 低 |
 | S4 | `cat_stats.type = 60` 的统计维度 | 低 |
 | S5 | `d4.H()` 返回 `null` 的用途 | 低 |
 | S6 | `d4.r0()` 对应的 `C0742.X0` 偏好键名 | 低 |
 | S7 | `d4.z()` 返回 18 的语义（分类序号？） | 低 |
 
-> **S11 是把「流能显示」推进到「流能播放并能 seek」的最后一步。**
-> 已知 URL 在 `playlist_entries.folder_path`，但播放器如何取它、如何与解码器交接，本轮未追。
+> **S11 闭环后，流的完整生命周期已全链实证**：
+> 创建（§2 §3）→ 存储（§3.7）→ 列表（§5 §6）→ 播放取源（§12.1 §12.2）
+> → 位置记忆（§12.3）→ 清理（§12.7）。
+>
+> 剩余项均属外围：`get_url` 实现方在其它进程（S12）、XML 格式细节（S10）、
+> 若干元数据方法语义（S4–S8）。
 
 ---
 

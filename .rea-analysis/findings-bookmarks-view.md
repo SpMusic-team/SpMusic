@@ -517,7 +517,131 @@ public final boolean p(RestProvider restProvider, Uri uri, int[] iArr) {
 
 ---
 
-## 12. 未取项
+## 13. `pos_ms` 的全部引用点（B8 闭环）
+
+**取证方式**：JADX 无法按字符串字面量检索，改用 apktool `--no-res` 反汇编后全局搜索。
+
+```powershell
+# APK 内仅 1 个 classes.dex（6.35 MB）
+apktool d --no-res -f -o <out> Poweramp-v3.apk     # 生成 7308 个 .smali，耗时 ~12s
+```
+
+搜索 `const-string "pos_ms"`，**共 4 处**：
+
+| # | 文件 | 方向 |
+| --- | --- | --- |
+| 1 | `smali/android/support/v4/media/session/К.smali:3227` | **写入（主路径）** |
+| 2 | `smali/com/maxmpz/audioplayer/preference/exportimport/С.smali:1498` | **写入（导入）** |
+| 3 | `smali/com/maxmpz/audioplayer/output/cc/х.smali:196` | 读取（无关，CC 协议） |
+| 4 | `smali/com/maxmpz/audioplayer/rest/library/a0.smali:968` | **读取（`u1()` 消费）** |
+
+### 13.1 主路径 `cmd_data_bookmark_now`（media session）
+
+```smali
+const v7, 0x7f0d03f9                    # R.id.cmd_data_bookmark_now
+if-ne v4, v7, :cond_68
+
+invoke-static {v10, v9}, Lcom/maxmpz/widget/StateBusHelper;->fromContextOrThrow(Landroid/content/Context;I)Lcom/maxmpz/widget/StateBus;
+move-result-object v0
+const v2, 0x7f0d00a2                    # R.id.state_player_track
+invoke-interface {v0, v2}, Lcom/maxmpz/widget/StateBus;->getObjectState(I)Ljava/lang/Object;
+move-result-object v2
+check-cast v2, Lcom/maxmpz/audioplayer/player/g0;
+if-eqz v2, :cond_9f
+invoke-virtual {v2}, Lcom/maxmpz/audioplayer/player/g0;->H()Z
+move-result v4
+if-eqz v4, :cond_9f
+iget v4, v2, Lcom/maxmpz/audioplayer/player/g0;->d:I
+invoke-static {v4}, Lokhttp3/internal/platform/android/y;->c(I)Z
+move-result v4
+if-eqz v4, :cond_66
+goto/16 :goto_2d
+:cond_66
+iget-object v4, v2, Lcom/maxmpz/audioplayer/player/g0;->V:Lcom/maxmpz/audioplayer/rest/library/o0;
+const v7, 0x7f0d00aa                    # R.id.state_player_current_playing_pos_ms
+invoke-interface {v0, v7}, Lcom/maxmpz/widget/StateBus;->getIntState(I)I
+move-result v0
+if-gez v0, :cond_67
+const/4 v0, 0x0
+:cond_67
+new-instance v7, Landroid/os/Bundle;
+invoke-direct {v7}, Landroid/os/Bundle;-><init>()V
+const-string v9, "pos_ms"
+invoke-virtual {v7, v9, v0}, Landroid/os/BaseBundle;->putInt(Ljava/lang/String;I)V
+new-instance v26, Lcom/maxmpz/audioplayer/rest/library/UriAndIds;
+iget-object v9, v2, Lcom/maxmpz/audioplayer/player/g0;->i:Landroid/net/Uri;
+invoke-virtual {v2}, Lcom/maxmpz/audioplayer/player/g0;->Х()J
+move-result-wide v11
+const/4 v13, 0x1
+new-array v2, v13, [J
+aput-wide v11, v2, v24
+const/16 v29, 0x0
+move-object/from16 v28, v2
+move-object/from16 v31, v4
+move-object/from16 v30, v7
+move-object/from16 v27, v9
+invoke-direct/range {v26 .. v31}, Lcom/maxmpz/audioplayer/rest/library/UriAndIds;-><init>(Landroid/net/Uri;[JLandroid/content/ContentValues;Landroid/os/Bundle;Lcom/maxmpz/audioplayer/rest/library/o0;)V
+move-object/from16 v4, v26
+move-object/from16 v2, v31
+invoke-virtual {v3}, Lcom/maxmpz/audioplayer/rest/library/g1;->getBookmarks()Lcom/maxmpz/audioplayer/rest/library/a0;
+move-result-object v7
+invoke-virtual {v7, v5, v2, v4}, Lcom/maxmpz/audioplayer/rest/library/a0;->u1(Lcom/maxmpz/audioplayer/rest/RestProvider;Lcom/maxmpz/audioplayer/rest/library/h2;Lcom/maxmpz/audioplayer/rest/library/UriAndIds;)I
+move-result v2
+if-lez v2, :cond_9f
+const v2, 0x7f0d015b                    # R.id.bus_app
+invoke-static {v10, v2}, Lcom/maxmpz/widget/MsgBusHelper;->fromContextOrThrow(Landroid/content/Context;I)Lcom/maxmpz/widget/MsgBus;
+move-result-object v2
+invoke-virtual {v3}, Lcom/maxmpz/audioplayer/rest/library/g1;->getBookmarks()Lcom/maxmpz/audioplayer/rest/library/a0;
+move-result-object v3
+const v5, 0x7f0d0049                    # R.id.msg_app_data_changed
+invoke-interface {v2, v5, v14, v14, v3}, Lcom/maxmpz/widget/MsgBus;->post(IIILjava/lang/Object;)V
+```
+
+### 13.2 R.id 名字对照（public.xml 实证）
+
+| R.id | name |
+| --- | --- |
+| `0x7f0d03f9` | `cmd_data_bookmark_now` |
+| `0x7f0d00a2` | `state_player_track` |
+| `0x7f0d00aa` | `state_player_current_playing_pos_ms` |
+| `0x7f0d015b` | `bus_app` |
+| `0x7f0d0049` | `msg_app_data_changed` |
+
+### 13.3 导入路径 `exportimport.С`
+
+```smali
+# 三元组反查 folder_files._id（跨设备恢复，ID 会变）
+const-string v5, "SELECT folder_files._id FROM folder_files INNER JOIN folders ON folders._id=folder_id WHERE folder_files.name=? AND folders.short_name=? AND folder_files.offset_ms=?"
+invoke-static/range {v3 .. v8}, Lcom/google/android/gms/internal/play_billing/x1;->р(Landroid/database/sqlite/SQLiteDatabase;Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;J)J
+move-result-wide v4
+cmp-long v0, v4, v43
+if-eqz v0, :cond_29
+const-string v0, "pos_ms"
+invoke-virtual {v15, v0, v12}, Landroid/os/BaseBundle;->putInt(Ljava/lang/String;I)V
+aput-wide v4, v13, v23
+...
+new-instance v11, Lcom/maxmpz/audioplayer/rest/library/UriAndIds;
+invoke-virtual/range {v27 .. v27}, Lcom/maxmpz/audioplayer/rest/library/g1;->getFiles()Lcom/maxmpz/audioplayer/rest/library/n0;
+move-result-object v0
+invoke-virtual {v0}, Lcom/maxmpz/audioplayer/rest/library/А;->B0()Landroid/net/Uri;
+move-result-object v12
+invoke-direct/range {v11 .. v16}, Lcom/maxmpz/audioplayer/rest/library/UriAndIds;-><init>(Landroid/net/Uri;[JLandroid/content/ContentValues;Landroid/os/Bundle;Lcom/maxmpz/audioplayer/rest/library/o0;)V
+```
+
+### 13.4 无关的第三处
+
+```smali
+# output/cc/х.smali —— CC/Cast 控制协议的 SEEK 消息
+const-string v2, "pos_ms"
+const/4 v3, -0x1
+invoke-virtual {v0, v2, v3}, Lorg/json/JSONObject;->optInt(Ljava/lang/String;I)I
+```
+
+与书签无关，仅同名。
+
+---
+
+## 14. 未取项
 
 | # | 项 | 状态 |
 | --- | --- | --- |
@@ -528,5 +652,84 @@ public final boolean p(RestProvider restProvider, Uri uri, int[] iArr) {
 | ~~B5~~ | ✅ `bookmarks.meta` 内容格式 | **已闭环，§10** |
 | B6 | `d()` / `k0()` / `c()` / `s()` / `z()` 等分类元数据方法 | 开放 |
 | B7 | `q0()` 删除 / `p()` 重排的完整语义 | 开放（§11 已收原文） |
-| **B8** | `pos_ms` 在 UI 侧的赋值点 | 开放 |
-| **B9** | `t.f3846` 占位符文本 | 开放 |
+| ~~B8~~ | ✅ `pos_ms` 在 UI 侧的赋值点 | **已闭环，§13** |
+| B9 | `t.f3846` 占位符文本 | 开放 |
+| B10 | `exportimport.С` 的备份文件格式 | 开放 |
+
+---
+
+## 15. 辅助类摘要（B8 取证路径上的中间证据）
+
+### 15.1 `UriAndIds`
+
+`ev_00a19922fa994793626732ef0d59160fffd0ac9f9271c888c49a3b97f6aa7722`
+
+7 字段：
+
+```
+A       : long[]
+B       : android.net.Uri
+CREATOR : Parcelable.Creator<UriAndIds>
+K       : com.maxmpz.audioplayer.rest.library.h1
+X       : android.content.ContentValues
+x       : android.os.Bundle          ← ★ pos_ms 载体
+y       : com.maxmpz.audioplayer.rest.library.h0
+```
+
+9 方法，含 4 个构造重载：
+
+```
+<init>(Uri, long)
+<init>(Uri, long[], ContentValues, Bundle)
+<init>(Uri, long[], ContentValues, Bundle, int)
+<init>(Uri, long[], ContentValues, Bundle, o0)
+```
+
+### 15.2 `RestProvider`
+
+`ev_2532a90140fc45bf0d0cecc999c1ecc90b4eccb62330a5541b2a4c7788aa31d2`
+
+18 方法，含跨进程入口：
+
+```java
+public Bundle call(String str, String str2, Bundle bundle)   // ← 书签命令通道
+```
+
+### 15.3 `h1.C`（批量查询执行器）
+
+`ev_9751c2d73a9a8384f1d3b19b8dd1f3fcbb225def8666a8c7fae56453c4594f70`
+
+```java
+public static Cursor C(RestProvider restProvider, Uri uri, String[] strArr, long[] jArr,
+                       int i, int i2, int i3, int i4, boolean z, i2 i2Var) {
+    if (jArr.length != 0 && i < jArr.length && i + i2 <= jArr.length) {
+        StringBuilder sb = new StringBuilder();
+        StringBuilder sb2 = new StringBuilder();
+        if (i2Var.e0(uri, jArr, i, i2, i3, sb, sb2, z)) {
+            String[] strArrJ = strArr == null ? i2Var.j() : strArr;
+            if (i4 > 0) {
+                sb2.append(" LIMIT ");
+                sb2.append(i4);
+            }
+            try {
+                Cursor cursorA = restProvider.A(uri, strArrJ, sb.toString(), null, sb2.toString(), false);
+                ...
+            } catch (SQLiteException e) {
+                Log.e("RestMassOps", "", e);
+            }
+        }
+    }
+    return null;
+}
+```
+
+### 15.4 `g1.B0`（基 URI 访问器）
+
+`ev_07b7915627e33c55ba4ae4c8aca92e95dd611148691c763933526b1f5dc9e9b4`
+
+```java
+@Override // h0
+public final Uri B0() {
+    return this.B;
+}
+```

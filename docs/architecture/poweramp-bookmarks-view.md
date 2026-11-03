@@ -45,20 +45,45 @@ source_documents:
 | 列表投影 | **自有 2 字段**（两个 id） | 多为 `p0.f3367` / `y` / `l.X` |
 | 播放位置 | **`bookmarks.offset_ms`** | 无此概念 |
 | 显示行 | **三段 meta 拼接**（书签 / 曲目 / EQ 预设） | 标准曲目行 |
-| **位置来源** | **URI 参数 `pos_ms`** | — |
+| **位置来源** | **`StateBus.state_player_current_playing_pos_ms`** → URI 参数 `pos_ms` | — |
 | **meta 内容** | **`pos_ms` 的可读格式化（`M:SS` / `H:MM:SS`）** | — |
+| **创建入口** | **`cmd_data_bookmark_now` 命令** | — |
 
 **位置字段是 `bookmarks.offset_ms`（毫秒），证据在 `a0.d1()` 的完整 SELECT 里。**
+**写入端在 `a0.u1()`，位置来自 `UriAndIds` 的 `pos_ms` 参数，由 `cmd_data_bookmark_now` 从播放器实时进度填充（§4.7）。**
+**同时按同一值格式化出 `meta`（§4.6）。**
+
+### 0.1.1 完整生命周期（已全链实证）
+
+```
+① 创建  cmd_data_bookmark_now（§4.7）
+          StateBus.getIntState(state_player_current_playing_pos_ms)
+          → Bundle.putInt("pos_ms", pos)
+          → new UriAndIds(uri, [trackId], null, bundle, o0)
+
+② 存储  a0.u1()（§4.5）
+          INSERT INTO bookmarks (folder_file_id, sort, offset_ms, meta, created_at)
+          offset_ms = pos_ms
+          meta      = Utils.A(pos_ms)  ← M:SS / H:MM:SS
+
+③ 读取  a0.d1()（§4.1）
+          SELECT … bookmarks.offset_ms … WHERE bookmarks._id=?
+          第 22 列
+
+④ 显示  a0.n0()（§5）
+          bookmarks.meta | folder_files.meta | EQ 预设名
+```
 **写入端在 `a0.u1()`，位置来自 URI 参数 `pos_ms`，同时格式化出一份 `meta`。**
 
 ### 0.2 缺口状态
 
-**本轮已闭环 B2**（写入 + 读取两端），并顺带确认 meta 语义：
+**已闭环 3 项**（B2 / B5 / B8）：
 
 | # | 原缺口 | 现状 |
 | --- | --- | --- |
 | ~~B2~~ | 位置写入/消费路径 | ✅ **已闭环**，见 §4.5 / §4.6 |
-| ~~B5~~ | `bookmarks.meta` 内容格式 | ✅ **已闭环**：`Utils.A(pos_ms)` 格式化出的时长串，见 §4.6 |
+| ~~B5~~ | `bookmarks.meta` 内容格式 | ✅ **已闭环**：`Utils.A(pos_ms)` 格式化的时长串，见 §4.6 |
+| ~~B8~~ | `pos_ms` 在 UI 侧的填充点 | ✅ **已闭环**：`StateBus.state_player_current_playing_pos_ms`，经 `cmd_data_bookmark_now` 命令，见 §4.7 |
 
 **仍开放**：
 
@@ -66,7 +91,6 @@ source_documents:
 | --- | --- | --- |
 | **B1** | `bookmarks` 表完整 DDL | `data.C0633.onUpgrade` 用变量拼 SQL（`n.n("ALTER TABLE ", str, ...)`），表名来自参数，静态无法枚举 |
 | B3 | `n1()` / `r1()` / `s1()` / `v()` 四个 boolean 的语义 | 影响批量操作行为 |
-| B8 | `pos_ms` 在 UI 侧的赋值点（播放器当前进度 → URI 参数） | 见 §4.5 末 |
 | B4 | 同曲目多书签时 `x()` 无 `LIMIT` 的行为 | 见 §6.1 |
 
 ---
@@ -347,7 +371,7 @@ public final int u1(RestProvider restProvider, h2 h2Var, UriAndIds uriAndIds) {
 3. **`sort` 在事务内取 MAX**：`beginTransactionNonExclusive()` 包住 `MAX(sort)` 与全部 insert，避免并发下 sort 重复。
    但注意 `MAX(sort)` 查询在事务开始后、循环开始前只做了一次——若同事务内插入多条，靠 `nextSort += 1` 递增维持唯一。
 
-> **B8 未解**：`pos_ms` 由哪个调用方（UI 层）用播放器当前进度填充，本轮未追到。
+> **调用方见 §4.7（B8 已闭环）。**
 
 ### 4.6 `meta` 内容：`pos_ms` 的可读时长（B5 闭环）
 
@@ -397,6 +421,134 @@ public static void m2719(StringBuilder sb, int i, boolean z) {
 
 > 该函数是**通用时长格式化器**（`Utils.m2719`），不只服务书签 —— 播放器时间显示也会走它。
 > 因此这个不一致是**全局可见**的，不是书签专有问题。
+
+### 4.7 调用方：`pos_ms` 的填充点（B8 闭环）
+
+通过 smali 反汇编（apktool `--no-res`）全局搜索 `"pos_ms"` 字面量，共 **4 处**命中：
+
+| # | 位置 | 方向 | 与书签的关系 |
+| --- | --- | --- | --- |
+| 1 | `android.support.v4.media.session.К` | **写入** | **主路径**（`cmd_data_bookmark_now`） |
+| 2 | `com.maxmpz.audioplayer.preference.exportimport.С` | **写入** | 备份导入恢复 |
+| 3 | `com.maxmpz.audioplayer.output.cc.х` | 读取 | **无关**（Cast 控制协议 JSON 的 SEEK 参数） |
+| 4 | `com.maxmpz.audioplayer.rest.library.a0` | **读取** | `u1()` 消费，见 §4.5 |
+
+#### 主路径：`cmd_data_bookmark_now`
+
+```smali
+; 1. 命令匹配
+const v7, 0x7f0d03f9                    ; R.id.cmd_data_bookmark_now
+if-ne v4, v7, :cond_68
+
+; 2. 取当前曲目对象
+invoke-static {v10, v9}, StateBusHelper;->fromContextOrThrow(...)
+const v2, 0x7f0d00a2                    ; R.id.state_player_track
+invoke-interface {v0, v2}, StateBus;->getObjectState(I)
+check-cast v2, Lcom/maxmpz/audioplayer/player/g0;
+
+; 3. 可播放性校验
+invoke-virtual {v2}, g0;->H()Z
+if-eqz v4, :cond_9f                     ; 不可播放 → 退出
+iget v4, v2, g0;->d:I
+invoke-static {v4}, .../y;->c(I)Z       ; 类型校验
+if-eqz v4, :cond_66
+
+; 4. ★ 取播放位置
+const v7, 0x7f0d00aa                    ; R.id.state_player_current_playing_pos_ms
+invoke-interface {v0, v7}, StateBus;->getIntState(I)
+move-result v0
+if-gez v0, :cond_67
+const/4 v0, 0x0                         ; 负值归零
+:cond_67
+
+; 5. ★ 放入 Bundle
+new-instance v7, Landroid/os/Bundle;
+invoke-direct {v7}, Bundle;-><init>()V
+const-string v9, "pos_ms"
+invoke-virtual {v7, v9, v0}, BaseBundle;->putInt(Ljava/lang/String;I)V
+
+; 6. 构造 UriAndIds(uri, [trackId], null, bundle, o0)
+invoke-direct/range {v26 .. v31}, UriAndIds;-><init>(Uri;[JLContentValues;LBundle;Lo0;)V
+
+; 7. ★ 调用 u1() 写入
+invoke-virtual {v3}, g1;->getBookmarks()La0;
+invoke-virtual {v7, v5, v2, v4}, a0;->u1(RestProvider;h2;UriAndIds;)I
+move-result v2
+if-lez v2, :cond_9f                    ; 插入失败 → 退出
+
+; 8. 成功后发数据变更通知
+invoke-static {v10, v2}, MsgBusHelper;->fromContextOrThrow(...)
+const v5, 0x7f0d0049                    ; R.id.msg_app_data_changed
+invoke-interface {v2, v5, v14, v14, v3}, MsgBus;->post(IIILjava/lang/Object;)V
+```
+
+#### R.id 名字对照【实证·原文】
+
+| R.id | 名字 | 作用 |
+| --- | --- | --- |
+| `0x7f0d03f9` | **`cmd_data_bookmark_now`** | 「立即收藏」命令 |
+| `0x7f0d00a2` | `state_player_track` | 当前曲目对象（`g0`） |
+| **`0x7f0d00aa`** | **`state_player_current_playing_pos_ms`** | **当前播放位置（毫秒）** |
+| `0x7f0d015b` | `bus_app` | 应用级 StateBus |
+| `0x7f0d0049` | `msg_app_data_changed` | 数据变更消息 |
+
+⇒ **位置直接来自 `StateBus` 的 `state_player_current_playing_pos_ms`，即播放器实时进度。**
+
+#### 完整位置链路
+
+```
+StateBus.getIntState(state_player_current_playing_pos_ms)   ← 播放器实时进度（ms）
+  → 负值归零
+  → Bundle.putInt("pos_ms", pos)
+  → new UriAndIds(uri, [trackId], null, bundle, o0)
+  → a0.u1() 读 uriAndIds.x.getInt("pos_ms", 0)
+  → bindLong(3, pos)  → bookmarks.offset_ms
+  → Utils.A(pos)      → bookmarks.meta
+  → MsgBus.post(msg_app_data_changed) → 通知列表刷新
+```
+
+#### 导入路径：`exportimport.С`
+
+```smali
+; 用「文件名 + 文件夹短名 + CUE 偏移」三元组反查 folder_files._id
+const-string v5, "SELECT folder_files._id FROM folder_files INNER JOIN folders
+    ON folders._id=folder_id WHERE folder_files.name=? AND folders.short_name=?
+    AND folder_files.offset_ms=?"
+invoke-static/range {...}, x1;->р(...)
+move-result-wide v4
+cmp-long v0, v4, v43
+if-eqz v0, :cond_29
+const-string v0, "pos_ms"
+invoke-virtual {v15, v0, v12}, BaseBundle;->putInt(Ljava/lang/String;I)V
+aput-wide v4, v13, v23
+...
+new-instance v11, Lcom/maxmpz/audioplayer/rest/library/UriAndIds;
+invoke-virtual {v27}, g1;->getFiles()Ln0;     ; ★ 走 getFiles() 而非 getBookmarks()
+...
+invoke-direct/range {v11 .. v16}, UriAndIds;-><init>(Uri;[JLContentValues;LBundle;Lo0;)V
+```
+
+**两条路径的差异**：
+
+| 维度 | 主路径 | 导入路径 |
+| --- | --- | --- |
+| `pos_ms` 来源 | `StateBus` 实时进度 | 备份文件中的值 |
+| 曲目定位 | 直接 `g0.Х()` 取当前 track id | **文件名 + 文件夹短名 + CUE 偏移 三元组反查** |
+| `UriAndIds` 基 URI | `getBookmarks()` | **`getFiles()`** |
+
+**导入路径不能用 ID 定位曲目** —— 备份恢复可能跨设备，`folder_files._id` 会变，只能用「文件名 + 文件夹短名 + CUE 偏移」这组稳定属性反查。
+
+> 这也解释了为什么它调 `getFiles()`：它只需要拿到**曲目 id**，插入动作仍由 `a0.u1()` 完成。
+
+#### 第三个 `pos_ms` 与书签无关
+
+```smali
+const-string v2, "pos_ms"
+const/4 v3, -0x1
+invoke-virtual {v0, v2, v3}, Lorg/json/JSONObject;->optInt(Ljava/lang/String;I)I
+```
+
+`output.cc.х` 中这是 **Cast/CC 播放控制协议**的 `SEEK` 消息参数，仅是同名巧合。记录在此以排除。
 
 ---
 
@@ -590,27 +742,28 @@ public final boolean T(RestProvider rp, Uri uri, int i) {
 
 ## 10. 未解
 
-### 10.1 本轮已闭环（2 项）
+### 10.1 已闭环（3 项）
 
 | # | 原问题 | 结论 | 证据位置 |
 | --- | --- | --- | --- |
-| ~~B2~~ | `offset_ms` 写入与消费路径 | 写入端 `a0.u1()`：位置来自 URI 参数 `pos_ms`，绑定到 `offset_ms`；读取端 `a0.d1()` 第 22 列 | §4.5 / §4.1 |
-| ~~B5~~ | `bookmarks.meta` 内容格式 | `Utils.A(pos_ms)` 格式化出的时长串（`M:SS` / `H:MM:SS`），与 `offset_ms` 同源冗余 | §4.6 |
+| ~~B2~~ | `offset_ms` 写入与消费路径 | 写入端 `a0.u1()`：位置来自 `UriAndIds.x` 的 `pos_ms`；读取端 `a0.d1()` 第 22 列 | §4.5 / §4.1 |
+| ~~B5~~ | `bookmarks.meta` 内容格式 | `Utils.A(pos_ms)` 格式化的时长串（`M:SS` / `H:MM:SS`），与 `offset_ms` 同源冗余 | §4.6 |
+| ~~B8~~ | `pos_ms` 的 UI 侧填充点 | `StateBus.getIntState(state_player_current_playing_pos_ms)`，由 `cmd_data_bookmark_now` 命令触发 | §4.7 |
 
 ### 10.2 仍开放
 
 | # | 问题 | 优先级 |
 | --- | --- | --- |
-| **B8** | `pos_ms` 在 UI 层的赋值点（播放器当前进度 → URI 参数） | **中** |
 | **B1** | `bookmarks` 表完整 DDL（`onUpgrade` 变量拼 SQL，无法静态枚举） | 中 |
 | B3 | `n1()` / `r1()` / `s1()` / `v()` 四个 boolean 的语义 | 中 |
 | B4 | 同曲目多书签时 `x()` 的实际返回（无 `LIMIT`） | 低 |
 | B6 | `a0.d()` / `k0()` / `c()` / `s()` / `z()` 等分类元数据方法 | 低 |
 | B7 | `q0()`（删除）/ `p()`（批量重排）的完整行为 | 低 |
 | B9 | `t.f3846` 占位符的实际文本（负值/零值时长时显示） | 低 |
+| B10 | `exportimport.С` 的备份格式（书签如何序列化进备份文件） | 低 |
 
-> B2 闭环后，书签的「创建 → 存储」链路已完全打通。
-> 剩余的 B8 是「播放器进度 → `pos_ms`」这一段的 UI 侧赋值，属调用方而非书签实体本身。
+> **书签的完整生命周期已实证闭环**：创建（§4.7）→ 存储（§4.5）→ 读取（§4.1）→ 显示（§5）。
+> 剩余项均属外围（DDL 细节、批量操作标志位、备份格式）。
 
 ---
 
@@ -619,12 +772,33 @@ public final boolean T(RestProvider rp, Uri uri, int i) {
 | 主题 | Evidence ID |
 | --- | --- |
 | `g1` 库门面（`getBookmarks` / `getBookmarksFilesForced`） | `ev_d827238fa0be30f105438806871117c737191b025c5e7460a44c03377a4eb404` |
+| `UriAndIds` 类摘要（`x: Bundle`、`X: ContentValues`） | `ev_00a19922fa994793626732ef0d59160fffd0ac9f9271c888c49a3b97f6aa7722` |
+| `RestProvider` 类摘要（`call(Bundle)` 入口） | `ev_2532a90140fc45bf0d0cecc999c1ecc90b4eccb62330a5541b2a4c7788aa31d2` |
 | **`a0.u1`（创建路径，B2/B5 闭环）** | `ev_4fc27fa243586116503a80493a2753fc62b83c87d7d77e79b146bd219a21782f` |
 | **`Utils.A`（毫秒→秒四舍五入）** | `ev_16484cc820e2e177317992fee10cc8a0f116d060904c76baa1117b2994442c81` |
 | **`Utils.m2719`（时长格式化 `M:SS` / `H:MM:SS`）** | `ev_e5e2fa2ec2b0e9aa0e1a65921243838ffa27df99fb9a6b00430d80247efd15d8` |
 | `a0.q0`（删除路径） | `ev_5743cf276494bdb98995b6d742888d89be93c0a3adf95cbec870c0efee622065` |
 | `a0.p`（批量重排） | `ev_6157af9be3a7ec2ae08e50ddbb2637d7822341b478640f82fe2c854da1508a9b` |
 | `a0.d1`（28 列 SELECT，`bookmarks.offset_ms`） | `ev_ef7358d973fd3ceeb5c62ebcfc69871abda41c3763d34b745900b206b5adfc4b` |
+| `h1.C`（批量查询执行器） | `ev_9751c2d73a9a8384f1d3b19b8dd1f3fcbb225def8666a8c7fae56453c4594f70` |
+| `g1.B0`（基 URI 访问器） | `ev_07b7915627e33c55ba4ae4c8aca92e95dd611148691c763933526b1f5dc9e9b4` |
+
+### 11.1 B8 闭环的取证方式（smali 反汇编）
+
+`pos_ms` 字面量的调用方**无法通过 JADX 的类/方法检索找到**（字面量不在方法签名或类名里）。
+本轮改用 **apktool `--no-res` 反汇编 + 全局字符串搜索**：
+
+```powershell
+# 1. 从 APK 提取 classes.dex（single dex, 6.35 MB）
+# 2. apktool d --no-res -f -o <out> Poweramp-v3.apk     → 7308 个 .smali
+# 3. 在 smali 中搜索 const-string "pos_ms"
+```
+
+结果：**4 处命中**（§4.7 表格），其中 2 处是 `Bundle.putInt("pos_ms", ...)` 写入方。
+
+> 该流程可复用：当需要定位某个字符串字面量的**所有引用点**（而非某个类/方法）时，
+> JADX 的检索能力不足，必须落到 smali 层做文本搜索。
+> 本次生成的 smali 目录约 7308 文件，反汇编耗时约 12 秒。
 | **`a0.X0`（列表 SQL）+ 类摘要** | `ev_98758a171bb97f22b6064af0a58c67c2d31d1134e54b5182421372968821983b` |
 | `a0.Q0` | `ev_12f27c68bfff6259d318daa9d2a94798e495b39f42ebafda064e4211c963981b` |
 | **`a0.<clinit>`（2 字段投影，smali）** | `ev_c2bd8e9939f24757bf57d832a18bdce5c53c11ca823458be179a72ab2c4f2191` |

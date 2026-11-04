@@ -553,16 +553,312 @@ id/queue_as_next                 0x7f0d06a3
 
 ---
 
-## 10. 未取项
+## 10. `V0()` 调用方：URI 参数 `shs`（Q2 闭环）
+
+### 10.1 唯一调用点
+
+`smali/com/maxmpz/audioplayer/rest/RestProvider.smali:237-306`
+
+```smali
+const-string v4, "lim"                                       # L238
+invoke-virtual {v1, v4}, Landroid/net/Uri;->getQueryParameter(Ljava/lang/String;)Ljava/lang/String;
+
+const-string v4, "shs"                                       # L244 ★
+invoke-virtual {v1, v4}, Landroid/net/Uri;->getQueryParameter(Ljava/lang/String;)Ljava/lang/String;
+move-result-object v4
+
+if-eqz v4, :cond_b                                           # shs != null
+invoke-virtual {v4}, Ljava/lang/String;->length()I
+move-result v5
+if-eqz v5, :cond_b                                           # shs.length() != 0
+const-string v5, "0"                                         # L258
+invoke-virtual {v4, v5}, Ljava/lang/Object;->equals(Ljava/lang/Object;)Z
+move-result v5
+if-nez v5, :cond_b                                           # !shs.equals("0")
+const-string v5, "false"                                     # L266
+invoke-virtual {v4, v5}, Ljava/lang/Object;->equals(Ljava/lang/Object;)Z
+move-result v4
+if-eqz v4, :cond_9                                           # !shs.equals("false")
+
+:cond_9
+instance-of v4, v2, Lcom/maxmpz/audioplayer/rest/library/х;  # L277 ★ 是否为 х 子类
+if-eqz v4, :cond_a
+check-cast v4, Lcom/maxmpz/audioplayer/rest/library/х;
+invoke-virtual {v4}, Lcom/maxmpz/audioplayer/rest/library/х;->V0()Ljava/lang/String;   # L285 ★
+move-result-object v4
+goto :goto_3
+:cond_a
+move-object v4, v9                                           # null
+:goto_3
+move-object v15, v4                                          # 排序覆盖值
+
+:cond_b
+move-object/from16 v15, p5                                   # 用默认排序 p5
+```
+
+### 10.2 还原
+
+```java
+String shs = uri.getQueryParameter("shs");
+String sortOverride;
+if (shs != null && shs.length() != 0
+    && !shs.equals("0") && !shs.equals("false")) {
+    if (entity instanceof х) {
+        sortOverride = ((х) entity).V0();
+    } else {
+        sortOverride = null;
+    }
+} else {
+    sortOverride = defaultSort;   // p5，即调用方传入的排序
+}
+```
+
+| `shs` 取值 | 排序来源 |
+| --- | --- |
+| 缺省 / `""` / `"0"` / `"false"` | 默认排序（`X0()` 里设的 `queue.sort`） |
+| 其它非空值 | `V0()` |
+
+### 10.3 `V0()` 的只有一处 smali 定义在 `х` 基类
+
+```
+smali/com/maxmpz/audioplayer/rest/library/х.smali:276   .method public V0()Ljava/lang/String;
+```
+
+`m3`、`p3`、`i` 各自覆写。
+
+---
+
+## 11. 入队主逻辑（Q9 闭环）
+
+### 11.1 方法定位
+
+```
+smali/com/maxmpz/audioplayer/data/А.smali:3570   .method public final x(ILjava/lang/Object;)V
+```
+
+约 500 行消息处理器（`MsgBus` 的 `handleMessage` 风格）。
+
+### 11.2 参数与 Bundle 键
+
+| Bundle 键 | 类型 | 语义 |
+| --- | --- | --- |
+| `clean_and_play` | boolean | L3622 | 清空并播放 |
+| `as_next` | boolean | L3662 | 插入到下一首位置 |
+| `playing_entry_id` | long | L3638（写入） | 当前播放条目 id |
+| `keep_id` | long | L3803（读取） | 要保留的条目 id |
+
+### 11.3 步骤一：`keepId` 判定
+
+```smali
+const-string v8, "clean_and_play"                             # L3622
+invoke-virtual {v3, v8, v9}, Landroid/os/Bundle;->getBoolean(Ljava/lang/String;Z)Z
+move-result v8
+
+const v10, 0x7f0d00a2                                         # L3630 state_player_track
+invoke-interface {v6, v10}, Lcom/maxmpz/widget/StateBus;->getObjectState(I)Ljava/lang/Object;
+move-result-object v10
+check-cast v10, Lcom/maxmpz/audioplayer/player/g0;
+
+const-string v11, "playing_entry_id"                          # L3638
+if-eqz v10, :cond_3                                           # player != null
+iget-object v14, v10, Lcom/maxmpz/audioplayer/player/g0;->V:Lcom/maxmpz/audioplayer/rest/library/o0;
+instance-of v14, v14, Lcom/maxmpz/audioplayer/rest/library/m3; # L3644 ★ 当前实体是队列
+if-eqz v14, :cond_3
+if-nez v8, :cond_3                                            # !clean_and_play
+invoke-virtual {v10}, Lcom/maxmpz/audioplayer/player/g0;->Х()J
+move-result-wide v14
+invoke-virtual {v3, v11, v14, v15}, Landroid/os/BaseBundle;->putLong(Ljava/lang/String;J)V   # L3654
+goto :goto_0
+:cond_3
+const-wide/16 v14, 0x0                                        # keepId = 0
+:goto_0
+```
+
+### 11.4 步骤二：清空决策
+
+```smali
+:cond_4
+iget-object v13, v1, Lcom/maxmpz/audioplayer/data/А;->X:Lcom/maxmpz/audioplayer/rest/RestProvider;   # L3683
+const/4 v12, 0x1
+
+if-nez v8, :cond_5                                            # !clean_and_play
+sget-object v9, Lcom/maxmpz/audioplayer/rest/library/у;->С:Lcom/maxmpz/preference/fastprefs/h0;   # L3689 queue_clear_on_add
+iget-boolean v9, v9, Lcom/maxmpz/preference/fastprefs/H;->А:Z
+if-eqz v9, :cond_8                                            # clear_on_add → 跳到清空路径
+
+:cond_5
+sget-object v9, Lcom/maxmpz/audioplayer/rest/library/у;->С:...  # L3696 再读一次
+iget-boolean v9, ...
+if-eqz v9, :cond_6
+# ... 判 never_clear
+:cond_6
+const/4 v9, 0x0
+
+# L3720
+if-eqz v9, :cond_7
+const-wide/16 v14, 0x0
+:cond_7
+invoke-static {v13, v14, v15}, Lcom/maxmpz/audioplayer/rest/library/m3;->u1(...)Z   # L3727 ★ 清空
+
+:cond_8                                                        # L3729
+```
+
+后续 `L3827-3909` 是第二次（事务内）清空判定：
+
+```smali
+:cond_c
+const/4 v14, 0x1                                              # L3816 canClear = true
+
+invoke-virtual {v15}, Landroid/database/sqlite/SQLiteDatabase;->beginTransactionNonExclusive()V   # L3825
+
+if-eqz v14, :cond_10                                          # L3827
+invoke-virtual {v9}, Lcom/maxmpz/audioplayer/rest/library/А;->B0()Landroid/net/Uri;
+const-string v9, "COUNT(*)"                                   # L3833
+filled-new-array {v9}, [Ljava/lang/String;
+const-string v22, "folder_files.played_at < queue.created_at" # L3843 ★ 未播条件
+invoke-... provider.A(uri, ["COUNT(*)"], "folder_files.played_at < queue.created_at", ...)
+
+if-eqz v9, :cond_e
+invoke-interface {v9}, Landroid/database/Cursor;->moveToNext()Z
+move-result v14
+if-eqz v14, :cond_d
+const/4 v14, 0x0
+invoke-interface {v9, v14}, Landroid/database/Cursor;->getInt(I)I   # notPlayed
+move-result v19
+goto :goto_5
+:cond_d
+const/16 v19, 0x0
+:goto_5
+invoke-interface {v9}, Landroid/database/Cursor;->close()V
+
+if-nez v19, :cond_10                                          # L3881 ★ notPlayed == 0
+sget-object v9, .../у;->С:...                                 # L3883 queue_clear_on_add
+iget-boolean v9, ...
+if-nez v9, :cond_f                                            # clear_on_add → 清空
+sget-object v9, .../у;->c:...                                 # L3889 queue_never_clear_on_add
+iget-boolean v9, ...
+if-nez v9, :cond_10                                           # never_clear=true → 不清空
+:cond_f
+const-wide/16 v8, 0x0
+invoke-static {v13, v8, v9}, Lcom/maxmpz/audioplayer/rest/library/m3;->u1(...)Z   # L3900 ★ 清空
+
+:cond_10
+const-string v12, "SELECT COUNT(*) FROM queue"                # L3910
+```
+
+⇒ 清空条件 = `keepId == 0` **&&** `notPlayed == 0` **&&** (`clear_on_add || !never_clear_on_add`)
+
+---
+
+## 12. 洗牌预处理
+
+### 12.1 触发条件
+
+```smali
+if-eqz v6, :cond_11        # L3926 useShuffle
+if-lez v8, :cond_11        # L3928 queueCount > 0
+```
+
+### 12.2 三条 SQL
+
+```smali
+const-string v8, "DROP TABLE IF EXISTS temp_queue_shuffle_order"                  # L3930
+
+const-string v11, "CREATE TEMP TABLE temp_queue_shuffle_order AS SELECT queue._id FROM queue INNER JOIN folder_files ON folder_files._id=queue.folder_file_id  WHERE queue._id=? OR folder_files.played_at >= queue.created_at OR queue.created_at=0 ORDER BY queue.shuffle_order, queue.sort"   # L3942
+
+const-string v8, "SELECT COUNT(*) FROM temp_queue_shuffle_order"                  # L3946
+const-wide/16 v9, 0x1
+# N = count + 1
+
+const-string v8, "UPDATE queue SET shuffle_order=ABS(MAX(shuffle_order, -9223372036854775807))"   # L3956
+
+const-string v9, "UPDATE queue SET shuffle_order=(SELECT rowid-"                  # L3964
+# + N
+const-string v9, " FROM temp_queue_shuffle_order WHERE temp_queue_shuffle_order._id=queue._id) WHERE _id IN (SELECT _id FROM temp_queue_shuffle_order)"   # L3970
+```
+
+---
+
+## 13. INSERT 语句
+
+### 13.1 列与占位符
+
+```smali
+const-string v8,  "queue.folder_file_id"     # L3986
+const-string v9,  "queue.sort"               # L3992
+const-string v10, "queue.created_at"         # L3998
+const-string v11, "queue.shuffle_order"      # L4004
+
+if-eqz v27, :cond_12
+const-string v12, "?"                        # L4012（as_next 外部给）
+goto :goto_9
+:cond_12
+const-string v12, "ABS(MAX(-9223372036854775807, RANDOM()))"   # L4020（随机）
+
+const-string v13, "\n            INSERT INTO queue ("         # L4025
+```
+
+拼接结果：
+
+```sql
+INSERT INTO queue (folder_file_id, sort, created_at, shuffle_order) VALUES (?, ?, ?, ?)
+```
+
+### 13.2 `sort` 计算
+
+```smali
+invoke-static {}, Ljava/lang/System;->currentTimeMillis()J    # L4053
+const-string v11, "SELECT IFNULL(MAX(sort), -1) FROM queue"   # L4057
+invoke-virtual {v11}, Landroid/database/sqlite/SQLiteStatement;->simpleQueryForLong()J
+move-result-wide v12                                          # maxSort
+
+const-wide/16 v33, -0x1                                       # L4076
+if-eqz v27, :cond_15                                          # as_next
+cmp-long v14, v12, v33
+if-lez v14, :cond_15                                          # maxSort > -1
+
+const-string v14, "UPDATE queue SET sort=sort+? WHERE sort > ?"   # L4086 ★ 插队腾位
+const-string v21, "SELECT sort FROM queue WHERE _id=?"            # L4097 ★ 取当前项位置
+```
+
+---
+
+## 14. Q9：入队不做查重
+
+### 14.1 全路径无查重
+
+| 环节 | smali 位置 | 是否查重 |
+| --- | --- | --- |
+| `keepId` 判定 | L3614-3661 | 否 |
+| 清空决策 | L3683-3909 | 否（只 `COUNT(*)` 未播数） |
+| 洗牌预处理 | L3926-3980 | 否（只按 `_id` 重排） |
+| INSERT | L4025-4120 | **否，直接追加** |
+
+### 14.2 结论
+
+**同一曲目可多次入队，产生多条 `queue` 行，各自有独立 `created_at` 与 `sort`。**
+
+配合 §2 的状态推导（`folder_files.played_at >= queue.created_at`）：
+
+| 场景 | 结果 |
+| --- | --- |
+| 单次入队 | 正确 |
+| 先后入队（不同 `created_at`） | 正确（时间戳单调） |
+| **同批入队（相同 `created_at`）** | **一次播放让多条同时变已播** |
+
+---
+
+## 15. 未取项
 
 | # | 项 | 状态 |
 | --- | --- | --- |
 | Q1 | `queue` 表完整 DDL | 开放 |
-| Q2 | `V0()` 的实际调用方 | 开放 |
+| ~~Q2~~ | ✅ `V0()` 的实际调用方 | **已闭环，§10** |
 | Q3 | `n3` 与 `m3` 的差异 | 开放 |
 | Q4 | `у->p` 与 `у->C` 是否同键别名 | 开放 |
 | Q5 | 四个能力开关的接口语义 | 开放 |
 | Q6 | `aa_status` 取值枚举（`2` 是什么） | 开放 |
 | Q7 | `C()` = 5、`z()` = 10 的语义 | 开放 |
 | Q8 | `r()` 返回的实例字段 `H` 何时赋值 | 开放 |
-| Q9 | 同曲目多次入队时的状态判定行为 | 开放 |
+| ~~Q9~~ | ✅ 同曲目多次入队时的状态判定行为 | **已闭环，§14** |
+| Q10 | `clear_on_add` 与 `never_clear_on_add` 同时为 true 时前者优先是否有意 | 开放 |

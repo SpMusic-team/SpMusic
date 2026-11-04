@@ -39,24 +39,46 @@ source_documents:
 
 这个比较式贯穿三处：列表投影、当前项查询、计数器统计。
 
-### 0.2 与既有队列文档的分工
+### 0.2 三条链路
+
+```
+【入队侧】 见 §14
+            Bundle(clean_and_play / as_next / ids)
+            → 判定 keepId（正在播队列时才保留当前条目）
+            → 清空决策（无未播项 且 偏好允许 → u1() 全清）
+            → 洗牌预处理（temp_queue_shuffle_order 固化已播顺序）
+            → INSERT（sort=MAX+1 或 as_next 插队，created_at=now）
+            → 不做查重（同曲目可多条）
+
+【状态侧】 见 §3
+            folder_files.played_at >= queue.created_at  → 已播/待播
+            无常驻布尔列，状态随播放自动重算
+
+【消费侧】 见 §2 §4
+            d4→m3.X0()：列表（投影 3 表达式）
+            v1()：找第一个待播位置（含 created_at=0 兜底）
+            w1()：待播数 + 总数
+            shs 参数 → V0() 覆写为含 shuffle_order 的顺序
+```
+
+### 0.3 与既有队列文档的分工
 
 | 文档 | 覆盖 |
 | --- | --- |
-| **本文** | **页面组织 + 数据模型**：表结构、SQL、投影、计数器、偏好键 |
-| `poweramp-queue-runtime-reference.md` | **运行时状态机**：next/prev 不对称、随机语义、延迟队列、错误码 |
+| **本文** | **页面组织 + 数据模型 + 入队运行机制**：表结构、SQL、投影、计数器、偏好键、入队/清空/洗牌 |
+| `poweramp-queue-runtime-reference.md` | **播放运行时状态机**：next/prev 不对称、随机语义、延迟队列、错误码 |
 
-**两者互补，无覆盖重叠。** 本文 §15 给出明确边界。
+**两者互补，无覆盖重叠。** 本文 §18 给出明确边界。
 
-### 0.3 核心特征
+### 0.4 核心特征
 
 | 特征 | 队列 | 书签 | 流 |
 | --- | --- | --- | --- |
 | 主表 | **`queue`** | `bookmarks` | `folder_files` |
 | 与曲目的 JOIN | **`INNER JOIN`** | `INNER JOIN` | `LEFT JOIN` |
-| 排序 | **硬编码 `queue.sort`**（但 `V0()` 可含 shuffle_order） | 硬编码 | 6 模式偏好 |
+| 排序 | **硬编码 `queue.sort`**（`shs` 参数可覆写为含 shuffle_order） | 硬编码 | 6 模式偏好 |
 | 投影 | **3 个表达式**（非普通列） | 2 个 id | `p0.f3367` |
-| 注销机制 | **无**（显示全部） | 无 | 无 |
+| 入队查重 | **无** | — | — |
 | 特有概念 | **入队时间戳驱动的「未播放」判定** | 播放位置快照 | `__dynamic_url` |
 
 ---
@@ -707,6 +729,11 @@ public final long x(SQLiteDatabase db, long a, long trackId) {
 | A6 | **`shuffle_order` 与 `sort` 双列**（§8.3） | 原始顺序与随机顺序互不覆盖，切回顺序播放不丢排序 |
 | A7 | **`w1()` 一次调用填两个计数器** | 待播数 + 总数同批查询，减少往返 |
 | A8 | **`f0()` 动态列拼接**（§5.1） | 复用基类列清单，避免为详情查询写重复 SQL |
+| **A9** | **`notPlayed == 0` 才允许清空**（§14.2） | 队列还有未听内容时，新入队不会冲掉它。保护用户未消费的内容 |
+| **A10** | **`temp_queue_shuffle_order` 固化已播顺序**（§14.3） | 新入队项随机排在已播区之后，不会插进中间打乱已听顺序 |
+| **A11** | **`keepId` 只在「正在播队列」时保留**（§14.2） | 从别处入队时自然清空；在队列中操作时保留当前曲目，行为符合直觉 |
+| **A12** | **`as_next` 用 `sort+?` 腾位而非重排全表**（§14.4） | 一次 UPDATE 完成插队，O(n) 而非 O(n log n) |
+| **A13** | **`shs` URI 参数旁路覆写排序**（§14.1） | 同一份列表 SQL 支持两种顺序，无需为随机视图另写查询 |
 
 ### 13.2 不建议照抄
 
@@ -720,12 +747,282 @@ public final long x(SQLiteDatabase db, long a, long trackId) {
 | **N6** | **`O(int)` 忽略参数且与 `V0()` 行为不同**（§8.3） | 两个排序方法各自偏离，调用方必须知道用哪个 |
 | **N7** | **`d()` 返回 `-1` 表示无排序偏好** | 魔法负数，与其他实体的 `0` 约定不一致 |
 | **N8** | **队列专用过滤 `aa_status!=2` 只在 `f0()` 中**（§5.1） | 列表查询 `X0()` 没有此过滤，两处对同一批数据口径不同 |
+| **N9** | **入队完全不查重**（§14.5） | 同曲目可重复入队产生多条行；配合 N10 会让状态判定出错 |
+| **N10** | **状态用跨表全局时间比较**（§14.5 / §15.3） | `folder_files.played_at` 被同曲目的所有队列项共享，同批重复入队时一次播放会让多条同时变已播 |
+| **N11** | **`clear_on_add` 与 `never_clear_on_add` 同时为 true 时前者静默胜出**（§14.2） | 两个互斥语义的偏好未做互斥校验，配置矛盾时行为不可预期。应改为单一枚举 |
+| **N12** | **清空判定用 `played_at < created_at` 而列表投影用 `>=`**（§14.2 vs §3.2） | 两处对称但独立撰写，且清空判定**不含** `created_at=0` 兜底——与 N1 同源的第三处口径差异 |
 
 ---
 
-## 14. 与 SpMusic 对照
+## 14. 运行机制：入队、清空、洗牌（Q2 / Q9 闭环）
 
-### 14.1 SpMusic 现状
+> 本节回答两个此前未解的问题：`V0()` 何时被用、同曲目重复入队如何判定。
+> 全部结论来自 smali 反汇编 `data/А.smali`（消息处理器）与 `RestProvider.smali`。
+
+### 14.1 `V0()` 的调用方：URI 查询参数 `shs`（Q2 闭环）
+
+`V0()` 在全库**只有一个调用点**：`RestProvider.smali:285`。
+
+```java
+// RestProvider —— 查询分发
+String shs = uri.getQueryParameter("shs");          // ★ shuffle sort
+if (shs != null && shs.length() != 0
+    && !shs.equals("0") && !shs.equals("false")) {
+    if (entity instanceof х) {                       // 基类
+        sortOverride = ((х) entity).V0();            // ★ 用含 shuffle 的顺序
+    }
+}
+```
+
+#### `shs` 参数语义
+
+| `shs` 取值 | 排序来源 |
+| --- | --- |
+| 缺省 / `""` / `"0"` / `"false"` | `X0()` 里硬编码的 `queue.sort` |
+| 其它任意非空值 | `V0()` → `queue_no_shuffle ? queue.sort : "queue.shuffle_order,queue.sort"` |
+
+⇒ **`shs` 是「按随机顺序取列表」的开关**。
+
+这不是队列专属机制——任何继承 `х` 基类的实体都会在收到 `shs` 时走自己的 `V0()`。
+`m3.V0()` 的特化点是**它会读 `queue_no_shuffle`**，其它实体的 `V0()` 多为常量或偏好直读。
+
+#### 分工总结
+
+| 方法 | 调用场景 | 返回 |
+| --- | --- | --- |
+| `O(int)` | `X0()` 设 `i1Var.B`（默认列表排序） | 恒 `"queue.sort"` |
+| `V0()` | URI 带 `shs` 非零值 | 按 `queue_no_shuffle` 二选一 |
+
+### 14.2 入队流程：不做查重（Q9 闭环）
+
+入队主逻辑在 `data/А.x(int, Object)`（`L3570` 起，约 500 行消息处理器）。
+
+#### 步骤一：决定保留下标 `playing_entry_id`
+
+```java
+boolean cleanAndPlay = bundle.getBoolean("clean_and_play", false);
+
+long keepId = 0;
+g0 player = StateBus.getObjectState(0x7f0d00a2);         // state_player_track
+if (player != null
+    && player.V instanceof m3                            // ★ 当前播放实体确实是队列
+    && !cleanAndPlay) {
+    keepId = player.Х();                                 // 当前播放条目 id
+    bundle.putLong("playing_entry_id", keepId);
+}
+```
+
+**关键**：只有在「正在播放队列中的曲目」且「不是 clean_and_play」时才保留当前条目。
+
+#### 步骤二：清空决策
+
+```java
+boolean canClear = (keepId == 0);
+
+if (canClear) {
+    // 统计未播数量
+    Cursor c = provider.A(uri, new String[]{"COUNT(*)"},
+                          "folder_files.played_at < queue.created_at", null, null, false);
+    int notPlayed = (c != null && c.moveToNext()) ? c.getInt(0) : 0;
+    if (c != null) c.close();
+
+    if (notPlayed == 0) {
+        // ★ 队列里没有未播项 → 考虑清空
+        if (у->С.А || !у->c.А) {                          // queue_clear_on_add || !never_clear_on_add
+            m3.u1(provider, 0);                          // DELETE FROM queue WHERE _id!=0 → 全清
+        }
+    }
+}
+```
+
+#### 清空条件真值表
+
+| `queue_clear_on_add` | `queue_never_clear_on_add` | 无未播项时是否清空 |
+| --- | --- | --- |
+| `true` | 任意 | **清空** |
+| `false` | `false` | **清空**（默认行为） |
+| `false` | `true` | **不清空** |
+
+⇒ 默认（两个偏好都未设 = `false`）是**清空**。
+`queue_never_clear_on_add = true` 是唯一阻止清空的开关。
+`queue_clear_on_add = true` 会**覆盖** `never_clear_on_add`。
+
+【推断】`clear_on_add` 与 `never_clear_on_add` 在设置界面是互斥的两个选项（`pref_queue_clear_on_add` / `pref_queue_never_clear_on_add`），
+同时为 true 时前者优先——这是一个未做互斥校验的潜在配置矛盾。
+
+#### 清空的前置条件：`notPlayed == 0`
+
+**只有当队列里所有条目都已播放过，才允许清空。**
+
+⇒ 若队列还有未听的内容，新入队不会冲掉它。这是「保护未播内容」的设计。
+
+### 14.3 洗牌顺序固化：`temp_queue_shuffle_order`
+
+清空决策之后、真正 INSERT 之前，有一段洗牌预处理（`L3930-3980`）：
+
+```sql
+-- ① 建临时表：已播部分 + 指定保留项，按 shuffle_order 排序
+DROP TABLE IF EXISTS temp_queue_shuffle_order;
+
+CREATE TEMP TABLE temp_queue_shuffle_order AS
+SELECT queue._id
+FROM queue
+  INNER JOIN folder_files ON folder_files._id = queue.folder_file_id
+WHERE queue._id = ?
+   OR folder_files.played_at >= queue.created_at
+   OR queue.created_at = 0
+ORDER BY queue.shuffle_order, queue.sort;
+
+-- ② 归一化 shuffle_order（处理负值溢出）
+UPDATE queue SET shuffle_order = ABS(MAX(shuffle_order, -9223372036854775807));
+
+-- ③ 按临时表的 rowid 重新分配 shuffle_order
+UPDATE queue
+SET shuffle_order = (SELECT rowid - <N> FROM temp_queue_shuffle_order
+                     WHERE temp_queue_shuffle_order._id = queue._id)
+WHERE _id IN (SELECT _id FROM temp_queue_shuffle_order);
+```
+
+其中 `<N> = COUNT(*) FROM temp_queue_shuffle_order + 1`。
+
+#### 这段逻辑在做什么
+
+**把「已播 + 当前」的条目按现有随机顺序重新编号为连续的 `shuffle_order`，并把它们排到新插入项之前。**
+
+效果：新入队的曲目随机顺序排在已播项之后，不会插到中间打乱已听过的顺序。
+
+#### 触发条件
+
+```java
+if (useShuffle && queueCount > 0) {   // 用随机 且 队列非空
+    ...洗牌预处理...
+}
+```
+
+⇒ 顺序模式下跳过整段。
+
+### 14.4 真正插入
+
+```sql
+INSERT INTO queue (folder_file_id, sort, created_at, shuffle_order)
+VALUES (?, ?, ?, ?)
+```
+
+| 列 | 值 | 说明 |
+| --- | --- | --- |
+| `folder_file_id` | 曲目 id | 调用方给 |
+| `sort` | `IFNULL(MAX(sort), -1) + 1`，或 as_next 时插值 | 追加到末尾 |
+| `created_at` | `System.currentTimeMillis()` | 自动 |
+| `shuffle_order` | `ABS(MAX(-9223372036854775807, RANDOM()))` | 随机，或 `?` 由外部指定 |
+
+smali 实证：
+
+```smali
+const-string v11, "SELECT IFNULL(MAX(sort), -1) FROM queue"          # L4057
+invoke-static {}, Ljava/lang/System;->currentTimeMillis()J           # L4053
+const-string v12, "ABS(MAX(-9223372036854775807, RANDOM()))"         # L4020（非 as_next）
+const-string v12, "?"                                                # L4012（as_next 时外部给）
+```
+
+#### as_next 插队逻辑
+
+```sql
+-- 目标位置之后的条目整体后移
+UPDATE queue SET sort = sort + ? WHERE sort > ?
+```
+
+```smali
+const-string v14, "UPDATE queue SET sort=sort+? WHERE sort > ?"      # L4086
+const-string v21, "SELECT sort FROM queue WHERE _id=?"               # L4097（取当前项位置）
+```
+
+⇒ **`as_next` = 插到当前播放项之后，`sort` 值后移腾位**。
+
+### 14.5 不入队查重：Q9 的答案
+
+**整个入队路径没有任何「该曲目已在队列中」的检查。**
+
+| 环节 | 是否查重 |
+| --- | --- |
+| 清空决策 | 否（只统计未播数） |
+| 洗牌预处理 | 否（按 `_id` 重排，不涉及曲目） |
+| INSERT | **否，直接追加** |
+
+⇒ **同一曲目可以多次加入队列，产生多条 `queue` 行，各自有独立的 `created_at` 与 `sort`。**
+
+#### 这对 §3 的状态推导意味着什么
+
+回顾 §3.2 的状态判定：
+
+```
+条目状态 = folder_files.played_at >= queue.created_at
+```
+
+**`played_at` 是 `folder_files` 上的全局播放时间，被同一曲目的所有队列项共享。**
+
+假设曲目 T 被入队两次：
+
+| 时刻 | 事件 | `played_at` | 条目 A（`created_at`=100） | 条目 B（`created_at`=200） |
+| --- | --- | --- | --- | --- |
+| t=100 | 入队 A | 0 | A: 0 >= 100? 否 → **待播** | — |
+| t=150 | 播放 T | **150** | A: 150 >= 100 → **已播** ✓ | — |
+| t=200 | 入队 B | 150 | A: 150 >= 100 → 已播 | B: 150 >= 200? 否 → **待播** ✓ |
+| t=250 | 再播 T | **250** | A: 已播 | B: 250 >= 200 → **已播** ✓ |
+
+**这个例子中结果是正确的**——因为 `played_at` 是单调递增的时间戳，后来的入队总有更大的 `created_at`。
+
+#### 但存在一个真实歧义
+
+若同一曲目在**同一次批量入队**中被添加两次（`created_at` 相同）：
+
+| `created_at` | 效果 |
+| --- | --- |
+| A: 300 | 待播 |
+| B: 300 | 待播 |
+| 播放一次后 `played_at`=350 | **A 和 B 同时变成「已播」** |
+
+⇒ **一次播放会把两条队列项都标记为已播**，但实际只播了一次。
+
+这是「用全局 `played_at` 而非队列项私有播放时间」的结构性后果。
+【推断】实际影响有限（用户极少重复入队同一曲目），但语义上确实不精确。
+
+#### 对 SpMusic 的建议（已在 §15.3 展开）
+
+若 SpMusic 要实现相同能力，**应在队列项上存自己的 `playedAt` 快照**，而不是跨表比全局时间。
+
+### 14.6 队列运行时的完整决策图
+
+```
+入队请求（Bundle: clean_and_play / as_next / 曲目 ids）
+  │
+  ├─ ① 判定 keepId
+  │    当前播放实体是 m3 且 !clean_and_play ?
+  │      是 → keepId = 当前条目 id
+  │      否 → keepId = 0
+  │
+  ├─ ② 清空决策（仅 keepId == 0 时）
+  │    统计 COUNT(*) WHERE played_at < created_at   → notPlayed
+  │    notPlayed == 0 且 (clear_on_add || !never_clear_on_add) ?
+  │      是 → u1(provider, 0) 全清
+  │
+  ├─ ③ 洗牌预处理（仅 useShuffle && queueCount > 0）
+  │    CREATE TEMP temp_queue_shuffle_order（已播 + 保留项，按 shuffle_order 排）
+  │    UPDATE queue SET shuffle_order = rowid - N
+  │
+  ├─ ④ 插入
+  │    sort = IFNULL(MAX(sort),-1)+1        （普通追加）
+  │    或  UPDATE sort=sort+? WHERE sort>?  （as_next 插队）
+  │    created_at = now()
+  │    shuffle_order = RANDOM() 或外部值
+  │
+  └─ ⑤ 播放器接管
+       播放 → UPDATE folder_files SET played_at=now()
+       条目状态自动变为「已播」（§3.2 的表达式重新求值）
+```
+
+---
+
+## 15. 与 SpMusic 对照
 
 `src/features/player/model/mediaLibraryCategories.ts` 定义 12 个分类，**含 `queue`**：
 
@@ -735,7 +1032,7 @@ public final long x(SQLiteDatabase db, long a, long trackId) {
 
 `playbackQueue.ts` 提供队列模型，`PlaybackQueueOrigin` 为 `'all-songs' | 'playlist'`。
 
-### 14.2 维度对照
+### 15.2 维度对照
 
 | # | 维度 | Poweramp | SpMusic 现状 |
 | --- | --- | --- | --- |
@@ -748,7 +1045,7 @@ public final long x(SQLiteDatabase db, long a, long trackId) {
 | 7 | 队列结束行为 | `queue_end`（退出/停留） | — |
 | 8 | 忽略随机 | `queue_no_shuffle`（**还影响搜索**） | — |
 
-### 14.3 可借鉴的最小实现
+### 15.3 可借鉴的最小实现
 
 SpMusic 队列如果要加「待播/已播」区分：
 
@@ -759,35 +1056,80 @@ SpMusic 队列如果要加「待播/已播」区分：
 | 顺序 | `order` + `shuffleOrder` 双字段（A6） |
 | 计数器 | **一处实现**，避免 Poweramp 的 N1 不一致 |
 | 兜底 | 无时间戳的条目显式视为待播（A3） |
+| **重复入队** | **要么显式查重，要么在队列项上存自己的 `playedAt`**（见下） |
 
-**一个必须注意的坑**：若 SpMusic 的曲目有「上一次播放时间」，注意它与「本队列项入队后的播放时间」是不同概念。Poweramp 用 `folder_files.played_at`（曲目全局播放时间）与 `queue.created_at`（入队时间）比较——**这是跨表比较，不是队列项自己的播放记录**。
+#### 必须修正的一处：不要跨表比全局时间
 
-后果【推断】：如果曲目在入队**前**刚播过，`played_at` 可能小于 `created_at` → 正确判为待播；
-但如果同一曲目被重复入队，`played_at` 会被更新，可能让**其它队列项**的状态判断受影响（因为它们共享同一 `folder_files.played_at`）。
+Poweramp 用 `folder_files.played_at`（曲目**全局**播放时间）与 `queue.created_at`（入队时间）比较。
 
-⇒ 这个设计在「同曲目多次入队」场景下可能产生歧义。SpMusic 若要照抄，建议在队列项上存自己的 `playedAt` 快照。
+**这是跨表比较，不是队列项自己的播放记录。**
+
+§14.5 已实证：入队**完全不查重**，同一曲目可产生多条队列行，它们共享同一个 `folder_files.played_at`。
+
+| 场景 | 结果 | 是否正确 |
+| --- | --- | --- |
+| 曲目在入队**前**刚播过 | `played_at < created_at` → 待播 | ✓ 正确 |
+| 曲目单次入队后播放 | `played_at >= created_at` → 已播 | ✓ 正确 |
+| **同曲目同批入队两次** | 一次播放让**两条都**变已播 | ✗ **不精确**（只播了一次） |
+| **同曲目先后入队两次** | 各按自己的 `created_at` 判定 | ✓ 正确（时间戳单调递增） |
+
+⇒ 只有「同批重复入队」这一种情况会出错。
+
+**建议**：若不打算做入队查重，就在队列项上存自己的 `playedAt` 快照（播放时写入该条目的 `playedAt`，而非曲目的全局 `played_at`）。
+这样即使同一曲目入队 N 次，每条也能独立判定。
+
+代价是多一个字段和一次更新；收益是状态语义精确。
+
+#### 其他照抄注意点
+
+| Poweramp 做法 | 建议 |
+| --- | --- |
+| `shs` URI 参数覆写排序（§14.1） | 可用，但要意识到它会让**同一列表出现两种顺序**，前端需明确当前处于哪种 |
+| `temp_queue_shuffle_order` 固化（§14.3） | 值得借鉴：保证新入队项不插进已播区中间 |
+| 清空三重条件（§14.2） | 逻辑正确但偏好组合有歧义（`clear_on_add` 与 `never_clear_on_add` 同时 true 时前者胜），建议改成单一枚举 |
+| `notPlayed == 0` 才允许清空（§14.2） | 值得借鉴：保护未听内容不被冲掉 |
 
 ---
 
-## 15. 未解
+## 16. 未解
+
+### 16.1 已闭环（Q2 / Q9）
+
+| # | 原问题 | 结论 | 证据位置 |
+| --- | --- | --- | --- |
+| ~~Q2~~ | `V0()` 的实际调用方 | URI 查询参数 `shs` 非空且非 `"0"`/`"false"` 时，`RestProvider` 调用 `((х)entity).V0()` 覆写排序 | §14.1 |
+| ~~Q9~~ | 同曲目多次入队的状态判定 | **入队完全不做查重**，同曲目可产生多条队列行；因 `played_at` 全局共享，同批入队的重复项会被一次播放同时标记为已播 | §14.5 |
+
+**附带闭环的运行机制**（原文档未覆盖）：
+
+| 主题 | 结论 | 位置 |
+| --- | --- | --- |
+| 保留下标 | 仅当「正在播放队列中的曲目」且 `!clean_and_play` 时保留当前条目 | §14.2 |
+| 清空条件 | `keepId==0` **且** 无未播项 **且**（`clear_on_add` 或 `!never_clear_on_add`） | §14.2 |
+| 洗牌固化 | `temp_queue_shuffle_order` 临时表把已播部分重编号，新项排在之后 | §14.3 |
+| as_next 插队 | `UPDATE queue SET sort=sort+? WHERE sort>?` 腾位 | §14.4 |
+
+### 16.2 仍开放
 
 | # | 问题 | 优先级 |
 | --- | --- | --- |
-| **Q1** | `queue` 表完整 DDL（`onUpgrade` 变量拼 SQL，无法静态枚举） | 中 |
-| **Q2** | `V0()` 的实际调用方（哪个场景需要含 `shuffle_order` 的顺序） | **高** |
 | **Q3** | `n3`（`getQueueFilesForced`）的实现与 `m3` 的差异 | 中 |
 | **Q4** | `у->p` 与 `у->C` 都指向 `queue_no_shuffle` 的原因（是否别名） | 中 |
 | **Q5** | 四个能力开关 `n1/r1/s1/v` 的接口语义 | 中 |
 | **Q6** | `aa_status` 的取值枚举（`2` 是什么状态） | 中 |
-| **Q7** | `C()` 返回 `5`、`z()` 返回 `10` 的语义 | 低 |
-| **Q8** | `r()` 返回的实例字段 `H` 何时被赋值 | 低 |
-| **Q9** | 「同曲目多次入队」时状态判定的实际行为（§14.3 的推论） | **高** |
+| **Q1** | `queue` 表完整 DDL（`onUpgrade` 变量拼 SQL，无法静态枚举） | 中 |
+| **Q10** | `clear_on_add` 与 `never_clear_on_add` 同时为 true 时前者优先，是否为有意的设计 | 低 |
+| Q7 | `C()` 返回 `5`、`z()` 返回 `10` 的语义 | 低 |
+| Q8 | `r()` 返回的实例字段 `H` 何时被赋值 | 低 |
 
-> **Q2 与 Q9 最关键**：前者决定「随机顺序」在数据层如何暴露，后者决定该状态模型在真实使用中是否成立。
+> Q2 / Q9 闭环后，队列的**完整生命周期**已全链实证：
+> 入队（§14.2–14.4）→ 状态推导（§3.2）→ 列表（§2）→ 待播查找（§4.2）→ 清空（§14.2）。
+>
+> 剩余项均属外围：`n3` 差异（Q3）、偏好别名（Q4）、UI 语义（Q5–Q8）。
 
 ---
 
-## 16. Evidence ID 索引
+## 17. Evidence ID 索引
 
 | 主题 | Evidence ID |
 | --- | --- |
@@ -828,7 +1170,7 @@ apktool d --no-res -f -o <out> .rea-analysis/Poweramp-v3.apk
 
 ---
 
-## 17. 与既有文档的边界
+## 18. 与既有文档的边界
 
 | 文档 | 边界 |
 | --- | --- |

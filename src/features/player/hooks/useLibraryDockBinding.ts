@@ -4,6 +4,8 @@ import type { PlaylistDeleteAction, PlaylistDeleteSnapshot, PlaylistAddAction, P
 
 export type LibraryDockSelection = {
   scope?: string | null
+  limitedActions?: boolean
+  imageAction?: boolean
   active: boolean
   count: number
   total: number
@@ -50,8 +52,12 @@ export function useLibraryDockBinding(routeKey: string, binding: LibraryDockBind
   const owner = useRef(Symbol('library-dock-page'))
   const action = useRef(binding.onSearchToggle)
   const selectionRef = useRef(binding.selection)
+  const active = isPresent && context?.activeRouteKey === routeKey
   useLayoutEffect(() => { action.current = binding.onSearchToggle })
-  useLayoutEffect(() => { selectionRef.current = binding.selection })
+  useLayoutEffect(() => {
+    selectionRef.current = active && binding.selection?.active ? binding.selection : undefined
+    return () => { selectionRef.current = undefined }
+  }, [binding.selection, active])
   const toggleSearch = useCallback(() => action.current?.(), [])
   const selectAll = useCallback(() => selectionRef.current?.onSelectAll(), [])
   const clear = useCallback(() => selectionRef.current?.onClear(), [])
@@ -88,6 +94,8 @@ export function useLibraryDockBinding(routeKey: string, binding: LibraryDockBind
   }, [])
   const selectionActive = binding.selection?.active ?? false
   const selectionScope = binding.selection?.scope
+  const limitedActions = binding.selection?.limitedActions ?? false
+  const imageAction = binding.selection?.imageAction ?? false
   const count = binding.selection?.count ?? 0
   const total = binding.selection?.total ?? 0
   const allSelected = binding.selection?.allSelected ?? false
@@ -98,12 +106,12 @@ export function useLibraryDockBinding(routeKey: string, binding: LibraryDockBind
   const canAddToPlaylist = binding.selection?.canAddToPlaylist ?? false
   const hasSelection = Boolean(binding.selection)
   const selection = useMemo(() => hasSelection ? {
-    scope: selectionScope, active: selectionActive, count, total, allSelected, canSelectAll, canPlay, canCreatePlaylist, canDelete, canAddToPlaylist,
+    scope: selectionScope, limitedActions, imageAction, active: selectionActive, count, total, allSelected, canSelectAll, canPlay, canCreatePlaylist, canDelete, canAddToPlaylist,
     onPrepareDelete: prepareDelete, onDelete: deleteSongs,
     onPrepareAddToPlaylist: prepareAdd, onRefreshAddToPlaylist: refreshAdd, onAddToPlaylist: addSongs, onRemoveFromPlaylist: removeSongs,
     onCreateAddPlaylist: createAdd, onOpenPlaylistTarget: openTarget,
     onSelectAll: selectAll, onClear: clear, onExit: exit, onPlay: play, onCreatePlaylist: create,
-  } : undefined, [hasSelection, selectionScope, selectionActive, count, total, allSelected, canSelectAll, canPlay, canCreatePlaylist, canDelete, canAddToPlaylist, prepareDelete, deleteSongs, prepareAdd, refreshAdd, addSongs, removeSongs, createAdd, openTarget, selectAll, clear, exit, play, create])
+  } : undefined, [hasSelection, selectionScope, limitedActions, imageAction, selectionActive, count, total, allSelected, canSelectAll, canPlay, canCreatePlaylist, canDelete, canAddToPlaylist, prepareDelete, deleteSongs, prepareAdd, refreshAdd, addSongs, removeSongs, createAdd, openTarget, selectAll, clear, exit, play, create])
   const hasSearch = Boolean(binding.onSearchToggle)
   const stableBinding = useMemo(() => ({
     searchOpen: binding.searchOpen,
@@ -113,7 +121,6 @@ export function useLibraryDockBinding(routeKey: string, binding: LibraryDockBind
     selection,
   }), [binding.searchOpen, hasSearch, binding.controllerOffsetY, binding.controllerHidden, toggleSearch, selection])
   const publish = context?.publish
-  const active = isPresent && context?.activeRouteKey === routeKey
   useLayoutEffect(() => {
     if (!active || !publish) return
     return publish(owner.current, routeKey, stableBinding)

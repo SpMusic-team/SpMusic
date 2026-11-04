@@ -35,6 +35,10 @@
 .album-card[data-folder-variant='text-double'] .folder-parent-name { flex: 0 1 45%; }
 .album-library-content[data-has-hero] .album-songs { padding-top: 0; }
 .artist-card .folder-cover { border-radius: var(--app-radius-pill); }
+.artist-card[data-folder-variant='tile'][aria-pressed] > .playlist-card-checkbox { top: 25px; left: 25px; right: auto; transform: none; }
+.artist-card[data-folder-variant='tile'][data-folder-size='small'][aria-pressed] > .playlist-card-checkbox { left: 15px; }
+.artist-card[data-folder-variant^='row-'][aria-pressed] > .playlist-card-checkbox { top: 50%; left: 25px; right: auto; transform: translateY(-50%); }
+.artist-card[data-folder-level='5'][aria-pressed] > .playlist-card-checkbox { left: 20px; }
 .artist-card[data-folder-variant='tile'] .folder-copy { width: 100%; text-align: center; }
 .artist-card[data-folder-variant='tile'][data-folder-size='large'] .folder-cover { aspect-ratio: 1; }
 .artist-library [data-artist-root] .album-list[data-folder-level='0'] { gap: 22px 8px; padding-inline: 0; }

@@ -72,6 +72,7 @@ type AllSongsCardProps = {
   current: boolean
   canActivate: boolean
   selectMode: boolean
+  showReorderHandle: boolean
   selected: boolean
   artworkVisible: boolean
   showExtendedMetadata: boolean
@@ -86,7 +87,7 @@ type AllSongsCardProps = {
 // into the aggregated rows. The rows therefore keep their identity while covers
 // arrive, and only the card whose own store entry changed re-renders.
 const AllSongsCard = memo(function AllSongsCard({ item, index, store, artworkSource, fallbackArtworkSource, current,
-  canActivate, selectMode, selected, artworkVisible, showExtendedMetadata, coverFailed, onCoverFailed, onActivate,
+  canActivate, selectMode, showReorderHandle, selected, artworkVisible, showExtendedMetadata, coverFailed, onCoverFailed, onActivate,
   onToggleSelect, onEnterSelectMode }: AllSongsCardProps) {
   const coverUrl = useAllSongsCoverUrl(store, item.key, item.trackId, item.sourcePath)
   const track = item.track
@@ -97,7 +98,7 @@ const AllSongsCard = memo(function AllSongsCard({ item, index, store, artworkSou
   return <PlaylistCard songKey={item.key} track={track} index={index} coverUrl={coverUrl}
     artworkSource={artworkSource} fallbackArtworkSource={fallbackArtworkSource}
     current={current} unavailable={!item.available} canSelectUnavailable canActivate={canActivate}
-    selectMode={selectMode} selected={selected} artworkVisible={artworkVisible}
+    selectMode={selectMode} showReorderHandle={showReorderHandle} selected={selected} artworkVisible={artworkVisible}
     showExtendedMetadata={showExtendedMetadata} contentVisible contentRepresentative={false}
     contentShape={contentShape} coverFailed={coverFailed} onCoverFailed={onCoverFailed}
     onActivate={onActivate} onToggleSelect={onToggleSelect} onEnterSelectMode={onEnterSelectMode} />
@@ -142,6 +143,7 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
   const handledEntryPositionId = useRef<number | null>(null)
   const pendingEntryPosition = useRef<{ requestId: number; cancelled: boolean } | null>(null)
   const managementPanelRef = useRef<HTMLElement | null>(null)
+  const songsLayoutPanelRef = useRef<HTMLElement | null>(null)
   const [failedSongCovers, setFailedSongCovers] = useState<ReadonlySet<string>>(new Set())
   const controllerActionsRef = useRef<HTMLDivElement | null>(null)
   const [toolbarPassed, setToolbarPassed] = useState(false)
@@ -158,9 +160,9 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
     announce: (nextLayout) => `列表视图已切换为${nextLayout.label}`,
   })
   const { layout: songsLayout, announcement: songsAnnouncement } = useCollectionLayout({
-    panelRef, gridRef: songsListRef, layouts: PLAYLIST_SONG_LAYOUTS,
+    panelRef: songsLayoutPanelRef, gridRef: songsListRef, layouts: PLAYLIST_SONG_LAYOUTS,
     storageKey: ALL_SONGS_LAYOUT_STORAGE_KEY, defaultLevel: defaultAllSongsLevel,
-    selectors: ALL_SONGS_LAYOUT_SELECTORS,
+    selectors: ALL_SONGS_LAYOUT_SELECTORS, wheelGestureArea: 'panel',
     announce: (nextLayout) => `歌曲视图已切换为${nextLayout.label}`,
   })
   const visible = useMemo(() => categoryItems
@@ -184,7 +186,7 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
   }, [songQuickIndexKey]) // eslint-disable-line react-hooks/exhaustive-deps
   const orderedSongs = useMemo(() => {
     const songs = sourceSongs ?? []
-    if (isRecent || library.allSongsManualOrder) return [...songs]
+    if (isRecent || (isLong && library.allSongsManualOrder)) return [...songs]
     const byKey = new Map(songs.map((item) => [item.key, item]))
     const ordered: AllSongsItem[] = []
     for (const key of orderedSongKeys) {
@@ -195,7 +197,7 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
     // quick-index fingerprint; never reorder silently on stale keys.
     return ordered.length === songs.length ? ordered
       : [...songs].sort((left, right) => compareByQuickIndex(left.track.title, right.track.title))
-  }, [orderedSongKeys, sourceSongs, library.allSongsManualOrder, isRecent])
+  }, [orderedSongKeys, sourceSongs, library.allSongsManualOrder, isRecent, isLong])
   const visibleSongs = useMemo(() => orderedSongs
     .filter((item) => `${item.track.title} ${item.track.artist} ${item.track.album}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())), [orderedSongs, query])
   const displayedSongs = useMemo(() => {
@@ -275,7 +277,7 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
   const reorderSourceVersion = useMemo(() => JSON.stringify(fullReorderKeys), [fullReorderKeys])
   const visibleReorderKeys = useMemo(() => visibleSongs.map(item => item.key), [visibleSongs])
   const songReorder = usePlaylistSongReorder({
-    enabled: isSongs && !isRecent && selectMode && isPresent && library.allSongsMetadataStatus !== 'loading' && !playlist.isOpenAudioDisabled
+    enabled: isLong && selectMode && isPresent && library.allSongsMetadataStatus !== 'loading' && !playlist.isOpenAudioDisabled
       && !library.isDeletePending && Boolean(library.onReorderSongs),
     scopeKey: 'all-songs', sourceVersion: reorderSourceVersion, layoutKey: `${songsLayout.level}:${query}:${searchOpen}:${searchRequestId}:${dismissedSearchRequestId}`,
     orderedKeys: visibleReorderKeys, selectedKeys: selected, gridRef: songsListRef, scrollRef: panelRef,
@@ -523,7 +525,7 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
         </form>
       </DialogContent>
     </Dialog>
-    <motion.section ref={(node) => { panelRef.current = node; managementPanelRef.current = isSongs ? null : node }} className="playlist-management-content" tabIndex={-1} aria-label={`${category.label}管理`}
+    <motion.section ref={(node) => { panelRef.current = node; managementPanelRef.current = isSongs ? null : node; songsLayoutPanelRef.current = isSongs ? node : null }} className="playlist-management-content" tabIndex={-1} aria-label={`${category.label}管理`}
       data-metadata-loading={isSongs && library.allSongsMetadataStatus === 'loading' || undefined}
       variants={offscreenEntry ? navigationMotion.detailReturn.incoming : appearanceMotion.variants.backdrop}
       transition={offscreenEntry ? navigationMotion.transition : atomicOverview ? { duration: 0 } : returnTransition}
@@ -572,7 +574,7 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
             artworkSource={playlist.artworkSource} fallbackArtworkSource={playlist.fallbackArtworkSource}
             current={item.trackId === playlist.currentTrackId}
             canActivate={!playlist.isOpenAudioDisabled}
-            selectMode={selectMode} selected={selected.has(item.key)}
+            selectMode={selectMode} showReorderHandle={categoryId !== 'songs'} selected={selected.has(item.key)}
             artworkVisible={songsLayout.showArtwork} showExtendedMetadata={songsLayout.flow !== 'tile'}
             coverFailed={failedSongCovers.has(item.key)}
             onCoverFailed={handleSongCoverFailed}

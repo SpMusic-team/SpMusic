@@ -170,7 +170,9 @@ function SelectionPanel({ selection }: { selection: LibraryDockSelection }) {
     <div className="playlist-selection-panel-actions">
       {[
         [selectionPlaylist, '播放列表'], [selectionQueue, '队列'], [selectionNext, '下一首播放'],
-        [selectionDelete, '删除'], [selectionShare, '分享'], [selectionInfo, '信息/标签'], [selectionArtwork, '专辑封面'],
+        [selectionDelete, '删除'], [selectionShare, '分享'],
+        ...(selection.imageAction ? [[selectionArtwork, '图像']] : []),
+        ...(selection.limitedActions ? [] : [[selectionInfo, '信息/标签'], [selectionArtwork, '专辑封面']]),
       ].map(([source, label]) => <Button key={label} variant="ghost" className="playlist-selection-action" disabled={selection.count === 0 || deleteBusy || (label === '删除' ? !selection.onDelete || selection.canDelete === false : label === '播放列表' ? !selection.onAddToPlaylist || !selection.canAddToPlaylist : true)} onClick={label === '删除' ? beginDelete : label === '播放列表' ? beginAdd : undefined} title={label === '删除' ? '从列表移除或删除文件' : label === '播放列表' ? '添加到播放列表' : '暂未支持此操作'}><SelectionIcon source={source} size={28} /><span>{label}</span></Button>)}
     </div>
     {deleteError && !deleteSnapshot ? <p className="playlist-selection-error" role="alert">{deleteError}</p> : null}

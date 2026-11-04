@@ -122,7 +122,7 @@ export function SearchPanel({ viewModel, store, controllerMode = 'movable' }: { 
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
   const [selectMode, setSelectMode] = useState(false)
   const [expanded, setExpanded] = useState<{ category: SearchCategory; item: SearchCollection } | null>(null)
-  const layoutState = useCollectionLayout({ panelRef, gridRef, layouts: LAYOUTS, storageKey: 'spmusic.search.layout-level.v1', defaultLevel, selectors: SELECTORS, announce: layout => layout.label })
+  const layoutState = useCollectionLayout({ panelRef, gridRef, layouts: LAYOUTS, storageKey: 'spmusic.search.layout-level.v1', defaultLevel, selectors: SELECTORS, wheelGestureArea: 'panel', announce: layout => layout.label })
   const layout = layoutState.layout
   useLayoutEffect(() => {
     const panel = panelRef.current

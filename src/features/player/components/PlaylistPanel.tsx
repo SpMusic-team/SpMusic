@@ -381,7 +381,7 @@ export function PlaylistPanel({
   const contentShapes = useMemo(() => new Map(filteredTracks.map(track => [track.id, playlistCardContentShape(track)])), [filteredTracks])
   const { level: layoutLevel, layout, announcement: layoutAnnouncement } = useCollectionLayout({
     panelRef, gridRef, layouts: PLAYLIST_SONG_LAYOUTS, storageKey: PLAYLIST_LAYOUT_STORAGE_KEY,
-    defaultLevel: defaultPlaylistSongLevel, selectors: DETAIL_LAYOUT_SELECTORS,
+    defaultLevel: defaultPlaylistSongLevel, selectors: DETAIL_LAYOUT_SELECTORS, wheelGestureArea: 'panel',
     announce: (nextLayout) => `歌曲视图已切换为${nextLayout.label}`,
     onBeforeTransition: (snapshot, grid) => {
       artworkHoldIdsRef.current = snapshot ? new Set(

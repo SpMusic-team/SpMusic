@@ -16,6 +16,7 @@ type Options<Layout extends { label: string }> = {
   defaultLevel: () => number
   selectors: CollectionLayoutSelectors
   gestureArea?: 'grid' | 'panel'
+  wheelGestureArea?: 'grid' | 'panel'
   announce: (layout: Layout) => string
   onBeforeTransition?: (snapshot: ReadonlyMap<string, CollectionLayoutSnapshot> | null, grid: HTMLElement) => void
   onSettled?: () => void
@@ -69,7 +70,7 @@ function animateLayoutPart(element: HTMLElement, from: DOMRect, to: DOMRect, dur
 }
 
 export function useCollectionLayout<Layout extends { label: string }>(options: Options<Layout>) {
-  const { panelRef, gridRef, layouts, storageKey, defaultLevel, selectors, gestureArea = 'grid' } = options
+  const { panelRef, gridRef, layouts, storageKey, defaultLevel, selectors, gestureArea = 'grid', wheelGestureArea = gestureArea } = options
   const appearanceMotion = useAppearanceMotion()
   const callbacksRef = useRef(options)
   useLayoutEffect(() => { callbacksRef.current = options })
@@ -127,13 +128,13 @@ export function useCollectionLayout<Layout extends { label: string }>(options: O
   useEffect(() => {
     const panel = panelRef.current
     if (!panel) return
-    const acceptsTarget = (target: EventTarget | null) => {
-      const area = gestureArea === 'panel' ? panel : gridRef.current
+    const acceptsTarget = (target: EventTarget | null, gestureBoundary: 'grid' | 'panel') => {
+      const area = gestureBoundary === 'panel' ? panel : gridRef.current
       if (!area || !(target instanceof Node) || !area.contains(target)) return false
       const handleTarget = target instanceof Element ? target : target.parentElement
       if (handleTarget?.closest('[data-reorder-handle]')) return false
       // Preserve the existing detail-grid boundary and input behavior.
-      if (gestureArea === 'grid') return true
+      if (gestureBoundary === 'grid') return true
       const element = target instanceof Element ? target : target.parentElement
       if (!element || element.closest('input, textarea, select, [role="textbox"], [role="combobox"], [role="dialog"], [role="alertdialog"], .playlist-library-sidebar, .playlist-playback-dock, [inert]')) return false
       return !(element instanceof HTMLElement && element.isContentEditable)
@@ -141,7 +142,7 @@ export function useCollectionLayout<Layout extends { label: string }>(options: O
     }
     const changeLayout = (direction: -1 | 1, now: number) => {
       const grid = gridRef.current
-      if ((gestureArea === 'grid' && !grid) || now < wheelLockedUntilRef.current) return
+      if (now < wheelLockedUntilRef.current) return
       const currentLevel = layoutLevelRef.current
       const nextLevel = Math.max(0, Math.min(layouts.length - 1, currentLevel + direction))
       if (nextLevel === currentLevel) return
@@ -170,7 +171,7 @@ export function useCollectionLayout<Layout extends { label: string }>(options: O
       if (event.key === 'Control') pressedControlKeys.delete(event.code || event.key)
     }
     const handleWheel = (event: WheelEvent) => {
-      if (!event.ctrlKey || !acceptsTarget(event.target)) return
+      if (!event.ctrlKey || !acceptsTarget(event.target, wheelGestureArea)) return
       event.preventDefault()
       const now = performance.now()
       // Chromium emits ctrlKey wheel for a trackpad pinch without pressing Ctrl.
@@ -224,7 +225,7 @@ export function useCollectionLayout<Layout extends { label: string }>(options: O
       }
       if (touchBlocked || event.touches.length !== 2) return
       const [first, second] = Array.from(event.touches)
-      if (![first!, second!].every((touch) => acceptsTarget(touch.target) && insidePanel(touch))) return
+      if (![first!, second!].every((touch) => acceptsTarget(touch.target, gestureArea) && insidePanel(touch))) return
       // Reserve only the two-finger gesture; one-finger scrolling stays native.
       if (event.cancelable) event.preventDefault()
       pinch = { identifiers: [first!.identifier, second!.identifier], distance: touchDistance(first!, second!) }
@@ -296,7 +297,7 @@ export function useCollectionLayout<Layout extends { label: string }>(options: O
       pendingLayoutSnapshotRef.current = null
       stopLayoutAnimations()
     }
-  }, [appearanceMotion, stopLayoutAnimations, panelRef, gridRef, layouts, storageKey, selectors, gestureArea])
+  }, [appearanceMotion, stopLayoutAnimations, panelRef, gridRef, layouts, storageKey, selectors, gestureArea, wheelGestureArea])
   const selectLevel = useCallback((nextLevel: number) => {
     if (!Number.isInteger(nextLevel) || !layouts[nextLevel]) return
     layoutLevelRef.current = nextLevel

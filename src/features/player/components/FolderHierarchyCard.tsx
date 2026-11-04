@@ -4,6 +4,8 @@ import { useCollectionCoverUrl, type AllSongsCoverStore, type AllSongsCoverItem 
 import type { FolderHierarchyEntry } from '../model/folderHierarchy'
 import type { FolderCardLayout } from '../model/folderCardLayouts'
 import { formatDurationClock } from '../model/playlistDuration'
+import { usePlaylistCardLongPress } from '../hooks/usePlaylistCardLongPress'
+import { SongCardCheckbox } from './PlaylistCard'
 import folder48 from '@/assets/playlist-library/fece3.svg'
 import folder32 from '@/assets/playlist-library/1633d.svg'
 import folder16 from '@/assets/playlist-library/ba3db.svg'
@@ -27,6 +29,7 @@ type Props = {
   selectMode: boolean
   selected: boolean
   onActivate: () => void
+  onEnterSelectMode: (key: string) => void
 }
 
 function summary(directory: FolderHierarchyEntry) {
@@ -39,8 +42,9 @@ function summary(directory: FolderHierarchyEntry) {
   return duration === null ? String(count) : `${count} | ${duration}`
 }
 
-export function FolderHierarchyCard({ flat = false, navigationKey, sharedProjection, projectionKey, transition, directory, layout, coverItem, store, selectMode, selected, onActivate }: Props) {
+export function FolderHierarchyCard({ flat = false, navigationKey, sharedProjection, projectionKey, transition, directory, layout, coverItem, store, selectMode, selected, onActivate, onEnterSelectMode }: Props) {
   const cover = useCollectionCoverUrl(store, coverItem)
+  const longPress = usePlaylistCardLongPress({ identity: `folder:${directory.path}`, disabled: false, selectMode, onEnterSelectMode })
   const folder = layout.folderGlyph === 48 ? folder48 : layout.folderGlyph === 32 ? folder32 : folder16
   const badge = layout.folderGlyph === 28 ? badge28 : layout.folderGlyph === 24 ? badge24 : badge16
   const music = layout.musicGlyph === 'large' ? musicLarge : layout.musicGlyph === 'medium' ? musicMedium : musicSmall
@@ -54,10 +58,12 @@ export function FolderHierarchyCard({ flat = false, navigationKey, sharedProject
     data-folder-kind={flat ? 'flat' : 'hierarchy'} data-folder-variant={layout.variant} data-folder-size={layout.size} data-folder-level={layout.level}
     data-collection-key={`folder:${directory.path}`} data-song-key={coverItem?.key}
     aria-label={selectMode ? `选择文件夹 ${directory.name}` : `打开文件夹 ${directory.name}`}
-    aria-pressed={selectMode ? selected : undefined} onClick={onActivate} style={layout.style}>
+    aria-pressed={selectMode ? selected : undefined} onClick={event => { if (!longPress.consumeClick(event)) onActivate() }}
+    onPointerDown={longPress.onPointerDown} onContextMenu={longPress.onContextMenu} style={layout.style}>
     {layout.coverWidth ? <motion.span key={`cover:${projectionKey}`} className="folder-cover" layoutId={sharedProjection ? `folder-cover:${navigationKey}` : undefined} layoutCrossfade={false} transition={{ layout: transition }}>
       {cover ? <img className="folder-cover-image" src={cover} alt="" decoding="async" /> : <img className="folder-cover-placeholder" src={folder48} alt="" />}
       {tile && !flat ? <span className="folder-badge"><img className="folder-row-icon" src={badge} alt="" /></span> : null}
+      {selectMode ? <SongCardCheckbox /> : null}
     </motion.span> : null}
     <span className="folder-copy">
       {twoLine ? <><span className="folder-primary-row">{name}{folderGlyph}</span><span className="folder-secondary-row">{parent}{statistics}</span></>
@@ -65,5 +71,6 @@ export function FolderHierarchyCard({ flat = false, navigationKey, sharedProject
       {directory.error ? <span className="folder-error">{directory.error}</span> : null}
     </span>
     {layout.variant === 'row-wide' ? folderGlyph : null}
+    {selectMode && !layout.coverWidth ? <SongCardCheckbox /> : null}
   </Button>
 }

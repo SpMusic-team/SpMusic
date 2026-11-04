@@ -21,6 +21,7 @@ type PlaylistCardProps = {
   canSelectUnavailable?: boolean
   canActivate: boolean
   selectMode: boolean
+  showReorderHandle?: boolean
   selected: boolean
   artworkVisible: boolean
   showExtendedMetadata: boolean
@@ -49,7 +50,7 @@ function SongCardGlyph({ src, className }: { src: string; className: string }) {
   return <span className={`playlist-card-glyph ${className}`} style={{ maskImage: `url("${src}")` }} />
 }
 
-function SongCardCheckbox() {
+export function SongCardCheckbox() {
   return <span className="playlist-card-checkbox" aria-hidden="true">
     <SongCardGlyph className="playlist-card-checkbox-icon" src={checkbox} />
     <span className="playlist-card-checkbox-fill" />
@@ -83,6 +84,7 @@ export const PlaylistCard = memo(function PlaylistCard({
   canSelectUnavailable = false,
   canActivate,
   selectMode,
+  showReorderHandle = true,
   selected,
   artworkVisible,
   showExtendedMetadata,
@@ -169,13 +171,13 @@ export const PlaylistCard = memo(function PlaylistCard({
       onContextMenu={longPress.onContextMenu}
     >
       {contentVisible ? <PlaylistCardContent track={track} songKey={songKey} coverUrl={coverUrl} artworkVisible={artworkVisible}
-        selectMode={selectMode} unavailable={unavailable} showExtendedMetadata={showExtendedMetadata}
+        selectMode={selectMode} showReorderHandle={showReorderHandle} unavailable={unavailable} showExtendedMetadata={showExtendedMetadata}
         coverState={coverState} coverFailed={coverFailed} onCoverFailed={onCoverFailed} /> : null}
     </button>
   )
 })
 
-function PlaylistCardContent({ track, songKey, coverUrl, artworkVisible, selectMode, unavailable, showExtendedMetadata, coverState, coverFailed, onCoverFailed }: Pick<PlaylistCardProps, 'track' | 'songKey' | 'coverUrl' | 'artworkVisible' | 'selectMode' | 'unavailable' | 'showExtendedMetadata' | 'coverFailed' | 'onCoverFailed'> & { coverState: PlaylistCardCoverState }) {
+function PlaylistCardContent({ track, songKey, coverUrl, artworkVisible, selectMode, showReorderHandle, unavailable, showExtendedMetadata, coverState, coverFailed, onCoverFailed }: Pick<PlaylistCardProps, 'track' | 'songKey' | 'coverUrl' | 'artworkVisible' | 'selectMode' | 'showReorderHandle' | 'unavailable' | 'showExtendedMetadata' | 'coverFailed' | 'onCoverFailed'> & { coverState: PlaylistCardCoverState }) {
   const systemIcons = useSystemIcons()
   const coverSource = coverUrl ?? track.coverImage ?? track.coverImageFallback
   const coverMarkVisible = coverState === 'empty' || coverState === 'error'
@@ -221,10 +223,10 @@ function PlaylistCardContent({ track, songKey, coverUrl, artworkVisible, selectM
             handle lives here too, and both of its readers resolve it at event time
             (`usePlaylistSongReorder` reads `event.target.closest('[data-reorder-handle]')`,
             `useCollectionLayout` marks a gesture invalid the same way), so the mount
-            follows the same `selectMode` flag those readers already require. */}
+            is mounted only when selection mode and the current view allow it. */}
         {selectMode ? <span className="playlist-card-cover-selection" aria-hidden="true">
           <SongCardCheckbox />
-          <span className="playlist-card-move" data-reorder-handle><SongCardGlyph className="playlist-card-move-icon" src={arrowMove} /></span>
+          {showReorderHandle ? <span className="playlist-card-move" data-reorder-handle><SongCardGlyph className="playlist-card-move-icon" src={arrowMove} /></span> : null}
         </span> : null}
       </span>
       <span className="playlist-card-copy">
@@ -243,7 +245,7 @@ function PlaylistCardContent({ track, songKey, coverUrl, artworkVisible, selectM
         ) : null}
       </span>
       {selectMode ? <span className="playlist-card-selection-actions" aria-hidden="true">
-        <span className="playlist-card-row-move" data-reorder-handle><EqualIcon aria-hidden="true" strokeWidth={3} /></span>
+        {showReorderHandle ? <span className="playlist-card-row-move" data-reorder-handle><EqualIcon aria-hidden="true" strokeWidth={3} /></span> : null}
         <SongCardCheckbox />
       </span> : null}
   </>

@@ -31,6 +31,7 @@
   color: var(--player-ink);
   scrollbar-color: color-mix(in srgb, var(--player-muted) 35%, transparent) transparent;
   scrollbar-width: thin;
+  scrollbar-gutter: stable;
 }
 
 .playlist-panel[data-metadata-loading="true"] { overflow-y: hidden; }

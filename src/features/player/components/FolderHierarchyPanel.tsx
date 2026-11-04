@@ -62,14 +62,14 @@ function Cover({ item, store, hero = false }: { item?: AllSongsCoverItem; store:
   return cover ? <img src={cover} alt="" decoding="async" /> : <img className="folder-cover-placeholder" src={folderIcon} alt="" />
 }
 
-function Song({ item, store, playlist, selectMode, selected, artworkVisible, showExtendedMetadata, onSelect, onPlay }: { item: AllSongsItem; store: AllSongsCoverStore; playlist: PlayerPlaylistViewModel; selectMode: boolean; selected: boolean; artworkVisible: boolean; showExtendedMetadata: boolean; onSelect: (key: string) => void; onPlay: (key: string) => void }) {
+function Song({ item, store, playlist, selectMode, selected, artworkVisible, showExtendedMetadata, onSelect, onPlay, onEnterSelectMode }: { item: AllSongsItem; store: AllSongsCoverStore; playlist: PlayerPlaylistViewModel; selectMode: boolean; selected: boolean; artworkVisible: boolean; showExtendedMetadata: boolean; onSelect: (key: string) => void; onPlay: (key: string) => void; onEnterSelectMode: (key: string) => void }) {
   const coverUrl = useAllSongsCoverUrl(store, item.key, item.trackId, item.sourcePath)
   const [failed, setFailed] = useState(false)
   return <PlaylistCard songKey={item.key} track={item.track} coverUrl={coverUrl}
     current={playlist.currentTrackId === item.trackId} unavailable={!item.available} canSelectUnavailable
-    canActivate={!playlist.isOpenAudioDisabled} selectMode={selectMode} selected={selected}
+    canActivate={!playlist.isOpenAudioDisabled} selectMode={selectMode} showReorderHandle={false} selected={selected}
     artworkVisible={artworkVisible} showExtendedMetadata={showExtendedMetadata} contentVisible contentRepresentative={false} contentShape={15}
-    coverFailed={failed} onCoverFailed={() => setFailed(true)} onActivate={onPlay} onToggleSelect={onSelect} />
+    coverFailed={failed} onCoverFailed={() => setFailed(true)} onActivate={onPlay} onToggleSelect={onSelect} onEnterSelectMode={onEnterSelectMode} />
 }
 
 type Props = { categoryId?: 'folder' | 'folders'; playlist: PlayerPlaylistViewModel; allSongsCoverStore: AllSongsCoverStore; librarySidebarOpen: boolean; onLibrarySidebarOpenChange: (open: boolean) => void; searchRequestId?: number; controllerMode?: PlaylistControllerMode; timelineInteraction?: PlayerTimelineViewModel['interaction'] }
@@ -178,7 +178,7 @@ function FolderHierarchyScene({ categoryId = 'folders', playlist, allSongsCoverS
   const directSongs = useMemo(() => location ? ownerSongs.filter(item => parentFolder(item.sourcePath) === folderPath(location.directoryPath)) : EMPTY_SONGS, [ownerSongs, location])
   const visibleSongs = useMemo(() => directSongs.filter(item => `${item.track.title} ${item.track.artist} ${item.track.album}`.toLocaleLowerCase().includes(query)).sort((a, b) => a.track.title.localeCompare(b.track.title, 'zh-CN', { numeric: true })), [directSongs, query])
   const recursiveSongs = useMemo(() => flat ? directSongs : location ? ownerSongs.filter(item => insideFolder(item.sourcePath, location.directoryPath)) : ownerSongs, [flat, directSongs, location, ownerSongs])
-  const { layout, announcement } = useCollectionLayout({ panelRef, gridRef, layouts: PLAYLIST_SONG_LAYOUTS, storageKey: flat ? 'spmusic.flat-folders.layout-level.v1' : 'spmusic.folder-hierarchy.layout-level.v1', defaultLevel: flat ? () => 0 : defaultLevel, selectors: SELECTORS, gestureArea: location ? 'grid' : 'panel', announce: next => `文件夹和歌曲视图已切换为${next.label}` })
+  const { layout, announcement } = useCollectionLayout({ panelRef, gridRef, layouts: PLAYLIST_SONG_LAYOUTS, storageKey: flat ? 'spmusic.flat-folders.layout-level.v1' : 'spmusic.folder-hierarchy.layout-level.v1', defaultLevel: flat ? () => 0 : defaultLevel, selectors: SELECTORS, gestureArea: location ? 'grid' : 'panel', wheelGestureArea: 'panel', announce: next => `文件夹和歌曲视图已切换为${next.label}` })
   const folderLayout = FOLDER_CARD_LAYOUTS[layout.level]
   useEffect(() => {
     if (present && flat && requestedLocation && !library.isFolderRestorePending && !library.isFolderRescanPending && !library.isImportPending && !songs.some(item => parentFolder(item.sourcePath) === folderPath(requestedLocation.directoryPath))) changeLocation?.(null)
@@ -188,14 +188,12 @@ function FolderHierarchyScene({ categoryId = 'folders', playlist, allSongsCoverS
   const { controllerMotion, returnTransition } = useCollectionHeroMotion({
     panelRef,
     dockRef: dockContext?.dockRef ?? fallbackDockRef, mode: controllerMode,
-    seeking: !location && currentSelection.active || timelineInteraction === 'seeking' || timelineInteraction === 'previewing',
+    seeking: currentSelection.active || timelineInteraction === 'seeking' || timelineInteraction === 'previewing',
     layoutKey,
     controllerEnabled: Boolean(present && (!dockContext || dockContext.activeRouteKey === `category:${categoryId}`)),
     actionsPassed,
     rowSelector: '.folder-directory-list > .folder-row, .folder-songs > .folder-song-slot',
   })
-  useLibraryDockBinding(`category:${categoryId}`, { searchOpen: showSearch, onSearchToggle: toggleSearch,
-    controllerOffsetY: controllerMotion.offsetY, controllerHidden: controllerMotion.hidden })
   const songWindow = useAllSongsRenderWindow(visibleSongs.length, layout, panelRef, songsRef, spaceRef, metadataLoading)
   const renderedSongs = useMemo(() => visibleSongs.slice(songWindow.first, songWindow.end), [visibleSongs, songWindow.first, songWindow.end])
   useLayoutEffect(() => {
@@ -228,17 +226,73 @@ function FolderHierarchyScene({ categoryId = 'folders', playlist, allSongsCoverS
     publishDetailVisibility: location ? chrome.publishDetailVisibility : undefined,
   })
   const rebaseController = controllerMotion.rebase
-  useLayoutEffect(() => { if (showSearch || !location && currentSelection.active) rebaseController({ reveal: true }) }, [showSearch, location, currentSelection.active, rebaseController])
+  useLayoutEffect(() => { if (showSearch || currentSelection.active) rebaseController({ reveal: true }) }, [showSearch, currentSelection.active, rebaseController])
   const toggleSelect = (key: string) => setSelection(previous => { const keys = new Set(previous.keys); if (keys.has(key)) keys.delete(key); else keys.add(key); return { ...previous, keys } })
+  const enterSelectMode = (key: string) => setSelection(previous => ({ ...previous, active: true, keys: new Set(previous.keys).add(key) }))
   const candidates = useMemo(() => {
-    const candidates = location ? [...visibleSongs] : []
-    for (const directory of visibleDirectories) if (!currentSelection.active || currentSelection.keys.has(`folder:${directory.path}`)) candidates.push(...directory.songs)
+    const candidates = location ? [...(currentSelection.active ? directSongs : visibleSongs)] : []
+    const candidateDirectories = currentSelection.active ? directories : visibleDirectories
+    for (const directory of candidateDirectories) if (!currentSelection.active || currentSelection.keys.has(`folder:${directory.path}`)) candidates.push(...directory.songs)
     const seen = new Set<string>()
     return candidates.filter(item => {
-      if (!item.available || (currentSelection.active && location && !currentSelection.keys.has(item.key) && !visibleDirectories.some(dir => currentSelection.keys.has(`folder:${dir.path}`) && insideFolder(item.sourcePath, dir.path))) || seen.has(item.key)) return false
+      if (!item.available || (currentSelection.active && location && !currentSelection.keys.has(item.key) && !candidateDirectories.some(dir => currentSelection.keys.has(`folder:${dir.path}`) && insideFolder(item.sourcePath, dir.path))) || seen.has(item.key)) return false
       seen.add(item.key); return true
     })
-  }, [location, visibleSongs, visibleDirectories, currentSelection])
+  }, [location, directSongs, visibleSongs, directories, visibleDirectories, currentSelection])
+  const selectableKeys = useMemo(() => [
+    ...visibleDirectories.map(directory => `folder:${directory.path}`),
+    ...visibleSongs.map(item => item.key),
+  ], [visibleDirectories, visibleSongs])
+  const selectedSongKeys = useMemo(() => {
+    const keys = new Set<string>()
+    for (const song of directSongs) if (currentSelection.keys.has(song.key)) keys.add(song.key)
+    for (const directory of directories) {
+      if (currentSelection.keys.has(`folder:${directory.path}`)) for (const song of directory.songs) keys.add(song.key)
+    }
+    return [...keys]
+  }, [directSongs, directories, currentSelection.keys])
+  useLibraryDockBinding(`category:${categoryId}`, {
+    searchOpen: showSearch, onSearchToggle: toggleSearch,
+    controllerOffsetY: controllerMotion.offsetY, controllerHidden: currentSelection.active ? false : controllerMotion.hidden,
+    selection: {
+      scope: null, limitedActions: flat, active: currentSelection.active,
+      count: currentSelection.keys.size, total: directories.length + directSongs.length,
+      allSelected: selectableKeys.length > 0 && selectableKeys.every(key => currentSelection.keys.has(key)),
+      canSelectAll: selectableKeys.length > 0,
+      canPlay: Boolean(candidates.length && library.onPlaySong && !playlist.isOpenAudioDisabled),
+      canCreatePlaylist: false,
+      canDelete: Boolean(selectedSongKeys.length && library.onDeleteSongs && !playlist.isOpenAudioDisabled && !library.isDeletePending),
+      canAddToPlaylist: Boolean(selectedSongKeys.length && library.onPreparePlaylistAdd && library.onAddToPlaylist && !playlist.isOpenAudioDisabled && !library.isDeletePending),
+      onPrepareAddToPlaylist: () => library.onPreparePlaylistAdd?.({ scope: null, songKeys: Object.freeze([...selectedSongKeys]) }),
+      onRefreshAddToPlaylist: library.onPreparePlaylistAdd,
+      onAddToPlaylist: library.onAddToPlaylist,
+      onRemoveFromPlaylist: library.onRemoveFromPlaylist,
+      onCreateAddPlaylist: library.onCreateAddPlaylist,
+      onOpenPlaylistTarget: library.onSelect,
+      onPrepareDelete: () => library.onDeleteSongs && selectedSongKeys.length ? {
+        scope: null, songKeys: Object.freeze([...selectedSongKeys]), canRemoveFromList: false,
+      } : undefined,
+      onDelete: library.onDeleteSongs ? async (snapshot, mode) => {
+        const result = await library.onDeleteSongs!(snapshot, mode)
+        const succeeded = new Set(result.succeededKeys)
+        const completedFolders = new Set(directories.filter(directory => currentSelection.keys.has(`folder:${directory.path}`) && directory.songs.length > 0
+          && directory.songs.every(song => succeeded.has(song.key))).map(directory => `folder:${directory.path}`))
+        setSelection(previous => previous.locationKey !== locationKey ? previous : {
+          ...previous, keys: new Set([...previous.keys].filter(key => !succeeded.has(key) && !completedFolders.has(key))),
+        })
+        return result
+      } : undefined,
+      onSelectAll: () => setSelection(previous => {
+        const keys = new Set(previous.keys)
+        const all = selectableKeys.length > 0 && selectableKeys.every(key => keys.has(key))
+        for (const key of selectableKeys) { if (all) keys.delete(key); else keys.add(key) }
+        return { ...previous, keys }
+      }),
+      onClear: () => setSelection(previous => ({ ...previous, keys: new Set() })),
+      onExit: () => setSelection(previous => ({ ...previous, active: false, keys: new Set() })),
+      onPlay: () => play(),
+    },
+  })
   const play = (key?: string) => {
     const entries = key ? visibleSongs.filter(item => item.available) : candidates
     const target = key ? entries.find(item => item.key === key) : entries[0]
@@ -272,8 +326,9 @@ function FolderHierarchyScene({ categoryId = 'folders', playlist, allSongsCoverS
   const renderHeroActions = (compact = false) => <motion.div ref={compact ? compactActionsRef : heroActionsRef}
     className={compact ? 'playlist-hero-actions playlist-controller-actions' : 'playlist-hero-actions'}
     role="group" aria-label="文件夹歌曲操作"
-    aria-hidden={compact && (!actionsPassed || !present) || undefined}
-    inert={compact && (!actionsPassed || !present) || undefined}
+    data-selection-hidden={currentSelection.active || undefined}
+    aria-hidden={currentSelection.active || compact && (!actionsPassed || !present) || undefined}
+    inert={currentSelection.active || compact && (!actionsPassed || !present) || undefined}
     data-actions-visible={compact ? String(Boolean(actionsPassed && present)) : undefined}
     custom={compact ? returnGeometry : undefined}
     variants={compact ? { ...appearance.variants.controllerActions, ...appearance.libraryNavigation.detailReturn.controllerOutgoing } : undefined}
@@ -316,7 +371,7 @@ function FolderHierarchyScene({ categoryId = 'folders', playlist, allSongsCoverS
         actions={renderHeroActions()} /> : null}
       <div ref={gridRef} data-layout-level={layout.level} data-layout-flow={layout.flow} data-layout-artwork={layout.showArtwork} style={{ ...layout.style, '--folder-columns': layout.columns } as CSSProperties}>
         {!location ? <CollectionManagementHeader chrome={managementChrome} category={category}
-          sharedProjection={sharedProjection} onOverview={goUp} returnTransition={returnTransition} more={renderRootMore()}
+          sharedProjection={sharedProjection} onOverview={goUp} returnTransition={returnTransition} more={renderRootMore()} hideActions={currentSelection.active}
           actions={{
             shuffleLabel: '随机播放文件夹歌曲', shuffleDisabled: playlist.isOpenAudioDisabled || metadataLoading || !candidates.length || !library.onShufflePlay,
             onShuffle: () => { void library.onShufflePlay?.(candidates.map(({ scope, trackId }) => ({ scope, trackId }))) },
@@ -328,7 +383,6 @@ function FolderHierarchyScene({ categoryId = 'folders', playlist, allSongsCoverS
             onSelect: () => setSelection(previous => ({ ...previous, active: !previous.active, keys: new Set() })), selectedCount: currentSelection.keys.size,
           }} /> : null}
         {showSearch ? <motion.div className="playlist-management-search" variants={navigationMotion.chrome} initial={atomicOverview ? 'initial' : false} animate="animate" exit={atomicOverview ? 'exit' : 'animate'} transition={navigationMotion.transition}><Input ref={searchRef} type="search" aria-label="搜索文件夹和歌曲名称" placeholder="搜索文件夹和歌曲" value={currentSearch.query} onChange={event => setSearch(previous => ({ ...previous, query: event.target.value }))} onKeyDown={event => { if (event.key === 'Escape') setSearch(previous => ({ ...previous, query: '', open: false, dismissedRequest: searchRequestId })) }} /></motion.div> : null}
-        {location && currentSelection.active ? <p className="folder-selection-status" role="status">已选择 {currentSelection.keys.size} 项</p> : null}
         {library.folderError ? <p className="folder-selection-status" role="alert">{library.folderError}</p> : null}
         {location && root?.status === 'ready' && root.directoryPaths === undefined ? <p className="folder-selection-status" role="status">当前目录由歌曲路径还原；重新选择文件夹可读取完整目录。</p> : null}
         <span className="sr-only" role="status">{announcement}</span>
@@ -338,7 +392,7 @@ function FolderHierarchyScene({ categoryId = 'folders', playlist, allSongsCoverS
               initial={!location && atomicOverview ? 'initial' : false} animate="animate" exit={!location && atomicOverview ? 'exit' : 'animate'} transition={navigationMotion.transition}><FolderHierarchyCard flat={flat} directory={directory} layout={folderLayout}
               navigationKey={categoryId + ':' + folderNavigationKey(flat ? roots.find(root => insideFolder(directory.path, root.path))?.path ?? directory.path : location?.rootPath ?? directory.path, directory.path)} sharedProjection={sharedProjection} projectionKey={projectionKey} transition={returnTransition}
               coverItem={folderCovers[index]} store={store} selectMode={currentSelection.active}
-              selected={currentSelection.keys.has(`folder:${directory.path}`)} onActivate={() => enter(directory)} /></motion.div>)}
+              selected={currentSelection.keys.has(`folder:${directory.path}`)} onActivate={() => enter(directory)} onEnterSelectMode={enterSelectMode} /></motion.div>)}
           </div>
           {location && metadataLoading && directSongs.length ? <PlaylistMetadataLoading layout={layout} trackCount={directSongs.length} /> : visibleSongs.length ? <div ref={spaceRef} style={songWindow.spaceStyle}><div ref={songsRef} className="playlist-grid folder-songs" data-layout-level={layout.level} data-layout-flow={layout.flow} data-layout-columns={layout.columns} style={{ ...layout.style, ...songWindow.gridStyle }} onKeyDown={event => {
             if (!songWindow.enabled || event.key !== 'Tab') return
@@ -353,7 +407,7 @@ function FolderHierarchyScene({ categoryId = 'folders', playlist, allSongsCoverS
             event.preventDefault(); pendingFocus.current = visibleSongs[next].key
             panel.scrollTop += space.getBoundingClientRect().top - panel.getBoundingClientRect().top + Math.floor(next / layout.columns) * songWindow.stride
           }}>
-            {renderedSongs.map(item => <div key={item.key} className="folder-song-slot" data-collection-key={item.key}><Song item={item} store={store} playlist={playlist} artworkVisible={layout.showArtwork} showExtendedMetadata={layout.flow !== 'tile'} selectMode={currentSelection.active} selected={currentSelection.keys.has(item.key)} onSelect={toggleSelect} onPlay={play} /></div>)}
+            {renderedSongs.map(item => <div key={item.key} className="folder-song-slot" data-collection-key={item.key}><Song item={item} store={store} playlist={playlist} artworkVisible={layout.showArtwork} showExtendedMetadata={layout.flow !== 'tile'} selectMode={currentSelection.active} selected={currentSelection.keys.has(item.key)} onSelect={toggleSelect} onPlay={play} onEnterSelectMode={enterSelectMode} /></div>)}
           </div></div> : null}
           {!visibleDirectories.length && !visibleSongs.length && !(metadataLoading && directSongs.length) ? <MotionEmpty className="playlist-management-empty" variants={navigationMotion.chrome} initial={atomicOverview ? 'initial' : false} animate="animate" exit={atomicOverview ? 'exit' : 'animate'} transition={navigationMotion.transition}><EmptyHeader><EmptyTitle>{query ? '没有匹配的文件夹或歌曲' : !location && (library.isImportPending || library.isFolderRestorePending) ? '正在扫描文件夹' : location ? '文件夹为空' : '尚未选择文件夹'}</EmptyTitle><EmptyDescription>{query ? '尝试其他名称，或清空搜索。' : location ? flat ? '此目录没有直接包含的歌曲。' : '此目录没有子文件夹或可识别的音频文件。' : flat ? '选择存储后，这里会列出所有直接含有歌曲的文件夹。' : '选择音乐文件夹后，在这里逐层浏览；所有歌曲会汇总其中及子目录内的音频。'}</EmptyDescription></EmptyHeader>{!location ? <Button disabled={library.isImportPending || library.isFolderRestorePending} onClick={library.onSelectFolders}>选择文件夹</Button> : null}</MotionEmpty> : null}
         </>}

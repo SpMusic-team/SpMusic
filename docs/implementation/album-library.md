@@ -6,11 +6,12 @@ status: "active"
 owner_agent: "Frontend Agent"
 version_scope: "project"
 created: "2026-10-28"
-updated: "2026-10-28"
+updated: "2026-11-03"
 source_documents:
   - "user request: 完成媒体库专辑分类，根页面复用所有歌曲侧边索引"
   - "https://www.figma.com/design/V4Gbm9HJrUOsTiwXl2XcXV/SpMusic?node-id=8007-15164"
   - "docs/architecture/album-library.md"
+  - "user request: 缺少ALBUMARTIST时，同目录同名专辑按合辑合并并继承已知年份"
 ---
 
 # 媒体库专辑分类实现
@@ -21,11 +22,11 @@ source_documents:
 
 `albumLibrary.ts` 集中生成稳定专辑身份：有专辑名及专辑艺术家时按两者归组，允许跨目录多碟合并；缺失专辑艺术家时，按专辑名和直接父目录归组，保留不同曲目艺术家组成的合辑；未知专辑无论是否有专辑艺术家标签均按目录隔离。不能直接使用展示回退值“本地音频”作为专辑名，也不以曲目艺术家拆分同目录合辑。
 
-这是当前标签能力下的保守策略：没有专辑艺术家标签的跨目录多碟专辑不会自动合并。大小写与路径规范化遵循现有曲库规则。
+2026-11-03 用户确认上述同目录合辑规则，替代之前缺少 ALBUMARTIST 时按完整 ARTIST 署名分组的策略。有显式 ALBUMARTIST 使用类型化 `album-artist` 身份分支，缺少或空白 ALBUMARTIST 使用 `directory` 分支；二者不会因 ARTIST 与另一组 ALBUMARTIST 同名而合并。没有专辑艺术家标签的跨目录多碟专辑不会自动合并，防止不同目录的合辑经重合 ARTIST 被间接串联。大小写与路径规范化遵循现有曲库规则。无真实专辑名的未知专辑继续按目录隔离，整组均无显式 ALBUMARTIST 时再按完整 ARTIST 署名细分。
 
 ## 页面与交互
 
-`AlbumLibraryPanel` 采用独立专辑实体数据，不将专辑身份冒充文件夹路径。根页复用 `CollectionManagementHeader`、原有 CD 分类资产、管理控制器和主题样式；封面来自本地曲目，设计稿里的示意图片不作为静态专辑数据。卡片展示专辑名和作者；作者优先专辑艺术家，否则先将每条曲目的艺术家按“/”拆分，逐段去除首尾空白、过滤空值及展示回退值，再按首次出现顺序去重，用“/”连接；没有艺术家标签时显示“未知艺术家”。不扩展逗号、`&` 或 `feat` 等拆分规则，专辑艺术家原串及分组身份保持不变。
+`AlbumLibraryPanel` 采用独立专辑实体数据，不将专辑身份冒充文件夹路径。根页复用 `CollectionManagementHeader`、原有 CD 分类资产、管理控制器和主题样式；封面来自本地曲目，设计稿里的示意图片不作为静态专辑数据。卡片展示专辑名和作者；作者优先专辑艺术家，否则先将每条曲目的原始艺术家按“/”拆分，逐段去除首尾空白、过滤空值，再去重并稳定排序，用“/”连接；没有艺术家标签时显示“未知艺术家”。不扩展逗号、`&` 或 `feat` 等拆分规则，不写回任何标签。
 
 用户的 `Hypersynthetic` 专辑提供了实际标签证据：两首曲目的 `ARTIST` 为 `Akira Complex`，另一首为 `Akira Complex/kors k`，均无专辑艺术家标签。原先对整串艺术家去重，再连接会产生 `Akira Complex/Akira Complex/kors k`；逐段去重后的专辑作者为 `Akira Complex/kors k`。此处理仅派生页面作者文案，不写回音乐文件标签。
 

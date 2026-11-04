@@ -4,7 +4,9 @@ import { AnimatePresence, motion, useIsPresent } from 'motion/react'
 import { CollectionReturnIcon } from './CollectionReturnIcon'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogTitle, DialogHeader } from '@/components/ui/dialog'
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Field, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty'
 import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { CollectionManagementHeader } from './CollectionManagementHeader'
@@ -29,6 +31,10 @@ import { useCollectionCoverUrl, useAllSongsCoverUrl, useAllSongsCoverLease, useA
 import { albumEntries, type AlbumEntry } from '../model/albumLibrary'
 import { formatDurationClock } from '../model/playlistDuration'
 import { artistEntries, artistAlbums, artistRoute, uniqueArtistSongs, CONTRIBUTOR_LABELS, type ContributorCategoryId } from '../model/artistLibrary'
+import { yearEntries, yearEffectiveYears, yearAlbums, yearRoute, readYearSort, writeYearSort, sortYearEntries, sortYearAlbums, sortYearSongs, YEAR_SORT_FIELDS, type YearSortScope, type YearSort } from '../model/yearLibrary'
+import yearIcon from '@/assets/year-library/1fed4.svg'
+import yearMusicNote from '@/assets/year-library/36e6f.svg'
+import sortIcon from '@/assets/playlist-hero-menu/08f63.svg'
 import { FOLDER_CARD_LAYOUTS } from '../model/folderCardLayouts'
 import { PLAYLIST_SONG_LAYOUTS } from '../model/playlistSongLayouts'
 import { mediaLibraryCategories, type MediaLibraryCategoryId } from '../model/mediaLibraryCategories'
@@ -50,7 +56,7 @@ const CATEGORY = { ...mediaLibraryCategories.find(item => item.id === 'album')!,
 const SELECTORS = { item: '[data-collection-key]', cover: '.folder-cover, .playlist-card-cover', copy: '.folder-copy, .playlist-card-copy', getId: (node: HTMLElement) => node.dataset.collectionKey }
 const rootLevel = () => 0
 const detailLevel = () => 3
-type Props = { categoryId?: 'album' | ContributorCategoryId; playlist: PlayerPlaylistViewModel; allSongsCoverStore: AllSongsCoverStore; librarySidebarOpen: boolean; onLibrarySidebarOpenChange: (open: boolean) => void; searchRequestId?: number; controllerMode?: PlaylistControllerMode; timelineInteraction?: PlayerTimelineViewModel['interaction'] }
+type Props = { categoryId?: 'album' | 'year' | ContributorCategoryId; playlist: PlayerPlaylistViewModel; allSongsCoverStore: AllSongsCoverStore; librarySidebarOpen: boolean; onLibrarySidebarOpenChange: (open: boolean) => void; searchRequestId?: number; controllerMode?: PlaylistControllerMode; timelineInteraction?: PlayerTimelineViewModel['interaction'] }
 
 function contributorNavigation(library: NonNullable<PlayerPlaylistViewModel['library']>, categoryId: NonNullable<Props['categoryId']>) {
   if (categoryId === 'album-artist') return { location: library.albumArtistLocation, change: library.onAlbumArtistLocationChange }
@@ -88,8 +94,8 @@ function ArtistMenuArtwork({ item, store }: { item?: AllSongsCoverItem; store: A
   return <span ref={frame} className="artist-menu-cover"><span className="artist-menu-cover" data-cover-key={item?.key}><AlbumCover song={item} store={store} artist /></span></span>
 }
 
-function AlbumCard({ album, store, level, selected, selectMode, sharedProjection, projectionKey, transition, onActivate, artist = false, categoryLabel = '艺术家', identityPrefix = 'album' }: {
-  identityPrefix?: string; artist?: boolean; categoryLabel?: string; album: AlbumEntry; store: AllSongsCoverStore; level: number; selected: boolean; selectMode: boolean;
+function AlbumCard({ album, store, level, selected, selectMode, sharedProjection, projectionKey, transition, onActivate, artist = false, year = false, categoryLabel = '艺术家', identityPrefix = 'album' }: {
+  identityPrefix?: string; artist?: boolean; year?: boolean; categoryLabel?: string; album: AlbumEntry; store: AllSongsCoverStore; level: number; selected: boolean; selectMode: boolean;
   sharedProjection: boolean; projectionKey: string; transition: ReturnType<typeof useAppearanceMotion>['layoutTransition']; onActivate: () => void
 }) {
   const layout = FOLDER_CARD_LAYOUTS[level]
@@ -97,16 +103,16 @@ function AlbumCard({ album, store, level, selected, selectMode, sharedProjection
   const artistStyle = level === 0
     ? { '--folder-card-width': '100%', '--folder-cover-width': 'min(280px, 100%)', '--folder-cover-height': 'auto', '--folder-title-size': '32px', '--folder-title-line': '40px' }
     : { '--folder-cover-width': `${Math.min(layout.coverWidth, layout.coverHeight)}px`, '--folder-cover-height': `${Math.min(layout.coverWidth, layout.coverHeight)}px` }
-  return <Button variant="ghost" className={`folder-row album-card${artist ? ' artist-card' : ''}`} data-artist-key={artist ? album.key : undefined} data-album-key={album.key} data-collection-key={album.key}
+  return <Button variant="ghost" className={`folder-row album-card${artist ? ' artist-card' : ''}${year ? ' year-card' : ''}`} data-year-key={year ? album.year ?? 'unknown' : undefined} data-artist-key={artist ? album.key : undefined} data-album-key={album.key} data-collection-key={album.key}
     data-song-key={album.coverSong?.key} data-cover-key={coverItem.key} data-folder-variant={layout.variant} data-folder-size={layout.size}
     style={artist ? { ...layout.style, ...artistStyle } as React.CSSProperties : layout.style}
-    aria-label={`${selectMode ? '选择' : '打开'}${artist ? categoryLabel : '专辑'} ${album.name}`} aria-pressed={selectMode ? selected : undefined} onClick={onActivate}>
+    aria-label={`${selectMode ? '选择' : '打开'}${year ? '年份' : artist ? categoryLabel : '专辑'} ${album.name}`} aria-pressed={selectMode ? selected : undefined} onClick={onActivate}>
     {layout.coverWidth ? <motion.span className="folder-cover" key={`cover:${projectionKey}`} layoutId={sharedProjection ? `${identityPrefix}-cover:${album.key}` : undefined} layoutCrossfade={false} transition={{ layout: transition }}>
       <AlbumCover song={coverItem} store={store} artist={artist} />
     </motion.span> : null}
     <span className="folder-copy">
       <motion.span key={`title:${projectionKey}`} className="folder-name" title={album.name} layout={sharedProjection ? 'position' : undefined} layoutId={sharedProjection ? `${identityPrefix}-name:${album.key}` : undefined} transition={{ layout: transition }}>{album.name}</motion.span>
-      {!artist ? <span className="folder-parent-name" title={album.artist}>{album.artist}</span> : null}
+      {year ? <span className="year-card-meta"><span className="year-card-music" style={{ maskImage: `url("${yearMusicNote}")` }} aria-hidden="true" /><span>{album.songs.length} | {clock(album.songs) ?? '读取中'}</span></span> : !artist ? <span className="folder-parent-name" title={album.artist}>{album.artist}</span> : null}
     </span>
   </Button>
 }
@@ -124,12 +130,12 @@ function AlbumSong({ item, store, playlist, selected, selectMode, artworkVisible
 export function AlbumLibraryPanel(props: Props) {
   const { playlist, librarySidebarOpen, onLibrarySidebarOpenChange, categoryId = 'album' } = props
   const library = playlist.library!
-  const albums = useMemo(() => categoryId !== 'album' ? artistEntries(library.allSongs ?? EMPTY, categoryId) : albumEntries(library.allSongs ?? EMPTY), [library.allSongs, categoryId])
+  const albums = useMemo(() => categoryId === 'year' ? yearEntries(library.allSongs ?? EMPTY) : categoryId !== 'album' ? artistEntries(library.allSongs ?? EMPTY, categoryId) : albumEntries(library.allSongs ?? EMPTY), [library.allSongs, categoryId])
   const outerChrome = useContext(LibraryChromeTransitionContext)
   const outerPresent = useIsPresent()
   const contributorLocation = contributorNavigation(library, categoryId).location
-  const route = categoryId !== 'album' ? artistRoute(contributorLocation ?? null, categoryId) : library.albumLocation ? `tracks:album:${library.albumLocation}` : 'category:album'
-  const [navigation, setNavigation] = useState({ route, internal: Boolean(categoryId !== 'album' ? contributorLocation : library.albumLocation) })
+  const route = categoryId === 'year' ? yearRoute(library.yearLocation ?? null) : categoryId !== 'album' ? artistRoute(contributorLocation ?? null, categoryId as ContributorCategoryId) : library.albumLocation ? `tracks:album:${library.albumLocation}` : 'category:album'
+  const [navigation, setNavigation] = useState({ route, internal: Boolean(categoryId === 'year' ? library.yearLocation : categoryId !== 'album' ? contributorLocation : library.albumLocation) })
   const internal = navigation.internal || navigation.route !== route
   if (navigation.route !== route) setNavigation({ route, internal: true })
   const localChrome = useLibraryChromeTransition(route, false, `category:${categoryId}`)
@@ -145,7 +151,7 @@ export function AlbumLibraryPanel(props: Props) {
     onSelect: (scope: string) => { onLibrarySidebarOpenChange(false); library.onSelect(scope) },
   }
   const sidebar = { playlistName: playlist.playlistName ?? '', trackCount: playlist.tracks.length, totalClock: null, onCurrentPlaylist: library.onOpen, library }
-  return <motion.div className={`playlist-management album-library${categoryId !== 'album' ? ' artist-library' : ''}`} data-contributor-category={categoryId !== 'album' ? categoryId : undefined} inert={!outerPresent || undefined} aria-hidden={!outerPresent || undefined}>
+  return <motion.div className={`playlist-management album-library${categoryId !== 'album' ? ' artist-library' : ''}${categoryId === 'year' ? ' year-library' : ''}`} data-contributor-category={categoryId !== 'album' ? categoryId : undefined} inert={!outerPresent || undefined} aria-hidden={!outerPresent || undefined}>
     <PlaylistLibrarySidebar {...sidebar} />
     <Dialog open={librarySidebarOpen} onOpenChange={onLibrarySidebarOpenChange}><DialogContent id="playlist-library-overlay" showCloseButton={false} className="playlist-library-dialog" overlayClassName="playlist-library-backdrop" style={{ translate: '0 0' }} finalFocus={() => {
       const menu = document.getElementById('playlist-library-menu')
@@ -159,27 +165,39 @@ export function AlbumLibraryPanel(props: Props) {
 
 function AlbumScene({ albums: rootEntries, categoryId = 'album', playlist, allSongsCoverStore: store, searchRequestId = 0, controllerMode = 'movable', timelineInteraction, outerPresent, positions }: Props & { albums: readonly AlbumEntry[]; outerPresent: boolean; positions: RefObject<Map<string, number>> }) {
   const library = playlist.library!
-  const artistMode = categoryId !== 'album'
+  const yearMode = categoryId === 'year'
+  const artistMode = categoryId !== 'album' && !yearMode
   const contributor = contributorNavigation(library, categoryId)
+  const yearLocation = yearMode ? library.yearLocation : null
+  const yearRoot = yearMode && !yearLocation
+  const yearOverview = yearMode && yearLocation?.view === 'albums'
+  const yearSongs = yearMode && yearLocation?.view === 'songs'
   const artistLocation = artistMode ? contributor.location : null
   const artistRoot = artistMode && !artistLocation
   const artistOverview = artistMode && artistLocation?.view === 'albums'
   const artistSongs = artistMode && artistLocation?.view === 'songs'
+  const currentYear = yearMode && yearLocation ? rootEntries.find(item => item.year === yearLocation.year) : undefined
   const currentArtist = artistMode ? rootEntries.find(item => item.key === artistLocation?.artistKey) : undefined
-  const albums = useMemo(() => artistMode && artistLocation ? artistAlbums(currentArtist) : rootEntries, [artistMode, artistLocation, currentArtist, rootEntries])
-  const location = artistMode ? artistLocation?.view === 'album' ? artistLocation.albumKey : null : library.albumLocation
+  const allAlbums = useMemo(() => yearMode ? albumEntries(library.allSongs ?? EMPTY) : [], [yearMode, library.allSongs])
+  const effectiveYears = useMemo(() => yearMode ? yearEffectiveYears(library.allSongs ?? EMPTY, allAlbums) : undefined, [yearMode, library.allSongs, allAlbums])
+  const albums = useMemo(() => yearMode && yearLocation ? yearAlbums(allAlbums, yearLocation.year) : artistMode && artistLocation ? artistAlbums(currentArtist) : rootEntries, [yearMode, yearLocation, allAlbums, artistMode, artistLocation, currentArtist, rootEntries])
+  const location = yearMode ? yearLocation?.view === 'album' ? yearLocation.albumKey : null : artistMode ? artistLocation?.view === 'album' ? artistLocation.albumKey : null : library.albumLocation
   const changeLocation = library.onAlbumLocationChange
   const changeArtistLocation = contributor.change
-  const detail = artistMode ? Boolean(artistLocation && artistLocation.view !== 'albums') : Boolean(location)
-  const albumDetail = detail && !artistSongs
-  const hasHero = detail || artistOverview
-  const route = artistMode ? artistRoute(artistLocation ?? null, categoryId) : detail ? `tracks:album:${location}` : 'category:album'
-  const categoryLabel = artistMode ? CONTRIBUTOR_LABELS[categoryId] : '专辑'
-  const listLabel = artistRoot ? categoryLabel : '专辑'
-  const category = artistMode ? mediaLibraryCategories.find(item => item.id === categoryId)! : CATEGORY
-  const identityPrefix = artistRoot ? categoryId : artistMode ? `${categoryId}-album:${currentArtist?.key}` : 'album'
-  const heroPrefix = artistMode && artistLocation?.view !== 'album' ? categoryId : identityPrefix
-  const heroIdentity = artistMode && artistLocation?.view !== 'album' ? currentArtist?.key : location
+  const changeYearLocation = library.onYearLocationChange
+  const detail = yearMode ? Boolean(yearLocation && yearLocation.view !== 'albums') : artistMode ? Boolean(artistLocation && artistLocation.view !== 'albums') : Boolean(location)
+  const albumDetail = detail && !artistSongs && !yearSongs
+  const hasHero = detail || artistOverview || yearOverview
+  const route = yearMode ? yearRoute(yearLocation ?? null) : artistMode ? artistRoute(artistLocation ?? null, categoryId as ContributorCategoryId) : detail ? `tracks:album:${location}` : 'category:album'
+  const categoryLabel = yearMode ? '年份' : artistMode ? CONTRIBUTOR_LABELS[categoryId as ContributorCategoryId] : '专辑'
+  const listLabel = yearRoot ? '年份' : artistRoot ? categoryLabel : '专辑'
+  const category = yearMode ? { ...mediaLibraryCategories.find(item => item.id === 'year')!, overviewIcon: yearIcon } : artistMode ? mediaLibraryCategories.find(item => item.id === categoryId)! : CATEGORY
+  const identityPrefix = yearRoot ? 'year' : yearMode ? `year-album:${yearLocation?.year ?? 'unknown'}` : artistRoot ? categoryId : artistMode ? `${categoryId}-album:${currentArtist?.key}` : 'album'
+  const heroPrefix = yearMode && yearLocation?.view !== 'album' ? 'year' : artistMode && artistLocation?.view !== 'album' ? categoryId : identityPrefix
+  const heroIdentity = yearMode && yearLocation?.view !== 'album' ? currentYear?.key : artistMode && artistLocation?.view !== 'album' ? currentArtist?.key : location
+  const sortScope: YearSortScope = yearRoot ? 'root' : yearOverview ? 'albums' : yearSongs ? 'songs' : 'album-tracks'
+  const [sort, setSort] = useState(() => readYearSort(sortScope))
+  const [sortOpen, setSortOpen] = useState(false)
   const appearance = useAppearanceMotion()
   const icons = useSystemIcons()
   const chrome = useContext(LibraryChromeTransitionContext)
@@ -207,12 +225,13 @@ function AlbumScene({ albums: rootEntries, categoryId = 'album', playlist, allSo
   const [selectMode, setSelectMode] = useState(false)
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
   const [departureCover, setDepartureCover] = useState<string>()
-  const loading = library.allSongsMetadataStatus === 'loading' || artistMode && Boolean(library.isFolderRestorePending || library.isFolderRescanPending || library.isImportPending)
-  const album = artistMode && artistLocation?.view !== 'album' ? currentArtist : albums.find(item => item.key === location)
-  const visibleAlbums = useMemo(() => loading ? [] : albums.filter(item => `${item.name} ${item.artist}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())), [albums, query, loading])
+  const loading = library.allSongsMetadataStatus === 'loading' || (artistMode || yearMode) && Boolean(library.isFolderRestorePending || library.isFolderRescanPending || library.isImportPending)
+  const album = yearMode && yearLocation?.view !== 'album' ? currentYear : artistMode && artistLocation?.view !== 'album' ? currentArtist : albums.find(item => item.key === location)
+  const visibleAlbums = useMemo(() => { const matches = loading ? [] : albums.filter(item => `${item.name} ${item.artist}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())); return yearMode ? yearRoot ? sortYearEntries(matches, sort) : sortYearAlbums(matches, sort) : matches }, [albums, query, loading, yearMode, yearRoot, sort])
   const indexNames = useMemo(() => visibleAlbums.map(item => item.name), [visibleAlbums])
   const songs = album?.songs ?? EMPTY
-  const visibleSongs = useMemo(() => songs.filter(item => `${item.track.title} ${item.track.artist} ${item.track.album}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())), [songs, query])
+  const visibleSongs = useMemo(() => { const matches = songs.filter(item => `${item.track.title} ${item.track.artist} ${item.track.album}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())); return yearMode ? sortYearSongs(matches, sort, effectiveYears) : matches }, [songs, query, yearMode, sort, effectiveYears])
+  const songIndexNames = useMemo(() => visibleSongs.map(item => item.track.title), [visibleSongs])
   const candidates = useMemo(() => uniqueArtistSongs(detail ? visibleSongs.filter(item => !selectMode || selected.has(item.key)) : visibleAlbums.filter(item => !selectMode || selected.has(item.key)).flatMap(item => item.songs)).filter(item => item.available), [detail, visibleSongs, visibleAlbums, selectMode, selected])
   const showSearch = searchOpen || searchRequestId > dismissedRequest
   const globalSearch = useLibrarySearch()
@@ -221,7 +240,7 @@ function AlbumScene({ albums: rootEntries, categoryId = 'album', playlist, allSo
   const { atomicOverview, navigationMotion } = managementChrome
   const { offscreenEntry, sharedProjection, projectionKey, entryControls } = useCollectionEntryProjection(present, chrome.offscreenReturn)
   const { layout, announcement } = useCollectionLayout({ panelRef, gridRef, layouts: PLAYLIST_SONG_LAYOUTS,
-    storageKey: artistMode ? `spmusic.${categoryId}-${artistRoot ? 'root' : artistOverview ? 'albums' : 'tracks'}.layout-level.v1` : detail ? 'spmusic.album-tracks.layout-level.v1' : 'spmusic.albums.layout-level.v1', defaultLevel: detail ? detailLevel : rootLevel,
+    storageKey: yearMode ? `spmusic.year-${sortScope}.layout-level.v1` : artistMode ? `spmusic.${categoryId}-${artistRoot ? 'root' : artistOverview ? 'albums' : 'tracks'}.layout-level.v1` : detail ? 'spmusic.album-tracks.layout-level.v1' : 'spmusic.albums.layout-level.v1', defaultLevel: yearRoot ? () => 5 : detail ? detailLevel : rootLevel,
     selectors: SELECTORS, gestureArea: detail ? 'grid' : 'panel', announce: next => `${categoryLabel}视图已切换为${next.label}` })
   const folderLayout = FOLDER_CARD_LAYOUTS[layout.level]
   const cardGridStyle = artistRoot && layout.level === 0 ? { ...folderLayout.style, '--folder-card-width': '310px' } : folderLayout.style
@@ -244,6 +263,18 @@ function AlbumScene({ albums: rootEntries, categoryId = 'album', playlist, allSo
     controllerOffsetY: controllerMotion.offsetY, controllerHidden: controllerMotion.hidden })
   const songWindow = useAllSongsRenderWindow(visibleSongs.length, layout, panelRef, songsRef, spaceRef, loading)
   const renderedSongs = useMemo(() => visibleSongs.slice(songWindow.first, songWindow.end), [visibleSongs, songWindow.first, songWindow.end])
+  const jumpToSongIndex = (key: string, index: number | undefined) => {
+    const panel = panelRef.current
+    if (!panel) return
+    if (key === 'top') { panel.scrollTop = 0; return }
+    if (index === undefined) return
+    if (songWindow.enabled && spaceRef.current) {
+      panel.scrollTop += spaceRef.current.getBoundingClientRect().top - panel.getBoundingClientRect().top + Math.floor(index / layout.columns) * songWindow.stride
+      return
+    }
+    const row = songsRef.current?.children.item(index)
+    if (row) panel.scrollTop += row.getBoundingClientRect().top - panel.getBoundingClientRect().top - 8
+  }
   const heroCover = hasHero ? album?.coverSong : undefined
   const heroCoverItem = useMemo(() => hasHero && album ? collectionCover(album, heroPrefix) : undefined, [hasHero, album, heroPrefix])
   const artistCoverItem = useMemo(() => currentArtist ? collectionCover(currentArtist, categoryId) : undefined, [currentArtist, categoryId])
@@ -258,11 +289,14 @@ function AlbumScene({ albums: rootEntries, categoryId = 'album', playlist, allSo
   const { sectionControls } = useCollectionDetailPresence(chrome.offscreenReturn, returnTransition, undefined, hasHero)
   useEffect(() => {
     if (!present || loading || library.isFolderRestorePending || library.isFolderRescanPending || library.isImportPending) return
-    if (artistMode && artistLocation) {
+    if (yearMode && yearLocation) {
+      if (!currentYear) changeYearLocation?.(null)
+      else if (yearLocation.view === 'album' && !album) changeYearLocation?.({ year: yearLocation.year, view: 'albums' })
+    } else if (artistMode && artistLocation) {
       if (!currentArtist) changeArtistLocation?.(null)
       else if (artistLocation.view === 'album' && !album) changeArtistLocation?.({ artistKey: artistLocation.artistKey, view: 'albums' })
     } else if (location && !album) changeLocation?.(null)
-  }, [present, location, loading, library.isFolderRestorePending, library.isFolderRescanPending, library.isImportPending, album, changeLocation, artistMode, artistLocation, currentArtist, changeArtistLocation])
+  }, [present, location, loading, library.isFolderRestorePending, library.isFolderRescanPending, library.isImportPending, album, changeLocation, artistMode, artistLocation, currentArtist, changeArtistLocation, yearMode, yearLocation, currentYear, changeYearLocation])
   useLayoutEffect(() => { if (panelRef.current) panelRef.current.scrollTop = positions.current.get(route) ?? 0 }, [route, positions])
   useCollectionHeroVisibility({ panelRef, artworkRef: hasHero ? artworkRef : managementChrome.toolbarRef,
     actionsRef: hasHero ? actionsRef : managementChrome.toolbarRef, compactActionsRef: compactRef, present,
@@ -276,9 +310,9 @@ function AlbumScene({ albums: rootEntries, categoryId = 'album', playlist, allSo
   }, [renderedSongs])
   const rebase = controllerMotion.rebase
   useLayoutEffect(() => { if (showSearch || !hasHero && selectMode) rebase({ reveal: true }) }, [showSearch, hasHero, selectMode, rebase])
-  const goUp = () => artistMode ? changeArtistLocation?.(artistLocation && artistLocation.view !== 'albums' ? { artistKey: artistLocation.artistKey, view: 'albums' } : null) : detail ? library.onAlbumLocationChange?.(null) : library.onOpenOverview?.()
-  const goBack = () => artistRoot ? library.onOpenOverview?.() : goUp()
-  const openEntry = (entry: AlbumEntry) => artistMode ? changeArtistLocation?.(artistRoot ? { artistKey: entry.key, view: 'albums' } : { artistKey: artistLocation!.artistKey, view: 'album', albumKey: entry.key }) : library.onAlbumLocationChange?.(entry.key)
+  const goUp = () => yearMode ? changeYearLocation?.(yearLocation && yearLocation.view !== 'albums' ? { year: yearLocation.year, view: 'albums' } : null) : artistMode ? changeArtistLocation?.(artistLocation && artistLocation.view !== 'albums' ? { artistKey: artistLocation.artistKey, view: 'albums' } : null) : detail ? library.onAlbumLocationChange?.(null) : library.onOpenOverview?.()
+  const goBack = () => yearRoot || artistRoot ? library.onOpenOverview?.() : goUp()
+  const openEntry = (entry: AlbumEntry) => yearMode ? changeYearLocation?.(yearRoot ? { year: entry.year, view: 'albums' } : { year: yearLocation!.year, view: 'album', albumKey: entry.key }) : artistMode ? changeArtistLocation?.(artistRoot ? { artistKey: entry.key, view: 'albums' } : { artistKey: artistLocation!.artistKey, view: 'album', albumKey: entry.key }) : library.onAlbumLocationChange?.(entry.key)
   const toggleSelect = (key: string) => setSelected(previous => { const next = new Set(previous); if (next.has(key)) next.delete(key); else next.add(key); return next })
   const play = (key?: string) => {
     const entries = key ? visibleSongs.filter(item => item.available) : candidates
@@ -286,19 +320,20 @@ function AlbumScene({ albums: rootEntries, categoryId = 'album', playlist, allSo
     if (target && !loading && !playlist.isOpenAudioDisabled) library.onPlaySong?.(target.scope, target.trackId, entries.map(({ scope, trackId }) => ({ scope, trackId })))
   }
   const toggleSelection = () => { setSelectMode(!selectMode); setSelected(new Set()) }
-  const more = <LibraryRootMenu categoryId={categoryId} library={library} />
+  const more = <LibraryRootMenu categoryId={categoryId} library={library} onSort={yearMode ? () => setSortOpen(true) : undefined} />
   const menuCategoryId = categoryId
   const menuPinned = library.pinnedCategoryIds?.includes(menuCategoryId) ?? false
   const menuBusy = Boolean(library.isImportPending || library.isFolderRescanPending)
   const artistMenuActions: readonly PlaylistHeroMoreAction[] = [
+    ...(yearMode ? [{ label: '重新排序', icon: sortIcon, onSelect: () => setSortOpen(true) }] : []),
     { label: '选择文件夹', icon: selectFoldersIcon, disabled: menuBusy || !library.onSelectFolders, onSelect: library.onSelectFolders },
     { label: '重新扫描', icon: rescanIcon, disabled: menuBusy || !library.onRescanFolders, onSelect: library.onRescanFolders },
     { label: '封面', icon: coverIcon, description: `${categoryLabel}封面设置尚未接入，当前封面继续使用本地歌曲封面。` },
     { label: menuPinned ? '取消侧栏置顶' : '在侧栏置顶', icon: pinIcon, disabled: !library.onToggleCategoryPin, pressed: menuPinned, onSelect: () => library.onToggleCategoryPin?.(menuCategoryId) },
     { label: '列表选项', icon: listOptionsIcon, flip: true, description: '此分类的列表选项尚未接入，后续可在这里调整列表显示。' },
   ]
-  const menuSongs = artistMode ? currentArtist?.songs ?? EMPTY : songs
-  const heroMore = hasHero ? <PlaylistHeroMoreMenu contextLabel={categoryLabel} title={artistMode ? currentArtist?.name ?? `未知${categoryLabel}` : album?.name ?? '未知专辑'}
+  const menuSongs = yearMode ? yearOverview ? uniqueArtistSongs(albums.flatMap(item => item.songs)) : songs : artistMode ? currentArtist?.songs ?? EMPTY : songs
+  const heroMore = hasHero ? <PlaylistHeroMoreMenu contextLabel={categoryLabel} title={yearMode ? albumDetail ? album?.name ?? '未知专辑' : currentYear?.name ?? '未知年份' : artistMode ? currentArtist?.name ?? `未知${categoryLabel}` : album?.name ?? '未知专辑'}
     count={menuSongs.length} totalClock={clock(menuSongs) ?? '读取中'} actions={artistMenuActions}
     artwork={<ArtistMenuArtwork item={artistMode ? artistCoverItem : heroCoverItem} store={store} />} /> : more
   const renderActions = (compact = false) => <motion.div ref={compact ? compactRef : actionsRef}
@@ -318,7 +353,7 @@ function AlbumScene({ albums: rootEntries, categoryId = 'album', playlist, allSo
   </motion.div>
   return <>
     <motion.section ref={panelRef} className="playlist-management-content folder-hierarchy-content album-library-content" aria-label={categoryLabel}
-      data-album-key={location ?? ''} data-album-detail={albumDetail || undefined} data-navigation-key={route} data-has-hero={hasHero || undefined} data-artist-root={artistRoot || undefined} data-artist-view={artistLocation?.view} data-select-mode={selectMode || undefined}
+      data-year-view={yearMode ? yearRoot ? 'root' : yearLocation?.view : undefined} data-album-key={location ?? ''} data-album-detail={albumDetail || undefined} data-navigation-key={route} data-has-hero={hasHero || undefined} data-artist-root={artistRoot || undefined} data-artist-view={artistLocation?.view} data-select-mode={selectMode || undefined}
       inert={!present || undefined} aria-hidden={!present || undefined} onScroll={event => { if (present) positions.current.set(route, event.currentTarget.scrollTop) }}
       variants={offscreenEntry && present ? appearance.libraryNavigation.detailReturn.incoming : chrome.offscreenReturn ? appearance.libraryNavigation.detailReturn.outgoing : appearance.variants.backdrop}
       transition={offscreenEntry ? appearance.libraryNavigation.transition : !hasHero && managementChrome.atomicOverview ? { duration: 0 } : returnTransition}
@@ -328,9 +363,9 @@ function AlbumScene({ albums: rootEntries, categoryId = 'album', playlist, allSo
         artworkLayoutId={!sharedProjection || heroOffscreen ? undefined : `${heroPrefix}-cover:${heroIdentity}`}
         titleLayoutId={!sharedProjection || heroOffscreen ? undefined : `${heroPrefix}-name:${heroIdentity}`} transition={returnTransition}
         songKey={heroCover?.key} coverKey={heroCoverItem?.key} artwork={<AlbumCover song={heroCoverItem} store={store} hero />}
-        category={<Button className="playlist-hero-category" size="sm" variant="ghost" aria-label={`返回${artistOverview ? categoryLabel : artistMode ? currentArtist?.name ?? categoryLabel : '专辑'}`} onClick={goBack}><CollectionReturnIcon data-icon="inline-start" aria-hidden="true" />{artistOverview ? categoryLabel : artistMode ? currentArtist?.name ?? categoryLabel : '专辑'}</Button>}
-        title={artistSongs ? `所有${categoryLabel}歌曲` : album?.name ?? categoryLabel} extraMetadata={album?.artist ? <p className="playlist-hero-meta collection-hero-parent-meta">{album.artist}</p> : undefined}
-        metadata={artistSongs ? <p className="playlist-hero-meta"><span className="artist-songs-meta-icon" style={{ maskImage: `url("${artistSongsMusicNote}")` }} aria-hidden="true" />{songs.length} 首歌曲</p>
+        category={<Button className="playlist-hero-category" size="sm" variant="ghost" aria-label={`返回${yearOverview ? '年份' : yearMode ? currentYear?.name ?? '年份' : artistOverview ? categoryLabel : artistMode ? currentArtist?.name ?? categoryLabel : '专辑'}`} onClick={goBack}><CollectionReturnIcon data-icon="inline-start" aria-hidden="true" />{yearOverview ? '年份' : yearMode ? currentYear?.name ?? '年份' : artistOverview ? categoryLabel : artistMode ? currentArtist?.name ?? categoryLabel : '专辑'}</Button>}
+        title={yearSongs ? '所有年份歌曲' : artistSongs ? `所有${categoryLabel}歌曲` : album?.name ?? categoryLabel} extraMetadata={album?.artist ? <p className="playlist-hero-meta collection-hero-parent-meta">{album.artist}</p> : undefined}
+        metadata={yearSongs ? <p className="playlist-hero-meta">{currentYear?.name} · {songs.length} 首歌曲{clock(songs) ? ` | ${clock(songs)}` : ''}</p> : artistSongs ? <p className="playlist-hero-meta"><span className="artist-songs-meta-icon" style={{ maskImage: `url("${artistSongsMusicNote}")` }} aria-hidden="true" />{songs.length} 首歌曲</p>
           : <p className="playlist-hero-meta">{albumDetail ? <span className="album-detail-meta-icon" style={{ maskImage: `url("${artistSongsMusicNote}")` }} aria-hidden="true" /> : <icons.music aria-hidden="true" />}{songs.length}{clock(songs) ? ` | ${clock(songs)}` : ''}{albumDetail && album?.year != null ? ` | ${album.year}` : ''}</p>} actions={renderActions()} /> : null}
       <div ref={gridRef} data-layout-level={layout.level} data-layout-flow={layout.flow} data-layout-artwork={layout.showArtwork} style={layout.style}>
         {!hasHero ? <CollectionManagementHeader category={category} chrome={managementChrome} sharedProjection={sharedProjection} onOverview={goBack} returnTransition={returnTransition} more={more}
@@ -342,6 +377,7 @@ function AlbumScene({ albums: rootEntries, categoryId = 'album', playlist, allSo
         {showSearch ? <motion.div className="playlist-management-search" variants={navigationMotion.chrome} initial={atomicOverview ? 'initial' : false} animate="animate" exit={atomicOverview ? 'exit' : 'animate'} transition={navigationMotion.transition}><Input ref={searchRef} type="search" aria-label={`搜索${categoryLabel}和歌曲`} placeholder={detail ? '搜索集合中的歌曲' : artistRoot ? `搜索${categoryLabel}` : '搜索专辑或专辑作者'} value={query} onChange={event => setQuery(event.target.value)} onKeyDown={event => { if (event.key === 'Escape') { setQuery(''); setSearchOpen(false); setDismissedRequest(searchRequestId) } }} /></motion.div> : null}
         <span className="sr-only" role="status">{announcement}</span>
         {detail && selectMode ? <p className="folder-selection-status" role="status">已选择 {selected.size} 项</p> : null}
+        {yearOverview ? <Button variant="ghost" className="artist-all-songs year-all-songs" disabled={loading || selectMode} onClick={() => changeYearLocation?.({ year: yearLocation!.year, view: 'songs' })}><span className="artist-all-songs-cover" aria-hidden="true"><AlbumCover song={heroCoverItem} store={store} /></span><span className="artist-all-songs-copy"><span className="artist-all-songs-title">所有年份歌曲</span><span className="artist-song-count">{currentYear?.songs.length ?? 0} 首歌曲</span></span></Button> : null}
         {artistOverview ? <Button variant="ghost" className="artist-all-songs" data-song-key={heroCover?.key} data-cover-key={heroCoverItem?.key} disabled={loading || selectMode}
           onClick={() => changeArtistLocation?.({ artistKey: artistLocation!.artistKey, view: 'songs' })}>
           <span className="artist-all-songs-cover" aria-hidden="true"><AlbumCover song={heroCoverItem} store={store} artist /></span>
@@ -360,7 +396,7 @@ function AlbumScene({ albums: rootEntries, categoryId = 'album', playlist, allSo
           }} className="folder-directory-list album-list" aria-label={`${listLabel}列表`} data-folder-flow={folderLayout.flow} data-folder-level={layout.level} style={{ ...cardGridStyle, ...albumWindow.gridStyle }}>
             {renderedAlbums.map(item => <motion.div key={item.key} style={{ minWidth: 0, transformOrigin: 'left top' }} variants={navigationMotion.cover}
               initial={atomicOverview ? 'initial' : false} animate="animate" exit={atomicOverview ? 'exit' : 'animate'} transition={navigationMotion.transition}><AlbumCard album={item} store={store} level={layout.level} sharedProjection={sharedProjection} projectionKey={projectionKey} transition={returnTransition} selected={selected.has(item.key)} selectMode={selectMode}
-              artist={artistRoot} categoryLabel={categoryLabel} identityPrefix={identityPrefix} onActivate={() => { if (selectMode) toggleSelect(item.key); else { setDepartureCover(entryCovers.get(item.key)?.key); openEntry(item) } }} /></motion.div>)}
+              year={yearRoot} artist={artistRoot} categoryLabel={categoryLabel} identityPrefix={identityPrefix} onActivate={() => { if (selectMode) toggleSelect(item.key); else { setDepartureCover(entryCovers.get(item.key)?.key); openEntry(item) } }} /></motion.div>)}
           </div></div> : <div ref={spaceRef} style={songWindow.spaceStyle}>
             <div ref={songsRef} className="playlist-grid folder-songs album-songs" data-layout-level={layout.level} data-layout-flow={layout.flow} data-layout-columns={layout.columns} style={{ ...layout.style, ...songWindow.gridStyle }} onKeyDown={event => {
               if (!songWindow.enabled || event.key !== 'Tab') return
@@ -376,7 +412,36 @@ function AlbumScene({ albums: rootEntries, categoryId = 'album', playlist, allSo
         {!loading && (detail ? !visibleSongs.length : !visibleAlbums.length) ? <MotionEmpty className="playlist-management-empty" variants={navigationMotion.chrome} initial={atomicOverview ? 'initial' : false} animate="animate" exit={atomicOverview ? 'exit' : 'animate'} transition={navigationMotion.transition}><EmptyHeader><EmptyTitle>{query ? `没有匹配的${artistRoot ? categoryLabel : detail ? '歌曲' : '专辑'}` : detail ? '集合中没有歌曲' : `暂无${categoryLabel}`}</EmptyTitle><EmptyDescription>{query ? '尝试其他名称，或清空搜索。' : `选择音乐文件夹后，按歌曲的${categoryLabel}标签浏览。`}</EmptyDescription></EmptyHeader>{!detail && !query ? <Button onClick={library.onSelectFolders} disabled={library.isImportPending || library.isFolderRestorePending}>选择文件夹</Button> : null}</MotionEmpty> : null}
       </div>
     </motion.section>
-    {!detail && present ? <CollectionQuickIndex panelRef={panelRef} names={indexNames} label={listLabel} itemSelector=".album-card[data-album-key]" onJump={albumWindow.enabled ? (key, index) => { if (key === 'top') { if (panelRef.current) panelRef.current.scrollTop = 0 } else if (index !== undefined) scrollToAlbum(index) } : undefined} /> : null}
+    {!detail && !yearRoot && present ? <CollectionQuickIndex panelRef={panelRef} names={indexNames} label={listLabel} itemSelector=".album-card[data-album-key]" onJump={albumWindow.enabled ? (key, index) => { if (key === 'top') { if (panelRef.current) panelRef.current.scrollTop = 0 } else if (index !== undefined) scrollToAlbum(index) } : undefined} /> : null}
+    {yearSongs && present && !loading ? <CollectionQuickIndex panelRef={panelRef} names={songIndexNames} label="歌曲" onJump={jumpToSongIndex} /> : null}
+    {yearMode ? <YearSortDialog open={sortOpen} onOpenChange={setSortOpen} scope={sortScope} sort={sort} onChange={setSort} /> : null}
     {renderActions(true)}
   </>
+}
+
+function YearSortDialog({ open, onOpenChange, scope, sort, onChange }: {
+  open: boolean; onOpenChange: (open: boolean) => void; scope: YearSortScope; sort: YearSort; onChange: (sort: YearSort) => void
+}) {
+  const update = (next: YearSort) => { onChange(next); writeYearSort(scope, next) }
+  return <Dialog open={open} onOpenChange={onOpenChange}>
+    <DialogContent aria-describedby={undefined}>
+      <DialogHeader><DialogTitle>年份排序</DialogTitle></DialogHeader>
+      <FieldGroup>
+        <Field><FieldLabel>排序依据</FieldLabel>
+          <Select items={YEAR_SORT_FIELDS[scope]} value={sort.field} onValueChange={value => { if (value) update({ ...sort, field: value }) }}>
+            <SelectTrigger aria-label="排序依据"><SelectValue /></SelectTrigger>
+            <SelectContent><SelectGroup>{YEAR_SORT_FIELDS[scope].map(field => <SelectItem key={field.value} value={field.value}>{field.label}</SelectItem>)}</SelectGroup></SelectContent>
+          </Select>
+        </Field>
+        <Field><FieldLabel>排序方向</FieldLabel>
+          <Select items={[{ value: 'asc', label: '升序' }, { value: 'desc', label: '降序' }]} value={sort.direction}
+            onValueChange={value => { if (value === 'asc' || value === 'desc') update({ ...sort, direction: value }) }}>
+            <SelectTrigger aria-label="排序方向"><SelectValue /></SelectTrigger>
+            <SelectContent><SelectGroup><SelectItem value="asc">升序</SelectItem><SelectItem value="desc">降序</SelectItem></SelectGroup></SelectContent>
+          </Select>
+        </Field>
+      </FieldGroup>
+      <Button onClick={() => onOpenChange(false)}>完成</Button>
+    </DialogContent>
+  </Dialog>
 }

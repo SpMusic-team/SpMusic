@@ -1,4 +1,4 @@
-import { useContext, useId, type SyntheticEvent } from 'react'
+import { useContext, useId, useLayoutEffect, useRef, type SyntheticEvent } from 'react'
 import { motion, useIsPresent } from 'motion/react'
 import { LibraryChromeTransitionContext } from '@/features/player/hooks/useLibraryChromeTransition'
 import { Button } from '@/components/ui/button'
@@ -24,6 +24,27 @@ export function PlaylistLibrarySidebar({ playlistName, trackCount, totalClock, c
   const appearanceMotion = useAppearanceMotion()
   const chromeTransition = useContext(LibraryChromeTransitionContext)
   const isPresent = useIsPresent()
+  const categoriesRef = useRef<HTMLElement>(null)
+  const categoryScroll = chromeTransition.categoryScroll
+  const scrollMode = overlay ? 'overlay' : 'desktop'
+  const captureCategoryScroll = () => {
+    const nav = categoriesRef.current
+    if (categoryScroll && isPresent && nav && nav.clientHeight > 0) categoryScroll.write(scrollMode, nav.scrollTop)
+  }
+  useLayoutEffect(() => {
+    const nav = categoriesRef.current
+    if (!categoryScroll || !isPresent || !nav) return
+    let visible = nav.clientHeight > 0
+    const restore = () => { nav.scrollTop = categoryScroll.read(scrollMode) }
+    if (visible) restore()
+    const resize = new ResizeObserver(() => {
+      const nextVisible = nav.clientHeight > 0
+      if (nextVisible && !visible) restore()
+      visible = nextVisible
+    })
+    resize.observe(nav)
+    return () => resize.disconnect()
+  }, [categoryScroll, isPresent, scrollMode])
   const atomicOverview = !overlay && chromeTransition.overviewBoundary
   const stationaryHandoff = atomicOverview || !overlay && chromeTransition.handoff && !chromeTransition.playerVisible
   const headingId = useId()
@@ -47,7 +68,8 @@ export function PlaylistLibrarySidebar({ playlistName, trackCount, totalClock, c
         <img className="playlist-library-logo" src={logo} alt="" />
         <span>SPMusic</span>
       </Button>
-      <nav className="playlist-library-categories" aria-label="媒体库分类" tabIndex={0}>
+      <nav ref={categoriesRef} className="playlist-library-categories" aria-label="媒体库分类" tabIndex={0}
+        onScroll={captureCategoryScroll} onClickCapture={captureCategoryScroll}>
         {sidebarLibraryCategories(library?.pinnedCategoryIds ?? library?.foldersPinnedInSidebar ?? false).map((category) => {
           const current = library?.route?.view === 'category' ? library.route.categoryId === category.id : category.id === 'playlists'
           return (

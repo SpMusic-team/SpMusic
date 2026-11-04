@@ -1,4 +1,33 @@
 .album-library-content .album-list[data-folder-flow='tile'] { gap: 22px 28px; }
+/* Year overview follows the compact collection row in Figma 9190:8873. */
+.year-library [data-year-view='root'] .playlist-management-heading { min-height: 151px; padding: 16px 24px 19px; gap: 36px; }
+.year-library [data-year-view='root'] .playlist-management-heading h2 { font-size: calc(57px * var(--app-font-scale)); line-height: 64px; }
+.year-library [data-year-view='root'] .playlist-management-category { width: 84px; height: 84px; }
+.year-library [data-year-view='root'] .playlist-management-category .media-library-category-glyph { width: 48px !important; height: 48px !important; }
+.year-library [data-year-view='root'] .playlist-management-toolbar { min-height: 64px; padding: 0 25px; }
+.year-library [data-year-view='root'] .playlist-management-actions { gap: 8px; }
+.year-library [data-year-view='root'] .playlist-management-actions button { height: 52px; min-width: 82px; padding: 5px 20px; border-width: 1px; }
+.year-library [data-year-view='root'] .playlist-management-actions button img { width: 32px; height: 32px; }
+.year-library [data-year-view='root'] .playlist-management-selection-more .playlist-hero-more-button { width: 64px; height: 64px; border: 1px solid var(--player-blue); border-radius: var(--app-radius-pill); background: transparent; }
+.year-library [data-year-view='root'] .playlist-hero-more-button img { width: 48px; height: 48px; }
+.year-library [data-year-view='root'] .album-list { padding: 25px 10px; gap: 16px; }
+.year-card.album-card { --folder-card-radius: calc(var(--app-radius-lg) * 5 / 3); }
+.year-card[data-folder-variant='row-compact'] { height: 88px; padding: 12px 15px; gap: 24px; }
+.year-card[data-folder-variant='row-compact'] .folder-copy { gap: 12px; }
+.year-card[data-folder-variant='row-compact'] .folder-name { font-size: calc(24px * var(--app-font-scale)); line-height: 32px; }
+.year-card-meta { display: flex; align-items: center; gap: 8px; color: var(--player-inverse-primary); font-size: calc(14px * var(--app-font-scale)); line-height: 20px; font-weight: 500; white-space: nowrap; }
+.year-card-music { display: block; width: 16px; height: 16px; flex: 0 0 auto; background: currentColor; mask-repeat: no-repeat; mask-position: center; mask-size: contain; }
+.year-library [data-year-view='albums'], .year-library [data-year-view='songs'] { padding-inline: 0; }
+.year-library [data-year-view='albums'] > .playlist-hero, .year-library [data-year-view='songs'] > .playlist-hero { width: calc(100% - 50px); max-width: none; height: 320px; padding: 10px; margin-inline: 25px; }
+.year-library [data-year-view='albums'] .playlist-hero-copy, .year-library [data-year-view='songs'] .playlist-hero-copy { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; }
+.year-library [data-year-view='albums'] .playlist-hero-meta { align-self: flex-start; }
+.year-library [data-year-view='songs'] .playlist-hero-title { min-height: 0; padding: 2px 15px; font-weight: 500; }
+.year-library [data-year-view='songs'] .playlist-hero-meta { min-height: 0; align-self: flex-start; padding: 2px 15px; font-size: calc(16px * var(--app-font-scale)); line-height: 24px; }
+@media (width < 440px) {
+  .year-library [data-year-view='root'] .playlist-management-toolbar { padding-inline: 16px; gap: 8px; }
+  .year-library [data-year-view='root'] .playlist-management-actions button { min-width: 0; padding-inline: 12px; }
+  .year-library [data-year-view='root'] .playlist-management-heading { gap: 24px; }
+}
 .album-card { --folder-card-radius: calc(var(--app-radius-lg) * 5 / 6); }
 .album-card .folder-copy { font-weight: 400; }
 .album-cover-placeholder { display: block; width: 48px; height: 48px; background: var(--player-muted); mask-repeat: no-repeat; mask-position: center; mask-size: contain; }
@@ -9,14 +38,16 @@
 .artist-card[data-folder-variant='tile'] .folder-copy { width: 100%; text-align: center; }
 .artist-card[data-folder-variant='tile'][data-folder-size='large'] .folder-cover { aspect-ratio: 1; }
 .artist-library [data-artist-root] .album-list[data-folder-level='0'] { gap: 22px 8px; padding-inline: 0; }
-.artist-all-songs { display: flex; width: 100%; height: auto; padding: 15px 40px; justify-content: start; align-items: center; gap: 15px; border: 0; border-radius: var(--app-radius-lg); color: var(--player-ink); font-weight: 400; text-align: left; }
+.artist-all-songs { display: flex; width: calc(100% - 2 * var(--all-songs-row-inset, 0px)); height: auto; margin-inline: var(--all-songs-row-inset, 0px); padding: 15px var(--all-songs-content-inset, 15px); justify-content: start; align-items: center; gap: 15px; border: 0; border-radius: calc(var(--app-radius-lg) * 5 / 6); color: var(--player-ink); font-weight: 400; text-align: left; }
+.album-library-content .artist-all-songs:focus-visible { outline-offset: -3px; }
 .artist-all-songs-cover { position: relative; display: grid; width: 125px; height: 125px; flex: 0 0 auto; place-items: center; overflow: hidden; border-radius: var(--app-radius-pill); background: var(--cover-placeholder-surface); box-shadow: var(--folder-shadow); }
 .artist-all-songs-copy { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
 .artist-all-songs-title { overflow: hidden; text-overflow: ellipsis; font-size: calc(28px * var(--app-font-scale)); line-height: 36px; white-space: nowrap; }
 .artist-song-count { display: flex; align-items: center; gap: 16px; color: var(--player-inverse-primary); font-size: calc(24px * var(--app-font-scale)); line-height: 32px; white-space: nowrap; }
 .artist-all-songs-music { display: block; width: 24px; height: 24px; flex: 0 0 auto; background: currentColor; mask-repeat: no-repeat; mask-position: center; mask-size: contain; }
 .artist-library .album-library-content[data-artist-view='albums'] { padding-inline: 0; }
-.artist-library [data-artist-view='albums'] > [data-layout-level] { margin-top: 0; }
+.artist-library [data-artist-view='albums'] > [data-layout-flow='tile'] { --all-songs-row-inset: 25px; }
+.artist-library [data-artist-view='albums'] > [data-layout-level='2'] { --all-songs-content-inset: 5px; }
 .artist-library [data-artist-view='albums'] > .playlist-hero { width: calc(100% - 50px); max-width: none; height: 320px; padding: 10px; margin-inline: 25px; }
 .artist-library [data-artist-view='albums'] .playlist-hero-copy { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; }
 .artist-library [data-artist-view='albums'] .playlist-hero-meta { align-self: flex-start; }
@@ -51,4 +82,25 @@
 @media (width <= 650px) {
   /* Match folder content insets so two full-size cards fit the narrow window. */
   .album-library-content:not([data-artist-root]) .album-list[data-folder-flow='tile'] { padding-inline: 16px; column-gap: 28px; }
+  .artist-library [data-artist-view='albums'] > [data-layout-flow='tile'] { --all-songs-row-inset: 16px; }
 }
+/* Include each card's own inset when aligning visible content with the hero. */
+.year-library .album-library-content[data-year-view='albums'] .album-list { padding-inline: 10px; justify-content: start; }
+.year-library .album-library-content[data-year-view='albums'] .album-list[data-folder-level='2'] { padding-inline: 20px; }
+.year-library [data-year-view='albums'] > [data-layout-level] { --all-songs-row-inset: 10px; }
+.year-library [data-year-view='albums'] > [data-layout-level='2'] { --all-songs-row-inset: 20px; --all-songs-content-inset: 5px; }
+.year-library [data-year-view='albums'] .year-all-songs .artist-all-songs-cover { border-radius: var(--app-radius-lg); }
+.year-library .album-library-content[data-year-view='songs'] .album-songs.playlist-grid { padding-inline: 10px; }
+.year-library .album-library-content[data-year-view='songs'] .album-songs[data-layout-flow='text'] { padding-inline: 13px; }
+.year-library .album-library-content[data-year-view='songs'] .album-songs[data-layout-flow='tile'] { padding-inline: 15px; }
+.year-library .album-library-content[data-year-view='songs'] .album-songs[data-layout-level='1'] { padding-inline: 20px; }
+.year-library [data-year-view='songs'] .album-songs[data-layout-flow='tile'] .playlist-card-cover,
+.year-library [data-year-view='songs'] .album-songs[data-layout-flow='tile'] .playlist-card-copy { align-self: flex-start; }
+@media (width > 1024px) {
+  .year-library .album-library-content[data-year-view='songs'] .album-songs[data-layout-level='0'] { padding-inline: 10px; }
+}
+/* All artwork row sizes align the clickable frame, rather than the artwork, to the hero. */
+.year-library .album-library-content[data-year-view='albums'] .album-list[data-folder-flow='row'],
+.artist-library .album-library-content[data-artist-view='albums'] .album-list[data-folder-flow='row'] { padding-inline: 25px; }
+.year-library [data-year-view='albums'] > [data-layout-flow='row'],
+.artist-library [data-artist-view='albums'] > [data-layout-flow='row'] { --all-songs-row-inset: 25px; }

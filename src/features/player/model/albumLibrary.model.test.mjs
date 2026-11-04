@@ -38,24 +38,28 @@ test('same album name by distinct album artists stays separate; multi-disc same 
   assert.equal(box.songs[0], input[2], 'original playable identity remains intact')
 })
 
-test('missing album artist separates complete credits and merges matching credits across directories',()=>{
+test('missing album artist joins directory compilations and separates matching credits in other directories',()=>{
  const a=song('a','/one/a','Mixed',null,' Singer A '),b=song('b','/two/b','Mixed',null,'Singer A'),duet=song('duet','/one/duet','Mixed',null,'Singer A/Singer B')
  const entries=albumEntries([a,b,duet]);assert.equal(entries.length,2)
- assert.deepEqual(entries.find(e=>e.artist==='Singer A').songs,[a,b]);assert.deepEqual(entries.find(e=>e.artist==='Singer A/Singer B').songs,[duet])
+ assert.deepEqual(entries.find(e=>e.songs.includes(a)).songs,[a,duet]);assert.deepEqual(entries.find(e=>e.songs.includes(b)).songs,[b])
+ assert.equal(entries.find(e=>e.songs.includes(a)).artist,'Singer A/Singer B')
 })
 
-test('Hypersynthetic keeps solo and cooperative tracks in their respective albums',()=>{
+test('Hypersynthetic joins solo and cooperative tracks only within their directory',()=>{
  const a=song('ether','E:/Music/Hypersynthetic/Ether Strike.flac','Hypersynthetic',null,'Akira Complex'),b=song('title','E:/Other/Hypersynthetic.flac','Hypersynthetic',null,'Akira Complex'),duet=song('remix','E:/Music/Hypersynthetic/remix.flac','Hypersynthetic',null,'Akira Complex/kors k')
  const entries=albumEntries([a,b,duet]);assert.equal(entries.length,2)
- assert.deepEqual(entries.find(e=>e.artist==='Akira Complex').songs,[a,b]);assert.deepEqual(entries.find(e=>e.artist==='Akira Complex/kors k').songs,[duet])
+ assert.deepEqual(entries.find(e=>e.songs.includes(a)).songs,[a,duet]);assert.deepEqual(entries.find(e=>e.songs.includes(b)).songs,[b])
+ assert.equal(entries.find(e=>e.songs.includes(a)).artist,'Akira Complex/kors k')
 })
 
-test('credit normalization preserves slash exceptions and explicit/fallback equivalence',()=>{
- const a=song('a','/one/a','Same',' A / A / B ','X'),b=song('b','/two/b','Same',null,'B/A')
+test('explicit credit normalization preserves slash exceptions and keeps directory identity distinct',()=>{
+ const a=song('a','/one/a','Same',' A / A / B ','X'),b=song('b','/two/b','Same','B/A','Y')
  const entries=albumEntries([a,b]);assert.equal(entries.length,1);assert.equal(entries[0].artist,'A/B');assert.deepEqual(entries[0].songs,[a,b]);assert.equal(albumKey(a),albumKey(b))
  assert.equal(albumEntries([song('ac','/one/ac','Rock',null,'AC/DC')])[0].artist,'AC/DC')
  assert.equal(albumEntries([song('plus','/one/plus','Rock',null,'+/-')])[0].artist,'+/-')
- assert.notEqual(albumKey(song('unknown','/x/a','Same',null,'本地音频')),albumKey(song('literal','/x/b','Same',null,'未知艺术家')))
+ const unknown=song('unknown','/x/a','Same',null,'本地音频'),literal=song('literal','/x/b','Same',null,'未知艺术家')
+ assert.equal(albumKey(unknown),albumKey(literal));assert.equal(albumEntries([unknown])[0].artist,'未知艺术家')
+ assert.notEqual(albumKey(a),albumKey(song('fallback','/one/c','Same',null,'A/B')))
 })
 
 test('pending is excluded; completed absent album stays directory-specific and differs from literal fallback text', () => {
@@ -104,8 +108,18 @@ test('summary mapper keeps raw album tags distinct from display fallback and equ
   assert.equal(pendingPlaylistTrackRow(descriptor).libraryAlbumName, undefined)
 })
 
-test('global named albums separate solo credits and merge matching cross-directory fallback and explicit credits',()=>{
+test('global named albums join directory members without borrowing explicit or cross-directory identity',()=>{
  const a=song('a','/one/a.flac','Same',null,'A'),b=song('b','/two/b.mp3','Same','A','A'),duet=song('duet','/one/duet.flac','Same',null,'A/B')
  const groups=albumEntries([a,b,duet])
- assert.equal(groups.length,2);assert.deepEqual(groups.find(e=>e.artist==='A').songs,[a,b]);assert.deepEqual(groups.find(e=>e.artist==='A/B').songs,[duet])
+ assert.equal(groups.length,2);assert.deepEqual(groups.find(e=>e.songs.includes(a)).songs,[a,duet]);assert.deepEqual(groups.find(e=>e.songs.includes(b)).songs,[b])
+})
+
+test('directory identities normalize path separators and keep credit boundaries without transitive bridges',()=>{
+ const a=song('a','D:\\Music\\Box\\a.flac',' Box ',null,'A'),b=song('b','D:/Music/Box/b.mp3','Box','   ','B')
+ const other=song('other','D:/Music/Other/c.flac','Box',null,'B'),explicit=song('explicit','D:/Music/Box/d.flac','Box','A','A')
+ const groups=albumEntries([a,b,other,explicit])
+ assert.equal(groups.length,3);assert.equal(albumKey(a),albumKey(b));assert.notEqual(albumKey(a),albumKey(other));assert.notEqual(albumKey(a),albumKey(explicit))
+ const compilation=groups.find(e=>e.songs.includes(a));assert.deepEqual(compilation.songs,[a,b]);assert.equal(compilation.artist,'A/B')
+ assert.equal(albumEntries([b,a]).find(e=>e.songs.includes(a)).artist,compilation.artist)
+ assert.notEqual(albumKey(a),albumKey(song('case','d:/music/box/a.flac','Box',null,'A')))
 })

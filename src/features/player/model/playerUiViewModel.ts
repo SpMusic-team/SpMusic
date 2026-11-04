@@ -215,6 +215,8 @@ export type PlaylistAddCallbacks = {
 }
 
 export type PlaylistLibraryViewModel = PlaylistAddCallbacks & {
+  yearLocation?: import('./yearLibrary').YearLocation
+  onYearLocationChange?: (location: import('./yearLibrary').YearLocation) => void
   artistLocation?: import('./artistLibrary').ArtistLocation
   onArtistLocationChange?: (location: import('./artistLibrary').ArtistLocation) => void
   albumArtistLocation?: import('./artistLibrary').ArtistLocation

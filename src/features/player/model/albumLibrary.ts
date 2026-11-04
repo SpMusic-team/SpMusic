@@ -32,8 +32,9 @@ function creditNames(song: AllSongsItem): string[] {
 export function albumKey(song: AllSongsItem): string | null {
   const name = song.track.libraryAlbumName
   if (name === undefined) return null
-  const names = creditNames(song)
-  return name?.trim() ? JSON.stringify(['album', name.trim(), names.length ? names.sort() : null])
+  const names = splitArtists(song.track.albumArtist?.trim() || '')
+  return name?.trim() ? JSON.stringify(['album', name.trim(), names.length
+    ? ['album-artist', names.sort()] : ['directory', parentFolder(song.sourcePath)]])
     : JSON.stringify([null, ['directory', parentFolder(song.sourcePath)]])
 }
 
@@ -61,8 +62,7 @@ export function albumEntries(songs: readonly AllSongsItem[]): AlbumEntry[] {
     return [...credits]
   })
   return finalGroups.map(([key, items]) => {
-    const artists = items[0].track.libraryAlbumName?.trim() ? creditNames(items[0])
-      : [...new Set(items.flatMap(creditNames))]
+    const artists = [...new Set(items.flatMap(creditNames))].sort(compareByQuickIndex)
     const artist = items[0].track.libraryAlbumName?.trim() ? artists.join('/') || '未知艺术家'
       : items[0].track.albumArtist?.trim() || artists.join('/') || '未知艺术家'
     const years = items.map(item => item.track.libraryYear).filter((year): year is number =>

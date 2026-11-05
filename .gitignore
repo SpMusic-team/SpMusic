@@ -42,6 +42,9 @@ dist-ssr
 !.rea-analysis/decoded/res/values/
 .rea-analysis/decoded/res/values/*
 !.rea-analysis/decoded/res/values/strings.xml
+# 持久 smali 缓存：从 APK 一次性反汇编（7308 个 .smali，约 80 MB）。
+# 供后续分析直接检索方法体，避免每次重新解包。内容可重建，不入库。
+.rea-analysis/smali/
 # 其它分析副产物（LevelDB 快照、内存采样 CSV），不属于文档证据
 .rea-analysis/ls-snapshot/
 .rea-analysis/*.csv

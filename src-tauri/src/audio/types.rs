@@ -228,6 +228,10 @@ pub struct AudioLoadAndPlayInput {
     pub path: String,
     #[ts(type = "number")]
     pub request_id: u64,
+    /// Position the replacement source before it becomes audible.
+    #[serde(default)]
+    #[ts(optional, type = "number")]
+    pub initial_position_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -435,6 +439,32 @@ mod tests {
     }
 
     #[test]
+    fn load_and_play_accepts_optional_initial_position_without_changing_old_callers() {
+        let legacy: AudioLoadAndPlayInput = serde_json::from_value(serde_json::json!({
+            "path": "song.flac", "requestId": 1
+        }))
+        .expect("legacy load-and-play input remains valid");
+        assert_eq!(legacy.initial_position_ms.unwrap_or(0), 0);
+        let bookmark: AudioLoadAndPlayInput = serde_json::from_value(serde_json::json!({
+            "path": "song.flac", "requestId": 2, "initialPositionMs": 58_000
+        }))
+        .expect("bookmark position should deserialize");
+        assert_eq!(bookmark.initial_position_ms, Some(58_000));
+        for invalid in [
+            serde_json::json!(-1),
+            serde_json::json!(1.5),
+            serde_json::json!("58000"),
+        ] {
+            assert!(
+                serde_json::from_value::<AudioLoadAndPlayInput>(serde_json::json!({
+                    "path": "song.flac", "requestId": 3, "initialPositionMs": invalid
+                }))
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
     fn audio_set_volume_input_exports_normalized_volume_contract() {
         let exported = AudioSetVolumeInput::export_to_string(&Config::default())
             .expect("AudioSetVolumeInput should be exportable to TypeScript");
@@ -461,6 +491,7 @@ mod tests {
             .expect("AudioLoadAndPlayResult should be exportable to TypeScript");
 
         assert!(input.contains("requestId: number"));
+        assert!(input.contains("initialPositionMs?: number"));
         assert!(result.contains("generation: number"));
         assert!(result.contains("state: AudioPlaybackState"));
         assert!(!result.contains("track: AudioTrackRef"));

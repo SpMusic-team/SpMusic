@@ -48,6 +48,7 @@ struct PendingLoad {
 struct PendingLoadAndPlay {
     path: PathBuf,
     request_id: u64,
+    initial_position_ms: u64,
     reply: Sender<Result<AudioLoadAndPlayResult, AudioCommandError>>,
 }
 
@@ -282,6 +283,7 @@ impl AudioController {
                             let PendingLoadAndPlay {
                                 path,
                                 request_id,
+                                initial_position_ms,
                                 reply,
                             } = pending;
                             if let Some(previous) = pending_load.take() {
@@ -299,6 +301,7 @@ impl AudioController {
                             let result = runtime.load_and_play(
                                 path.clone(),
                                 request_id,
+                                initial_position_ms,
                                 &runtime_load_and_play_queue.latest_intent,
                             );
                             let superseded = result
@@ -806,6 +809,7 @@ impl AudioController {
         let needs_wake = self.load_and_play_queue.register(PendingLoadAndPlay {
             path,
             request_id: input.request_id,
+            initial_position_ms: input.initial_position_ms.unwrap_or(0),
             reply,
         })?;
         if needs_wake {
@@ -1400,6 +1404,7 @@ mod tests {
             PendingLoadAndPlay {
                 path: PathBuf::from(path),
                 request_id,
+                initial_position_ms: 0,
                 reply,
             },
             rx,

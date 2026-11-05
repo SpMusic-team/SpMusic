@@ -253,7 +253,7 @@ export function MoreActionsMenu({
             <section className="more-action-grid" aria-label={appCopy.moreMenu.title}>
               <MenuAction icon={Delete48Regular} label={appCopy.moreMenu.delete} wide onClick={actions?.deleteSnapshot && actions.onDeleteSongs && !actions.disabled ? beginDelete : undefined} />
               <MenuAction icon={containsTrack ? CheckmarkCircle48Regular : AddCircle48Regular} label={appCopy.moreMenu.playlist} containsTrack={containsTrack} onClick={actions?.addSnapshot && actions.onPreparePlaylistAdd && !actions.disabled ? beginAdd : undefined} />
-              <UnavailableAction icon={Bookmark24Regular} label={appCopy.moreMenu.bookmark} />
+              <MenuAction icon={Bookmark24Regular} label={appCopy.moreMenu.bookmark} onClick={actions?.onBookmark && !actions.disabled ? () => { if (actions.onBookmark?.()) onOpenChange?.(false) } : undefined} />
               <UnavailableAction icon={Image48Regular} label={appCopy.moreMenu.cover} wide />
               <UnavailableAction icon={ErrorCircle48Regular} label={appCopy.moreMenu.info} />
               <UnavailableAction icon={ClosedCaption48Regular} label={appCopy.moreMenu.lyrics} />

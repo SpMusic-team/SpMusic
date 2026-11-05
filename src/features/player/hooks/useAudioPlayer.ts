@@ -3,6 +3,7 @@ import { isPlayerDragDiagnosticsRecording, playerDragDiagnosticId, recordPlayerD
 import { folderSelectionPath, isRootSelectionActive, projectSelectedFolder } from '@/features/player/model/folderSelection'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
+import { readBookmarks, writeBookmarks, type BookmarkEntry } from '../model/bookmarks'
 import {
   persistRepeatMode,
   persistShuffleMode,
@@ -55,6 +56,7 @@ import {
 import type {
   PlayerContentState,
   PlayerTimelineInteraction,
+  PlayerTimelineViewModel,
   PlaylistArtworkDemand,
   PlaylistCoverImage,
   PlaylistTrackMetadata,
@@ -434,6 +436,12 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
   const startupRestoreTimedOutRef = useRef(false)
   const [startupRestoreReady, setStartupRestoreReady] = useState(savedSession === null)
   const recentTrackerRef = useRef(new RecentlyPlayedTracker())
+  const [bookmarks, setBookmarks] = useState(readBookmarks)
+  const bookmarksRef = useRef(bookmarks)
+  const bookmarkRestoringRef = useRef(false)
+  const [bookmarkRestoring, setBookmarkRestoring] = useState(false)
+  const bookmarkProgressSequenceRef = useRef(0)
+  const [bookmarkProgressMotion, setBookmarkProgressMotion] = useState<PlayerTimelineViewModel['bookmarkProgressMotion']>(null)
   const [recentlyPlayed, setRecentlyPlayed] = useState(readRecentlyPlayed)
   const recentlyPlayedRef = useRef(recentlyPlayed)
   const [audioState, setAudioState] = useState<AudioPlaybackState | null>(null)
@@ -814,7 +822,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
   }, [persistCurrentSession])
 
   function transportOperationInProgress() {
-    return deletePendingRef.current || transportCommandRunningRef.current
+    return bookmarkRestoringRef.current || deletePendingRef.current || transportCommandRunningRef.current
       || activePlaybackTransitionRef.current !== null
       || Boolean(latestAudioStateRef.current?.transportTransition)
   }
@@ -1701,6 +1709,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     targetScope: string | null = null,
     visualNavigation?: { direction: Direction; source: TrackSelectionVisualSource; previewTokenId?: number },
   ) => {
+    setBookmarkProgressMotion(null)
     const existingPending = pendingSelectionRef.current
     const existingBackendStateMatches = Boolean(
       existingPending?.targetTrackId
@@ -3021,6 +3030,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     targetScope: string | null = playlistScopeRef.current,
     visualNavigation?: { direction: Direction; source: TrackSelectionVisualSource; previewTokenId?: number },
     preparedPreview?: PreparedTrackCardPreview,
+    initialPositionMs?: number,
   ) => {
     if (
       transportOperationInProgress()
@@ -3106,6 +3116,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       const result = await loadAndPlayAudio({
         path: folderTrack.sourcePath,
         requestId: selectionRequestId,
+        ...(initialPositionMs !== undefined ? { initialPositionMs } : {}),
       })
       if (!selectionIsCurrent(selectionRequestId, folderTrack.id)) return false
       if (result.requestId !== selectionRequestId || result.trackId !== folderTrack.id) {
@@ -3125,7 +3136,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       if (!pendingSelection || pendingSelection.requestId !== selectionRequestId) return false
       pendingSelection.commandConfirmed = true
       pendingSelection.loadedTrackId = result.trackId
-      applyAudioState(result.state)
+      applyAudioState(result.state, false, initialPositionMs !== undefined)
       setContentState('track')
       if (pendingSelection.detailsSettled) pendingSelectionRef.current = null
       audioSelectionInProgressRef.current = false
@@ -4076,6 +4087,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       || duration <= 0
       || timelineInteractionRef.current === 'seeking'
     ) return
+    setBookmarkProgressMotion(null)
     seekRequestIdRef.current += 1
     audioStateRequestGenerationRef.current += 1
     timelineInteractionRef.current = 'previewing'
@@ -4286,6 +4298,110 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     } else prefetchAdjacentPlaylistTracks(trackId)
     return true
   }, [findPlaylistForScope, loadPlaylistTrackOrSkip, activatePlaylistScope, prefetchAdjacentPlaylistTracks])
+
+  function createBookmark() {
+    const state = latestAudioStateRef.current
+    const current = audioTrackRef.current
+    if (!current || !state || state.currentTrackId !== current.id || audioSelectionInProgressRef.current
+      || transportOperationInProgress() || timelineInteractionRef.current !== 'following') return false
+    const positionMs = Math.round(Math.max(0, Math.min(state.durationMs ?? Infinity, visualTimelineClock.getPositionSeconds() * 1000)))
+    const entry: BookmarkEntry = { id: crypto.randomUUID(), sourcePath: normalizeAudioSourcePath(current.sourcePath),
+      positionMs, createdAt: Date.now(), sort: Math.max(0, ...bookmarksRef.current.map(item => item.sort)) + 1 }
+    try {
+      const next = [...bookmarksRef.current, entry]
+      writeBookmarks(next)
+      bookmarksRef.current = next
+      setBookmarks(next)
+      toast.success('已添加书签')
+      return true
+    } catch { toast.error('书签保存失败，请检查本地存储后重试。'); return false }
+  }
+
+  function deleteBookmarks(ids: readonly string[]) {
+    try {
+      const deleted = new Set(ids)
+      const next = bookmarksRef.current.filter(item => !deleted.has(item.id))
+      writeBookmarks(next)
+      bookmarksRef.current = next
+      setBookmarks(next)
+      return true
+    } catch { toast.error('书签删除失败，请重试。'); return false }
+  }
+
+  async function restoreBookmark(bookmark: BookmarkEntry, item: { scope: string; trackId: string; sourcePath: string }) {
+    if (audioSelectionInProgressRef.current || transportOperationInProgress()
+      || timelineInteractionRef.current !== 'following' || !bookmarksRef.current.some(entry => entry.id === bookmark.id)) return false
+    const playlist = findPlaylistForScope(item.scope)
+    const descriptor = playlist?.tracks.find(track => track.id === item.trackId
+      && normalizeAudioSourcePath(track.sourcePath) === normalizeAudioSourcePath(bookmark.sourcePath))
+    if (!playlist || !descriptor?.available) { toast.error('书签对应的歌曲不可用'); return false }
+    const before = latestAudioStateRef.current
+    const startRatio = before?.durationMs ? Math.min(1, Math.max(0,
+      visualTimelineClock.getPositionSeconds() * 1000 / before.durationMs)) : 0
+    const sameTrack = before?.currentTrackId === descriptor.id
+      && normalizeAudioSourcePath(audioTrackRef.current?.sourcePath ?? '') === normalizeAudioSourcePath(descriptor.sourcePath)
+    // A same-track bookmark is a seek, not a selection: retain the hydrated
+    // title/artwork and the live transport phase. A new track uses the same
+    // selection transaction and visual intent as queue/previous/next navigation.
+    const loading = sameTrack ? null : loadFolderAudioTrack(descriptor, true, false,
+      playlistScope(playlist), { direction: 1, source: 'queue' }, undefined, bookmark.positionMs)
+    const requestId = selectionRequestIdRef.current
+    const motionKey = `bookmark:${++bookmarkProgressSequenceRef.current}`
+    setBookmarkProgressMotion({ key: motionKey, startRatio, targetPositionMs: bookmark.positionMs, ready: false })
+    bookmarkRestoringRef.current = true
+    setBookmarkRestoring(true)
+    let restored = false
+    try {
+      if (loading) {
+        if (!await loading || selectionRequestIdRef.current !== requestId
+          || latestAudioStateRef.current?.currentTrackId !== descriptor.id) return false
+        activatePlaylistScope(playlist)
+        setBookmarkProgressMotion({ key: motionKey, startRatio, targetPositionMs: latestAudioStateRef.current.positionMs, ready: true })
+        restored = true
+        return true
+      }
+      const generation = before!.generation
+      const current = () => selectionRequestIdRef.current === requestId
+        && latestAudioStateRef.current?.currentTrackId === descriptor.id
+        && latestAudioStateRef.current?.generation === generation
+      const positionMs = Math.min(bookmark.positionMs, before!.durationMs ?? bookmark.positionMs)
+      const seekRequestId = ++seekRequestIdRef.current
+      audioStateRequestGenerationRef.current += 1
+      recentTrackerRef.current.breakBaseline()
+      timelineInteractionRef.current = 'seeking'
+      setTimelineInteraction('seeking')
+      seekTargetGuardRef.current = { trackId: descriptor.id, positionMs, expiresAt: window.performance.now() + 900 }
+      const positioned = await seekAudio(positionMs)
+      if (!current() || seekRequestIdRef.current !== seekRequestId
+        || positioned.currentTrackId !== descriptor.id || positioned.generation !== generation) return false
+      applyAudioState(positioned, false, true)
+      if (Math.abs(positioned.positionMs - positionMs) > 1000) throw new Error('未能恢复书签位置')
+      if (positioned.phase !== 'playing') {
+        const playing = await playAudio({ restart: false })
+        if (!current() || playing.currentTrackId !== descriptor.id || playing.generation !== generation) return false
+        applyAudioState(playing)
+      }
+      setBookmarkProgressMotion({ key: motionKey, startRatio, targetPositionMs: positioned.positionMs, ready: true })
+      restored = true
+      return true
+    } catch (error) {
+      setBookmarkProgressMotion(null)
+      if (sameTrack && selectionRequestIdRef.current === requestId) seekTargetGuardRef.current = null
+      commitAudioError(commandError(error))
+      toast.error('书签播放失败，请重试。')
+      return false
+    }
+    finally {
+      if (!restored) setBookmarkProgressMotion(motion => motion?.key === motionKey ? null : motion)
+      if (sameTrack && selectionRequestIdRef.current === requestId) {
+        timelineInteractionRef.current = 'following'
+        setTimelineInteraction('following')
+      }
+      bookmarkRestoringRef.current = false
+      setBookmarkRestoring(false)
+      setTransportBusy(transportOperationInProgress())
+    }
+  }
 
   const shufflePlaybackQueue = useCallback(async (selection: PlaybackQueueSelection) => {
     if (audioSelectionInProgressRef.current || transportOperationInProgress()
@@ -4817,6 +4933,12 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     preparePlaylistAdd,
     createAddPlaylist,
     reorderSongs,
+    bookmarks,
+    bookmarkRestoring,
+    bookmarkProgressMotion,
+    createBookmark,
+    deleteBookmarks,
+    restoreBookmark,
     recentlyPlayed,
     allSongsManualOrder: manualOrders.has(null),
     allSongsManualPaths: manualOrders.get(null),

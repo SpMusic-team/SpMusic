@@ -440,6 +440,7 @@ impl AudioRuntime {
         &mut self,
         path: PathBuf,
         request_id: u64,
+        initial_position_ms: u64,
         latest_intent: &LatestLoadAndPlayIntent,
     ) -> Result<AudioLoadAndPlayResult, AudioCommandError> {
         let started_at = Instant::now();
@@ -468,6 +469,7 @@ impl AudioRuntime {
             let source = open_source_fast(&normalized_path)?;
             let source_duration = source.total_duration();
             let track = playback_track_ref(&normalized_path, source_duration);
+            let initial_position = clamp_position_ms(initial_position_ms, track.duration_ms);
             latest_intent.ensure_latest(request_id)?;
             tracing::info!(
                 operation = "audio.transaction.load_and_play.source_ready",
@@ -499,14 +501,20 @@ impl AudioRuntime {
             } else {
                 (source, None)
             };
-            configure_rebuilt_sink(&sink, source, Duration::ZERO, false).map_err(|error| {
+            configure_rebuilt_sink(&sink, source, initial_position, false).map_err(|error| {
                 audio_error(
                     AudioErrorCode::PlaybackFailed,
                     format!("Failed to prepare audio source: {error}"),
                     true,
                 )
             })?;
-            Ok::<_, AudioCommandError>((normalized_path, track, sink, visualization_revision))
+            Ok::<_, AudioCommandError>((
+                normalized_path,
+                track,
+                sink,
+                visualization_revision,
+                initial_position,
+            ))
         })();
 
         latest_intent.commit_if_latest(request_id, || {
@@ -515,24 +523,25 @@ impl AudioRuntime {
             self.current_generation = Some(generation);
             self.invalidate_loaded_audio();
 
-            let (normalized_path, track, sink, visualization_revision) = match preparation {
-                Ok(prepared) => prepared,
-                Err(error) => {
-                    self.phase = AudioPlaybackPhase::Error;
-                    self.error = Some(error.clone());
-                    tracing::warn!(
-                        operation = "audio.transaction.load_and_play.end",
-                        path = %path.display(),
-                        request_id,
-                        generation,
-                        error_code = ?error.code,
-                        error = %error.message,
-                        elapsed_ms = started_at.elapsed().as_millis() as u64,
-                        "audio load-and-play transaction failed",
-                    );
-                    return Err(error);
-                }
-            };
+            let (normalized_path, track, sink, visualization_revision, initial_position) =
+                match preparation {
+                    Ok(prepared) => prepared,
+                    Err(error) => {
+                        self.phase = AudioPlaybackPhase::Error;
+                        self.error = Some(error.clone());
+                        tracing::warn!(
+                            operation = "audio.transaction.load_and_play.end",
+                            path = %path.display(),
+                            request_id,
+                            generation,
+                            error_code = ?error.code,
+                            error = %error.message,
+                            elapsed_ms = started_at.elapsed().as_millis() as u64,
+                            "audio load-and-play transaction failed",
+                        );
+                        return Err(error);
+                    }
+                };
 
             let track_id = track.id.clone();
             let file_name = track.file_name.clone();
@@ -543,7 +552,7 @@ impl AudioRuntime {
                 self.visualization_source_revision = Some(source_revision);
                 self.visualization_session.activate(revision);
             }
-            self.accumulated = Duration::ZERO;
+            self.accumulated = initial_position;
             self.started_at = Some(Instant::now());
             self.phase = AudioPlaybackPhase::Playing;
             if let Some(sink) = self.sink.as_ref() {
@@ -1663,6 +1672,7 @@ mod tests {
     #[derive(Default)]
     struct RecordingSink {
         actions: RefCell<Vec<SinkAction>>,
+        fail_seek: Cell<bool>,
     }
 
     impl RebuiltSink for RecordingSink {
@@ -1677,6 +1687,11 @@ mod tests {
 
         fn seek_to(&self, position: Duration) -> Result<(), rodio::source::SeekError> {
             self.actions.borrow_mut().push(SinkAction::Seek(position));
+            if self.fail_seek.get() {
+                return Err(rodio::source::SeekError::NotSupported {
+                    underlying_source: "test source",
+                });
+            }
             Ok(())
         }
 
@@ -1742,6 +1757,44 @@ mod tests {
                 SinkAction::Seek(position),
             ]
         );
+    }
+
+    #[test]
+    fn bookmark_preparation_positions_source_before_latest_intent_starts_it() {
+        for (requested_ms, duration_ms, expected_ms) in [
+            (0, Some(60_000), 0),
+            (58_000, Some(60_000), 58_000),
+            (103_000, Some(60_000), 60_000),
+            (103_000, None, 103_000),
+        ] {
+            let sink = RecordingSink::default();
+            let position = clamp_position_ms(requested_ms, duration_ms);
+            configure_rebuilt_sink(&sink, silent_test_source(), position, false)
+                .expect("bookmark source should prepare before commit");
+            assert_eq!(position, Duration::from_millis(expected_ms));
+            assert!(!sink.actions.borrow().contains(&SinkAction::Play));
+            let latest_intent = LatestLoadAndPlayIntent::default();
+            latest_intent.register(5).unwrap();
+            latest_intent
+                .commit_if_latest(5, || sink.start_playback())
+                .unwrap();
+            let mut expected = vec![SinkAction::Pause, SinkAction::Append];
+            if expected_ms > 0 {
+                expected.push(SinkAction::Seek(position));
+            }
+            expected.push(SinkAction::Play);
+            assert_eq!(*sink.actions.borrow(), expected);
+        }
+    }
+
+    #[test]
+    fn bookmark_preparation_seek_failure_never_starts_output() {
+        let sink = RecordingSink::default();
+        sink.fail_seek.set(true);
+        let result =
+            configure_rebuilt_sink(&sink, silent_test_source(), Duration::from_secs(58), true);
+        assert!(result.is_err());
+        assert!(!sink.actions.borrow().contains(&SinkAction::Play));
     }
 
     #[test]

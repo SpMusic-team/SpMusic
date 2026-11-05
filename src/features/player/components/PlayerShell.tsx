@@ -166,7 +166,7 @@ export function PlayerShell() {
     if (!isBrowsingActive && browsedScope) ensurePlaylistSummaries(browsedScope)
   }, [browsedScope, ensurePlaylistSummaries, isBrowsingActive])
   useEffect(() => {
-    if (!pendingArtistSongs && !isSearchOpen && (libraryRoute.view !== 'category' || !['songs', 'recent-played', 'recent-added', 'long-tracks', 'folders', 'folder', 'album', 'artist', 'album-artist', 'composer', 'year', 'genre'].includes(libraryRoute.categoryId))) return
+    if (!pendingArtistSongs && !isSearchOpen && (libraryRoute.view !== 'category' || !['songs', 'recent-played', 'recent-added', 'long-tracks', 'bookmarks', 'folders', 'folder', 'album', 'artist', 'album-artist', 'composer', 'year', 'genre'].includes(libraryRoute.categoryId))) return
     for (const source of librarySources) ensurePlaylistSummaries(playlistScope(source))
   }, [pendingArtistSongs, isSearchOpen, libraryRoute, librarySources, ensurePlaylistSummaries])
   const handlePlaylistOpenChange = useCallback((open: boolean) => {
@@ -266,7 +266,7 @@ export function PlayerShell() {
     setKnownScopeState({ scope: durationScope, known: activeKnownDurations, byScope })
   }
   const knownDurationsByScope = knownScopeState.byScope
-  const preferredDurationScopes = useMemo(() => isSearchOpen || libraryRoute.view === 'category' && ['songs', 'recent-played', 'recent-added', 'long-tracks', 'folders', 'folder', 'album', 'artist', 'album-artist', 'composer', 'year', 'genre'].includes(libraryRoute.categoryId)
+  const preferredDurationScopes = useMemo(() => isSearchOpen || libraryRoute.view === 'category' && ['songs', 'recent-played', 'recent-added', 'long-tracks', 'bookmarks', 'folders', 'folder', 'album', 'artist', 'album-artist', 'composer', 'year', 'genre'].includes(libraryRoute.categoryId)
     ? (isSearchOpen ? librarySources : player.libraryFolderPlaylists).map(playlistScope)
     : displayScope ? [displayScope] : [],
   [isSearchOpen, libraryRoute, player.libraryFolderPlaylists, librarySources, displayScope])
@@ -299,7 +299,7 @@ export function PlayerShell() {
   }, [rawPlaylistTracks, player.playlistDurationTracks, player.activePlaylistScope, durationData.durationsByScope, libraryArtwork])
   const playlistTracks = useStablePlaylistTrackRows(playlistPresentation.tracks)
   const libraryFallbackSourcePaths = playlistPresentation.fallbackSourcePaths
-  const isSongsCategoryOpen = isSearchOpen || isPlaylistOpen && libraryRoute.view === 'category' && ['songs', 'recent-played', 'recent-added', 'long-tracks', 'folders', 'folder', 'album', 'artist', 'album-artist', 'composer', 'year', 'genre'].includes(libraryRoute.categoryId)
+  const isSongsCategoryOpen = isSearchOpen || isPlaylistOpen && libraryRoute.view === 'category' && ['songs', 'recent-played', 'recent-added', 'long-tracks', 'bookmarks', 'folders', 'folder', 'album', 'artist', 'album-artist', 'composer', 'year', 'genre'].includes(libraryRoute.categoryId)
   const browsedTrackRows = useMemo<PlaylistTrackItemViewModel[]>(() => {
     if (isBrowsingActive) return playlistTracks
     const summaries = browsedScope ? summariesByScope[browsedScope] : undefined
@@ -524,7 +524,8 @@ export function PlayerShell() {
     playback: {
       moreActions: player.track ? {
         trackId: player.track.id,
-        disabled: player.audioBusy || player.transportBusy || player.selectionPending || player.deletePending || player.timelineInteraction === 'seeking',
+        onBookmark: player.createBookmark,
+        disabled: (player.audioBusy || player.bookmarkRestoring) || player.transportBusy || player.selectionPending || player.deletePending || player.timelineInteraction === 'seeking',
         deleteSnapshot: actionSnapshot ? { ...actionSnapshot, canRemoveFromList: canRemoveCurrent } : undefined,
         addSnapshot: actionSnapshot,
         onDeleteSongs: player.deleteSongs,
@@ -535,7 +536,7 @@ export function PlayerShell() {
         onPrepareNavigation: () => { setMoreNavigationTrackId(player.track!.id); for (const source of player.libraryFolderPlaylists) ensurePlaylistSummaries(playlistScope(source)) },
         onArtist: currentArtist ? () => { openCurrentCategory('artist'); setArtistLocation({ artistKey: currentArtist.key, view: 'albums' }) } : undefined,
         onArtistSongs: () => {
-          if (!currentTrackId || player.audioBusy || player.transportBusy || player.selectionPending || player.deletePending || player.timelineInteraction === 'seeking') return
+          if (!currentTrackId || (player.audioBusy || player.bookmarkRestoring) || player.transportBusy || player.selectionPending || player.deletePending || player.timelineInteraction === 'seeking') return
           if (!currentPath) { toast.error('此歌曲暂无可用的媒体库艺术家页面。'); return }
           setMoreNavigationTrackId(currentTrackId)
           for (const source of player.libraryFolderPlaylists) {
@@ -567,7 +568,7 @@ export function PlayerShell() {
       isPlaying: player.playing,
       shuffleMode: player.shuffleMode,
       repeatMode: player.repeatMode,
-      isAudioBusy: player.audioBusy,
+      isAudioBusy: player.audioBusy || player.bookmarkRestoring,
       isSelectionPending: player.selectionPending,
       isTransportBusy: player.transportBusy,
       transportTransition: player.transportTransition,
@@ -589,6 +590,7 @@ export function PlayerShell() {
       durationSeconds: player.duration,
       interaction: player.timelineInteraction,
       visualClock: player.visualTimelineClock,
+      bookmarkProgressMotion: player.bookmarkProgressMotion,
       onPreviewStart: player.startProgressPreview,
       onPreview: player.setProgress,
       onCommit: player.commitProgress,
@@ -609,7 +611,7 @@ export function PlayerShell() {
       playlistName: player.playlistName,
       isOpen: player.queueOpen,
       onToggle: player.toggleQueue,
-      onTrackSelect: player.audioBusy || player.transportBusy || player.timelineInteraction === 'seeking'
+      onTrackSelect: (player.audioBusy || player.bookmarkRestoring) || player.transportBusy || player.timelineInteraction === 'seeking'
         ? undefined
         : player.selectQueueTrack,
     },
@@ -663,6 +665,9 @@ export function PlayerShell() {
           return { path, directoryPaths: source?.directoryPaths, error, selection,
             status: error ? 'error' as const : source ? 'ready' as const : 'loading' as const }
         }),
+        bookmarks: player.bookmarks,
+        onDeleteBookmarks: player.deleteBookmarks,
+        onRestoreBookmark: player.restoreBookmark,
         allSongs,
         recentSongs,
         recentAddedSongs,
@@ -705,7 +710,7 @@ export function PlayerShell() {
         onDeleteSongs: player.deleteSongs,
         isDeletePending: player.deletePending,
       },
-      isOpenAudioDisabled: player.audioBusy
+      isOpenAudioDisabled: player.audioBusy || player.bookmarkRestoring
         || player.transportBusy
         || player.selectionPending
         || player.timelineInteraction === 'seeking',
@@ -736,7 +741,7 @@ export function PlayerShell() {
         ...pageOrigin,
         entries: orderedTrackIds.map((trackId) => ({ scope: displayScope, trackId })),
       }) : undefined,
-      onTrackSelect: player.audioBusy || player.transportBusy || player.timelineInteraction === 'seeking'
+      onTrackSelect: (player.audioBusy || player.bookmarkRestoring) || player.transportBusy || player.timelineInteraction === 'seeking'
         ? undefined
         : handlePlaylistTrackSelect,
       onVisibleTrackIdsChange: isBrowsingActive ? player.setVisiblePlaylistTrackIds : handleLibraryVisibleTrackIds,
@@ -754,7 +759,7 @@ export function PlayerShell() {
     phase: player.audioState?.phase ?? 'idle',
     title: player.track?.title ?? null,
     isPlaying: player.playing,
-    isAudioBusy: player.audioBusy || player.selectionPending || player.timelineInteraction === 'seeking',
+    isAudioBusy: (player.audioBusy || player.bookmarkRestoring) || player.selectionPending || player.timelineInteraction === 'seeking',
     isTransportBusy: player.transportBusy,
     statusText: player.statusText,
     positionSeconds: player.progress,

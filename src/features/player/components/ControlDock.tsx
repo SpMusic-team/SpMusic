@@ -38,7 +38,7 @@ type ProgressControlProps = {
   isPlaying: boolean
   showTimes?: boolean
   className?: string
-  trackSwitchMotion?: { key: string; startRatio: number; durationSeconds: number; ease: Easing; disabled: boolean; ready: boolean }
+  trackSwitchMotion?: { key: string; startRatio: number; endRatio?: number; bookmark?: boolean; durationSeconds: number; ease: Easing; disabled: boolean; ready: boolean }
 }
 
 function usePlaybackModeControls(playback: PlayerUiViewModel['playback']) {
@@ -307,8 +307,14 @@ export const ProgressControl = memo(function ProgressControl({
 
   useLayoutEffect(() => {
     const switchKey = trackSwitchMotion?.key
-    if (!switchKey || completedSwitchKeyRef.current === switchKey) return
-    if (trackSwitchMotion.disabled || timeline.interaction !== 'following') {
+    if (!switchKey) {
+      switchVisualOwnerRef.current = false
+      switchVisualRatioRef.current = null
+      updateVisualProgress()
+      return
+    }
+    if (completedSwitchKeyRef.current === switchKey) return
+    if (trackSwitchMotion.disabled || (timeline.interaction !== 'following' && !trackSwitchMotion.bookmark)) {
       completedSwitchKeyRef.current = switchKey
       switchVisualOwnerRef.current = false
       switchVisualRatioRef.current = null
@@ -317,17 +323,19 @@ export const ProgressControl = memo(function ProgressControl({
       return
     }
     switchVisualOwnerRef.current = true
-    const startRatio = trackSwitchMotion.startRatio
+    const startRatio = trackSwitchMotion.bookmark
+      ? switchVisualRatioRef.current ?? trackSwitchMotion.startRatio
+      : trackSwitchMotion.startRatio
     switchVisualRatioRef.current = startRatio
     paintVisualRatio(startRatio)
     let frame = 0
     let animation: ReturnType<typeof animate> | undefined
     const start = () => {
-      if (!trackSwitchMotion.ready || frame || animation || !paintVisualRatio(startRatio)) return
+      if (!trackSwitchMotion.ready || timeline.interaction !== 'following' || frame || animation || !paintVisualRatio(startRatio)) return
       startSwitchAnimationRef.current = null
       frame = window.requestAnimationFrame(() => {
         frame = 0
-        animation = animate(startRatio, 0, {
+        animation = animate(startRatio, trackSwitchMotion.endRatio ?? 0, {
           duration: trackSwitchMotion.durationSeconds,
           ease: trackSwitchMotion.ease,
           onUpdate: (ratio) => {
@@ -350,11 +358,15 @@ export const ProgressControl = memo(function ProgressControl({
       startSwitchAnimationRef.current = null
       if (frame) window.cancelAnimationFrame(frame)
       animation?.stop()
-      switchVisualOwnerRef.current = false
-      switchVisualRatioRef.current = null
-      updateVisualProgress()
+      // Retain ownership across the pending -> ready handoff. Releasing it
+      // here would paint the confirmed target before the new animation starts.
+      if (!trackSwitchMotion.bookmark) {
+        switchVisualOwnerRef.current = false
+        switchVisualRatioRef.current = null
+        updateVisualProgress()
+      }
     }
-  }, [paintVisualRatio, timeline.interaction, trackSwitchMotion?.disabled, trackSwitchMotion?.durationSeconds, trackSwitchMotion?.ease, trackSwitchMotion?.key, trackSwitchMotion?.ready, trackSwitchMotion?.startRatio, updateVisualProgress])
+  }, [paintVisualRatio, timeline.interaction, trackSwitchMotion?.bookmark, trackSwitchMotion?.endRatio, trackSwitchMotion?.disabled, trackSwitchMotion?.durationSeconds, trackSwitchMotion?.ease, trackSwitchMotion?.key, trackSwitchMotion?.ready, trackSwitchMotion?.startRatio, updateVisualProgress])
 
   useEffect(() => {
     if (!timeline.visualClock) return
@@ -491,6 +503,13 @@ export function ControlDock({
     setSwitchState({ observedKey: selectionKey, activeKey: selectionKey })
   }
   const activeSwitchKey = intentOwnsSelection && switchState.activeKey === selectionKey ? selectionKey : null
+  const bookmarkMotion = timeline.bookmarkProgressMotion
+  const [bookmarkSwitch, setBookmarkSwitch] = useState({ observed: bookmarkMotion?.key, active: null as string | null, suppressedSelectionKey: bookmarkMotion ? selectionKey : null })
+  if (bookmarkMotion?.key !== bookmarkSwitch.observed) {
+    setBookmarkSwitch({ observed: bookmarkMotion?.key, active: bookmarkMotion?.key ?? null,
+      suppressedSelectionKey: bookmarkMotion ? selectionKey : bookmarkSwitch.suppressedSelectionKey })
+  }
+  const activeBookmarkMotion = bookmarkSwitch.active === bookmarkMotion?.key ? bookmarkMotion : null
   const disabled = !playback.track
   const playbackCommandBusy = playback.isAudioBusy
     || playback.isTransportBusy
@@ -530,7 +549,16 @@ export function ControlDock({
         timeline={timeline}
         disabled={commandBusy || disabled}
         isPlaying={playback.isPlaying}
-        trackSwitchMotion={activeSwitchKey ? {
+        trackSwitchMotion={activeBookmarkMotion ? {
+          key: activeBookmarkMotion.key,
+          startRatio: activeBookmarkMotion.startRatio,
+          endRatio: timeline.durationSeconds > 0 ? Math.min(1, Math.max(0, activeBookmarkMotion.targetPositionMs / 1000 / timeline.durationSeconds)) : 0,
+          bookmark: true,
+          durationSeconds: appearanceMotion.trackCardCommitDurationSeconds * appearance.motion.durationScale,
+          ease: appearanceMotion.trackCardCommitEase,
+          disabled: appearanceMotion.disabled,
+          ready: activeBookmarkMotion.ready,
+        } : activeSwitchKey && bookmarkSwitch.suppressedSelectionKey !== selectionKey ? {
           key: activeSwitchKey,
           startRatio: selectionIntent?.progressStartRatio ?? 0,
           durationSeconds: appearanceMotion.trackCardCommitDurationSeconds * appearance.motion.durationScale,

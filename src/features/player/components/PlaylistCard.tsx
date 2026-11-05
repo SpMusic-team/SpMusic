@@ -13,6 +13,7 @@ type PlaylistCardProps = {
   track: PlaylistTrackItemViewModel
   artworkSource?: PlaylistArtworkSource
   fallbackArtworkSource?: PlaylistArtworkSource
+  positionMs?: number
   songKey?: string
   coverUrl?: string
   index?: number
@@ -77,6 +78,7 @@ export const PlaylistCard = memo(function PlaylistCard({
   artworkSource,
   fallbackArtworkSource,
   songKey,
+  positionMs,
   coverUrl,
   index = 0,
   current,
@@ -170,14 +172,14 @@ export const PlaylistCard = memo(function PlaylistCard({
       onPointerDown={longPress.onPointerDown}
       onContextMenu={longPress.onContextMenu}
     >
-      {contentVisible ? <PlaylistCardContent track={track} songKey={songKey} coverUrl={coverUrl} artworkVisible={artworkVisible}
+      {contentVisible ? <PlaylistCardContent track={track} positionMs={positionMs} songKey={songKey} coverUrl={coverUrl} artworkVisible={artworkVisible}
         selectMode={selectMode} showReorderHandle={showReorderHandle} unavailable={unavailable} showExtendedMetadata={showExtendedMetadata}
         coverState={coverState} coverFailed={coverFailed} onCoverFailed={onCoverFailed} /> : null}
     </button>
   )
 })
 
-function PlaylistCardContent({ track, songKey, coverUrl, artworkVisible, selectMode, showReorderHandle, unavailable, showExtendedMetadata, coverState, coverFailed, onCoverFailed }: Pick<PlaylistCardProps, 'track' | 'songKey' | 'coverUrl' | 'artworkVisible' | 'selectMode' | 'showReorderHandle' | 'unavailable' | 'showExtendedMetadata' | 'coverFailed' | 'onCoverFailed'> & { coverState: PlaylistCardCoverState }) {
+function PlaylistCardContent({ track, positionMs, songKey, coverUrl, artworkVisible, selectMode, showReorderHandle, unavailable, showExtendedMetadata, coverState, coverFailed, onCoverFailed }: Pick<PlaylistCardProps, 'track' | 'positionMs' | 'songKey' | 'coverUrl' | 'artworkVisible' | 'selectMode' | 'showReorderHandle' | 'unavailable' | 'showExtendedMetadata' | 'coverFailed' | 'onCoverFailed'> & { coverState: PlaylistCardCoverState }) {
   const systemIcons = useSystemIcons()
   const coverSource = coverUrl ?? track.coverImage ?? track.coverImageFallback
   const coverMarkVisible = coverState === 'empty' || coverState === 'error'
@@ -190,6 +192,7 @@ function PlaylistCardContent({ track, songKey, coverUrl, artworkVisible, selectM
     : artistText
   const bitDepth = track.audioFormat?.bitDepth
   const formatParts = showExtendedMetadata ? [formatTrackClock(track.durationSeconds), track.fileExtension?.toLowerCase()].filter((part): part is string => Boolean(part)) : []
+  if (positionMs !== undefined) formatParts.unshift(formatTrackClock(positionMs / 1000) ?? '0:00')
   if (showExtendedMetadata && bitDepth != null && Number.isFinite(bitDepth) && bitDepth >= 24) formatParts.push(`${bitDepth}bit`)
   const handleCoverError = (event: SyntheticEvent<HTMLImageElement>) => {
     const image = event.currentTarget

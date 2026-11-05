@@ -1,3 +1,4 @@
+import type { BookmarkEntry } from './bookmarks'
 import type { MediaLibraryCategoryId, MediaLibraryRoute } from '@/features/player/model/mediaLibraryCategories'
 import type { LibraryFolderSettings, DirectoryChildren, ReplaceLibraryFoldersInput, RootSelection } from '@/features/player/services/audioCommands'
 import type { PlaylistArtworkSource } from '@/features/player/model/playlistArtworkStore'
@@ -67,6 +68,7 @@ export type PlayerPlaybackViewModel = {
 
 export type PlayerMoreActions = PlaylistAddCallbacks & {
   trackId: string
+  onBookmark?: () => boolean
   disabled?: boolean
   deleteSnapshot?: PlaylistDeleteSnapshot
   addSnapshot?: PlaylistAddSnapshot
@@ -98,6 +100,7 @@ export type PlayerTimelineViewModel = {
   durationSeconds: number
   interaction: PlayerTimelineInteraction
   visualClock?: PlayerVisualTimelineClock
+  bookmarkProgressMotion?: { key: string; startRatio: number; targetPositionMs: number; ready: boolean } | null
   onPreviewStart: () => void
   onPreview: (positionSeconds: number) => void
   onCommit: (positionSeconds: number) => void
@@ -215,6 +218,10 @@ export type PlaylistAddCallbacks = {
 }
 
 export type PlaylistLibraryViewModel = PlaylistAddCallbacks & {
+  bookmarks?: readonly BookmarkEntry[]
+  onDeleteBookmarks?: (ids: readonly string[]) => boolean
+  onRestoreBookmark?: (bookmark: BookmarkEntry, item: AllSongsItem) => Promise<boolean>
+
   genreLocation?: import('./genreLibrary').GenreLocation
   onGenreLocationChange?: (location: import('./genreLibrary').GenreLocation) => void
   yearLocation?: import('./yearLibrary').YearLocation

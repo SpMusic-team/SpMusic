@@ -317,6 +317,13 @@ export function PlaylistPlaybackDock({
     setSwitchState({ observedKey: selectionKey, activeKey: selectionKey })
   }
   const activeSwitchKey = intentOwnsSelection && switchState.activeKey === selectionKey ? selectionKey : null
+  const bookmarkMotion = timeline.bookmarkProgressMotion
+  const [bookmarkSwitch, setBookmarkSwitch] = useState({ observed: bookmarkMotion?.key, active: null as string | null, suppressedSelectionKey: bookmarkMotion ? selectionKey : null })
+  if (bookmarkMotion?.key !== bookmarkSwitch.observed) {
+    setBookmarkSwitch({ observed: bookmarkMotion?.key, active: bookmarkMotion?.key ?? null,
+      suppressedSelectionKey: bookmarkMotion ? selectionKey : bookmarkSwitch.suppressedSelectionKey })
+  }
+  const activeBookmarkMotion = bookmarkSwitch.active === bookmarkMotion?.key ? bookmarkMotion : null
   const keepPlayingVisual = Boolean(selectionIntent?.preservePlayingVisual
     && selectionIntent.sequence === playback.selectionActivitySequence
     && playback.isSelectionPending)
@@ -536,7 +543,16 @@ export function PlaylistPlaybackDock({
         disabled={disabled || commandBusy}
         isPlaying={playback.isPlaying}
         showTimes={false}
-        trackSwitchMotion={activeSwitchKey ? {
+        trackSwitchMotion={activeBookmarkMotion ? {
+          key: activeBookmarkMotion.key,
+          startRatio: activeBookmarkMotion.startRatio,
+          endRatio: timeline.durationSeconds > 0 ? Math.min(1, Math.max(0, activeBookmarkMotion.targetPositionMs / 1000 / timeline.durationSeconds)) : 0,
+          bookmark: true,
+          durationSeconds: appearanceMotion.trackCardCommitDurationSeconds * appearance.motion.durationScale,
+          ease: appearanceMotion.trackCardCommitEase,
+          disabled: appearanceMotion.disabled,
+          ready: activeBookmarkMotion.ready,
+        } : activeSwitchKey && bookmarkSwitch.suppressedSelectionKey !== selectionKey ? {
           key: activeSwitchKey,
           startRatio: selectionIntent?.progressStartRatio ?? 0,
           durationSeconds: appearanceMotion.trackCardCommitDurationSeconds * appearance.motion.durationScale,

@@ -352,6 +352,8 @@ export type AudioPlayInput = {
 export type AudioLoadAndPlayInput = {
   path: string
   requestId: number
+  /** Initial track-relative position, committed before playback starts. */
+  initialPositionMs?: number
 }
 
 export type AudioLoadAndPlayResult = {

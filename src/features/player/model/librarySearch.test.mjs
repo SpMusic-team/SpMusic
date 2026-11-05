@@ -55,3 +55,27 @@ test('genre summary changes survive row equality and trims missing values to nul
   assert.equal(playlistTrackRowEqual(jazz, rock), false)
   assert.equal(playlistTrackRowFromSummary(descriptor, null).libraryGenreName, null)
 })
+
+test('genre search splits multi-value tags into independently searchable collections and deduplicates shared tracks', () => {
+  const shared = song('A', 'C:/Music/shared.flac', { libraryGenreName: 'Rock; Pop；Rock' })
+  const library = { allSongs: [shared, { ...shared, scope: 'duplicate-root' }, song('A', 'jazz', { libraryGenreName: 'Jazz' }), song('A', 'fusion', { libraryGenreName: 'Pop/Rock' })], items: [] }
+  const collections = searchLibrary(library, '', ['genre'])[0].collections
+  assert.deepEqual(collections.map(item => item.name).sort(), ['Jazz', 'Pop', 'Pop/Rock', 'Rock'])
+  for (const name of ['Rock', 'Pop']) {
+    const entry = collections.find(item => item.name === name)
+    assert.equal(entry.key, JSON.stringify(['genre', name]))
+    assert.deepEqual(entry.songs.map(item => item.trackId), [shared.trackId])
+    assert.equal(entry.songs[0].scope, 'A')
+  }
+  assert.deepEqual(searchLibrary(library, 'pop', ['genre'])[0].collections.map(item => item.name).sort(), ['Pop', 'Pop/Rock'])
+  assert.equal(uniqueSearchSongs(collections.filter(item => ['Rock', 'Pop'].includes(item.name)).flatMap(item => item.songs)).length, 1)
+})
+
+test('genre search preserves unknown identity, case distinctions and pending semantics without changing year groups', () => {
+  const library = { allSongs: [song('A', 'null', { libraryGenreName: null }), song('A', 'literal', { libraryGenreName: '未知流派' }), song('A', 'pending', { libraryGenreName: undefined }), song('A', 'case', { libraryGenreName: 'Rock;rock' })], items: [] }
+  const collections = searchLibrary(library, '', ['genre'])[0].collections
+  assert.equal(collections.length, 4)
+  assert.deepEqual(collections.filter(item => item.name === '未知流派').map(item => item.key).sort(), [JSON.stringify(['genre', null]), JSON.stringify(['genre', '未知流派'])].sort())
+  assert.equal(collections.some(item => item.songs.some(member => member.trackId === 'pending')), false)
+  assert.deepEqual(searchLibrary(library, '2023', ['year'])[0].collections.map(item => [item.name, item.songs.length]), [['2023', 4]])
+})

@@ -6,6 +6,7 @@ import { recentlyAddedSongs } from '../model/recentlyAdded'
 import { recentlyPlayedSongs } from '../model/recentlyPlayed'
 import type { MediaLibraryCategoryId, MediaLibraryRoute } from '@/features/player/model/mediaLibraryCategories'
 import type { ArtistLocation } from '@/features/player/model/artistLibrary'
+import type { GenreLocation } from '@/features/player/model/genreLibrary'
 import type { YearLocation } from '@/features/player/model/yearLibrary'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
@@ -77,6 +78,7 @@ export function PlayerShell() {
   const [artistLocation, setArtistLocation] = useState<ArtistLocation>(null)
   const [albumArtistLocation, setAlbumArtistLocation] = useState<ArtistLocation>(null)
   const [composerLocation, setComposerLocation] = useState<ArtistLocation>(null)
+  const [genreLocation, setGenreLocation] = useState<GenreLocation>(null)
   const [yearLocation, setYearLocation] = useState<YearLocation>(null)
   const [folderLocation, setFolderLocation] = useState<{ rootPath: string; directoryPath: string } | null>(null)
   const [playlistArtworkSettled, setPlaylistArtworkSettled] = useState(false)
@@ -143,6 +145,7 @@ export function PlayerShell() {
     if (categoryId === 'album-artist') setAlbumArtistLocation(null)
     if (categoryId === 'composer') setComposerLocation(null)
     if (categoryId === 'year') setYearLocation(null)
+    if (categoryId === 'genre') setGenreLocation(null)
     if (categoryId === 'songs') setPlaylistEntryPosition((previous) => ({ requestId: previous.requestId + 1, target: 'top' }))
   }
   const openLibrary = () => selectLibraryCategory('playlists')
@@ -163,7 +166,7 @@ export function PlayerShell() {
     if (!isBrowsingActive && browsedScope) ensurePlaylistSummaries(browsedScope)
   }, [browsedScope, ensurePlaylistSummaries, isBrowsingActive])
   useEffect(() => {
-    if (!pendingArtistSongs && !isSearchOpen && (libraryRoute.view !== 'category' || !['songs', 'recent-played', 'recent-added', 'long-tracks', 'folders', 'folder', 'album', 'artist', 'album-artist', 'composer', 'year'].includes(libraryRoute.categoryId))) return
+    if (!pendingArtistSongs && !isSearchOpen && (libraryRoute.view !== 'category' || !['songs', 'recent-played', 'recent-added', 'long-tracks', 'folders', 'folder', 'album', 'artist', 'album-artist', 'composer', 'year', 'genre'].includes(libraryRoute.categoryId))) return
     for (const source of librarySources) ensurePlaylistSummaries(playlistScope(source))
   }, [pendingArtistSongs, isSearchOpen, libraryRoute, librarySources, ensurePlaylistSummaries])
   const handlePlaylistOpenChange = useCallback((open: boolean) => {
@@ -172,7 +175,7 @@ export function PlayerShell() {
     if (open && !isPlaylistOpen && player.track) {
       setPlaylistEntryPosition((previous) => ({ requestId: previous.requestId + 1, target: 'current-track' }))
       if ((player.playbackQueueKind === 'all-songs' || player.playbackQueueKind === 'recent-played' || player.playbackQueueKind === 'recent-added' || player.playbackQueueKind === 'long-tracks')) {
-        if (!(libraryRoute.view === 'category' && ['folders', 'folder', 'album', 'artist', 'album-artist', 'composer', 'year'].includes(libraryRoute.categoryId))) setLibraryRoute({ view: 'category', categoryId: player.playbackQueueKind === 'long-tracks' ? 'long-tracks' : player.playbackQueueKind === 'recent-added' ? 'recent-added' : player.playbackQueueKind === 'recent-played' ? 'recent-played' : 'songs' })
+        if (!(libraryRoute.view === 'category' && ['folders', 'folder', 'album', 'artist', 'album-artist', 'composer', 'year', 'genre'].includes(libraryRoute.categoryId))) setLibraryRoute({ view: 'category', categoryId: player.playbackQueueKind === 'long-tracks' ? 'long-tracks' : player.playbackQueueKind === 'recent-added' ? 'recent-added' : player.playbackQueueKind === 'recent-played' ? 'recent-played' : 'songs' })
         setBrowsedScope(null)
       } else {
         setLibraryRoute({ view: 'tracks' })
@@ -263,7 +266,7 @@ export function PlayerShell() {
     setKnownScopeState({ scope: durationScope, known: activeKnownDurations, byScope })
   }
   const knownDurationsByScope = knownScopeState.byScope
-  const preferredDurationScopes = useMemo(() => isSearchOpen || libraryRoute.view === 'category' && ['songs', 'recent-played', 'recent-added', 'long-tracks', 'folders', 'folder', 'album', 'artist', 'album-artist', 'composer', 'year'].includes(libraryRoute.categoryId)
+  const preferredDurationScopes = useMemo(() => isSearchOpen || libraryRoute.view === 'category' && ['songs', 'recent-played', 'recent-added', 'long-tracks', 'folders', 'folder', 'album', 'artist', 'album-artist', 'composer', 'year', 'genre'].includes(libraryRoute.categoryId)
     ? (isSearchOpen ? librarySources : player.libraryFolderPlaylists).map(playlistScope)
     : displayScope ? [displayScope] : [],
   [isSearchOpen, libraryRoute, player.libraryFolderPlaylists, librarySources, displayScope])
@@ -296,7 +299,7 @@ export function PlayerShell() {
   }, [rawPlaylistTracks, player.playlistDurationTracks, player.activePlaylistScope, durationData.durationsByScope, libraryArtwork])
   const playlistTracks = useStablePlaylistTrackRows(playlistPresentation.tracks)
   const libraryFallbackSourcePaths = playlistPresentation.fallbackSourcePaths
-  const isSongsCategoryOpen = isSearchOpen || isPlaylistOpen && libraryRoute.view === 'category' && ['songs', 'recent-played', 'recent-added', 'long-tracks', 'folders', 'folder', 'album', 'artist', 'album-artist', 'composer', 'year'].includes(libraryRoute.categoryId)
+  const isSongsCategoryOpen = isSearchOpen || isPlaylistOpen && libraryRoute.view === 'category' && ['songs', 'recent-played', 'recent-added', 'long-tracks', 'folders', 'folder', 'album', 'artist', 'album-artist', 'composer', 'year', 'genre'].includes(libraryRoute.categoryId)
   const browsedTrackRows = useMemo<PlaylistTrackItemViewModel[]>(() => {
     if (isBrowsingActive) return playlistTracks
     const summaries = browsedScope ? summariesByScope[browsedScope] : undefined
@@ -641,6 +644,8 @@ export function PlayerShell() {
         albumArtistLocation,
         onAlbumArtistLocationChange: setAlbumArtistLocation,
         composerLocation,
+        genreLocation,
+        onGenreLocationChange: setGenreLocation,
         yearLocation,
         onYearLocationChange: setYearLocation,
         onComposerLocationChange: setComposerLocation,

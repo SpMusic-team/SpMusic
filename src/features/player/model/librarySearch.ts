@@ -1,5 +1,6 @@
 import { albumEntries } from './albumLibrary'
 import { artistEntries } from './artistLibrary'
+import { genreEntries } from './genreLibrary'
 import { flatFolderEntries } from './folderHierarchy'
 import { normalizeAudioSourcePath } from './playlistTrackSummary'
 import type { AllSongsItem, PlaylistLibraryViewModel } from './playerUiViewModel'
@@ -36,7 +37,8 @@ export function searchLibrary(library: PlaylistLibraryViewModel | undefined, que
     if (category === 'album') collections = albumEntries(songs).map(item => ({ ...item, subtitle: item.artist }))
     if (category === 'artist' || category === 'album-artist' || category === 'composer') collections = artistEntries(songs, category).map(item => ({ ...item, subtitle: '' }))
     if (category === 'folder') collections = flatFolderEntries(songs).map(item => ({ key: item.path, path: item.path, name: item.name, subtitle: item.parentName, songs: item.songs }))
-    if (category === 'genre' || category === 'year') collections = groups(category === 'genre' ? 'libraryGenreName' : 'libraryYear', label)
+    if (category === 'genre') collections = genreEntries(songs).map(item => ({ ...item, subtitle: '' }))
+    if (category === 'year') collections = groups('libraryYear', label)
     if (category === 'playlists') collections = (library?.items ?? []).filter(item => item.sourceKind !== 'folder').map(item => ({ key: item.scope, scope: item.scope, name: item.name, subtitle: '', songs: uniqueSearchSongs((library?.allSongs ?? []).filter(song => song.scope === item.scope)) }))
     return { category, label, collections: collections.filter(item => matches(item.name, item.subtitle)),
       songs: category === 'songs' ? songs.filter(item => matches(item.track.title, item.track.artist, item.track.album, item.track.libraryComposerName, item.track.libraryGenreName, item.track.libraryYear)) : [] }

@@ -87,7 +87,7 @@ function actionsFor(id: MediaLibraryCategoryId): Action[] {
   return [select, rescan, pin, settings]
 }
 
-export function LibraryRootMenu({ categoryId, library, onSort }: { categoryId: MediaLibraryCategoryId; library: PlaylistLibraryViewModel; onSort?: () => void }) {
+export function LibraryRootMenu({ categoryId, library, onSort, onListOptions, rootToolbar = false }: { categoryId: MediaLibraryCategoryId; library: PlaylistLibraryViewModel; onSort?: () => void; onListOptions?: () => void; rootToolbar?: boolean }) {
   const icons = useSystemIcons()
   const [open, setOpen] = useState(false)
   const [transferring, setTransferring] = useState(false)
@@ -101,6 +101,7 @@ export function LibraryRootMenu({ categoryId, library, onSort }: { categoryId: M
   const pinned = library.pinnedCategoryIds?.includes(categoryId) ?? false
   const busy = library.isImportPending || library.isFolderRescanPending
   const run = (action: Action) => {
+    if (action === settings && onListOptions) { setOpen(false); onListOptions(); return }
     if (action === sort && onSort) { setOpen(false); onSort(); return }
     if (action === settings && categoryId === 'long-tracks' && library.onLongTracksMinDurationChange) {
       setDurationMinutes(String((library.longTracksMinDurationMs ?? DEFAULT_LONG_TRACKS_MIN_DURATION_MS) / 60000))
@@ -123,7 +124,7 @@ export function LibraryRootMenu({ categoryId, library, onSort }: { categoryId: M
     if (action.kind === 'rescan') library.onRescanFolders?.()
   }
   return <Dialog open={open} onOpenChange={value => { setTransferring(false); setNotice(null); setDurationOptions(false); setOpen(value) }}>
-    <DialogTrigger render={<Button ref={trigger} className="playlist-hero-icon playlist-hero-more-button" variant="ghost" size="icon" aria-label="更多列表操作">{categoryId === 'year' ? <img src={yearMoreIcon} alt="" /> : <icons.more aria-hidden="true" />}</Button>} />
+    <DialogTrigger render={<Button ref={trigger} className="playlist-hero-icon playlist-hero-more-button" variant="ghost" size="icon" aria-label="更多列表操作">{rootToolbar || categoryId === 'year' || categoryId === 'genre' ? <img src={yearMoreIcon} alt="" /> : <icons.more aria-hidden="true" />}</Button>} />
     {!transferring && (durationOptions ? <DialogContent finalFocus={trigger}>
       <form className="flex flex-col gap-4" onSubmit={event => {
         event.preventDefault()
@@ -155,7 +156,7 @@ export function LibraryRootMenu({ categoryId, library, onSort }: { categoryId: M
       </header>
       <Separator className="folder-root-menu-divider" />
       <div className="folder-root-menu-actions">
-        {(categoryId === 'year' ? [select, rescan, settings] : onSort ? [select, rescan, sort, pin, settings] : actionsFor(categoryId)).map(action => <Button key={action.label} className="folder-root-menu-action" variant="ghost"
+        {(categoryId === 'year' || categoryId === 'genre' ? [select, rescan, settings] : onSort ? [select, rescan, sort, pin, settings] : actionsFor(categoryId)).map(action => <Button key={action.label} className="folder-root-menu-action" variant="ghost"
           disabled={action.kind === 'select' ? busy || !library.onSelectFolders : action.kind === 'rescan' ? busy || !library.onRescanFolders : action.kind === 'pin' ? !library.onToggleCategoryPin : false}
           aria-pressed={action.kind === 'pin' ? pinned : undefined}
           onClick={() => run(action)}>

@@ -311,7 +311,7 @@ function FolderHierarchyScene({ categoryId = 'folders', playlist, allSongsCoverS
       changeLocation?.({ rootPath: flat ? roots.find(root => insideFolder(directory.path, root.path))?.path ?? directory.path : location?.rootPath ?? directory.path, directoryPath: directory.path })
     }
   }
-  const renderRootMore = () => flat ? <LibraryRootMenu categoryId="folder" library={library} /> : <FolderHierarchyRootMenu onSelectFolders={library.onSelectFolders}
+  const renderRootMore = (rootToolbar = false) => flat ? <LibraryRootMenu categoryId="folder" library={library} rootToolbar={rootToolbar} /> : <FolderHierarchyRootMenu rootToolbar={rootToolbar} onSelectFolders={library.onSelectFolders}
     onRescan={library.onRescanFolders} onTogglePinned={library.onToggleFoldersPin} pinned={library.foldersPinnedInSidebar}
     busy={library.isImportPending || library.isFolderRestorePending || library.isFolderRescanPending}
     rescanDisabled={!library.folderRoots?.length} />
@@ -371,7 +371,7 @@ function FolderHierarchyScene({ categoryId = 'folders', playlist, allSongsCoverS
         actions={renderHeroActions()} /> : null}
       <div ref={gridRef} data-layout-level={layout.level} data-layout-flow={layout.flow} data-layout-artwork={layout.showArtwork} style={{ ...layout.style, '--folder-columns': layout.columns } as CSSProperties}>
         {!location ? <CollectionManagementHeader chrome={managementChrome} category={category}
-          sharedProjection={sharedProjection} onOverview={goUp} returnTransition={returnTransition} more={renderRootMore()} hideActions={currentSelection.active}
+          sharedProjection={sharedProjection} onOverview={goUp} returnTransition={returnTransition} more={renderRootMore(true)} hideActions={currentSelection.active}
           actions={{
             shuffleLabel: '随机播放文件夹歌曲', shuffleDisabled: playlist.isOpenAudioDisabled || metadataLoading || !candidates.length || !library.onShufflePlay,
             onShuffle: () => { void library.onShufflePlay?.(candidates.map(({ scope, trackId }) => ({ scope, trackId }))) },

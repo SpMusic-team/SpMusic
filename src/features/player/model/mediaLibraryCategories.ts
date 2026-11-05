@@ -31,7 +31,7 @@ import overview9 from '@/assets/playlist-library/dc9e8.svg'
 import overview10 from '@/assets/media-library/1acd5.svg'
 import overview11 from '@/assets/media-library/8e7f7.svg'
 import overview12 from '@/assets/media-library/01c3e.svg'
-import overview13 from '@/assets/media-library/a608b.svg'
+import overview13 from '@/assets/library-root-menu/c95de.svg'
 import overview14 from '@/assets/media-library/31d62.svg'
 import overview15 from '@/assets/media-library/fb051.svg'
 import overview16 from '@/assets/media-library/6f6b6.svg'
@@ -52,7 +52,7 @@ export const mediaLibraryCategories = [
   { id: 'streams', label: '流', icon: streams, overviewIcon: overview10, glyphWidth: 48, glyphHeight: 48 },
   { id: 'queue', label: '队列', icon: queue, overviewIcon: overview11, glyphWidth: 48, glyphHeight: 56.571 },
   { id: 'bookmarks', label: '书签', icon: bookmarks, overviewIcon: overview12, glyphWidth: 48, glyphHeight: 48 },
-  { id: 'most-played', label: '最常播放', icon: mostPlayed, overviewIcon: overview13, glyphWidth: 48, glyphHeight: 57 },
+  { id: 'most-played', label: '最常播放', icon: mostPlayed, overviewIcon: overview13, glyphWidth: 48, glyphHeight: 48 },
   { id: 'highest-rated', label: '最高评级', icon: highestRated, overviewIcon: overview14, glyphWidth: 48, glyphHeight: 48 },
   { id: 'lowest-rated', label: '最低评级', icon: lowestRated, overviewIcon: overview15, glyphWidth: 48, glyphHeight: 48 },
   { id: 'recent-played', label: '最近播放', icon: recentPlayed, overviewIcon: overview16, glyphWidth: 48, glyphHeight: 57 },

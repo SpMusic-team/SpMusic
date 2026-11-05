@@ -1,3 +1,4 @@
+import { DEFAULT_MOST_PLAYED_OPTIONS, isMostPlayedOptions } from '../model/mostPlayed'
 import { useId, useRef, useState, type CSSProperties } from 'react'
 import { flushSync } from 'react-dom'
 import { Button } from '@/components/ui/button'
@@ -92,6 +93,13 @@ export function LibraryRootMenu({ categoryId, library, onSort, onListOptions, ro
   const [open, setOpen] = useState(false)
   const [transferring, setTransferring] = useState(false)
   const [notice, setNotice] = useState<Action | null>(null)
+  const [mostOptions, setMostOptions] = useState(false)
+  const [clearMost, setClearMost] = useState(false)
+  const [mostLimit, setMostLimit] = useState('100')
+  const [mostFrom, setMostFrom] = useState('')
+  const [mostDirection, setMostDirection] = useState<'asc' | 'desc'>('desc')
+  const [mostError, setMostError] = useState('')
+  const mostId = useId()
   const [durationOptions, setDurationOptions] = useState(false)
   const [durationMinutes, setDurationMinutes] = useState('')
   const [durationError, setDurationError] = useState('')
@@ -101,6 +109,18 @@ export function LibraryRootMenu({ categoryId, library, onSort, onListOptions, ro
   const pinned = library.pinnedCategoryIds?.includes(categoryId) ?? false
   const busy = library.isImportPending || library.isFolderRescanPending
   const run = (action: Action) => {
+    if (categoryId === 'most-played') {
+      if (action === settings && library.onMostPlayedOptionsChange) {
+        const options = library.mostPlayedOptions ?? DEFAULT_MOST_PLAYED_OPTIONS
+        setMostLimit(String(options.limit)); setMostDirection(options.direction)
+        setMostFrom(options.from ? new Date(options.from - new Date(options.from).getTimezoneOffset() * 60000).toISOString().slice(0, 16) : '')
+        setMostError(''); setMostOptions(true); return
+      }
+      if (action.label === '查看全部' && library.onMostPlayedOptionsChange) {
+        library.onMostPlayedOptionsChange({ ...(library.mostPlayedOptions ?? DEFAULT_MOST_PLAYED_OPTIONS), limit: Number.MAX_SAFE_INTEGER, from: 0 }); setOpen(false); return
+      }
+      if (action.label === '清空' && library.onClearMostPlayed) { setClearMost(true); return }
+    }
     if (action === settings && onListOptions) { setOpen(false); onListOptions(); return }
     if (action === sort && onSort) { setOpen(false); onSort(); return }
     if (action === settings && categoryId === 'long-tracks' && library.onLongTracksMinDurationChange) {
@@ -123,9 +143,28 @@ export function LibraryRootMenu({ categoryId, library, onSort, onListOptions, ro
     if (action.kind === 'pin') library.onToggleCategoryPin?.(categoryId)
     if (action.kind === 'rescan') library.onRescanFolders?.()
   }
-  return <Dialog open={open} onOpenChange={value => { setTransferring(false); setNotice(null); setDurationOptions(false); setOpen(value) }}>
+  return <Dialog open={open} onOpenChange={value => { setTransferring(false); setNotice(null); setDurationOptions(false); setMostOptions(false); setClearMost(false); setOpen(value) }}>
     <DialogTrigger render={<Button ref={trigger} className="playlist-hero-icon playlist-hero-more-button" variant="ghost" size="icon" aria-label="更多列表操作">{rootToolbar || categoryId === 'year' || categoryId === 'genre' ? <img src={yearMoreIcon} alt="" /> : <icons.more aria-hidden="true" />}</Button>} />
-    {!transferring && (durationOptions ? <DialogContent finalFocus={trigger}>
+    {!transferring && (clearMost ? <DialogContent finalFocus={trigger}>
+      <DialogHeader><DialogTitle>清空最常播放？</DialogTitle><DialogDescription>清除累计播放次数。音乐文件、最近播放和当前播放队列会保留。</DialogDescription></DialogHeader>
+      <DialogFooter><Button variant="outline" onClick={() => setClearMost(false)}>取消</Button><Button onClick={() => { library.onClearMostPlayed?.(); setOpen(false) }}>清空</Button></DialogFooter>
+    </DialogContent> : mostOptions ? <DialogContent finalFocus={trigger}>
+      <form className="flex flex-col gap-4" onSubmit={event => {
+        event.preventDefault()
+        const limit = Number(mostLimit), from = mostFrom ? new Date(mostFrom).getTime() : 0
+        if (!mostLimit.trim() || !Number.isSafeInteger(limit) || limit < 2 || !isMostPlayedOptions({ limit, from, direction: mostDirection })) { setMostError('请输入至少 2 的整数条数和有效的时间。'); return }
+        library.onMostPlayedOptionsChange?.({ limit, from, direction: mostDirection }); setOpen(false)
+      }}>
+        <DialogHeader><DialogTitle>最常播放 · 列表选项</DialogTitle><DialogDescription>先选出累计次数最高的歌曲，再按次数方向显示。</DialogDescription></DialogHeader>
+        <FieldGroup>
+          <Field data-invalid={Boolean(mostError)}><FieldLabel htmlFor={mostId}>最多歌曲数</FieldLabel><Input id={mostId} type="number" min={2} step={1} value={mostLimit} onChange={event => setMostLimit(event.target.value)} aria-invalid={Boolean(mostError)} /><FieldDescription>默认 100 首；“查看全部”可取消条数和时间限制。</FieldDescription></Field>
+          <Field><FieldLabel htmlFor={mostId + '-from'}>最近达标播放晚于</FieldLabel><Input id={mostId + '-from'} type="datetime-local" value={mostFrom} onChange={event => setMostFrom(event.target.value)} /><FieldDescription>留空包含全部历史；显示的次数始终是累计次数。</FieldDescription></Field>
+          <Field><FieldLabel>播放次数排序</FieldLabel><Button type="button" variant="outline" onClick={() => setMostDirection(value => value === 'desc' ? 'asc' : 'desc')}>{mostDirection === 'desc' ? '降序（最多在前）' : '升序（最少在前）'}</Button></Field>
+          {mostError ? <FieldError>{mostError}</FieldError> : null}
+        </FieldGroup>
+        <DialogFooter><Button type="button" variant="outline" onClick={() => setMostOptions(false)}>取消</Button><Button type="submit">保存</Button></DialogFooter>
+      </form>
+    </DialogContent> : durationOptions ? <DialogContent finalFocus={trigger}>
       <form className="flex flex-col gap-4" onSubmit={event => {
         event.preventDefault()
         const minutes = Number(durationMinutes)

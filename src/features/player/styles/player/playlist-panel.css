@@ -924,3 +924,67 @@
   .playlist-grid[data-layout-level="0"] .playlist-card-title { line-height: 24px; }
   .playlist-grid[data-layout-level="0"] .playlist-card-artist { line-height: 20px; }
 }
+
+.playlist-card-play-count {
+  font-size: calc(var(--playlist-play-count-size, 14px) * var(--app-font-scale));
+  line-height: 20px;
+  font-weight: 500;
+}
+
+.playlist-card-format .playlist-card-play-count {
+  margin-left: auto;
+  flex: 0 0 auto;
+  padding-inline: 6px;
+  color: var(--player-inverse-primary, var(--player-blue));
+}
+
+.playlist-card-cover-play-count { display: none; }
+.playlist-grid[data-layout-flow="tile"] .playlist-card-cover-play-count {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: grid;
+  place-items: center;
+  min-width: 29px;
+  height: 24px;
+  padding-inline: 6px;
+  border-radius: var(--app-radius-pill);
+  background: var(--app-bg);
+  color: var(--player-blue);
+  pointer-events: none;
+}
+.playlist-grid[data-layout-level="2"] .playlist-card-cover-play-count { top: 7px; }
+.playlist-grid[data-layout-flow="tile"] .playlist-card-format .playlist-card-play-count { display: none; }
+
+/* The two compact two-line layouts align count/title and format/artist. */
+.playlist-card-compact-play-count { display: none; }
+.playlist-grid:is([data-layout-level="5"], [data-layout-level="6"]) .playlist-card[data-has-play-count] .playlist-card-copy {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) fit-content(45%);
+  grid-template-rows: auto auto;
+  align-content: center;
+  gap: 0 16px;
+}
+.playlist-grid:is([data-layout-level="5"], [data-layout-level="6"]) .playlist-card[data-has-play-count] .playlist-card-title { grid-column: 1; grid-row: 1; }
+.playlist-grid:is([data-layout-level="5"], [data-layout-level="6"]) .playlist-card[data-has-play-count] .playlist-card-artist { grid-column: 1; grid-row: 2; }
+.playlist-grid:is([data-layout-level="5"], [data-layout-level="6"]) .playlist-card[data-has-play-count] .playlist-card-compact-play-count {
+  display: block;
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: end;
+  align-self: center;
+  color: var(--player-inverse-primary, var(--player-blue));
+}
+.playlist-grid:is([data-layout-level="5"], [data-layout-level="6"]) .playlist-card[data-has-play-count] .playlist-card-format {
+  grid-column: 2;
+  grid-row: 2;
+  align-self: center;
+  justify-content: flex-end;
+  min-width: 0;
+  max-width: 100%;
+}
+.playlist-grid:is([data-layout-level="5"], [data-layout-level="6"]) .playlist-card[data-has-play-count] .playlist-card-format .playlist-card-play-count { display: none; }
+
+/* Count typography steps down with the compact song layouts. */
+.playlist-grid:is([data-layout-level="5"], [data-layout-level="6"] ) { --playlist-play-count-size: 12px; }
+.playlist-grid:is([data-layout-level="7"], [data-layout-level="8"], [data-layout-level="9"] ) { --playlist-play-count-size: 10px; }

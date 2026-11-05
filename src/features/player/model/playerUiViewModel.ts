@@ -1,3 +1,4 @@
+import type { MostPlayedOptions } from './mostPlayed'
 import type { BookmarkEntry } from './bookmarks'
 import type { MediaLibraryCategoryId, MediaLibraryRoute } from '@/features/player/model/mediaLibraryCategories'
 import type { LibraryFolderSettings, DirectoryChildren, ReplaceLibraryFoldersInput, RootSelection } from '@/features/player/services/audioCommands'
@@ -246,6 +247,11 @@ export type PlaylistLibraryViewModel = PlaylistAddCallbacks & {
   onSelectCategory?: (categoryId: MediaLibraryCategoryId) => void
   isOpen: boolean
   items: readonly PlaylistLibraryItem[]
+  mostPlayedSongs?: readonly AllSongsItem[]
+  mostPlayedCounts?: ReadonlyMap<string, number>
+  mostPlayedOptions?: MostPlayedOptions
+  onMostPlayedOptionsChange?: (value: MostPlayedOptions) => void
+  onClearMostPlayed?: () => void
   recentSongs?: readonly AllSongsItem[]
   recentAddedSongs?: readonly AllSongsItem[]
   longSongs?: readonly AllSongsItem[]

@@ -1,3 +1,4 @@
+import { readMostPlayed, writeMostPlayed, recordMostPlayed } from '../model/mostPlayed'
 import { RecentlyPlayedTracker, readRecentlyPlayed, writeRecentlyPlayed } from '../model/recentlyPlayed'
 import { isPlayerDragDiagnosticsRecording, playerDragDiagnosticId, recordPlayerDragDiagnostic, registerPlayerDragDiagnosticSnapshot } from '@/features/player/diagnostics/playerDragDiagnostics'
 import { folderSelectionPath, isRootSelectionActive, projectSelectedFolder } from '@/features/player/model/folderSelection'
@@ -442,6 +443,13 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
   const [bookmarkRestoring, setBookmarkRestoring] = useState(false)
   const bookmarkProgressSequenceRef = useRef(0)
   const [bookmarkProgressMotion, setBookmarkProgressMotion] = useState<PlayerTimelineViewModel['bookmarkProgressMotion']>(null)
+  const [mostPlayed, setMostPlayed] = useState(readMostPlayed)
+  const mostPlayedRef = useRef(mostPlayed)
+  const clearMostPlayed = useCallback(() => {
+    mostPlayedRef.current = []
+    setMostPlayed([])
+    try { writeMostPlayed([]) } catch (error) { console.error('Failed to clear most played', error) }
+  }, [])
   const [recentlyPlayed, setRecentlyPlayed] = useState(readRecentlyPlayed)
   const recentlyPlayedRef = useRef(recentlyPlayed)
   const [audioState, setAudioState] = useState<AudioPlaybackState | null>(null)
@@ -2871,6 +2879,10 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
         recentlyPlayedRef.current = next
         try { writeRecentlyPlayed(next) } catch (error) { console.error('Failed to save recently played', error) }
         setRecentlyPlayed(next)
+        const statistics = recordMostPlayed(mostPlayedRef.current, sourcePath, Date.now())
+        mostPlayedRef.current = statistics
+        setMostPlayed(statistics)
+        try { writeMostPlayed(statistics) } catch (error) { console.error('Failed to save most played', error) }
       }
     }
     const previousAudioState = latestAudioStateRef.current
@@ -4273,7 +4285,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     const source = selection.sourceScope ? findPlaylistForScope(selection.sourceScope) : undefined
     if (selection.kind === 'playlist' && !source) return false
     const id = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
-    const name = selection.kind === 'long-tracks' ? '长' : selection.kind === 'recent-added' ? '最近添加' : selection.kind === 'recent-played' ? '最近播放' : selection.kind === 'all-songs' ? '所有歌曲' : playlistDisplayName(source!)
+    const name = selection.kind === 'most-played' ? '最常播放' : selection.kind === 'long-tracks' ? '长' : selection.kind === 'recent-added' ? '最近添加' : selection.kind === 'recent-played' ? '最近播放' : selection.kind === 'all-songs' ? '所有歌曲' : playlistDisplayName(source!)
     const playlist: PlaybackQueuePlaylist = {
       sourceKind: 'custom', sourcePath: `queue:${selection.kind}:${id}`,
       sourceName: name, directoryPath: '', directoryName: name, selectedIndex: index, tracks,
@@ -4939,6 +4951,8 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     createBookmark,
     deleteBookmarks,
     restoreBookmark,
+    mostPlayed,
+    clearMostPlayed,
     recentlyPlayed,
     allSongsManualOrder: manualOrders.has(null),
     allSongsManualPaths: manualOrders.get(null),

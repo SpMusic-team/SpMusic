@@ -1,3 +1,4 @@
+import { normalizeAudioSourcePath } from '../model/playlistTrackSummary'
 import { useLibrarySearch } from '../hooks/useLibrarySearch'
 import { CollectionQuickIndex } from './CollectionQuickIndex'
 import { useCollectionEntryProjection } from '../hooks/useCollectionEntryProjection'
@@ -64,6 +65,7 @@ type Props = {
 }
 
 type AllSongsCardProps = {
+  playCount?: number
   item: AllSongsItem
   index: number
   store: AllSongsCoverStore
@@ -86,7 +88,7 @@ type AllSongsCardProps = {
 // Covers are layered in the card from the artwork stores instead of being merged
 // into the aggregated rows. The rows therefore keep their identity while covers
 // arrive, and only the card whose own store entry changed re-renders.
-const AllSongsCard = memo(function AllSongsCard({ item, index, store, artworkSource, fallbackArtworkSource, current,
+const AllSongsCard = memo(function AllSongsCard({ playCount, item, index, store, artworkSource, fallbackArtworkSource, current,
   canActivate, selectMode, showReorderHandle, selected, artworkVisible, showExtendedMetadata, coverFailed, onCoverFailed, onActivate,
   onToggleSelect, onEnterSelectMode }: AllSongsCardProps) {
   const coverUrl = useAllSongsCoverUrl(store, item.key, item.trackId, item.sourcePath)
@@ -95,7 +97,7 @@ const AllSongsCard = memo(function AllSongsCard({ item, index, store, artworkSou
   const hasFormat = Boolean((track.durationSeconds ?? 0) > 0 || track.fileExtension || (bitDepth != null && bitDepth >= 24))
   const contentShape = Number(Boolean(track.title)) | (Number(Boolean(track.artist)) << 1)
     | (Number(Boolean(track.artist || track.album)) << 2) | (Number(hasFormat) << 3)
-  return <PlaylistCard songKey={item.key} track={track} index={index} coverUrl={coverUrl}
+  return <PlaylistCard playCount={playCount} songKey={item.key} track={track} index={index} coverUrl={coverUrl}
     artworkSource={artworkSource} fallbackArtworkSource={fallbackArtworkSource}
     current={current} unavailable={!item.available} canSelectUnavailable canActivate={canActivate}
     selectMode={selectMode} showReorderHandle={showReorderHandle} selected={selected} artworkVisible={artworkVisible}
@@ -117,11 +119,12 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
   const library = playlist.library!
   const categoryId = library.route?.view === 'category' ? library.route.categoryId : 'playlists'
   const category = mediaLibraryCategories.find((item) => item.id === categoryId)!
+  const isMost = categoryId === 'most-played'
   const isRecentAdded = categoryId === 'recent-added'
-  const isRecent = categoryId === 'recent-played' || isRecentAdded
+  const isRecent = categoryId === 'recent-played' || isRecentAdded || isMost
   const isLong = categoryId === 'long-tracks'
   const isSongs = categoryId === 'songs' || isRecent || isLong
-  const sourceSongs = isLong ? library.longSongs : isRecentAdded ? library.recentAddedSongs : isRecent ? library.recentSongs : library.allSongs
+  const sourceSongs = isMost ? library.mostPlayedSongs : isLong ? library.longSongs : isRecentAdded ? library.recentAddedSongs : isRecent ? library.recentSongs : library.allSongs
   const hasDataSource = isSongs || categoryId === 'playlists' || categoryId === 'folder'
   const categoryItems = useMemo(() => categoryId === 'playlists' ? library.items.filter((item) => item.sourceKind !== 'folder') : categoryId === 'folder' ? library.items.filter((item) => item.sourceKind === 'folder') : [], [categoryId, library.items])
   const [query, setQuery] = useState('')
@@ -447,7 +450,7 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
   function toggleSelection() { setSelectMode(!selectMode); setSelected(new Set()) }
   function openCreatePlaylist() { setPlaylistName(''); setCreateError(''); setCreateOpen(true) }
   function renderMore(compact = false) {
-    if (!compact || isLong) return <LibraryRootMenu key={categoryId} categoryId={categoryId} library={library} rootToolbar={!compact} />
+    if (!compact || isLong || isMost) return <LibraryRootMenu key={categoryId} categoryId={categoryId} library={library} rootToolbar={!compact} />
     return <DropdownMenu>
       <DropdownMenuTrigger render={<Button className={compact ? 'playlist-hero-icon playlist-hero-more-button' : 'playlist-management-more'}
         variant={compact ? 'ghost' : 'outline'} size={compact ? 'icon' : 'default'} aria-label="更多列表操作">
@@ -570,11 +573,11 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
           panel.scrollTop += space.getBoundingClientRect().top - panel.getBoundingClientRect().top + Math.floor(next / songsLayout.columns) * songsWindow.stride
         }}
         style={{ ...songsLayout.style, touchAction: 'pan-y', transformOrigin: 'left top', ...songsWindow.gridStyle }}>
-        {renderedSongs.map((item, index) => <AllSongsCard key={item.key} item={item} index={songsWindow.first + index} store={coverStore}
+        {renderedSongs.map((item, index) => <AllSongsCard key={item.key} item={item} playCount={isMost ? library.mostPlayedCounts?.get(normalizeAudioSourcePath(item.sourcePath)) : undefined} index={songsWindow.first + index} store={coverStore}
             artworkSource={playlist.artworkSource} fallbackArtworkSource={playlist.fallbackArtworkSource}
             current={item.trackId === playlist.currentTrackId}
             canActivate={!playlist.isOpenAudioDisabled}
-            selectMode={selectMode} showReorderHandle={categoryId !== 'songs'} selected={selected.has(item.key)}
+            selectMode={selectMode} showReorderHandle={categoryId !== 'songs' && !isMost} selected={selected.has(item.key)}
             artworkVisible={songsLayout.showArtwork} showExtendedMetadata={songsLayout.flow !== 'tile'}
             coverFailed={failedSongCovers.has(item.key)}
             onCoverFailed={handleSongCoverFailed}

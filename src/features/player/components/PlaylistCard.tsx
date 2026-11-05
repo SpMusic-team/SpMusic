@@ -10,6 +10,7 @@ import checkbox from '@/assets/song-card/checkbox-unchecked.svg'
 import arrowMove from '@/assets/song-card/arrow-move.svg'
 
 type PlaylistCardProps = {
+  playCount?: number
   track: PlaylistTrackItemViewModel
   artworkSource?: PlaylistArtworkSource
   fallbackArtworkSource?: PlaylistArtworkSource
@@ -74,6 +75,7 @@ function useCardArtwork(source: PlaylistArtworkSource | undefined, trackId: stri
 }
 
 export const PlaylistCard = memo(function PlaylistCard({
+  playCount,
   track: baseTrack,
   artworkSource,
   fallbackArtworkSource,
@@ -153,6 +155,7 @@ export const PlaylistCard = memo(function PlaylistCard({
       type="button"
       className="playlist-card"
       data-playlist-track-id={track.id}
+      data-has-play-count={playCount !== undefined || undefined}
       data-song-key={songKey}
       data-cover-state={coverState}
       data-content-visible={contentVisible ? 'true' : 'false'}
@@ -167,19 +170,19 @@ export const PlaylistCard = memo(function PlaylistCard({
       aria-pressed={selectMode ? selected : undefined}
       disabled={disabled}
       title={label}
-      aria-label={label}
+      aria-label={playCount === undefined ? label : `${label} · 累计播放 ${playCount} 次`}
       onClick={handleClick}
       onPointerDown={longPress.onPointerDown}
       onContextMenu={longPress.onContextMenu}
     >
-      {contentVisible ? <PlaylistCardContent track={track} positionMs={positionMs} songKey={songKey} coverUrl={coverUrl} artworkVisible={artworkVisible}
+      {contentVisible ? <PlaylistCardContent playCount={playCount} track={track} positionMs={positionMs} songKey={songKey} coverUrl={coverUrl} artworkVisible={artworkVisible}
         selectMode={selectMode} showReorderHandle={showReorderHandle} unavailable={unavailable} showExtendedMetadata={showExtendedMetadata}
         coverState={coverState} coverFailed={coverFailed} onCoverFailed={onCoverFailed} /> : null}
     </button>
   )
 })
 
-function PlaylistCardContent({ track, positionMs, songKey, coverUrl, artworkVisible, selectMode, showReorderHandle, unavailable, showExtendedMetadata, coverState, coverFailed, onCoverFailed }: Pick<PlaylistCardProps, 'track' | 'positionMs' | 'songKey' | 'coverUrl' | 'artworkVisible' | 'selectMode' | 'showReorderHandle' | 'unavailable' | 'showExtendedMetadata' | 'coverFailed' | 'onCoverFailed'> & { coverState: PlaylistCardCoverState }) {
+function PlaylistCardContent({ playCount, track, positionMs, songKey, coverUrl, artworkVisible, selectMode, showReorderHandle, unavailable, showExtendedMetadata, coverState, coverFailed, onCoverFailed }: Pick<PlaylistCardProps, 'playCount' | 'track' | 'positionMs' | 'songKey' | 'coverUrl' | 'artworkVisible' | 'selectMode' | 'showReorderHandle' | 'unavailable' | 'showExtendedMetadata' | 'coverFailed' | 'onCoverFailed'> & { coverState: PlaylistCardCoverState }) {
   const systemIcons = useSystemIcons()
   const coverSource = coverUrl ?? track.coverImage ?? track.coverImageFallback
   const coverMarkVisible = coverState === 'empty' || coverState === 'error'
@@ -219,6 +222,7 @@ function PlaylistCardContent({ track, positionMs, songKey, coverUrl, artworkVisi
             <systemIcons.music />
           </span>
         ) : null}
+        {playCount !== undefined ? <span className="playlist-card-play-count playlist-card-cover-play-count">{playCount}</span> : null}
         {unavailable ? <span className="playlist-card-cover-state">{appCopy.playlistPage.moreUnavailable}</span> : null}
         {/* Selection controls are structurally bound to selection mode: outside it
             a card mounts no mask-image glyph and no per-card SVG, which is what kept
@@ -234,16 +238,18 @@ function PlaylistCardContent({ track, positionMs, songKey, coverUrl, artworkVisi
       </span>
       <span className="playlist-card-copy">
         <span className="playlist-card-title">{track.title}</span>
+        {playCount !== undefined ? <span className="playlist-card-play-count playlist-card-compact-play-count" aria-hidden="true">{playCount}</span> : null}
         {artistAlbum ? <span className="playlist-card-artist">{artistAlbum}</span> : null}
-        {formatParts.length ? (
+        {formatParts.length || showExtendedMetadata && playCount !== undefined ? (
           <span className="playlist-card-format">
-            <systemIcons.music aria-hidden="true" />
+            {formatParts.length ? <systemIcons.music aria-hidden="true" /> : null}
             {formatParts.map((part, index) => (
               <span key={`${part}-${index}`}>
                 {index > 0 ? <span className="playlist-card-format-separator" aria-hidden="true"> | </span> : null}
                 {part}
               </span>
             ))}
+            {showExtendedMetadata && playCount !== undefined ? <span className="playlist-card-play-count" aria-hidden="true">{playCount}</span> : null}
           </span>
         ) : null}
       </span>

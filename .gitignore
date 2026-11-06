@@ -48,3 +48,9 @@ dist-ssr
 # 其它分析副产物（LevelDB 快照、内存采样 CSV），不属于文档证据
 .rea-analysis/ls-snapshot/
 .rea-analysis/*.csv
+.rea-analysis/audio-shots/
+.rea-analysis/v1035/
+.rea-analysis/tools/
+
+# 临时构建产物与运行时诊断目录（含 LevelDB、数据库、日志），可重建，不入库
+.codex-tmp-folder-ui-dist/

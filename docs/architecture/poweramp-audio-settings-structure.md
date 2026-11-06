@@ -75,30 +75,66 @@ source_documents:
 
 ## 1. 目标标识与解码来源
 
+### 1.1 当前基准（build-1035）
+
+**本文以 build-1035 为唯一权威基准**（build-1025 仅作历史对照，见 §13.8）。
+
 | | |
 | --- | --- |
-| 包名 / 版本 | `com.maxmpz.audioplayer` build-1025-uni（versionCode `1025009`） |
-| APK SHA-256 | `4467fdac3e89b98485866e454bc3b7dc2d73d788d7a1aa9c73ea1028d36b82e0` |
-| 解码工具 | **apktool 3.0.3** + 内置 JDK（`vendor/jdk`） |
-| 解码产物 | `.rea-analysis/decoded/res/xml/`（10 个 `audio*.xml`）、`.rea-analysis/decoded/res/values/strings.xml`（2056 条） |
+| 包名 / 版本 | `com.maxmpz.audioplayer` **build-1035-bundle-play**（`versionCode 1035009`） |
+| 安装包形态 | **Split APK**：`base.apk`（18.2 MB）+ `split_config.arm64_v8a.apk`（6.6 MB） |
+| 解码工具 | **apktool 2.11.1** + JBR 25（`D:\IntelliJ IDEA 2026.1.1\jbr`） |
+| 解码产物 | `.rea-analysis/v1035/decoded/`（`res/xml/` 59 文件、`smali/` + `smali_classes2/` 共 4397 文件） |
 | 证据性质 | **偏好页面由 XML 定义**，故 XML 原文是该结构的权威来源，优于反编译 Java |
 
-### 1.1 十个 XML 文件与行数（原文核对）
+> `lib/` 目录不在 `base.apk` 内，而在 `split_config.arm64_v8a.apk`——这是 ABI split 的必然结果，**不影响** XML/偏好结构分析。
 
-| 文件 | 行数 | 角色 |
+### 1.2 音频分支的 15 个 XML
+
+build-1035 的音频分支共 **15 个 XML**（`res/xml/` 下以 `audio_`、`fade`、`rg`、`peq_` 开头的文件）：
+
+| 文件 | 行数 | 角色 | 相对 1025 |
+| --- | ---: | --- | --- |
+| `audio.xml` | 17 | 根页面（`@string/pref_audio_engine` = "Audio"），**10 个入口** | key 8→9 |
+| `audio_bit_perfect.xml` | 19 | **比特完美**（64-bit / 跟随采样率 / DSD 重制 / 极致） | **新增** |
+| `audio_outputs2.xml` | 16 | 输出设备列表（6 个 `ButtonPref`） | **新增**（取代 `audio_outputs.xml`） |
+| `audio_outputs_tweaks.xml` | 10 | 输出高级（USB / 流3 / 探测日志） | **新增** |
+| `audio_output_device_opts.xml` | 69 | **设备级选项（63 key，核心）** | 25 行 21 key → 69 行 63 key |
+| `audio_focus.xml` | 19 | 音频焦点 | 不变 |
+| `audio_equ.xml` | 18 | 均衡器 | 不变 |
+| `audio_resampler.xml` | 10 | 重采样 | 不变 |
+| `audio_dvc.xml` | 22 | 直接音量控制 | 10→15 key |
+| `audio_tweaks.xml` | 22 | 高级调整 | 13→11 key |
+| `audio_platform_log.xml` | 4 | 输出探测日志（空壳） | 不变 |
+| `fade.xml` | 18 | 交叉淡入淡出 / 无间隙 | 12→11 key |
+| `rg.xml` | 10 | 播放增益 | 不变 |
+| `peq_equ_bands.xml` | 14 | **第 4 层**：图形均衡器频段 | 不变 |
+| `peq_equ_tone.xml` | 11 | **第 4 层**：音调 | 不变 |
+
+> **已移除**：`audio_output.xml`（单插件配置）、`audio_outputs.xml`（插件列表空壳）——被 `audio_outputs2.xml` 统一取代。
+
+**层级关系**（共 4 层）：
+
+```
+audio（根，10 入口）
+ ├─ audio_bit_perfect           ← 4 组「全局开关 + 逐输出状态行」
+ ├─ audio_outputs2              ← 6 个设备 ButtonPref
+ │    └─ audio_output_device_opts  ← 63 项（含三态 / 多选位集 / 11 个只读状态行）
+ │         └─ （插件驱动选择 output_api 在此页）
+ ├─ audio_outputs2 → audio_outputs_tweaks   ← 「其他」分类下的输出高级
+ ├─ audio_equ → peq_equ_bands / peq_equ_tone  ← 第 4 层
+ └─ fade / rg / audio_focus / audio_resampler / audio_dvc / audio_tweaks
+```
+
+### 1.3 build-1025 对照（历史，仅 §13.8 使用）
+
+| 项 | 1025 | 1035 |
 | --- | --- | --- |
-| `audio.xml` | 15 | 根页面（`title = @string/pref_audio_engine` = "Audio"） |
-| `audio_outputs.xml` | 7 | 输出插件列表（第 1 层） |
-| `audio_output.xml` | 14 | 单插件配置（第 2 层） |
-| `audio_output_device_opts.xml` | 25 | **设备级选项（第 3 层，核心）** |
-| `audio_focus.xml` | 18 | 音频焦点 |
-| `audio_equ.xml` | 17 | 均衡器 |
-| `audio_resampler.xml` | 8 | 重采样 |
-| `audio_dvc.xml` | 16 | 直接音量控制 |
-| `audio_tweaks.xml` | 23 | 高级调整 |
-| `audio_platform_log.xml` | 3 | 输出探测日志（空壳） |
-
-> 行数均含 XML 声明行与根标签行（【实证·原文】实际读取）。
+| versionCode | `1025009` | `1035009` |
+| 解码工具 | apktool 3.0.3 | apktool 2.11.1 |
+| 音频 XML 数 | 10 | **15** |
+| 根页面入口 | 9 | **10** |
+| 设备级选项 key | 21 | **63** |
 
 ## 2. 偏好树
 
@@ -154,6 +190,59 @@ flowchart TD
 
 > `audio_info` 用 `<intent android:targetPackage="@string/edition_pak_name">`——**targetPackage 是资源引用而非硬编码**，指向不同的产品版本包名。这暗示同一份 XML 服务于多个 edition。
 
+### 3.1 ⚠️ 实机截图与 APK 的版本差异（**重要**）
+
+用实机截图（17 张，2026-11-06）与本文解包的 APK（`build-1025-uni` / `versionCode 1025009`）逐项对照后，发现**截图版本比 APK 新**，多出若干页面与项：
+
+| 截图中的项 | 页面 | APK 中是否存在 |
+| --- | --- | --- |
+| **比特完美**（根页面第 9 个入口） | `bit_perfect`（独立页） | ❌ **完全不存在** |
+| └ 64-bit 音频输出链路 | 同上 | ❌ |
+| └ 跟随音轨采样率 | 同上 | ❌ |
+| └ DSD 重制（PCM 重制为 DSD） | 同上 | ❌ |
+| └ 极致比特完美 | 同上 | ❌ |
+| Tracker 解码器插值 | `audio_tweaks` | ❌ 不存在（该页其他项都在） |
+
+**验证方法**：对上述 6 个 key/关键词，在 `res/xml/*.xml`（14 个文件）、`res/values/strings.xml`、`res/values-zh-rCN/strings.xml`、`libpowerampcore.so` 中全部 **0 命中**。
+
+**对照：确实存在的项**（证明这份 APK 与截图基本同源）：
+
+| 截图项 | APK 中的 key |
+| --- | --- |
+| 声道解码器额外增益 | `mod_gain_mb` ✓ |
+| Tracker 解码器立体声分离 | `mod_separation` ✓ |
+| 音量阶数 / 音量面板 / 根据音量暂停恢复 | `volume_levels` / `volume_popup` / `pause_on_volume` ✓ |
+| MusicFX | `allow_platform_fx` ✓ |
+| 9 个根页面标题 | 全部 ✓ |
+
+**结论**：
+
+1. 本文 §1–§14 描述的是 **APK build-1025-uni 的结构**，准确。
+2. 截图中「比特完美」页属于**更新的 Poweramp 版本**，其 key 命名、存储字段、位掩码均**无法从本 APK 得出**——需要更新版本的 APK 才能分析。
+3. 反过来说，本 APK 的 `audio.xml` 只有 9 个入口，而实机有 10 个（多出「比特完美」），印证了根页面入口存在**版本演进**。
+
+### 3.2 实机截图中确认的、APK 里不明显的运行时细节
+
+以下来自截图观察，补充 XML 静态结构看不到的部分：
+
+| 观察 | 说明 |
+| --- | --- |
+| 根页面「音频信息」的弹窗 | 展示 **4 段信号链**：音频信息（延迟 120ms）→ 音量控制（默认/无直接音频控制/增益 0.0dB）→ 输出（OpenSL ES Output / 48kHz / 24bit→16bit / 标志 `NO_HEADROOM_GAIN` / 延迟 120ms）→ 输出设备（扬声器 / 48kHz / 16bit），底部还有 **Fidelity 26 / 信号处理 15** 两个评分 |
+| `fade` 页的禁用提示 | 明确写出三条生效限制：① Chromecast 输出不应用淡入淡出；② **极致比特完美模式会禁用所有淡入淡出**；③ 采样率不同的轨道间切换不应用淡入淡出 |
+| `fade` 页的实测默认值 | Crossfade Length **5000ms** / Short Crossfade **400ms** / Fade Short **400ms** / Seek Fade **100ms** / Gapless Preload **0ms** / Track End Silence **0ms** —— 与 `fade.xml` 的 `defaultValue` 完全一致 ✓ |
+| `rg` 页的灰显 | RG 未启用时「来源」整行**变灰**（`rg_source` 无 XML dependency，是运行期 setEnabled） |
+| `audio_focus` 页的灰显 | `resume_on_start=false` 时，`resume_on_resume`（重新打开时恢复）与 `resume_on_mount`（等待存储就绪）**均变灰** —— 与 XML 的 `android:dependency="resume_on_start"` 一致 ✓ |
+| `audio_focus` 页的依赖 | `af_short=true` 时 `resume_on_focus` 与 `af_short_duck` 可用 —— 与 XML 的 `android:dependency="af_short"` 一致 ✓ |
+| `audio_dvc` 页的动态状态框 | `bt_absvol_status` 渲染成**圆角状态卡**，实测显示「绝对音量 → 蓝牙连接已断开 / 蓝牙 DVC → -」；「DVC 被启用的条件」是**可展开列表**（▶ 显示更多） |
+| `audio_dvc` 页的逐输出勾选 | `dvc_enabled` 下方列出「有线耳机 → Hi-Res输出 ✓」「蓝牙 → Hi-Res输出 ✓」，带勾选标记 |
+| `audio_resampler` 页 | 2 条提示 + `resampler_type`（软件/SoX）+ `resampler_cutoff` 旋钮（实测 **97.0%**）+ `dither`（实测「无抖动（最快）」） |
+| `audio_equ` 页 | 4 行提示（图形/参数模式说明），`eq_labels` 实测选中「分贝」，`tone_labels` 实测选中「%」 |
+| `audio_outputs` 页**实测显示的是设备列表** | 见下方 ⚠️ |
+
+> **⚠️ 关于 `audio_outputs` 的实测形态**：截图显示该页列出的是「有线耳机/音频输入」「扬声器」「蓝牙」「USB DAC」「Chromecast」「其他输出设备」**六类设备**（每项下方标注当前使用的输出插件，如「OpenSL ES Output / 激活 (48 kHz 16 bit)」），**而不是** §4.2 描述的"插件列表"。
+>
+> 这说明 XML 里的 `output_plugins_list`（一个空 `PreferenceCategory`）在运行时被填充的是**设备条目**，插件名作为**副标题**显示。本文 §4.2 的措辞需要修正：**第 1 层是"设备 × 当前插件"的列表，不是纯插件列表**。
+
 ## 4. 输出三层结构（本文核心）
 
 ### 4.1 为什么必须三层
@@ -162,7 +251,7 @@ flowchart TD
 
 ⇒ 必须 **插件 × 设备** 双维度。
 
-### 4.2 第 1 层：`audio_outputs.xml` —— 插件列表
+### 4.2 第 1 层：`audio_outputs.xml` —— 设备 × 插件列表
 
 【实证·原文】`audio_outputs.xml:2-7`：
 
@@ -178,9 +267,29 @@ flowchart TD
 
 （原文见 `audio_outputs.xml:2-7`；命名空间声明行已省略。）
 
-**`output_plugins_list` 是空 `PreferenceCategory`** ⇒ 插件由代码动态填入。这解释了为何有多个输出后端（`output.aa` / `output.at` / `output.athd` / `output.osl` / `output.cc`）——它们都是**可启用/禁用的插件**，不是硬编码分支。
+**`output_plugins_list` 是空 `PreferenceCategory`** ⇒ 内容由代码动态填入。
+
+> **⚠️ 措辞修正（依据实机截图）**：本层运行时填充的**不是纯插件列表，而是"输出设备"列表**。截图实测该页列出 6 个设备条目：
+>
+> | 设备条目 | 副标题（当前使用的输出插件 + 状态） |
+> | --- | --- |
+> | 有线耳机/音频输入 | Hi-Res输出 |
+> | 扬声器 | OpenSL ES Output · **激活 (48 kHz 16 bit)** |
+> | 蓝牙 | Hi-Res输出 |
+> | USB DAC | USB 独占输出 |
+> | Chromecast | Chromecast 输出 |
+> | 其他输出设备 | OpenSL ES 输出 |
+>
+> 即：**设备是主条目，插件是副标题**。用户在这里为「设备」选择「用哪个插件」，而非为「插件」选择设备。
+>
+> 结合 §13.3 的位掩码机制可以看出维度关系：
+> - **设备**（6 类，见 §13.3 的设备类型枚举）→ 决定第 2 层页面里哪几个设备开关可勾选
+> - **插件**（5 个，`output.aa`/`at`/`athd`/`osl`/`cc`）→ 决定第 3 层页面里哪些位掩码能力可用
+>
+> 这也解释了 `audio_output.xml`（第 2 层）里那 6 个 `SwitchConfigPreference`（`output_headset`/`speaker`/`bt`/`usb`/`chromecast`/`other`）——正是"该插件支持哪些设备"的开关集合。
 
 ### 4.3 第 2 层：`audio_output.xml` —— 单插件配置
+
 
 【实证·原文】`audio_output.xml:2-14`：
 
@@ -753,9 +862,1473 @@ Poweramp 的应对不是「假装生效」，而是**三层如实记录 + 一处
 | **P10** | （本文新增）`audio_focus.xml` 中 `resume_on_resume`(`:6`) 与 `resume_on_focus`(`:13`) **未声明 `android:persistent`** | ⚠️ 开放 | 同页其它项多为 `persistent="true"` 显式声明。是继承默认值还是遗漏？影响这两项是否真的持久化 |
 | **P11** | （本文新增）`w:skipSearch` 的默认值 | ⚠️ 开放 | `audio_equ.xml:12-15` 显式写 `skipSearch="false"`，暗示默认为 `true`；但大量项未声明却应可搜。默认值方向未确认 |
 
-## 13. 证据索引
+## 13. 运行时实现机制（补充：本文原仅基于 XML 静态结构）
 
-### 13.1 XML 原文（本文权威来源）
+> 以上 §1–§12 基于 XML 原文与反编译产物做**结构**归纳。本节补充从 smali 挖到的**实现机制**，解决原文标注为"待验证"的多项 P1–P9。
+
+### 13.1 14 个 XML 与 helper 类分派
+
+音频分支实际共 **14 个 XML**（原文只覆盖 10 个，遗漏 `fade` / `rg` / `peq_equ_bands` / `peq_equ_tone`），资源 id 与处理类如下【实证·产物】`f0.smali`：
+
+| 资源 id | 页面 | XML 行数 | helper 类 | 模式参数 |
+| --- | --- | ---: | --- | --- |
+| `0x7f160003` | `audio`（根） | 15 | `k0` | `0x1` |
+| `0x7f160011` | `fade` | 16 | `k0` | — |
+| `0x7f160022` | `rg` | 9 | `k0` | — |
+| `0x7f160006` | `audio_focus` | 18 | `k0` | `0x2` |
+| `0x7f160007` | `audio_output` | 14 | `k0` | `0x3` |
+| `0x7f160009` | `audio_outputs` | 7 | `k0` | `0x4` |
+| `0x7f16000c` | `audio_tweaks` | 23 | `k0` | `0x6` |
+| `0x7f16001e` | `peq_equ_bands` | 13 | `k0` | `0x5` |
+| `0x7f160004` | `audio_dvc` | 16 | `p0` | — |
+| `0x7f160005` | `audio_equ` | 17 | `r0` | — |
+| `0x7f16000b` | `audio_resampler` | 8 | `j0` | — |
+| `0x7f160008` | `audio_output_device_opts` | 25 | `c1` | — |
+| `0x7f16000a` | `audio_platform_log` | 3 | `f1` | — |
+| `0x7f16001f` | `peq_equ_tone` | 10 | `f1` | — |
+
+> **`k0` 是共用的通用 helper**（134 KB），通过构造参数 `l`（模式号）在 `l()` 里 `packed-switch` 分派到 19 个分支处理不同页面。`c1`（79 KB）专用于设备级选项。
+
+### 13.2 三层输出的数据模型（本文核心结构的实现验证）
+
+原文 §4 的三层结构在实现上是**两个独立 prefs 文件 + 一个位掩码字段**：
+
+| 层 | 存储 | 说明 |
+| --- | --- | --- |
+| 第 1 层：插件列表 | 原生 `native_get_plugins()` | **不在 prefs 里**，来自 `libpowerampcore.so`【实证·产物】`NativePluginManager.y():763` |
+| 第 2 层：插件→设备启用 | prefs 文件 **`foutp`** 的 `output_headset/speaker/bt/usb/other/chromecast` | 6 个字符串字段，按 `uniqName` 存【实证·产物】`Р.smali:47-95` |
+| 第 3 层：设备级选项 | 由 `uniqName` + `device` 组合定位，**位掩码**存储 | 见 §13.5.3 |
+
+**5 个内置输出插件**【实证·原文】`strings.xml` 的 `pa_output_*`：
+
+| uniqName | 标题 | 描述 |
+| --- | --- | --- |
+| `output.aa` | AAudio Output | Hi-Res (Android 14+) native output |
+| `output.at` | AudioTrack Output | Java based output |
+| `output.athd` | Hi-Res Output | Experimental direct hardware 24+ bit 96/192+ kHz |
+| `output.cc` | Chromecast Output | — |
+| `output.osl` / `output.oslhd` | OpenSL ES Output / OpenSL ES Hi-Res Output | Native Android audio API |
+
+### 13.3 设备级选项的位掩码模型（解决原文 P2「无依赖声明」疑问）
+
+原文 §5.2 指出"四个开关在 XML 里没有 `android:dependency`"。**实现上它们根本不用布尔字段，而是共享一个位掩码 int**。
+
+真正的读取方法是 `c1.w(prefKey, baseKey, mask, ...)`【实证·产物】`c1.smali:330-410`：
+
+```java
+w(key, baseKey, mask, ..., hideIfUnsupported, ...) {
+    pref = findPreference(baseKey) ?? findPreference(key);
+    if (pref != null) {
+        if ((mask & storedMask) != 0) {        // ← 位测试
+            ((TwoStatePreference) pref).setChecked(flag);
+            pref.setKey(key);                   // 动态改 key
+            pref.setPersistent(false);
+            pref.setEnabled(true);
+            return pref;
+        }
+        if (hideIfUnsupported) {                // ← 不支持的项直接移除
+            removePreference(pref);
+            return pref;
+        }
+        pref.setEnabled(false);                 // ← 支持但未启用 → 灰显
+        ((TwoStatePreference) pref).setChecked(false);
+    }
+}
+```
+
+各选项的位值【实证·产物】`c1.smali` 各调用点（`const/16 v5, <mask>` 后紧跟 `w(...)` 调用）：
+
+| key | 位掩码 | 十六进制 | 证据行 |
+| --- | --- | ---: | ---: |
+| `no_headroom` | `0x20` | 32 | `:2417` |
+| `no_equ` | `0x40` | 64 | `:2437` |
+| `float` | `0x80` | 128 | `:2455` |
+| `no_duck` | `0x2000` | 8192 | `:2544` |
+| `no_af` | `0x100000` | 1048576 | `:2560` |
+
+> 位值是**稀疏分布**的（0x20/0x40/0x80 连续三位，然后跳到 0x2000，再跳到 0x100000），说明这个掩码同时还编码了其他非 UI 能力（如编解码、DSP 开关），只有这几位暴露到设置页。
+
+> **这解释了原文的疑问**：四个开关之所以没有 `android:dependency`，是因为它们的**可用性**由 native 插件通过位掩码声明（该设备/该输出支持哪些能力），而非由用户设置之间互相依赖。**"四正交"不仅是设计意图，也是数据模型上的事实**——每一位独立，互不影响。
+
+**设备类型枚举**【实证·产物】`Р.smali:146-216`：
+
+| 值 | 设备 |
+| ---: | --- |
+| 0 | 耳机 `output_headset` |
+| 1 | 扬声器 `output_speaker` |
+| 2 | 蓝牙 `output_bt` |
+| 3 | USB `output_usb` |
+| 4 | 其他 `output_other` |
+| 5 | Chromecast `output_chromecast` |
+
+### 13.4 第 1 层插件列表的动态生成
+
+`audio_outputs.xml` 只有 3 个元素，插件列表是**运行时按 `pa_output_<uniqName>` 生成**的【实证·产物】`k0.smali:1041-1150`：
+
+```
+遍历 NativePluginManager.x() 返回的插件数组：
+  key = "pa_output_" + plugin.uniqName
+  if (findPreference(key) == null) {
+      新建 Preference
+      setTitle(plugin.袙(ctx))          // 插件自报的标题
+      setKey(key)
+      if (plugin 是当前输出) {
+          setFragment(f0)                // 点进第 2 层
+          extras: target="audio_output_device_opts"
+                  uniqName=plugin.uniqName
+                  device="chromecast"
+      }
+  }
+```
+
+> `uniqName` 与 `device` 通过 `getExtras()` 传给下一层页面——这就是三层结构**跨页面传参的唯一通道**（没有全局状态）。
+
+### 13.5 字面量补充：`fade` 与 `rg` 两页（原标"边界外"）
+
+原文把 `fade.xml` / `rg.xml` 标为"边界外"。实际上它们是音频根页面的一级子页，共 **16 个配置项**：
+
+**`fade.xml`（16 行，12 个 key）**：
+
+| key | 控件 | 标题 | 默认 | 范围 |
+| --- | --- | --- | ---: | --- |
+| `crossfade_auto_advance` | TagListPreference | Auto Advance Fading | 0 | — |
+| `fade_manual_advance` | TagListPreference | Manual Advance Fading | 1 | — |
+| `cc_fades_warning` | RawTextPreference | — | — | 提示 |
+| `fade_play_pause` | MultilineSwitchPreference | Fade On Play/Pause | true | — |
+| `fade_seek` | MultilineSwitchPreference | Fade On Seek | true | — |
+| `gapless_preload_ms` | SeekbarPreference | Gapless Preload | 0 | 0–5000, step 100 |
+| `track_end_silence_ms` | SeekbarPreference | Silence Between Tracks | 0 | 0–5000, step 100 |
+| `crossfade_length_ms` | SeekbarPreference | Crossfade Length | 5000 | 100–15000, step 50 |
+| `fade_short_xfade_ms` | SeekbarPreference | Short Crossfade | 400 | 10–1000, step 10 |
+| `fade_short_ms` | SeekbarPreference | Short Fade | 400 | 10–1000 |
+| `fade_seek_ms` | SeekbarPreference | Seek Fade | 100 | 10–500 |
+
+**`rg.xml`（9 行，4 个配置项）**：
+
+| key | 控件 | 标题 | 默认 |
+| --- | --- | --- | ---: |
+| `rg_type` | TagListPreference | Replay Gain Type | 0 |
+| `rg_source` | TagListPreference | Replay Gain Source | 0 |
+| `rg_preamp_mb` | **RoundKnobPreference** | RG Preamp | 0（-16.00..+16.00 dB, step 0.10） |
+| `rg_default_mb` | **RoundKnobPreference** | RG Default Gain | 0（同上） |
+
+> `RoundKnobPreference` 是本分支唯一的"旋钮"控件，`w:scale="100.0"` 表示内部整数 ×100 还原成 dB。
+
+### 13.6 第四层：`peq_equ_bands` / `peq_equ_tone`
+
+`audio_equ.xml` 下钻到两个**参数均衡器**配置页：
+
+**`peq_equ_bands.xml`（13 行，6 个配置项）**：
+
+| key | 控件 | 默认 | 范围 |
+| --- | --- | ---: | --- |
+| `equ_bands_num` | TagListPreference | **10** | 预设档位（`pref_peq_equ_bands` 数组） |
+| `equ_custom_bands` | MultilineSwitchPreference | — | 开关 |
+| `equ_custom_bands_num` | SeekbarPreference | 10 | **5–32** |
+| `equ_custom_bands_first_fr` | SeekbarPreference | 20 | 5–200 Hz |
+| `equ_custom_bands_last_fr` | SeekbarPreference | 16000 | 14000–20000 Hz, step 500 |
+
+**`peq_equ_tone.xml`（10 行，4 个 RotateKnob）**：`_bassFreq`、`_bassQ`、`_trebleFreq`、`_trebleQ`（全部无 title，靠 rank/order 定位）+ 一个手动输入提示。
+
+> 注意这些 key 带 **下划线前缀**（`_bassFreq` 等），与 `audio_equ.xml` 的 `_autosave`、`_clear_autoeq_known_devices` 同一约定：**下划线 = 不持久化或内部项**。
+
+### 13.7 原文 P1–P9 的解决情况
+
+| 原待验证项 | 状态 |
+| --- | --- |
+| P1 三层结构的数据落点 | ✅ 插件来自 native；设备启用存 `foutp`；设备选项用位掩码 |
+| P2 四开关无 dependency | ✅ 位掩码模型解释：可用性由插件声明，非用户设置互依 |
+| P3 `audio_platform_log` 空壳 | ✅ 由 `f1` helper 处理，内容运行时填充 |
+| P4 插件列表来源 | ✅ `native_get_plugins()` + `pa_output_*` 字符串 |
+| P5 `fade`/`rg` 边界外 | ✅ 已补全（§13.5.5） |
+| P6 `peq_equ_*` 层级 | ✅ 已补全（§13.5.6），属第 4 层 |
+| P7 位掩码语义 | ✅ §13.5.3 |
+| P8/P9 | 部分解决，见下 |
+
+**仍未解**：
+
+1. **各选项的完整位值表**：只确认了 `no_af = 0x100000`，其余 `no_duck`/`no_equ`/`no_headroom`/`float`/`oem_variant` 的位值需逐个读调用点常量（位置已定位，未全部抄录）。**注**：1035 已改写此模型（见 §13.8），位掩码只保留 `no_af`/`no_duck`/`no_equ`/`no_headroom`/`float` 五项。
+2. **`buffer_size` 的对话框实现**：已知 key 与 summary 资源，但弹出的是哪个 Activity 未追。
+3. **`sample_rate` / `sample_fmt` 的候选值来源**：由插件能力决定还是硬编码，未确认。
+
+### 13.8 build-1035 的结构重构（对照 build-1025）
+
+来源：`.rea-analysis/v1035/decoded/`（apktool 2.11.1 解包，`versionCode 1035009`）。
+
+#### 13.8.1 根页面：9 → 10 个入口
+
+【实证·原文】`v1035/decoded/res/xml/audio.xml`：
+
+| 顺序 | key | title | target | 与 1025 的差异 |
+| ---: | --- | --- | --- | --- |
+| 1 | `audio_info` | `@string/audio_info` | `AudioInfoActivity` | 同 |
+| 2 | `fade` | `@string/pref_fade_and_gapless` | `fade` | 同 |
+| 3 | `rg` | `@string/pref_replay_gain` | `rg` | 同 |
+| 4 | `audio_focus` | `@string/pref_audio_focus` | `audio_focus` | 同 |
+| 5 | *（无 key）* | `@string/equalizer` | `audio_equ` | 同 |
+| 6 | `audio_resampler` | `@string/pref_resampler` | `audio_resampler` | 同 |
+| 7 | `audio_dvc` | `@string/pref_direct_volume_control` | `audio_dvc` | 同 |
+| 8 | `audio_outputs2` | **`@string/audio_outputs`** | `audio_outputs2` | **key 与 target 都改**（原 `audio_outputs`） |
+| 9 | **`audio_bit_perfect`** | **`@string/bit_perfect`** | `audio_bit_perfect` | **全新入口** |
+| 10 | `audio_tweaks` | `@string/pref_advanced_tweaks` | `audio_tweaks` | 同 |
+
+> 与实机截图完全一致（截图显示「音频输出」与「比特完美」两个入口）。
+
+#### 13.8.2 【新页面】`audio_bit_perfect.xml` —— 比特完美
+
+19 行、9 个 key。**4 组「开关 + 动态状态行 + 说明块」**的模式【实证·原文】：
+
+| order | 节点 | key | title / 内容 |
+| ---: | --- | --- | --- |
+| 0 | RawText | — | `bit_perfect_hint1` + `hint2` + `signs_hint`（图例：✓已启用 / ✗已禁用 / ⊘不支持） |
+| 10 | MultilineSwitch | `global_pipeline64` | **`@string/pipeline64`**（64-bit 音频输出链路） |
+| 11 | RawText | `pipeline64_opts` | **动态状态行**（逐输出徽标） |
+| 20 | RawText | — | `pipeline64_hint1` + `hint2` |
+| 30 | MultilineSwitch | `global_follow_sr` | **`@string/follow_track_sr`**（跟随音轨采样率） |
+| 31 | RawText | `follow_sr_opts` | 动态状态行 |
+| 50 | RawText | — | `pa_will_try_to_match_track_sr_or_upsample` |
+| 60 | MultilineSwitch | `global_dsd_remaster` | **`@string/dsd_remaster`**（DSD 重制） |
+| 61 | RawText | `dsd_remaster_opts` | 动态状态行 |
+| 70 | RawText | — | `dsd_remaster_hint1` |
+| 80 | MultilineSwitch | `global_perfect_bit_perfect` | **`@string/perfect_bit_perfect`**（极致比特完美） |
+| 81 | RawText | `perfect_bit_perfect_opts` | 动态状态行 |
+| 90 | RawText | — | `perfect_bit_perfect_hint1/2/3` |
+| 100 | Preference | `restore_defaults` | — |
+
+**关键设计**：4 个开关都是 **`global_` 前缀**（全局默认），而 4 个 `*_opts` 状态行则**逐个输出显示实际生效情况**（截图实测显示「有线耳机/音频输入 → Hi-Res输出 ✗」「USB DAC → USB 独占输出 跟随音轨」等）。这正是提示行 `bit_perfect_hint1` 说的"本页面上的各项设置也可以针对特定输出或配置文件单独进行覆盖"。
+
+> **「全局 vs 逐输出」两级模型**：`global_*` 是总开关，`audio_output_device_opts.xml` 里的同名项（`pipeline64`/`dsd_remaster`/`perfect_bit_perfect`）是**逐输出覆盖**，用三态（`@array/pref_tristate`）表达"跟随全局/强制开/强制关"。
+
+#### 13.8.3 【重构】`audio_outputs2.xml` —— 设备列表（取代旧的插件列表）
+
+16 行、8 个 key。旧版 `audio_outputs.xml`（插件列表，3 key）与 `audio_output.xml`（单插件配置，9 key）**都被删除**。
+
+【实证·原文】新结构：
+
+```xml
+<PreferenceScreen android:title="@string/audio_outputs" w:searchIndexer="...SettingsHelperAudioOutputs2$SearchIndexer">
+    <RawTextPreference>  <!-- audio_outputs_hint1 + hint2 --></RawTextPreference>
+    <ButtonPref android:icon="@drawable/wired_24dp"      android:key="output_headset"    android:title="@string/device_headset" />
+    <ButtonPref android:icon="@drawable/speaker_24dp"    android:key="output_speaker"    android:title="@string/device_speaker" />
+    <ButtonPref android:icon="@drawable/bt_24dp"         android:key="output_bt"         android:title="@string/device_bt" />
+    <ButtonPref android:icon="@drawable/usb_24dp"        android:key="output_usb"        android:title="@string/device_usb" />
+    <ButtonPref android:icon="@drawable/chromecast_24dp" android:key="output_chromecast" android:title="@string/device_chromecast" />
+    <ButtonPref android:icon="@drawable/other_24dp"      android:key="output_other"      android:title="@string/device_other" />
+    <PreferenceCategory android:title="@string/pref_other">
+        <RedirectPreference android:key="audio_outputs_tweaks" w:target="audio_outputs_tweaks" />
+    </PreferenceCategory>
+    <Preference android:key="restore_defaults" />
+</PreferenceScreen>
+```
+
+**这是对 §4.2 的关键修正**：在 1035 里，**6 类设备直接写在 XML 里**（用新的 `ButtonPref` 控件），不再是运行时填充的空 `PreferenceCategory`。每项点击进入该设备的插件/参数页。
+
+> 这也印证了 §3.2 从截图得出的判断：旧版运行时填充的确实是**设备**（而非插件），1035 干脆把设备固化成 XML 项了。
+
+#### 13.8.4 【新页面】`audio_outputs_tweaks.xml` —— 输出高级
+
+10 行、5 个 key，从 `audio_outputs2` 的「其他」分类进入：
+
+| key | 控件 | title | 来源 |
+| --- | --- | --- | --- |
+| `usb_activity` | MultilineSwitch | `pref_usb_activity` | **新增** |
+| `force_no_speaker` | MultilineSwitch | `pref_hires_force_no_speaker` | 从 `audio_tweaks` 移来 |
+| `use_stream3_player` | MultilineSwitch | `pref_use_stream3_player` | 从 `audio_tweaks` 移来 |
+| `audio_platform_log` | RedirectPreference | `pref_output_detection_log` | 从 `audio_tweaks` 移来 |
+| `restore_defaults` | Preference | — | — |
+
+#### 13.8.5 【大幅扩张】`audio_output_device_opts.xml`：21 → 63 key
+
+从 25 行扩到 **69 行**，新增 47 个 key、移除 5 个。这是 1035 变化最大的页面。
+
+**移除的 5 项**：`bt_dvc_msg`、`oem_variant`、`output_switch`、`pref_ar_format_changes_when_playing`、`pref_hi_res_no_dvc_hint`
+
+**新增的核心能力**（按主题分组）：
+
+| 主题 | 新增 key |
+| --- | --- |
+| **输出驱动选择** | `output_api`（`w:prefType="stringType"`，列出可用的 native 输出驱动） |
+| **采样率策略** | `allowed_srs`（`w:prefType="multiSelectBitset"`，**多选位集**）、`prefer_base_rate`、`set_codec_sr`、`follow_sr_hint1/hint2`、`codec_sr_hint` |
+| **64-bit 链路** | `pipeline64`（三态）、`pipeline64_static`（动态状态行） |
+| **DSD 重制** | `dsd_remaster`（三态）、`dsd_remaster_sample_rate`、`dsd_remaster_allow_48k`、`dsd_remaster_gain_mb`（RoundKnob，−6.00..0 dB）、`dsd_remaster_static`/`_sample_rate_static` |
+| **比特完美** | `perfect_bit_perfect`（三态）、`perfect_bit_perfect_static` |
+| **音量类型** | `volume_type`（带 `w:summaries`）、`volume_type_static`、`sync_hw_volume`、`restore_hw_volume` |
+| **Shizuku 绝对音量** | `shizuku_absvol`（带 `w:sup` 实验标记）、`shizuku_absvol_hint`、`shizuku_absvol_static` |
+| **USB / 延迟调优** | `pause_usb_release`、`play_silence_in_background`、`force_usb_full_speed`、`reconfig_delay_ms`（0–500ms）、`warmup`、`pcm_dsd_extra_warmup`、`target_alt_sr_quirk` |
+| **DSD 传输** | `allow_dsd_dop`、`prefer_dsd_raw` |
+| **EQ 快捷** | `eq_preset`（`ButtonPref`，带 `w:borderlessButton`） |
+| **静态状态行** | `sample_rate_static`、`sample_bits_static`、`no_dvc_static`、`pipeline64_static`、`dsd_remaster_static`、`perfect_bit_perfect_static`、`volume_type_static`、`shizuku_absvol_static`、`top_output_info`、`top_output_info2`、`output_info` |
+
+**三态模型**（`@array/pref_tristate` / `pref_tristate_values`）：
+`pipeline64`、`dsd_remaster`、`perfect_bit_perfect` 三项从布尔升级为**三态**，语义为「跟随全局默认 / 强制启用 / 强制禁用」——与 §13.8.2 的 `global_*` 形成两级覆盖。
+
+> **`ButtonPref` 是新控件**：`eq_preset` 和 `audio_outputs2` 的 6 个设备项都用它，带 `w:iconAlignedHorCenter`、`w:borderlessButton` 等新属性。
+
+#### 13.8.6 其他页面的小改动
+
+| 文件 | 变化 |
+| --- | --- |
+| `audio_dvc.xml` | 10 → 15 key（+5），行数 17 → 22 |
+| `audio_tweaks.xml` | 13 → 11 key（−2），因为 `force_no_speaker`/`use_stream3_player`/`audio_platform_log` 移到了 `audio_outputs_tweaks` |
+| `fade.xml` | 12 → 11 key（−1） |
+| `audio_equ` / `audio_focus` / `audio_resampler` / `peq_equ_bands` / `peq_equ_tone` / `rg` / `audio_platform_log` | **key 集合完全不变** |
+
+#### 13.8.7 未受影响的结论
+
+以下本文核心结论在 1035 中**依然成立**：
+
+- ✅ 三层/多层输出结构的整体思路（设备 → 驱动 → 参数）
+- ✅ 四开关正交（`no_af`/`no_duck`/`no_equ`/`no_headroom` 仍全部存在）
+- ✅ 位掩码模型（这 5 个开关仍用掩码；新增项改用三态/多选位集）
+- ✅ `fade`/`rg` 的配置项与默认值
+- ✅ `peq_equ_bands`/`peq_equ_tone` 的第四层结构
+
+### 13.9 build-1035 新增控件与能力查询模型
+
+本节回答两个"1035 才出现"的问题：`ButtonPref` 是什么、`output_api` 的候选驱动从哪来。
+
+#### 13.9.1 `ButtonPref` —— 新控件
+
+【实证·产物】`v1035/decoded/smali/com/maxmpz/audioplayer/preference/ButtonPref.smali`（13383 字节）：
+
+| | |
+| --- | --- |
+| 基类 | `RawTextPreference`（**不是** `Preference`） |
+| 用途 | 渲染成"图标 + 一行文字"的可点按钮行 |
+| 使用位置 | `audio_outputs2.xml` 的 6 个设备项；`audio_output_device_opts.xml` 的 `eq_preset` |
+
+**构造器解析 3 个自定义属性**（`obtainStyledAttributes(attrs, L讌/qt0;->袨:[I)`，按**数组索引**读取，故按属性名 grep 无命中）：
+
+| 索引 | 属性 | 类型 | 落入字段 | 默认 |
+| ---: | --- | --- | --- | --- |
+| 0 | `borderlessButton` | boolean | `j` | false |
+| 1 | `buttonIcon` | reference | `h`（再 `setButtonIcon`） | 0 |
+| 2 | `buttonIsVisible` | boolean | `i`（再 `setButtonIsVisible`） | true |
+
+**关键方法**：
+
+| 方法 | 作用 |
+| --- | --- |
+| `onCreateView(ViewGroup)` | 自己 inflate 布局（用 `layout_inflater` 服务） |
+| `onBindView(View)` | 绑定按钮图标与文案 |
+| `X(FastButton)` | 直接接管一个 `FastButton` 实例 |
+| `setButtonIsVisibleDirect(Z)` | **绕过动画**直接改可见性（批量场景用） |
+| `onClick(View)` | 走标准 `OnPreferenceClickListener`（`getOnClickListener()`） |
+
+> **设计意图**：旧版（1025）用 `SwitchConfigPreference` + 运行时填充来表达设备选择；1035 改用 `ButtonPref` **固化成 XML**，让"6 个设备"成为可搜索、可定位的静态项（`audio_outputs2` 也注册了 `SettingsHelperAudioOutputs2$SearchIndexer`）。
+
+#### 13.9.2 `output_api` 的候选驱动从哪来
+
+**结论：候选列表 = native 插件清单，按"是否支持当前设备"过滤后动态构建。**
+
+【实证·产物】`v1035/decoded/smali/ׅ/o81.smali:3506-3880`（类 `ׅ/o81` = SettingsHelperAudioOutputDeviceOpts 的实现类）：
+
+```
+findPreference("output_api") as TagListPreference
+n = pref.getEntries().length                    // XML 未定义 entries，此处为 0
+if (n == 0) {                                   // ← 首次进入才构建
+    entries = new ArrayList();  values = new ArrayList();  icons = new ArrayList()
+    for (plugin : this.T) {                     // T = 已按权重排序的插件列表
+        info = NativePluginManager.褏(plugin.X)  // 按 uniqName 查插件
+        if (info == null) continue;
+
+        // ① 能力过滤：该插件是否支持当前设备类型？
+        devMask = OutputInternalHelper.袙(info.id)      // native_output_get_supported_devices
+        if ((1 << this.G /*设备类型*/) & devMask) == 0) continue;
+
+        // ② 排除当前正在用的那个（且设备类型不是 5=Chromecast）
+        if (plugin.X.equals(currentUniqName) && this.G != 5) continue;
+
+        // ③ 取插件自报的元数据
+        i30 = NativePluginManager.B(plugin.X)
+        disabled = !i30.A()                      // 是否可用
+        iconRes  = i30.B()                       // 图标资源
+        ...
+    }
+}
+```
+
+**三个过滤条件**：
+
+| # | 条件 | 说明 |
+| ---: | --- | --- |
+| ① | `(1 << deviceType) & supportedDevices` | 插件必须声明支持该设备 |
+| ② | 不等于当前正在使用的 uniqName | 已选的不用再列；但 **Chromecast（设备类型 5）例外** |
+| ③ | `i30.A()` | 插件自报的可用性（实验性/不可用会被标记） |
+
+#### 13.9.3 输出能力查询的唯一入口：`OutputInternalHelper`
+
+5 个 native 方法构成全部能力查询 API【实证·产物】`plugin/OutputInternalHelper.smali`：
+
+| 方法 | native 符号 | 返回 | 用途 |
+| --- | --- | --- | --- |
+| `袙(I)` | `native_output_get_supported_devices(int pluginId)` | int 位掩码 | **插件支持哪些设备**（§13.9.2 的条件①） |
+| `A(II)` | `native_output_get_sample_formats(int, int)` | int 位掩码 | 该插件在该设备上支持的采样格式 |
+| `B(II)` | `native_output_get_sample_rates(int, int, boolean)` | int 位掩码 | 支持的采样率集合 |
+| `х(IIZ)` | `native_output_get_generic_property(int, int, int)` | int | 通用属性（缓冲区等） |
+| `А(II[B)` | `native_output_get_options(int, int, byte[])` | long | 该设备/插件的完整选项位（**设备级选项页 63 项的总开关**） |
+
+> **这解释了 §13.3 位掩码的真正来源**：设备级选项页里哪些开关可点，不是 Poweramp 写死的，而是 `native_output_get_options` 返回的 **long 位图**决定的。1035 里 `no_af=0x100000`、`no_equ=0x40` 这些位，正是这个返回值里的位。
+
+**设备位掩码的构造方式**（`o81.smali:3750-3762`）：
+
+```java
+devMask   = OutputInternalHelper.袙(info.id);   // 插件支持设备位图
+thisBit   = 1 << this.G;                        // G = 当前设备类型（0..5）
+supported = (thisBit & devMask) != 0;
+```
+
+即**第 N 位 = 第 N 类设备**，与 §13.3 设备枚举表（0=耳机/1=扬声器/2=蓝牙/3=USB/4=其他/5=Chromecast）直接对应。
+
+#### 13.9.4 1035 引入的三种新 `prefType`
+
+【实证·原文】`v1035/decoded/res/values/attrs.xml:2884` 定义 `prefType` 枚举共 5 种：
+
+| 枚举值 | 数值 | 用在哪些 key |
+| --- | ---: | --- |
+| `intType` | 0 | 默认（多数 TagListPreference） |
+| `booleanType` | 1 | — |
+| `multiSelectString` | 2 | — |
+| **`multiSelectBitset`** | **3** | **`allowed_srs`**（Allowed Sample Rates 多选） |
+| **`stringType`** | **4** | **`output_api`**（Output Driver 字符串选择） |
+
+**三态模型**（`@array/pref_tristate` + `pref_tristate_values`）：
+
+| 显示 | 值 | 语义 |
+| --- | ---: | --- |
+| `@string/pref_auto`（Auto） | **0** | 跟随全局 `global_*` 开关 |
+| `@string/enable`（Enable） | **1** | 对该输出强制启用 |
+| `@string/disable`（Disable） | **−1** | 对该输出强制禁用 |
+
+用在：`pipeline64`、`dsd_remaster`、`perfect_bit_perfect` 三项（对应 `audio_bit_perfect.xml` 的 3 个 `global_*` 总开关）。
+
+> **全局 + 逐输出两级覆盖的完整语义**：
+> ```
+> 生效值 = (逐输出三态 == -1) ? 关
+>        : (逐输出三态 ==  1) ? 开
+>        : 全局开关 global_*        // Auto 时回落到全局
+> ```
+
+#### 13.9.5 静态状态行（`*_static`）的作用
+
+1035 的设备级选项页有 11 个 `*_static` 只读行（`sample_rate_static`、`sample_bits_static`、`no_dvc_static`、`pipeline64_static`、`dsd_remaster_static`、`dsd_remaster_sample_rate_static`、`perfect_bit_perfect_static`、`volume_type_static`、`shizuku_absvol_static`、`top_output_info`、`top_output_info2`、`output_info`）。
+
+它们**不是用户可改的项**，而是把 native 层的**实际生效值**渲染成只读文本。这与 §9「期望值 / 实际值双记录」的设计一致：
+
+| 用户设置项 | 对应的只读实际值行 |
+| --- | --- |
+| `sample_rate` | `sample_rate_static` |
+| `sample_fmt` | `sample_bits_static` |
+| `pipeline64` | `pipeline64_static` |
+| `dsd_remaster` | `dsd_remaster_static` |
+| `perfect_bit_perfect` | `perfect_bit_perfect_static` |
+| `volume_type` | `volume_type_static` |
+| `shizuku_absvol` | `shizuku_absvol_static` |
+
+> 全部带 `w:skipSearch="true"`——不进搜索索引，因为它们没有稳定的用户语义。
+
+### 13.10 native 层能力常量与 DSD 处理链
+
+本节基于 `v1035/natives/libpowerampcore.so`（4.42 MB，从 `split_config.arm64_v8a.apk` 解出）的字符串与符号证据。
+
+#### 13.10.1 采样率能力标志族（PA_FLAG_SR_*）
+
+native 库中共有 **15 个采样率标志**，分两组【实证·产物】：
+
+| 类别 | 标志 | 说明 |
+| --- | --- | --- |
+| **PCM（10 个）** | `PA_FLAG_SR_44K` / `48K` / `88K` / `96K` / `176K` / `192K` / `352K` / `384K` / `705K` / `768K` | 覆盖 44.1k 与 48k 两个基频家族的完整倍频链 |
+| **DSD（5 个）** | `PA_FLAG_SR_DSD64` / `DSD128` / `DSD256` / `DSD512` / `DSD1024` | 每档还有 `x48` 变体（如 `PA_FLAG_SR_DSD64x48`） |
+
+> **x48 变体的意义**：DSD 的 48kHz 基频家族（DSD64x48 = 3.072 MHz，而 DSD64 = 2.8224 MHz）。USB DAC 与部分 DAP 只支持其中之一，因此需要分别声明。
+>
+> 这直接解释了 `allowed_srs`（Allowed Sample Rates）这个 multiSelectBitset 选项——它列的正是这些标志的子集。
+
+**其它标志**：`PA_FLAG_GET_SAMPLES_BLOCK_CONSUMED`（内部控制用，不在 UI 出现）
+
+#### 13.10.2 DSD 重制的实际处理链
+
+native 库中的日志模板揭示了 DSD 重制的关键函数【实证·产物】：
+
+| 函数 / 日志 | 含义 |
+| --- | --- |
+| `resolve_dsd_remaster_sr` | **计算目标 DSD 采样率**。日志 `follow_sr BAD dsd track_sr=%d forcing PCM` 说明：Follow Track 模式下若 DSD 源采样率不受支持，会**强制回退到 PCM** |
+| `resolve_dsd_remaster` | 执行重制。日志 `!perfect_bit_perfect DSD sr=%d` —— **极致比特完美开启时会改变 DSD 重制行为** |
+| `pa_find_next_allowed_sr` | 协商可用采样率。日志 `no PCM/DSD rates avail all_supported_rates=%s` |
+| `resolve_best_sr` | 选择最佳采样率。日志 `no PCM rates allowed config_allowed_srs=%s` |
+
+**DSD 阶数与基频对照**（从字符串表推断）：
+
+| 标志 | x48 变体值 | 标准值 |
+| --- | --- | --- |
+| DSD64 | 3.072 MHz | 2.8224 MHz |
+| DSD128 | 6.144 MHz | 5.6448 MHz |
+| DSD256 | 12.288 MHz | 11.2896 MHz |
+| DSD512 | 24.576 MHz | 22.5792 MHz |
+| DSD1024 | 49.152 MHz | 45.1584 MHz |
+
+> **`DSD1014` 是特殊值**：字符串表中 ` DSD1014:` 与 `DSD1014x48:` 独立出现，紧邻 `native_output_get_generic_property`。它是某些 DAP 固件的非标准 DSD 档位，**不是标准 DSD 阶数**。
+
+#### 13.10.3 极致比特完美的 native 侧行为
+
+关键日志【实证·产物】：
+
+```
+%s() FAIL perfect_bit_perfect !is_dsd_sr !best_sr track_sr=%d all_supported_rates=%s
+%s() FAIL perfect_bit_perfect !best_sr track_sr=%d all_supported_rates=%s
+%s() !perfect_bit_perfect DSD sr=%d
+```
+
+| 日志 | 触发条件 | 后果 |
+| --- | --- | --- |
+| `FAIL perfect_bit_perfect !is_dsd_sr !best_sr` | 音轨不是 DSD，且找不到最佳采样率 | **比特完美失败**，回退普通路径 |
+| `FAIL perfect_bit_perfect !best_sr` | 找不到最佳采样率 | 同上 |
+| `!perfect_bit_perfect DSD sr=%d` | 纯 DSD 重制路径，未开极致 | 走的是重制而非直通 |
+
+> 这与 UI 提示 `perfect_bit_perfect_hint2`（"Poweramp may still convert/resample tracks..."）**完全对应**——UI 的措辞不是免责声明，而是 native 层确实存在的失败分支。
+
+**其它相关能力**：
+
+| 字符串 | 说明 |
+| --- | --- |
+| `FLAG_DSD` | 格式标志位 |
+| `ua_as_fill_dop_silence` | **DoP（DSD over PCM）** 静音填充 |
+| `allow_dsd_dop`（UI key） | 允许 DoP 传输 |
+| `P2D_SDM_DSD64_N5_P8700_Z12000_Z18000_CIFB` | **SDM 调制器系数名**（N=阶数, FB=feedback） |
+| `P2D_SDM_DSD256_PLUS_N4_P8732_FB150_CIFB` | DSD256 专用 |
+| `P2D_SDM_DSD1024_FB150_CIFB` | DSD1024 |
+| `P2D_FIR_R64_N3_BALANCED` | 重采样 FIR 系数 |
+
+> **P2D_SDM_* 是 DSD 重制的核心**：PCM→DSD 需要 sigma-delta 调制器，这些是预置的调制器配置。P2D 应为 "PCM to DSD" 的缩写。
+
+#### 13.10.4 mod_interpolation 的位值序列
+
+【实证·原文】`v1035/decoded/res/values/arrays.xml`：
+
+| 显示 | 值 |
+| --- | ---: |
+| Default | **0** |
+| None | **1** |
+| Linear | **2** |
+| Cubic | **4** |
+| Sinc (8-tap) | **8** |
+
+> **值是 2 的幂序列**（0/1/2/4/8）——不是偶然，而是位标志（1<<n）。虽然 UI 上是单选，但内部以位图形式传给 native 的 tracker 解码器。与实机截图的 5 个选项完全一致。
+
+#### 13.10.5 audio_dvc 在 1035 新增的 5 个 key
+
+相对 1025 的 10 key，1035 有 15 key。新增项【实证·原文】`audio_dvc.xml`：
+
+| key | 控件 | 作用 |
+| --- | --- | --- |
+| `dvc_devices` | RawTextPreference | **动态状态行**：逐输出显示 DVC 是否生效（截图中的"有线耳机 → Hi-Res输出 ✓"） |
+| `no_dvc_bt_absvol_shizuku_hint` | RawTextPreference | Shizuku 说明块 |
+| `peq_shizuku_absvol` | MultilineSwitchPreference | **通过 Shizuku 允许 DVC**（带实验标记） |
+| `peq_shizuku_absvol_static` | RawTextPreference | Shizuku 状态的只读镜像 |
+| `peq_shizuku_absvol_hint` | RawTextPreference | Shizuku 使用说明 |
+
+> **注意 key 前缀是 peq_** —— 这是历史遗留（该功能最初在参数均衡器页面），不是笔误。同页的 `compensate_dvc_vol` 也带 `w:skipSearch="peq"`，说明搜索索引把它们归到 PEQ 分类下。
+
+#### 13.10.6 audio_tweaks 在 1035 的变化
+
+| 变化 | key |
+| --- | --- |
+| **新增** | `mod_interpolation`（Tracker 解码器插值，见 §13.10.4） |
+| 移出到 `audio_outputs_tweaks` | `force_no_speaker`、`use_stream3_player`、`audio_platform_log` |
+| 保留 | `volume_levels`、`volume_popup`、`pause_on_volume`、`allow_platform_fx`、`force_audio_on_focus`、`mod_gain_mb`、`mod_separation`、`reset_eq_presets`、`reset_reverb_presets` |
+
+#### 13.10.7 fade 在 1035 的变化
+
+11 key（1025 是 12）。差异**只在文案与结构，无 key 增删**：
+
+| 变化 | 说明 |
+| --- | --- |
+| `crossfade_auto_advance` | 新增 `android:summary`（"当歌曲自动切换时应用"） |
+| `fade_manual_advance` | 新增 `w:summary2="@string/output_driver_can_override_this"` |
+| 原来的 3 行提示 | 拆成 **4 个独立提示块**：`pref_cc_fades_warning` + `fades_pbp_warning` + `fades_sr_warning`（在开关上方），以及 `gapless_sr_warning`（在 gapless 滑杆下方） |
+| `cc_fades_warning` 这个 key | **消失**（改为无 key 的提示块） |
+
+> **提示内容的结构化**：1025 把三条警告挤在同一个 `cc_fades_warning` 里；1035 拆成（极致比特完美禁用淡入淡出）+（采样率不同不应用）+（Chromecast 不受支持），并新增（采样率不同可能无法无缝拼接）。截图里看到的正是这四条。
+### 13.11 输出能力位图（native long）的完整解码
+
+本节解决了此前"只知 5 个 UI 位"的缺口。**方法**：从 Java 侧 `o81.smali` 的每个选项注册调用点回溯 `const-wide` 常量，得到 63 个设备级选项中 **19 个的精确位值**。
+
+#### 13.11.1 调用约定
+
+【实证·产物】`v1035/decoded/smali/ׅ/o81.smali`，方法签名：
+
+```java
+static TwoStatePreference h0(
+    o81 self, String key, long optMask, long bitMask,  // ← 两段 long
+    int a, boolean defaultValue, boolean hideIfUnsupported, cd listener)
+```
+
+> 1025 是 `w(String key, String baseKey, long bitMask, int, boolean, x0, boolean, b1)`（单段 long）；1035 改为 **`h0(...long optMask, long bitMask...)`** —— **两段 long**，说明能力位图已从 64 位扩展为 **128 位（两个 64 位字）**。
+
+#### 13.11.2 完整位值表（19 项）
+
+| key | 位掩码（hex） | 位序 | 证据行 |
+| --- | ---: | ---: | ---: |
+| `cc_force_aa` | `0x1` | 0 | `:9195` |
+| `warmup` | `0x2` | 1 | `:9016` |
+| `no_dvc` | `0x10` | 4 | `:10243` |
+| `no_headroom` | `0x20` | 5 | `:9260` |
+| `no_equ` | `0x40` | 6 | `:9290` |
+| `float` | `0x80` | 7 | `:10121` |
+| `no_duck` | `0x2000` | 13 | `:9316` |
+| `allow_dsd_dop` | `0x10000` | 16 | `:8955` |
+| `prefer_dsd_raw` | `0x20000` | 17 | `:8986` |
+| `sync_hw_volume` | `0x40000` | 18 | `:10967` |
+| `force_usb_full_speed` | `0x80000` | 19 | `:9103` |
+| `no_af` | `0x100000` | 20 | `:9347` |
+| `restore_hw_volume` | `0x200000000` | 33 | `:11020` |
+| `pause_usb_release` | `0x100000000` | 32 | `:8861` |
+| `target_alt_sr_quirk` | `0x10000000` | 28 | `:9077` |
+| `prefer_base_rate` | `0x20000000` | 29 | `:6833` |
+| `pcm_dsd_extra_warmup` | `0x40000000` | 30 | `:9047` |
+| `dsd_remaster_allow_48k` | `0x80000000` | 31 | `:8337` |
+| `play_silence_in_background` | `0x200000000000000` | 57 | `:8916` |
+
+**位序分布**（按 8 位一组）：
+
+```
+第 0 字（bit 0-63）:
+  bit  0      cc_force_aa
+  bit  1      warmup
+  bit  4      no_dvc
+  bit  5      no_headroom
+  bit  6      no_equ
+  bit  7      float
+  bit 13      no_duck
+  bit 16      allow_dsd_dop
+  bit 17      prefer_dsd_raw
+  bit 18      sync_hw_volume
+  bit 19      force_usb_full_speed
+  bit 20      no_af
+  bit 28      target_alt_sr_quirk
+  bit 29      prefer_base_rate
+  bit 30      pcm_dsd_extra_warmup
+  bit 31      dsd_remaster_allow_48k
+  bit 32      pause_usb_release
+  bit 33      restore_hw_volume
+  bit 57      play_silence_in_background
+```
+
+> **观察**：
+> 1. **bit 0-7 是"基础输出行为"**（强制 AA、预热、DVC、headroom、EQ、float），是每个插件都必须声明的核心能力。
+> 2. **bit 16-20 是"音频格式/传输"**（DoP、DSD raw、硬件音量、USB 全速、音频焦点）。
+> 3. **bit 28-33 是"高级调优"**（采样率协商、USB 释放、硬件音量恢复），集中在连续区间，说明是同一批加入的。
+> 4. **bit 57 极高**，且用 `const-wide/high16` 加载 —— 属于 64 位字的"尾部"能力，`play_silence_in_background` 是很晚才加的功能。
+
+#### 13.11.3 高度稀疏说明什么
+
+19 个已知位分布在 0-63 之间，**密度仅 30%**。剩余约 45 位不是废弃，而是：
+
+| 类别 | 推测（未验证） |
+| --- | --- |
+| 参数范围位 | 采样率 / 位深 / 通道数的合法组合 |
+| 内部状态位 | 编解码器选择、缓冲区策略 |
+| 厂商专用位 | 特定 DAP / USB DAC 的 quirk 开关 |
+
+> ⚠️ 这些是**推断**，未经 native 反汇编验证。因为库已 strip 且函数通过 `RegisterNatives` 动态注册，无法用静态符号定位。
+
+#### 13.11.4 native 函数的真实地址（已定位）
+
+虽然 `.symtab` 被 strip，但通过解析 **`.rela.dyn` 的 `R_AARCH64_RELATIVE` 重定位 + `.data.rel.ro` 中的 `JNINativeMethod` 三元组**，精确定位了 5 个 JNI 函数：
+
+| JNI 方法 | 函数地址 | 大小区间 |
+| --- | ---: | --- |
+| `native_output_get_supported_devices` | `0x2d7b14` | `0x2d7b14` – `0x2d7bb0` |
+| `native_output_get_options` | `0x2d7bb0` | `0x2d7bb0` – `0x2d7d78` |
+| `native_output_get_sample_rates` | `0x2d7d78` | `0x2d7d78` – `0x2d7e3c` |
+| `native_output_get_sample_formats` | `0x2d7e3c` | `0x2d7e3c` – `0x2d7ee8` |
+| `native_output_get_generic_property` | `0x2d7ee8` | `0x2d7ee8` – … |
+
+**关键结论**：
+
+- 5 个函数**地址连续**（`0x2d7b14` 起，间隔 0x9c/0x1c8/0xc4/0xac），说明它们是同一编译单元的相邻函数，很可能是**同一个 C++ 类的 5 个成员方法**。
+- `native_output_get_options` 恰好是**最大的一段**（0x1c8 = 456 字节），符合它"返回完整能力位图"的职责。
+- `native_output_get_supported_devices` 最小（0x9c = 156 字节），只做位查询，逻辑简单。
+
+> **这是可达的最深一层**：要到指令级必须反汇编 ARM64 代码。当前环境无 objdump/radare2，且 npm 的 capstone 包依赖被禁止的 node-gyp 原生构建。若后续要突破，可考虑：
+> 1. 装 Android NDK 用其自带 `llvm-objdump`
+> 2. 用 `pip install capstone`（需可用 Python，当前 Store 别名不可用）
+> 3. 手工解码 AArch64 指令（工作量大，但 `native_output_get_supported_devices` 只有 156 字节，可行）
+
+#### 13.11.5 位图与 128 位扩展的意义
+
+1025 → 1035 的位图从"单 64 位"扩到"两段 64 位"（`h0(..., long optMask, long bitMask, ...)`），这与新增 47 个选项的事实一致：
+
+| 版本 | 选项数 | 位图宽度 |
+| --- | ---: | --- |
+| 1025 | 21 | 单 64 位（`w(..., J I Z ...)`） |
+| 1035 | 63 | **双 64 位 = 128 位**（`h0(..., JJ Z Z ...)`） |
+
+> 这解释了为什么 1035 要改方法签名——**64 位不够用了**。bit 57（`play_silence_in_background`）已经逼近 64 位上限，后续再加能力必须用第二段 long。
+### 13.12 JNI 函数指令级反汇编（AArch64）
+
+本节用 **LLVM 23.1.5 `llvm-objdump`** 对 `libpowerampcore.so` 做目标反汇编，得到 5 个输出能力查询函数的完整实现。
+
+> **工具链**：`winget install LLVM.LLVM` → `C:\Program Files\LLVM\bin\llvm-objdump.exe`
+> **目标**：`elf64-littleaarch64`，`.text` @ `0x1257a0`，大小 `0x332ae8`
+
+#### 13.12.1 五个函数都是"薄封装 + 虚表转发"
+
+**`native_output_get_supported_devices`（156 字节，最短）** 的完整逻辑：
+
+```asm
+2d7b14: stp  x29, x30, [sp, #-0x20]!      ; 建栈帧
+2d7b20: mov  w19, w2                      ; 保存 pluginId（第 3 参）
+2d7b24: mov  w0, w2
+2d7b28: bl   0x459600 <pa_get_plugin@plt> ; ★ 用 pluginId 查插件对象
+2d7b2c: cbz  x0, 0x2d7b50                 ; 查不到 → 走错误分支
+2d7b30: ldrb w8, [x0, #0x4]               ; 读 plugin->field_4（1 字节）
+2d7b34: cmp  w8, #0x3                     ; ★ 必须 == 3（内部插件类型）
+2d7b38: b.ne 0x2d7b50                     ; 不是内部插件 → 错误
+2d7b3c: ldr  x1, [x0, #0x48]              ; ★ 取虚表函数指针（+0x48）
+2d7b40: cbz  x1, 0x2d7b84                 ; 空指针 → 单独错误分支
+2d7b44: ldr  x19, [sp, #0x10]
+2d7b48: ldp  x29, x30, [sp], #0x20
+2d7b4c: br   x1                          ; ★ 尾调用（tail call）
+```
+
+**结论：整个函数只做三件事**——查插件、校验类型、尾调用虚函数。**没有任何位运算**。
+
+> 这推翻了之前的猜测：位图**不是**在这里计算或编码的，而是由**插件自己**返回。Poweramp 侧的 JNI 只是转发层。
+
+#### 13.12.2 插件对象的虚表偏移表（ABI）
+
+从 5 个函数的汇编直接读出【实证·产物】：
+
+| 偏移 | 用途 | 出现在 |
+| ---: | --- | --- |
+| `+0x00` | 插件 id（int） | 多处错误日志 |
+| `+0x04` | **子系统类型**（1 字节），必须 `== 3` | 全部 5 个函数 |
+| `+0x20` | 插件名/描述指针 | 错误日志 |
+| **`+0x48`** | **`get_supported_devices` 虚函数** | `0x2d7b3c` |
+| **`+0xd0`** | **`get_options` 虚函数** | `0x2d7bf8`、`0x2d7d30` |
+| **`+0xd8`** | **`get_sample_rates` 虚函数** | `0x2d7db4` |
+| **`+0xe0`** | **`get_sample_formats` 虚函数** | `0x2d7e70` |
+| **`+0xe8`** | **`get_generic_property` 虚函数** | `0x2d7f24` |
+
+> **偏移 +0x48 与 +0xd0..+0xe8 相差很远**（0x48 → 0xd0），说明这两组函数**不在同一个 C++ 基类**里：
+> - `+0x48` 在较早的虚表位置（可能是 `IAudioPlugin` 基础接口）
+> - `+0xd0`..`+0xe8` 连续 5 个指针，是 `IOutputInternalPlugin` 的专用方法表
+
+#### 13.12.3 `get_options` 是唯一有实际逻辑的函数
+
+**`native_output_get_options`（456 字节，最长）** 的关键段落【实证·产物】`0x2d7bb0-0x2d7d78`：
+
+```asm
+2d7bd8: bl   0x459600 <pa_get_plugin@plt>
+2d7be4: ldr  w8, [x0, #0x4]
+2d7be8: and  w8, w8, #0x800000ff          ; ★ 取低字节 + 最高位
+2d7bec: mov  w9, #-0x7ffffffd             ; = 0x80000003
+2d7bf0: cmp  w8, w9                       ; ★ 必须等于 0x80000003
+2d7bf4: b.ne 0x2d7c90                     ; 否则 FAIL
+2d7bf8: ldr  x8, [x20, #0xd0]             ; 取 get_options 虚函数
+2d7c00: cbz  x22, 0x2d7d20                ; 第 5 参（byte[] blob）为空 → 特殊路径
+...
+2d7c04: ldr  x8, [x24]                    ; this->vtable
+2d7c08: ldr  x8, [x8, #0x558]             ; ★ 另一个虚函数（+0x558）
+2d7c14: blr  x8                           ; 调用它，得到所需 buffer 大小
+2d7c18: sxtw x23, w0                      ; size
+2d7c1c: cmp  w0, #0x1f                    ; ★ 大小 <= 31 则失败
+2d7c20: b.ls 0x2d7cf8                     ; 太小 → 报错
+2d7c28: bl   0x458490 <malloc@plt>        ; ★ 分配临时缓冲
+2d7c34: ldr  x8, [x24]
+2d7c38: ldr  x8, [x8, #0x640]             ; ★ 再一个虚函数（+0x640）：填充缓冲
+2d7c50: blr  x8
+2d7c54: ldrsw x8, [x21, #0x1c]            ; 读 blob 头的 byte_total_len
+2d7c58: add  x5, x8, #0x20                ; ★ 期望 size = 头部 0x20 + 数据长度
+2d7c5c: cmp  x5, x23
+2d7c60: b.eq 0x2d7d30                     ; 一致 → 继续
+... 不一致 → 报 "output_blob size missmatch"
+2d7d30: ldr  x8, [x20, #0xd0]             ; 取 get_options
+2d7d34: mov  w0, w19                      ; deviceType
+2d7d38: mov  x1, x21                      ; blob
+2d7d3c: blr  x8                           ; ★ 真正调用插件
+2d7d40: mov  x19, x0                      ; 返回值
+2d7d44: mov  x0, x21
+2d7d48: bl   0x458480 <free@plt>          ; 释放缓冲
+2d7d4c: mov  x0, x19
+2d7d50: b    0x2d7cb8                     ; 返回插件结果
+```
+
+**`get_options` 的完整数据流**：
+
+```
+1. pa_get_plugin(pluginId)
+2. 校验 (flags & 0x800000ff) == 0x80000003   ← 内部插件 + 最高位标志
+3. 校验 plugin->vtbl[0xd0] 非空
+4. 若 blob 参数为空 → 走 0x2d7d20 的"仅查询"路径
+5. 否则：
+   a. 调 this->vtbl[0x558]() 得到所需 blob 大小
+   b. 大小必须 > 0x1f（31）
+   c. malloc 该大小
+   d. 调 this->vtbl[0x640](buf, 0, size) 填充 blob
+   e. 校验 buf+0x1c 的 byte_total_len，要求 0x20 + len == size
+   f. 调 plugin->vtbl[0xd0](deviceType, blob)  ← 真正查能力
+   g. free(buf)，返回结果
+```
+
+> **`+0x558` 与 `+0x640` 是 `this` 的虚函数**（`this` = `NativePluginManager`），不是插件的——说明"告诉调用方需要多大 buffer"和"填充 buffer"由管理器实现，插件只负责解读。
+>
+> **blob 头部结构**（从偏移推断）：
+> - `+0x00`（4B）：某 id
+> - `+0x1c`（4B）：`byte_total_len`
+> - `+0x20` 起：实际数据
+>
+> 整个 blob 就是 `PA_SIZEOF_PLUGIN_MSG` 描述的插件消息格式。
+
+#### 13.12.4 其余三个函数（纯转发）
+
+| 函数 | 字节 | 虚函数偏移 | 转发的参数 | 返回值 |
+| --- | ---: | ---: | --- | --- |
+| `get_sample_rates` | 196 | `+0xd8` | `(deviceType, doNotUpsample)` | int 位图 |
+| `get_sample_formats` | 172 | `+0xe0` | `(deviceType)` | int 位图 |
+| `get_generic_property` | ~150 | `+0xe8` | `(propertyId, param)` | int |
+
+三者的共同骨架（以 `get_sample_rates` 为例）：
+
+```asm
+bl   pa_get_plugin@plt
+cbz  x0, <fail>
+ldr  w8, [x0, #0x4]
+and  w8, w8, #0x800000ff
+mov  w9, #-0x7ffffffd          ; 0x80000003
+cmp  w8, w9                    ; 校验类型
+b.ne <fail>
+ldr  x2, [x0, #0xd8]           ; 取虚函数
+cbz  x2, <fail2>               ; 空 → 报 "FAIL !get_sample_rates"
+tst  w21, #0xff                ; ★ 布尔参数 → cset
+cset w1, ne
+mov  w0, w20                   ; deviceType
+br   x2                        ; 尾调用
+```
+
+> `tst w21, #0xff; cset w1, ne` 是 **bool 参数归一化**——Java 的 `boolean` 传进来可能是任意非零值，这里强制转成 0/1。
+
+#### 13.12.5 日志字符串全表（已解出）
+
+每个函数三条错误日志【实证·产物】`.rodata`：
+
+| 函数 | 日志 | 触发条件 |
+| --- | --- | --- |
+| `get_supported_devices` | `%s FAIL !internal output plugin=%d` | 插件不存在或类型不对 |
+| | `%s FAIL !get_supported_devices for output plugin=%s [%d]` | 虚函数为空 |
+| `get_options` | `%s FAIL !get_options output plugin=%s [%d]` | 虚函数为空 |
+| | `%s() %s output_blob size missmatch PA_SIZEOF_PLUGIN_MSG=%zu vs byte_total_len=%d` | blob 长度不符 |
+| | `%s() %s bad output_blob length=%d` | 长度过小（<= 0x1f） |
+| `get_sample_rates` | `%s not an internal output plugin=%d` | 类型校验失败 |
+| | `%s FAIL !get_sample_rates output plugin=%s [%d]` | 虚函数为空 |
+| `get_sample_formats` | `%s FAIL !get_sample_formats output plugin=%s [%d]` | 虚函数为空 |
+| `get_generic_property` | `%s not an internal output plugin=%d` | 类型校验失败 |
+| 全部 | `ASSERT: %s:%d` | malloc 失败等致命错误 |
+
+> 所有日志的源文件名统一是 **`output-internal.c`** —— 说明这 5 个函数在同一个 C 文件里实现。
+
+#### 13.12.6 位图的真正来源（结论修正）
+
+**§13.11 的位值表是"UI 侧的位掩码"，不是"native 计算出来的位"。** 二者关系是：
+
+```
+        UI 侧（Java）                          native 侧（C++）
+  ┌─────────────────────────┐          ┌──────────────────────────┐
+  │ o81.h0(key, mask, ...)  │          │ plugin->get_supported_   │
+  │   mask = 0x100000       │          │   devices() → int 位图    │
+  │                         │          │                          │
+  │ if ((mask & storedMask) │          │ plugin->get_options(     │
+  │     != 0) → 显示该项    │  ◄─────  │   deviceType, blob)      │
+  │                         │  比对     │   → long 能力位图         │
+  └─────────────────────────┘          └──────────────────────────┘
+```
+
+| 层 | 位图含义 | 宽度 | 来源 |
+| --- | --- | --- | --- |
+| Java `h0(mask)` | **UI 项的标识位**（哪一项显示/可点） | 64 位（`const-wide`） | **代码硬编码**（§13.11.2 的 19 个值） |
+| native `get_options` | **插件能力位图**（该设备支持哪些能力） | long（`(JII[B)J`） | **插件运行时返回** |
+
+> **两层必须一致才有意义**：Java 侧的 `mask` 是"问哪一位"，native 侧的返回值是"这一位是不是 1"。
+>
+> 所以 §13.11.2 那 19 个常量是**协议约定**——Poweramp 与插件厂商共同遵守的位定义。这也解释了为什么位序如此稀疏（0/1/4/5/6/7/13/16-20/28-33/57）：**它是跨进程/跨厂商的 ABI，改动一位就是破坏兼容**。
+
+#### 13.12.7 仍未解
+
+| 问题 | 阻塞原因 |
+| --- | --- |
+| 位图剩余 ~45 位的含义 | 需要看**插件实现**（`libpowerampcore.so` 里没有具体插件的 `get_options` 实现，它们是 `output.aa`/`output.osl` 等各自的模块） |
+| `blob` 头部各字段语义 | 只确认了 `+0x1c` = `byte_total_len`、数据从 `+0x20` 起 |
+| `this->vtbl[0x558]` / `[0x640]` 的实现 | 属于 `NativePluginManager`，未逐一反汇编 |
+### 13.13 blob 协议与 JNIEnv 槽位的最终确认
+
+本节解决了 §13.12.7 留下的两个未解项，并**修正** §13.12.3 的一处误判。
+
+#### 13.13.1 修正：`+0x558` 与 `+0x640` 不是 NativePluginManager 的方法
+
+§13.12.3 我写"`this->vtbl[0x558]` / `[0x640]` 属 `NativePluginManager`"——**这是错的**。
+
+**依据**：`get_options` 入口的寄存器保存序列【实证·产物】`0x2d7bb0-0x2d7bd8`：
+
+```asm
+2d7bc4: mov x22, x4     ; 第 5 参 = byte[] blob
+2d7bc8: mov w19, w3     ; 第 4 参 = deviceType
+2d7bcc: mov w21, w2     ; 第 3 参 = pluginId
+2d7bd0: mov x24, x0     ; ★ 第 1 参 = JNIEnv*（JNI 函数无 this）
+```
+
+JNI 函数签名是 `(JNIEnv* env, jclass, jint pluginId, jint deviceType, jbyteArray blob)`：**第 1 参就是 `JNIEnv*`**，AArch64 AAPCS64 下落在 `x0`。因此 `x24 = env`，`ldr x8,[x24]` 取的是 **JNIEnv 的函数表**。
+
+**两个偏移的真实身份**（按 Android NDK `jni.h` 的 arm64 槽位布局，前 4 槽保留）：
+
+| 偏移 | 槽号 | JNIEnv 函数 | 在 `get_options` 中的作用 |
+| ---: | ---: | --- | --- |
+| `0x558` | #171 | **`GetArrayLength`** | 取 `byteArray` 的长度 → 作为所需 buffer 大小 |
+| `0x640` | #200 | **`GetByteArrayRegion`** | 把 Java `byte[]` 拷进 C 侧 buffer |
+
+> **这才是 `get_options` 的真实语义**：它**不是"向插件申请 buffer"**，而是把 **Java 侧传入的 `byte[]`** 拷进 C 内存，再交给插件解读。
+>
+> 修正后的数据流：
+> ```
+> 1. 校验插件类型
+> 2. blob == NULL → 走"仅查询"路径（0x2d7d20）
+> 3. size = (*env)->GetArrayLength(env, blob)      // 0x558
+> 4. size 必须 > 31                                 // 0x1f
+> 5. buf = malloc(size)
+> 6. (*env)->GetByteArrayRegion(env, blob, 0, size, buf)  // 0x640
+> 7. 校验 buf+0x1c 的 byte_total_len + 0x20 == size
+> 8. result = plugin->get_options(deviceType, buf)   // 插件虚函数 +0xd0
+> 9. free(buf); return result
+> ```
+
+#### 13.13.2 `PA_SIZEOF_PLUGIN_MSG` 的完整结构
+
+在 `get_generic_property` 之后发现两个**独立的小函数**（`0x2d7f7c` 与 `0x2d7fc0`），它们解析 blob 头，直接暴露了结构定义【实证·产物】：
+
+```asm
+; === blob 校验 + 取值（0x2d7f7c） ===
+2d7f80: ldr  w8, [x2, #0x10]        ; 读 blob+0x10
+2d7f84: mov  w9, #0xf3f4
+2d7f88: movk w9, #0xf1f2, lsl #16   ; w9 = 0xF1F2F3F4
+2d7f8c: cmp  w8, w9                 ; ★ magic 必须 == 0xF1F2F3F4
+2d7f90: b.ne <fail>
+2d7f94: ldr  w8, [x2, #0x1c]        ; 读 blob+0x1c = byte_total_len
+2d7f98: cmp  w8, #0x8               ; 至少 8 字节
+2d7f9c: b.lo <fail>
+2d7fa0: ldr  w8, [x2, #0x20]        ; blob+0x20 = 字段 A
+2d7fa4: str  w8, [x0]               ; 写入出参 1
+2d7fa8: ldr  w8, [x2, #0x24]        ; blob+0x24 = 字段 B
+2d7fac: str  w8, [x1]               ; 写入出参 2
+2d7fb0: mov  w0, #0x1               ; 返回 true
+2d7fb4: ret
+```
+
+```asm
+; === blob 清零初始化（0x2d7fc0） ===
+2d7fd4: movi v0.2d, #0
+2d7fd8: stur q0, [x19, #0x2c]       ; 清零出参 +0x2c..+0x3b
+2d7fdc: stp  q0, q0, [x19, #0x10]   ; 清零 +0x10..+0x2f
+2d7fe0: str  q0, [x19]              ; 清零 +0x00..+0x0f
+; → 出参结构大小 >= 0x3c（60 字节）
+2d7fe8: ldr  w8, [x2, #0x10]        ; 同样校验 magic
+```
+
+**由此确定的 `PA_SIZEOF_PLUGIN_MSG` 布局**：
+
+| 偏移 | 大小 | 字段 | 证据 |
+| ---: | ---: | --- | --- |
+| `+0x00` | ? | （未触及） | — |
+| `+0x10` | 4 | **magic = `0xF1F2F3F4`** | `0x2d7f80-0x2d7f8c` |
+| `+0x14` | 4 | （未触及） | — |
+| `+0x18` | 4 | （未触及） | — |
+| **`+0x1c`** | 4 | **`byte_total_len`** | `0x2d7f94`、`0x2d7c54` |
+| `+0x20` | 4 | 字段 A | `0x2d7fa0` |
+| `+0x24` | 4 | 字段 B | `0x2d7fa8` |
+| `+0x28` | … | （未触及） | — |
+
+> **头部固定 0x20 字节**（`0x2d7c58` 的 `add x5, x8, #0x20` 印证：`期望大小 = 0x20 + byte_total_len`）。
+>
+> **magic `0xF1F2F3F4`** 是插件消息的识别标记——一串递增的十六进制数，典型的"防误判"设计。
+
+#### 13.13.3 五个函数的最终分类
+
+| 函数 | 字节 | 虚表偏移 | 逻辑复杂度 | 是否走 blob |
+| --- | ---: | ---: | --- | :---: |
+| `get_supported_devices` | 156 | `+0x48` | 纯尾调用 | ✗ |
+| `get_sample_rates` | 196 | `+0xd8` | 纯尾调用 + bool 归一化 | ✗ |
+| `get_sample_formats` | 172 | `+0xe0` | 纯尾调用 | ✗ |
+| `get_generic_property` | ~150 | `+0xe8` | 纯尾调用（2 参数） | ✗ |
+| **`get_options`** | **456** | `+0xd0` | **完整 blob 编解码** | **✓** |
+
+> **为什么只有 `get_options` 需要 blob**：其它四个查询返回的是**单个 int 位图**，直接作为返回值即可；而 `get_options` 返回的是**变长的能力描述**（每个输出/设备的能力组合不同），必须用一块内存传递。
+
+#### 13.13.4 两层位图模型的最终确认
+
+结合 §13.11（Java 侧 19 个掩码）与本节（native 侧 blob 协议），完整链路是：
+
+```
+  Java (o81.smali)                          native (output-internal.c)
+  ─────────────────                         ─────────────────────────
+  h0(key, optMask=0x100000, ...)
+       │
+       ├─ 首次进入 → 调用 get_options(pluginId, deviceType, blob)
+       │                                    │
+       │                                    ├─ pa_get_plugin(pluginId)
+       │                                    ├─ 校验 flags == 0x80000003
+       │                                    ├─ GetArrayLength(blob) → size
+       │                                    ├─ malloc + GetByteArrayRegion
+       │                                    ├─ 校验 magic 0xF1F2F3F4
+       │                                    └─ plugin->get_options(devType, buf)
+       │                                              │
+       │                                              ▼
+       │                                        返回 long 能力位图
+       │
+       └─ if ((optMask & 能力位图) != 0) → 显示该项
+```
+
+| 层 | 位图 | 宽度 | 谁定义 |
+| --- | --- | --- | --- |
+| Java `optMask` | UI 项标识 | 64 位 | **Poweramp 代码硬编码**（19 个常量，§13.11.2） |
+| native 返回值 | 插件能力 | long | **插件运行时返回** |
+
+> **两者是 ABI 契约**：Java 侧"问第 N 位"，插件侧"答第 N 位"。位序（0/1/4/5/6/7/13/16-20/28-33/57）之所以稀疏，是因为**这是跨版本兼容的协议**——已分配的位永不移动。
+
+#### 13.13.5 本轮真正到达的边界
+
+| 已解 | 说明 |
+| --- | --- |
+| ✅ 5 个 JNI 函数的完整汇编 | 全部 456+196+172+156+150 字节 |
+| ✅ 插件 ABI（虚表偏移 +0x48/+0xd0..+0xe8） | 直接读自汇编 |
+| ✅ blob 头部结构（magic / byte_total_len / 0x20 对齐） | 从校验代码反推 |
+| ✅ JNIEnv 槽位（0x558/0x640） | 按 NDK jni.h 布局解析 |
+| ✅ 两层位图的关系 | 修正了上一轮的错误结论 |
+
+**仍未解（已到本质边界）**：
+
+| 问题 | 为什么无法在本文件内解决 |
+| --- | --- |
+| 位图剩余 ~45 位的语义 | 由**各插件自己的 `get_options` 实现**决定，而 `output.aa`/`output.osl` 等插件**不在 `libpowerampcore.so` 里**（它们是独立模块，通过 `pa_get_plugin` 注册） |
+| blob `+0x00..+0x0f` 与 `+0x14/+0x18/+0x28` 字段 | Poweramp 侧只读 magic 与 `byte_total_len`，其余字段**原样透传给插件**，宿主代码里没有解释逻辑 |
+| 各插件的具体能力实现 | 同上——需要各输出插件自己的 `.so` |
+
+> **结论**：`libpowerampcore.so` 只是**宿主/转发层**。要再往下必须拿到输出插件本体。而本 bundle 只有 `base.apk` 与 `split_config.arm64_v8a.apk`，其中 native 库只有 `libpowerampcore.so` 和 `libffmpeg_neon.so`——**插件实现并不在这个包里**（`output.aa`/`output.osl`/`output.athd` 由 `pa_get_plugin` 在运行时从内部注册表返回，实现链接进了 `libpowerampcore.so` 但符号已 strip，无法按名定位）。
+### 13.14 `audio_output_device_opts.xml` 全部 63 个选项逐条清单
+
+这是音频分支最复杂的一页：**69 行 XML、63 个 key、64 个元素**（含 1 个无 key 的元素）。下表按 **XML 中的实际出现顺序**排列，这样可以直接对照设备页的渲染顺序。
+
+> **列含义**：**类型** = 控件类（`RAW` = `RawTextPreference`）；**np** = `android:persistent="false"`（不持久化，运行时动态填充）；**skip** = `w:skipSearch="true"`（不进搜索索引）；**desc** 栏中 `〔...〕` 表示该行显示的提示文案。
+
+| # | key | 类型 | 标题 | 摘要 / 提示 | 标志 |
+| ---: | --- | --- | --- | --- | --- |
+| 1 | `eq_preset` | Button | — | — | skip |
+| 2 | `output_api` | TagList | Output Driver | — | np,stringType |
+| 3 | `bg_warn` | RAW | — | — | — |
+| 4 | `output_hint` | RAW | — | — | skip |
+| 5 | `top_output_info` | RAW | — | — | skip |
+| 6 | `top_output_info2` | RAW | — | — | skip |
+| 7 | `output_info` | RAW | — | — | skip |
+| 8 | `sample_rate` | TagList | Sample Rate | The sample rate Poweramp uses for the output | np |
+| 9 | `sample_rate_static` | RAW | — | — | skip |
+| 10 | `follow_sr_hint1` | RAW | — | 〔In Follow Track mode, Poweramp will try to match the track sample rate to a supported by the device rate from the allowed list, or it will upsample to the next higher allowed and supported rate〕 | skip |
+| 11 | `codec_sr_hint` | RAW | — | 〔On most Android phones, choosing a Bluetooth codec sample rate can cause repeated resampling because the system enforces 48 kHz-based sample rates, even when the codec supports 44.1 kHz-based frequencies. The codec option is intended for DAPs〕 | skip |
+| 12 | `allowed_srs` | TagList | Allowed Sample Rates | The set of sample rates Poweramp is allowed to use when matching the track sample rate | np,multiSelectBitset |
+| 13 | `follow_sr_hint2` | RAW | — | 〔Gapless playback and crossfade may be affected when switching between different sample rates〕 | skip |
+| 14 | `set_codec_sr` | MultilineSwitch | Set BT Codec Parameters | When enabled, Poweramp will attempt to set Bluetooth codec sample rate and other parameters | np |
+| 15 | `set_codec_sr_hint` | RAW | — | 〔Introduces a short gap between tracks during codec parameters change〕 | skip |
+| 16 | `prefer_base_rate` | MultilineSwitch | Base-Rate Synchronous Scaling | Prioritize integer multiples of the source frequency (44.1/48 kHz) from the Allowed Sample Rates | np |
+| 17 | `sample_fmt` | TagList | Sample Format | The sample format Poweramp uses for the output | np |
+| 18 | `sample_bits_static` | RAW | — | — | np,skip |
+| 19 | `sr_and_format_warnings` | RAW | — | — | skip |
+| 20 | `direct_no_effect` | RAW | — | On your device, <a href=#no_dvc>DVC</a> may force standard definition audio (48 kHz/16 bit) | skip |
+| 21 | `pref_sr_format_effects_override_hint` | RAW | — | Global sound effects, like Dolby, may force standard definition audio (48 kHz/16 bit) | skip |
+| 22 | `pipeline64` | TagList | 64-bit Audio Pipeline | Enables Float 64-bit audio pipeline from decoder to the output | np |
+| 23 | `pipeline64_static` | RAW | — | — | skip |
+| 24 | `dsd_remaster` | TagList | DSD Remastering | Remasters PCM to DSD | np |
+| 25 | `dsd_remaster_static` | RAW | — | — | skip |
+| 26 | `dsd_remaster_sample_rate` | TagList | Target DSD Sample Rate | Used in the DSD Remastering mode for the output | np |
+| 27 | `dsd_remaster_sample_rate_static` | RAW | — | — | skip |
+| 28 | `dsd_remaster_allow_48k` | MultilineSwitch | Allow 48 kHz-based DSD | Use 48 kHz-based DSD sample rates for 48 kHz-based PCM tracks | np |
+| 29 | `dsd_remaster_hint` | RAW | — | 〔This option overrides <a href="#sample_rate">Sample Rate</a> and <a href="#allowed_srs">Allowed Sample Rates</a> selection〕 | skip |
+| 30 | `dsd_remaster_gain_mb` | RoundKnob | DSD Remaster Gain | Attenuates the signal before PCM to DSD conversion, adds headroom for loud tracks | np |
+| 31 | `perfect_bit_perfect` | TagList | Perfect Bit Perfect | Direct decoder-to-output path. Enables DSD output for DSD tracks. No Equalizer, no DSP, no software volume control | np |
+| 32 | `perfect_bit_perfect_static` | RAW | — | — | skip |
+| 33 | `volume_type` | TagList | Volume Type | — | np |
+| 34 | `volume_type_static` | RAW | — | — | skip |
+| 35 | `volume_type_hints` | RAW | — | 〔USB DACs typically have an independent on-device volume control that Hardware Volume does not affect〕 | skip |
+| 36 | `sync_hw_volume` | MultilineSwitch | Synchronize Hardware Volume | Restores the previously saved volume. If disabled, the device current hardware volume is used, which is typically defaults to MAXIMUM | np |
+| 37 | `sync_hw_volume_hint` | RAW | — | 〔Enable this option for devices that lack on-device volume controls or do not retain their volume setting. Disable it for devices with the volume controls that preserve their volume level between connections〕 | skip |
+| 38 | `restore_hw_volume` | MultilineSwitch | Restore Hardware Volume On Release | Restore USB DAC hardware volume when USB is released | np |
+| 39 | `restore_hw_volume_hint` | RAW | — | 〔Disabled while Synchronize Hardware Volume is off to preserve the DAC's volume between connections〕 | skip |
+| 40 | `float` | MultilineSwitch | Float32 Sample Format | — | np |
+| 41 | `buffer_size` | Preference | Buffer Size | Tweak if audio skips | np |
+| 42 | `reconfig_delay_ms` | Seekbar | Reconfiguration Delay | An additional delay between output reconfigurations. This is required for devices that fail to reconfigure quickly. Increases track change delay | np |
+| 43 | （无 key） | RAW | — | 〔Increasing this delay increases short pause between tracks with different sample rate〕 | np,skip |
+| 44 | `vis_latency_ms` | Seekbar | Visualization/Lyrics Delay | Extra delay to apply to visualization/lyrics for a better sync: %d ms | np |
+| 45 | `pause_usb_release` | MultilineSwitch | Release USB DAC while paused | Return the USB DAC to Android while Poweramp is paused or stopped so other apps can use it | np |
+| 46 | `play_silence_in_background` | MultilineSwitch | Play silence in background | Helps keeping player uninterrupted in the background. Increases battery usage | np |
+| 47 | `allow_dsd_dop` | MultilineSwitch | Allow DSD DOP | Allow DSD-Over-PCM protocol for this device | np |
+| 48 | `prefer_dsd_raw` | MultilineSwitch | Prefer DSD Raw | Prefer raw DSD formats if available for this device | np |
+| 49 | `warmup` | MultilineSwitch | USB DAC Warmup on Startup | Apply an additional warm-up on the first playback. Enable this if the device tends to produce distorted audio or silence immediately after connecting | np |
+| 50 | `pcm_dsd_extra_warmup` | MultilineSwitch | USB DAC PCM/DSD Warmups | Apply additional PCM/DSD warm-ups for USB DACs that may produce distorted audio after format or sample-rate changes | np |
+| 51 | `target_alt_sr_quirk` | MultilineSwitch | USB DAC Sample Rate Quirk | Set the USB sample rate after activating the target alternate setting. Enable this for USB DACs that play silence or distorted audio after a connection | np |
+| 52 | `force_usb_full_speed` | MultilineSwitch | Force USB 1.1 | Force slow full speed usb connection for the old USB 1.1 devices | np |
+| 53 | `cc_force_aa` | MultilineSwitch | Force Send Album Art | Send album art to Chromecast device even if it reports it has no display | np |
+| 54 | `cc_show_meta` | MultilineSwitch | Show Meta Information | Show additional meta information (track format, category, next track) on the Chromecast devices with a screen | np |
+| 55 | `no_dvc` | MultilineSwitch | No DVC | Disable Direct Volume Control (DVC) for this output/device | np |
+| 56 | `no_dvc_static` | RAW | — | — | skip |
+| 57 | `shizuku_absvol` | MultilineSwitch | Allow DVC via Shizuku | If enabled, this option disables Bluetooth Absolute Volume via Shizuku, allowing DVC usage | np |
+| 58 | `shizuku_absvol_static` | RAW | — | — | skip |
+| 59 | `shizuku_absvol_hint` | RAW | — | 〔Requires Shizuku installed and running on the device〕 | skip |
+| 60 | `no_headroom` | MultilineSwitch | No Headroom Gain Reduction | Don't reduce output gain when DVC is disabled. May cause distortion for high equ/tone gains | np |
+| 61 | `no_equ` | MultilineSwitch | No Equ/Tone | Disable equalizer/tone DSP for this output/device | np |
+| 62 | `no_duck` | MultilineSwitch | No Duck | Disable volume ducking for this output, e.g. when notifications cause issues with this output. Temporarily pause player instead | np |
+| 63 | `no_af` | MultilineSwitch | Ignore Audio Focus | Ignore calls/short Audio Focus requests, including notification sounds and ringtones | np |
+| 64 | `restore_defaults` | Preference | Restore Defaults | — | — |
+
+**分组理解**（按功能聚类，非 XML 顺序）：
+
+| 组 | key | 说明 |
+| --- | --- | --- |
+| **A. 驱动选择** | `output_api` | 选哪个 native 输出驱动（详见 §13.9.2） |
+| **B. 采样率** | `sample_rate`、`allowed_srs`、`prefer_base_rate`、`set_codec_sr` | `allowed_srs` 是 `multiSelectBitset` 多选 |
+| **C. 采样格式** | `sample_fmt`、`float` | `float` = Float32 格式 |
+| **D. 64-bit** | `pipeline64` | 三态 |
+| **E. DSD 重制** | `dsd_remaster`、`dsd_remaster_sample_rate`、`dsd_remaster_allow_48k`、`dsd_remaster_gain_mb` | 三态 + 目标采样率 + 48k 变体 + 增益衰减 |
+| **F. 比特完美** | `perfect_bit_perfect` | 三态 |
+| **G. 音量** | `volume_type`、`sync_hw_volume`、`restore_hw_volume` | 音量类型 + 硬件音量同步/恢复 |
+| **H. DVC** | `no_dvc`、`shizuku_absvol` | 禁用 DVC / 通过 Shizuku 启用 |
+| **I. DSP 开关** | `no_equ`、`no_duck`、`no_af`、`no_headroom` | 四个正交开关（§5 核心论点） |
+| **J. USB DAC 调优** | `pause_usb_release`、`force_usb_full_speed`、`warmup`、`pcm_dsd_extra_warmup`、`target_alt_sr_quirk`、`reconfig_delay_ms`、`buffer_size` | 7 项 USB/延迟相关 |
+| **K. DSD 传输** | `allow_dsd_dop`、`prefer_dsd_raw` | DoP 协议 / 原生 DSD |
+| **L. Chromecast** | `cc_force_aa`、`cc_show_meta` | 强制送封面 / 显示元信息 |
+| **M. 后台** | `play_silence_in_background` | 后台播放静音 |
+| **N. 可视化同步** | `vis_latency_ms` | 可视化/歌词延迟 0–2500ms |
+| **O. EQ 快捷** | `eq_preset` | `ButtonPref`，进均衡器预设 |
+| **P. 只读状态行** | `top_output_info`、`top_output_info2`、`output_info`、`sample_rate_static`、`sample_bits_static`、`pipeline64_static`、`dsd_remaster_static`、`dsd_remaster_sample_rate_static`、`perfect_bit_perfect_static`、`volume_type_static`、`no_dvc_static`、`shizuku_absvol_static` | 12 个，全部 `skipSearch`，显示 native 实际值 |
+| **Q. 提示块** | `bg_warn`、`output_hint`、`follow_sr_hint1`、`follow_sr_hint2`、`codec_sr_hint`、`set_codec_sr_hint`、`sr_and_format_warnings`、`direct_no_effect`、`pref_sr_format_effects_override_hint`、`volume_type_hints`、`sync_hw_volume_hint`、`restore_hw_volume_hint`、`dsd_remaster_hint`、`shizuku_absvol_hint` | 14 个提示块 |
+
+**合计**：17 个可交互项 + 12 个只读状态行 + 14 个提示块 + `restore_defaults` = **约 44 个有 key 的项**，其余为无 key 的布局元素。
+
+> **设计观察**：这一页几乎**所有可交互项都是 `persistent="false"`**——因为设备级选项不是简单的 key-value，而是通过 §13.13 的 **blob 协议**与 native 交换。XML 里的 key 只是"锚点"，真实值在 native 侧。
+### 13.15 其余 13 个音频页面的逐项清单
+
+本节补齐除 `audio_output_device_opts` 外所有音频 XML 的**每一个带 key 元素**，含标题、摘要/提示、默认值、依赖关系与标志位。
+
+> **标志位**：**np** = `persistent="false"`；**skip** = `w:skipSearch="true"`；`multiSelectBitset`/`stringType` = `w:prefType` 取值。
+
+
+#### § peq_equ_bands.xml —— 图形均衡器频段（第 4 层）（7 个带 key 元素）
+
+| key | 类型 | 标题 | 摘要 / 提示 | 默认 | 依赖 | 标志 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `equ_bands_num` | TagList | Number of Bands | Predefined number of bands, including ISO recommended bands distribution | `10` | — | — |
+| `_number_of_bands_msg` | RAW | — | 〔<small>High number of bands may require manual <a href=settings/peq_equ#peq_blocksize>Blo | — | — | — |
+| `equ_custom_bands` | MultilineSwitch | Enable Custom Bands | — | — | — | — |
+| `equ_custom_bands_num` | Seekbar | Custom Number of Bands | — | `10` | `equ_custom_bands` | — |
+| `equ_custom_bands_first_fr` | Seekbar | First Frequency | %.0fHz | `20` | `equ_custom_bands` | — |
+| `equ_custom_bands_last_fr` | Seekbar | Last Frequency | %.1fkHz | `16000` | `equ_custom_bands` | — |
+| `restore_defaults` | Preference | Restore Defaults | — | — | — | — |
+
+
+#### § peq_equ_tone.xml —— 音调（第 4 层）（5 个带 key 元素）
+
+| key | 类型 | 标题 | 摘要 / 提示 | 默认 | 依赖 | 标志 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `_bassFreq` | RoundKnob | — | — | — | — | np |
+| `_bassQ` | RoundKnob | — | — | — | — | np |
+| `_trebleFreq` | RoundKnob | — | — | — | — | np |
+| `_trebleQ` | RoundKnob | — | — | — | — | np |
+| `restore_defaults` | Preference | Restore Defaults | — | — | — | — |
+
+
+#### § audio_focus.xml —— 音频焦点（12 个带 key 元素）
+
+| key | 类型 | 标题 | 摘要 / 提示 | 默认 | 依赖 | 标志 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `resume_after_call` | MultilineSwitch | Resume After Call | Resume playing on hang up (if paused by call) | `true` | — | — |
+| `resume_on_start` | MultilineSwitch | Resume On Start | Resume playing when Poweramp is started | `false` | — | — |
+| `resume_on_resume` | MultilineSwitch | Resume On Reopen | Also resume when Poweramp is already running and reopened from the launcher | `true` | `resume_on_start` | — |
+| `resume_on_mount` | MultilineSwitch | Wait For Storage | Wait for a storage (up to 30s.) to mount before resuming on start | `false` | `resume_on_start` | — |
+| `cc_af_warning` | Redirect | — | Chromecast output may ignore calls and short Audio Focus completely. Press here to configu | — | — | skip |
+| `audio_focus_cat` | PreferenceCategory | Audio Focus | — | — | — | — |
+| `af_short` | MultilineSwitch | Short Audio Focus Change / Calls | Temporarily pause on short audio focus change (calls/notifications/navigation/etc.) | `true` | — | — |
+| `pause_in_call` | MultilineSwitch | Pause In Call | Pause when phone call happens. Poweramp always pauses for call via Bluetooth | `true` | — | — |
+| `resume_on_focus` | MultilineSwitch | Resume On Focus Gain | Resume after getting back the focus. If disabled, player stays paused | `true` | `af_short` | — |
+| `af_short_duck` | MultilineSwitch | Duck Volume | When possible, allow lowering the volume on short audio focus. This option can be overridd | `true` | `af_short` | — |
+| `af_permanent` | MultilineSwitch | Permanent Audio Focus Change | Pause on permanent audio focus change (other player/game/etc.) | `true` | — | — |
+| `restore_defaults` | Preference | Restore Defaults | — | — | — | — |
+
+
+#### § audio_equ.xml —— 均衡器（12 个带 key 元素）
+
+| key | 类型 | 标题 | 摘要 / 提示 | 默认 | 依赖 | 标志 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `peq_equ_bands` | Redirect | Graphic Equalizer Bands | Set number of bands, configure frequencies | — | — | — |
+| `peq_equ_tone` | Redirect | Tone | Set Bass/Treble frequencies and Q factors | — | — | np |
+| `eq_labels` | TagList | Equalizer Values | — | `1` | — | — |
+| `tone_labels` | TagList | Tone Values | — | `2` | — | — |
+| `_autosave` | MultilineSwitch | Auto Save | Auto save current preset | — | — | np |
+| `dsp_border_gain` | MultilineSwitch | Smooth Equalizer/Tone Gains | Automatically reduce Equalizer/Tone band gains near maximum volume to avoid overloading | `true` | — | — |
+| `suggest_autoeq` | MultilineSwitch | Suggest AutoEq Presets | Show suggestion to assign AutoEq preset for the connected Bluetooth/USB device | — | — | — |
+| `_clear_autoeq_known_devices` | RAW | Reset the Disabled AutoEq Suggestions | — | — | `suggest_autoeq` | — |
+| `_presets_to_peq` | RAW | Export Presets to the Poweramp Equalizer app | 〔Export all equalizer presets directly to the Poweramp Equalizer app〕 | — | — | — |
+| `_import_autoeq` | RAW | Import AutoEq Presets | 〔Import presets from a zip file〕 | — | — | — |
+| `reset_eq_presets` | RAW | Restore Equalizer Presets | 〔Built-in and AutoEq equalizer presets will be restored to defaults〕 | — | — | — |
+| `restore_defaults` | Preference | Restore Defaults | — | — | — | — |
+
+
+#### § audio_resampler.xml —— 重采样（4 个带 key 元素）
+
+| key | 类型 | 标题 | 摘要 / 提示 | 默认 | 依赖 | 标志 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `resampler_type` | TagList | Resampler Type | — | `0` | — | — |
+| `resampler_cutoff` | RoundKnob | Resampler Cutoff Frequency Ratio | — | `970` | — | — |
+| `dither` | NumberList | Dither | — | `0` | — | — |
+| `restore_defaults` | Preference | Restore Defaults | — | — | — | — |
+
+
+#### § audio_dvc.xml —— 直接音量控制（15 个带 key 元素）
+
+| key | 类型 | 标题 | 摘要 / 提示 | 默认 | 依赖 | 标志 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `dvc_enabled` | MultilineSwitch | Enable Direct Volume Control | — | `true` | — | — |
+| `dvc_devices` | RAW | — | — | — | — | — |
+| `bluetooth_headset` | PreferenceCategory | Bluetooth | — | — | — | — |
+| `bt_absvol_status` | RAW | — | — | — | — | — |
+| `no_dvc_bt_absvol` | MultilineSwitch | No DVC for Bluetooth Absolute Volume | Automatically disable DVC for Bluetooth when Absolute Volume is detected or it's not possi | `true` | `dvc_enabled` | — |
+| `no_dvc_bt_absvol_hint` | RAW | — | 〔• to detect Absolute Volume this option may temporarily change volume for a few seconds o | — | — | — |
+| `no_dvc_bt_absvol_hint_15` | RAW | — | 〔• it's not possible to detect Absolute Volume on your device〕 | — | — | — |
+| `no_dvc_bt_absvol_shizuku_hint` | RAW | — | — | — | — | skip |
+| `peq_shizuku_absvol` | MultilineSwitch | Allow DVC via Shizuku | If enabled, this option disables Bluetooth Absolute Volume via Shizuku, allowing DVC usage | — | — | — |
+| `peq_shizuku_absvol_static` | RAW | — | — | — | — | skip |
+| `peq_shizuku_absvol_hint` | RAW | — | 〔Requires Shizuku installed and running on the device〕 | — | — | skip |
+| `dvc_bt_msg` | RAW | Disable Bluetooth Absolute Volume | — | — | — | — |
+| `no_dvc_gain_mb` | RoundKnob | No DVC - Preamp Reduction | Allows equalization/basses without distortion. Set to 0 dB to match other players’ volume, | `-600` | — | — |
+| `compensate_dvc_vol` | MultilineSwitch | Compensate DVC Volume | Specifically compensate low volume in DVC mode on some Android 15+ firmwares. Applied only | `false` | — | — |
+| `restore_defaults` | Preference | Restore Defaults | — | — | — | — |
+
+
+#### § audio_tweaks.xml —— 高级调整（11 个带 key 元素）
+
+| key | 类型 | 标题 | 摘要 / 提示 | 默认 | 依赖 | 标志 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `volume_levels` | NumberList | Volume Levels | Number of volume levels: %s | `0` | — | — |
+| `volume_popup` | MultilineSwitch | Volume Panel | Custom volume panel. Shown when volume is adjusted in Poweramp UI | — | — | — |
+| `pause_on_volume` | MultilineSwitch | Pause/Resume on Volume | Pause when volume is set to 0, resume when volume increased from 0 | — | — | — |
+| `allow_platform_fx` | MultilineSwitch | MusicFX | Enable MusicFX Button (Android system audio effects) in Volume tab | `false` | — | — |
+| `force_audio_on_focus` | MultilineSwitch | Force Audio On Audio Focus Change | Enable this if audio stops after notifications | — | — | — |
+| `mod_gain_mb` | RoundKnob | Tracker Decoder Extra Gain | Extra gain applied to tracker formats, such as .mod, *.s3c, *.xm, *.it | — | — | — |
+| `mod_separation` | RoundKnob | Tracker Decoder Stereo Separation | — | — | — | — |
+| `mod_interpolation` | TagList | Tracker Decoder Interpolation | Sample interpolation for tracker formats | `0` | — | — |
+| `reset_eq_presets` | Preference | Restore Equalizer Presets | Built-in and AutoEq equalizer presets will be restored to defaults | — | — | — |
+| `reset_reverb_presets` | Preference | Restore Reverb Presets | Built-in reverb presets will be restored/set to defaults | — | — | — |
+| `restore_defaults` | Preference | Restore Defaults | — | — | — | — |
+
+
+#### § fade.xml —— 交叉淡入淡出（11 个带 key 元素）
+
+| key | 类型 | 标题 | 摘要 / 提示 | 默认 | 依赖 | 标志 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `crossfade_auto_advance` | TagList | Auto-advance Fading | Applied when the song is changed automatically | `0` | — | — |
+| `fade_manual_advance` | TagList | Manual Track Change Fading | Applied when the song is changed manually | `1` | — | — |
+| `fade_play_pause` | MultilineSwitch | Fade Play/Pause/Stop | — | `true` | — | — |
+| `fade_seek` | MultilineSwitch | Fade on Seek | — | `true` | — | — |
+| `gapless_preload_ms` | Seekbar | Preload Gapless Tracks | Increase (to Normal or more) for slow storages to improve gapless | `0` | — | — |
+| `track_end_silence_ms` | Seekbar | Silence Between Tracks | Applied to all tracks excluding CUE tracks. Elapsed time may go beyond track duration | `0` | — | — |
+| `crossfade_length_ms` | Seekbar | Crossfade Length | %d ms | `5000` | — | — |
+| `fade_short_xfade_ms` | Seekbar | Short Manual Crossfade Length | %d ms | `400` | — | — |
+| `fade_short_ms` | Seekbar | Play/Pause/Stop Fade Length | %d ms | `400` | — | — |
+| `fade_seek_ms` | Seekbar | Seek Fade Length | %d ms | `100` | — | — |
+| `restore_defaults` | Preference | Restore Defaults | — | — | — | — |
+
+
+#### § rg.xml —— 播放增益（5 个带 key 元素）
+
+| key | 类型 | 标题 | 摘要 / 提示 | 默认 | 依赖 | 标志 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `rg_type` | TagList | Replay Gain | — | `0` | — | — |
+| `rg_source` | TagList | Source | — | `0` | — | — |
+| `rg_preamp_mb` | RoundKnob | RG preamp | — | `0` | — | — |
+| `rg_default_mb` | RoundKnob | Preamp for songs without RG info | — | `0` | — | — |
+| `restore_defaults` | Preference | Restore Defaults | — | — | — | — |
+
+
+#### § audio_bit_perfect.xml —— 比特完美（9 个带 key 元素）
+
+| key | 类型 | 标题 | 摘要 / 提示 | 默认 | 依赖 | 标志 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `global_pipeline64` | MultilineSwitch | 64-bit Audio Pipeline | Enables Float 64-bit audio pipeline from decoder to the output | — | — | — |
+| `pipeline64_opts` | RAW | — | — | — | — | — |
+| `global_follow_sr` | MultilineSwitch | Follow Track Sample Rate | 〔Enables track sample rate matching for the compatible outputs〕 | — | — | — |
+| `follow_sr_opts` | RAW | — | — | — | — | — |
+| `global_dsd_remaster` | MultilineSwitch | DSD Remastering | Remasters PCM to DSD | — | — | — |
+| `dsd_remaster_opts` | RAW | — | — | — | — | — |
+| `global_perfect_bit_perfect` | MultilineSwitch | Perfect Bit Perfect | Direct decoder-to-output path. Enables DSD output for DSD tracks. No Equalizer, no DSP, no | — | — | — |
+| `perfect_bit_perfect_opts` | RAW | — | — | — | — | — |
+| `restore_defaults` | Preference | Restore Defaults | — | — | — | — |
+
+
+#### § audio_outputs2.xml —— 输出设备（8 个带 key 元素）
+
+| key | 类型 | 标题 | 摘要 / 提示 | 默认 | 依赖 | 标志 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `output_headset` | Button | Wired Headset/AUX | — | — | — | np |
+| `output_speaker` | Button | Speaker | — | — | — | np |
+| `output_bt` | Button | Bluetooth | — | — | — | np |
+| `output_usb` | Button | USB DAC | — | — | — | np |
+| `output_chromecast` | Button | Chromecast | — | — | — | np |
+| `output_other` | Button | Other Output Devices | — | — | — | np |
+| `audio_outputs_tweaks` | Redirect | Advanced Tweaks | — | — | — | — |
+| `restore_defaults` | Preference | Restore Defaults | — | — | — | — |
+
+
+#### § audio_outputs_tweaks.xml —— 输出高级（5 个带 key 元素）
+
+| key | 类型 | 标题 | 摘要 / 提示 | 默认 | 依赖 | 标志 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `usb_activity` | MultilineSwitch | Show Poweramp for USB DACs | Automatically activate Poweramp when USB DAC is attached. Allows the device to be remember | — | — | np |
+| `force_no_speaker` | MultilineSwitch | Force Speaker Off (for Hi-Res Output) | Enable this if speaker doesn't switch off after calls, some notifications, etc. | — | — | — |
+| `use_stream3_player` | MultilineSwitch | Emulate Media Stream (for Hi-Res output) | Enable this if volume or other media actions don't work for the lock screen or when screen | `false` | — | — |
+| `audio_platform_log` | Redirect | Audio Outputs Detection Log | — | — | — | — |
+| `restore_defaults` | Preference | Restore Defaults | — | — | — | — |
+
+
+#### § audio.xml —— 音频根页面（8 个带 key 元素）
+
+| key | 类型 | 标题 | 摘要 / 提示 | 默认 | 依赖 | 标志 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `fade` | Redirect | Crossfade, Fade, and Gapless | Crossfade options, fade type and length, gapless | — | — | — |
+| `rg` | Redirect | Replay Gain (RG) | Enable RG, set source, preamp values | — | — | — |
+| `audio_focus` | Redirect | Audio Focus | Pause/Resume/Duck volume on calls/notifications/start | — | — | — |
+| `audio_resampler` | Redirect | Resampler | Resampling/dither settings | — | — | — |
+| `audio_dvc` | Redirect | Direct Volume Control (DVC) | DVC options, DVC for Bluetooth | — | — | — |
+| `audio_outputs2` | Redirect | Audio Outputs | Wired Headset, Bluetooth, USB, Chromecast, and other outputs | — | — | — |
+| `audio_bit_perfect` | Redirect | Bit Perfect | 64-bit audio pipeline, Perfect Bit Perfect | — | — | — |
+| `audio_tweaks` | Redirect | Advanced Tweaks | Volume levels, MusicFX, equalizer/reverb presets reset | — | — | — |
+### 13.16 音频分支全部提示文案与格式串
+
+本节收录音频 XML 中**所有** `@string` 引用的完整英文原文（共 287 条引用，去重后 200+ 条），按来源页面分组。
+
+#### 13.16.1 提示块全文
+
+| 资源名 | 英文原文 | 出处 |
+| --- | --- | --- |
+| `absvol_change_settings_page` | • volume may be constantly changed and probed on this page | audio_dvc |
+| `absvol_desc_short` | Absolute Volume means Bluetooth device volume is synced to the phone | audio_dvc |
+| `absvol_disabled_bt_15` | • on you device this option just disables DVC for Bluetooth by default | audio_dvc |
+| `absvol_uncheck_manually` | • uncheck if you know that Absolute Volume is disabled for your device | audio_dvc |
+| `applied_on_new_connection` | Applied on the new connection | audio_output_device_opts |
+| `applied_when_no_dvc` | Applied only when DVC is disabled for any reason | audio_dvc |
+| `audio_info` | Audio Info | audio |
+| `audio_outputs_hint1` | Poweramp may use different audio output drivers depending on the connected output device | audio_outputs2 |
+| `audio_outputs_hint2` | For the active named Bluetooth or USB device, separate profile can be created with + button | audio_outputs2 |
+| `bit_perfect_hint1` | Each setting on this page can also be overridden individually for the specific output or profile | audio_bit_perfect |
+| `bit_perfect_hint2` | These settings are only supported by compatible drivers. To make an option take effect, switch to a driver that supports it | audio_bit_perfect |
+| `bit_perfect_signs_hint` | Icons: <img src=settings_opt_on_16dp_tinted align=cap> - enabled, <img src=settings_opt_off_16dp_tinted align=cap> - disabled, <img src=settings_opt_unsupported_16dp_tinted align=cap> - not supported | audio_bit_perfect |
+| `codec_sr_hint2` | The codec parameters may arrive late, requiring reconfiguration during a playback; or in some instances, may never arrive | audio_output_device_opts |
+| `dsd_remaster_hint1` | Allows playing any format (including DSD) with DSP processing in PCM domain that is remastered to DSD for output | audio_bit_perfect |
+| `dsd_remaster_hint3` | Combined with the Perfect Bit Perfect option, DSD Remaster processes PCM tracks only, DSD tracks remain unchanged | audio_output_device_opts |
+| `dvc_disabled_for_daps_wired` | For DAP 3.5/4.4 mm outputs, DVC usually is not supported and is disabled by default | audio_dvc |
+| `dvc_is_enabled_if` | DVC is enabled if: | audio_dvc |
+| `dvc_is_enabled_if2` | • per output \"No DVC\" option allows it | audio_dvc |
+| `dvc_is_enabled_if3` | • \"No DVC for Bluetooth Absolute Volume\" option allows it | audio_dvc |
+| `dvc_is_enabled_if4` | • the output driver and the end device support DVC | audio_dvc |
+| `fades_pbp_warning` | Perfect Bit Perfect mode disables all fading effects | fade |
+| `fades_sr_warning` | Fading is not applied when switching between tracks with different sample rates | fade |
+| `gapless_sr_warning` | Tracks with different sample rates may not be stitched together gaplessly | fade |
+| `long_press_value_to_enter_manually` | Long press value to edit | peq_equ_tone |
+| `none` | None | fade |
+| `opt_not_supported_by_some_firmwares` | Some firmwares may not support this option | audio_focus |
+| `option_issues_aauto` | The option may cause issues with Android Auto | audio_tweaks |
+| `output_disable_dvc_hint` | Disabling DVC may be required for Hi-Res and other advanced output options to work | audio_output_device_opts |
+| `output_driver_can_override_this` | Output driver can override this setting | audio_resampler,fade |
+| `pause_usb_release_hint` | This option stresses USB DAC a bit more, and may cause glitches for some DACs | audio_output_device_opts |
+| `pbp_allowed_srs_hint` | Perfect Bit Perfect mode enables the selection of allowed DSD rates as well | audio_output_device_opts |
+| `per_output_follow_sr_hint` | Enable the <a href=settings/audio_bit_perfect>Bit Perfect</a> options to avoid or minimize resampling | audio_resampler |
+| `perfect_bit_perfect_hint1` | Intended for DAP and USB DACs with hardware volume control | audio_bit_perfect |
+| `perfect_bit_perfect_hint3` | DSD bitstream is directly sent to the output if supported/allowed | audio_bit_perfect |
+| `pipeline64_hint1` | Float 64-bit is fully transparent for any sample formats, no bits lost | audio_bit_perfect |
+| `pipeline64_hint2` | Increases power consumption. Equalizer and DSP are switched to the 64-bit mode | audio_bit_perfect |
+| `play_silence_in_background_hint1` | Prefer allowing Poweramp to work in the background in the system settings as an alternative to this option | audio_output_device_opts |
+| `pref_af_notification_msg` | On Android 8 and up Poweramp can be unloaded by the system while paused. Press here to avoid that via Keep Notification option | audio_focus |
+| `pref_cc_fades_warning` | Play/pause/seek/manual track change fading is not applied for the Chromecast output | fade |
+| `pref_dvc_bt_msg` | DVC for Bluetooth works only when Absolute Volume is disabled. Otherwise, the volume may be too low | audio_dvc |
+| `pref_equ_mode_desc` | Depending on the loaded preset, the equalizer can be in Graphic or Parametric mode | audio_equ |
+| `pref_equ_mode_list_filter_desc` | Preset list has the Graphic and Parametric filters (both can be activated) | audio_equ |
+| `pref_experimental_msg` | This is an experimental feature - it may be changed/removed in the future builds and/or may not work on some Android variants/devices | audio_output_device_opts,audio_dvc,audio_tweaks |
+| `pref_graphic_equ_desc` | <img align=center src=equ_graphic_small> Graphic mode is easy to use 5-32 preconfigured bands | audio_equ |
+| `pref_headset_long_volume_press_hint` | Press here for Volume keys long press option | audio_tweaks |
+| `pref_long_volume_controls` | Change Tracks By Long Volume Keys Press | audio_tweaks |
+| `pref_option_for_active_pa` | This option works when the Poweramp UI or notification is visible | audio_tweaks |
+| `pref_parametric_equ_desc` | <img align=center src=equ_parametric_small> Parametric mode is an advanced equalizer mode, each band is added and configured manually | audio_equ |
+| `pref_preload_more` | More | fade |
+| `pref_summary_audio_info` | Detailed info about the audio processing. Also available by long press on small meta info on the Main and Equalizer screens | audio |
+| `pref_summary_equalizer` | Equalizer settings, number of bands, frequencies | audio |
+| `pref_summary_reset_disabled_autoeq_suggestions` | AutoEq preset suggestions will reappear for all devices | audio_equ |
+| `pref_volume_levels_hint1` | Starting from Android 12 this option is limited by Google and may work only inside Poweramp or may not work at all | audio_tweaks |
+| `pref_volume_levels_hint2` | Samsung Sound Assistant changed volume step is supported automatically (up to 150 levels) | audio_tweaks |
+| `resampling_opts_applied_hint` | Resampling options are applied only when the applicable Poweramp resampling stage is used | audio_resampler |
+| `set_codec_sr_hint2` | Depending on the devices/firmware/system settings some sample rates and/or formats won't be accepted and may cause silence, error, or some default parameters | audio_output_device_opts |
+| `set_codec_sr_hint3` | This can be enabled only when the target Bluetooth device is connected, and the device permission is granted | audio_output_device_opts |
+| `shizuku_absvol_headset_hint` | While Absolute Volume is disabled, the headset buttons change the headset volume only. Use them to set the headset volume level | audio_output_device_opts,audio_dvc |
+| `some_devices_block_absvol_detect` | Some devices/Android variants block Absolute Volume detection, in this case please toggle \"No DVC For Bluetooth Absolute Volume\" manually | audio_dvc |
+| `summary2_dsd_remaster_gain` | Lower it in case of clipping or overloading | audio_output_device_opts |
+| `tone` | Tone | audio_equ,peq_equ_tone |
+| `unusual_sr_hint` | Sample rates that are not in the allowed list or are not supported by the output device will still be resampled | audio_output_device_opts |
+| `use_this_opt_for_dac_dap_hint` | This option is intended for devices with broad sample rate support, including USB DACs and Digital Audio Players | audio_output_device_opts |
+| `volume_type_hint3` | Software volume is not applied in Perfect Bit Perfect mode | audio_output_device_opts |
+
+#### 13.16.2 数值格式串
+
+| 资源名 | 格式 | 用途 |
+| --- | --- | --- |
+| `d_db` | `%.1fdB` | 所有 RoundKnob 的分贝显示（×100 缩放） |
+| `d_ms` | `%d ms` | 所有 Seekbar 的毫秒显示 |
+| `f0_percent` | `%.0f%%` | `mod_separation` 百分比 |
+| `f_percent` | `%.1f%%` | `resampler_cutoff` 百分比 |
+| `f0_hz` | `%d Hz` | 频率显示（低频段） |
+| `f1_khz` | `%.1f kHz` | 频率显示（高频段，×1000 缩放） |
+
+> **缩放约定**：`w:scale="100.0"` 表示存储值为「实际值 × 100」（如 `-600` 显示为 `-6.0dB`）；`w:scale="1000.0"` 表示 ×1000（如 `16000` 显示为 `16 kHz`）；`w:scale="1.0"` 表示 ×1（百分比直接用）。
+## 14. 证据索引
+
+### 14.0 build-1035 解码来源与关键文案
+
+| | |
+| --- | --- |
+| 原始包 | `Poweramp_build-1035-bundle-play.apks`（split APK，含 `base.apk` + `split_config.arm64_v8a.apk`） |
+| 版本 | `versionCode 1035009` / `versionName build-1035-bundle-play` |
+| 解码工具 | **apktool 2.11.1** + JBR 25（`D:\IntelliJ IDEA 2026.1.1\jbr`） |
+| 解码产物 | `.rea-analysis/v1035/decoded/` |
+| 对比基准 | `.rea-analysis/decoded/`（build-1025-uni） |
+
+**bit_perfect 相关文案**【实证·原文】`v1035/decoded/res/values/strings.xml`：
+
+| 资源名 | 原文 |
+| --- | --- |
+| `bit_perfect` | **Bit Perfect** |
+| `summary_bit_perfect` | 64-bit audio pipeline, Perfect Bit Perfect |
+| `pipeline64` | **64-bit Audio Pipeline** |
+| `summary_pipeline64` | Enables Float 64-bit audio pipeline from decoder to the output |
+| `follow_track_sr` | **Follow Track Sample Rate** |
+| `summary_follow_track_sr` | Enables track sample rate matching for the compatible outputs |
+| `dsd_remaster` | **DSD Remastering** |
+| `summary_dsd_remaster` | Remasters PCM to DSD |
+| `perfect_bit_perfect` | **Perfect Bit Perfect** |
+| `summary_perfect_bit_perfect` | Direct decoder-to-output path. Enables DSD output for DSD tracks. No Equalizer, no DSP, no software volume control |
+
+**audio_outputs2 / 设备选项相关文案**：
+
+| 资源名 | 原文 |
+| --- | --- |
+| `audio_outputs` | **Audio Outputs**（注意：与 1025 的 `Output` 不同） |
+| `output_api_driver` | **Output Driver** |
+| `allowed_srs_for_track` | **Allowed Sample Rates** |
+| `target_dsd_remaster_sample_rate` | **Target DSD Sample Rate** |
+| `volume_type` | **Volume Type** |
+| `shizuku_absvol` | **Allow DVC via Shizuku** |
+
+### 14.1 XML 原文（本文权威来源）
 
 | 主题 | 路径 : 行 |
 | --- | --- |
@@ -769,8 +2342,13 @@ Poweramp 的应对不是「假装生效」，而是**三层如实记录 + 一处
 | DVC 5 项 + 6 提示 + `dvc_enabled` 依赖 | `decoded/res/xml/audio_dvc.xml:4-15` |
 | 高级调整 2 分类 + `sup`/`supLink` | `decoded/res/xml/audio_tweaks.xml:4-22` |
 | **空壳日志页（3 行全文）** | `decoded/res/xml/audio_platform_log.xml:1-3` |
+| **【1035】根页面 10 入口** | `v1035/decoded/res/xml/audio.xml:1-17` |
+| **【1035】比特完美页 4 开关 + 4 状态行** | `v1035/decoded/res/xml/audio_bit_perfect.xml:1-19` |
+| **【1035】设备列表 6 个 ButtonPref** | `v1035/decoded/res/xml/audio_outputs2.xml:1-16` |
+| **【1035】输出高级 5 项** | `v1035/decoded/res/xml/audio_outputs_tweaks.xml:1-10` |
+| **【1035】设备级 63 项（含三态/多选位集）** | `v1035/decoded/res/xml/audio_output_device_opts.xml:1-69` |
 
-### 13.2 strings.xml 关键文案
+### 14.2 strings.xml 关键文案
 
 | 资源 | 路径 : 行 | 原文 |
 | --- | --- | --- |
@@ -782,7 +2360,7 @@ Poweramp 的应对不是「假装生效」，而是**三层如实记录 + 一处
 | `pref_summary_output_no_af` | `strings.xml:1520` | `Ignore calls/short Audio Focus requests, including notification sounds and ringtones` |
 | `pref_summary_output_no_duck` | `strings.xml:1521` | `Disable volume ducking for this output, e.g. when notifications cause issues with this output. Temporarily pause player instead` |
 
-### 13.3 交叉引用（Native 层，本文不重述）
+### 14.3 交叉引用（Native 层，本文不重述）
 
 | 主题 | 路径 : 行 |
 | --- | --- |

@@ -46,7 +46,9 @@ source_documents:
 
 > **第 2 轮补充**：`commands_history` 的真实定位被低估了——它记录的是**音频焦点与播放决策的完整轨迹**（43 个写入点，13 个在 `rl0` 音频焦点状态机里），实际是**排查"为什么音乐突然暂停/不响应"的黑匣子**，而非单纯的按键历史。详见 §7。
 
-> **第 3 轮补充**：`w:target` 的三种语法已全链路解出。**最反直觉的发现**——锚点解析用 `split("/")` 而非 `"#"`（§8.4）。同时解出 `?uniqName=&device=#no_af` 指向 Chromecast 设备的音频焦点关闭项，以及 `oo0` 的 30 秒挂载窗口。详见 §8。
+> **第 3 轮**：`w:target` 的三种语法已全链路解出。解出 `?uniqName=&device=#no_af` 指向 Chromecast 设备的音频焦点关闭项，以及 `oo0` 的 30 秒挂载窗口。详见 §8。
+>
+> **第 4 轮（重要修正）**：**证伪了第 3 轮关于 `"#"→"/"` 转换层的推断**。真实情况是存在**两条独立机制**（`qd0.u` 拼 `"settings/"` 前缀 vs `n91.w` 读 Intent extra），而 XML 的 `#` 语法**不在这两条里**。已用排除法穷尽 6 处 `replace(CC)` 与 3 处 `0x23` 常量。这一项已如实降级为**已知边界**，需动态调试才能闭合。详见 §9。
 
 ---
 
@@ -917,29 +919,170 @@ if-gtz p2, :cond_2          // 超过 30 秒则跳过
 
 ---
 
-## 9. 未解问题
+---
 
-> **第 3 轮已闭合 2 项**：`cc_af_warning` 带参跳转、5 处单次写入参数。详见 §8.9。
+## 9. 第 4 轮：锚点分隔符之谜的真相（**证伪前一版推断**）
 
-### 9.1 仍未解
+> **本轮结论：所谓 `"#"→"/"` 转换层并不存在。** 上一轮的推断是错的。
+> 真实情况是：**存在两条互不相干的路径机制**，我之前把它们误认为同一条。
 
-1. **`n91.w()` 的 `"#"→"/"` 转换层**：XML 写 `misc#key`，但 `w()` 用 `split("/")` 解析。中间那层转换未定位——可能在某处把 `#` 替换成 `/`，也可能 `open_path` 的实际值形态与 XML 不同。**这是本文档唯一标注为【推断】的关键机制**。（P2）
+### 9.1 上一轮的推断错在哪里
 
-2. **`x80` 的 `ra1` 授权回调**：授权成功后 `ra1(this)` 做什么（刷新页面？自动开启开关？）未展开。（P3）
+上一轮我写：
 
-3. **`n81.uri` 字段的实际来源**：它是音频设备 URI，但构造点未找到（全库无 `new-instance n81`）。可能在 native 层或反射创建。（P3）
+> "XML 写 `misc#key`，但 `w()` 用 `split("/")`，中间必有转换层。标【推断】。"
 
-### 9.2 明确不再追的项
+**本轮把这个推断证伪了**。逐项排查结果：
 
-| 项 | 原因 |
+| 排查方向 | 结果 |
 | --- | --- |
-| `x80` 的 1786 行 Shizuku 集成细节 | 通用第三方方案，与耳机主线无关 |
-| `v81` 的 2082 行主题页逻辑 | 带参跳转模式已在 §8.5 抓到，主题业务无关 |
-| 15 处动态 `type` 值逐个确认 | 只影响日志分类展示 |
+| 全库 `replace(CC)` 调用（6 个类）| **无一处是 `#`→`/`**（`dn0` 是 `\`→`/`，`ne` 是 `/`→`_`，`q10/v10/y10` 是 `.` 替换）|
+| 全库 `const 0x23`（`#` ASCII）| 3 处，均为数字格式化/字符范围判断，**与路径无关** |
+| `PrefBase.setTarget` 链路 | 走 `qd0.u(String)`，拼成 `"settings/" + target`，**`#` 原样保留** |
 
-## 10. 证据索引
+### 9.2 真相：两条独立的路径机制
 
-### 10.1 XML / 资源
+**机制 A：`qd0.u()` —— 拼接式页面路径**
+
+【实证·产物】`qd0.smali:9720-9836`（116 行）：
+
+```java
+void u(String target) {
+    setFragment(null);                       // ← 不用 Android Fragment 机制
+    this.К = target;                         // 保存原始 target
+
+    if (target == null) return;
+
+    // URL 直接透传
+    if (target.startsWith("http:") || target.startsWith("https://")) {
+        this.у = target;
+        return;
+    }
+
+    // 非 URL：加 "settings/" 前缀
+    String prefix = target.startsWith("/") ? "" : "settings";
+    this.у = ee1.a(prefix, "/", target);     // 简单字符串拼接
+}
+```
+
+`ee1.a(a,b,c)` 就是 `a + b + c`【实证·产物】`ee1.smali:308-340`（33 行）。
+
+**所以 `misc#long_volume_controls` 会被拼成 `"settings/misc#long_volume_controls"`，`#` 完好保留。**
+
+**机制 B：`n91.w()` —— 读取 Intent 的 `open_path`**
+
+【实证·产物】`n91.smali:2766-2914`：
+
+```java
+void w() {
+    String path = activity.getExtraOpenPath();   // ← 从 Intent 读，不是从 qd0
+    if (path == null || path.length() == 0) return;
+
+    String[] parts = path.split("/");             // 用 "/" 分割
+    if (parts.length <= 1) return;
+
+    String anchor = parts[1].trim();
+    Preference p = K.findPreference(anchor);      // 直接当 key 用
+    if (p != null) X.postDelayed(new b6(this, 0x1b, p), 0x15e);
+}
+```
+
+### 9.3 关键问题：`findPreference(parts[1])` 收到的是什么
+
+按机制 B 的代码，若 `open_path = "settings/misc#long_volume_controls"`，则：
+
+```
+split("/") → ["settings", "misc#long_volume_controls"]
+parts[1]   → "misc#long_volume_controls"
+findPreference("misc#long_volume_controls")  ← 含 # ，查不到任何 key！
+```
+
+**这意味着机制 B 对带 `#` 的 target 是失效的**——除非 `open_path` 的实际值形态与 XML 不同。
+
+### 9.4 最可能的解释（仍为【推断】）
+
+`RedirectPreference` 的点击**根本不经过 `n91.w()`**。两条机制的适用场景是分开的：
+
+| 机制 | 触发场景 | `open_path` 的值 |
+| --- | --- | --- |
+| **A（`qd0.u`）** | **设置页内的 RedirectPreference 点击** | 不写 `open_path`，走 `qd0.у` |
+| **B（`n91.w`）** | **外部 Intent 跳入**（桌面快捷方式、其他 App、`open_path` extra）| `"<page>/<key>"` 形态 |
+
+证据支撑：
+
+1. `n91.w()` 的三个调用点是 `u61:1736`（helper 创建后）、`n91:3545`（resume）、`g91:109` —— **都在"页面加载"时机**，不是"点击 RedirectPreference"时机
+2. `n91.P()`（写 `open_path`）用的是 `р()` = **当前页面路径**，即 `"misc"` 这类，不含锚点
+3. 全库只有 1 处 `setFragment` 且传 `null` —— 确认不走 Android 标准 Fragment 跳转
+
+**结论**：机制 B 处理的是 `"settings/misc/long_volume_controls"` 这种**用 `/` 分隔页与 key** 的外部路径，而不是 XML 里的 `#` 语法。
+
+> **XML 的 `#` 语法由谁处理，仍未定位。** 这可能是：
+> - 在 `SettingsActivity.startActivity()`（3506–3720 行，215 行）里
+> - 在某处把 `#` 转成 `/` 后再拼 `open_path`
+> - 或 `#` 只是**给人看的文档标记**，实际运行时由 `qd0.u` 拼的 `"settings/misc#..."` 交给别的消费方
+
+### 9.5 本轮排除的假说（供后续参考）
+
+| 假说 | 排除依据 |
+| --- | --- |
+| `replace('#','/')` 某处 | 全库 6 个 `replace(CC)` 全部核对，无 `0x23` |
+| `const 0x23` 做 indexOf | 3 处均为非路径用途 |
+| `qd0.у` 直接被 `n91.w()` 消费 | `n91.w()` 只读 `getExtraOpenPath()`，与 `qd0` 无关 |
+| Android `setFragment` 机制 | 全库唯一调用传 `null` |
+| `isValidFragment` 做分派 | 只允许 `u61`，是对固定 Fragment 的校验 |
+
+### 9.6 诚实的结论
+
+**这一项应该降级为"已知边界"而非"待解问题"。**
+
+理由：
+- 已确认 `#` 不是通过字符串替换处理的（排除法穷尽了所有 `replace` 和 `0x23` 使用）
+- 已确认存在两条独立机制，且 `n91.w()` 对带 `#` 的 target 会失效
+- 继续追需要**动态调试**（在 `findPreference` 下断点看实参），静态分析已到边界
+
+> **对文档读者最重要的是**：`w:target="page#key"` 这个语法**确实有效**（XML 里大量使用，功能正常），但**其解析路径不在我定位的这两个机制里**。这个断层已如实记录，不再用推断掩盖。
+
+---
+
+## 10. 未解问题
+
+> **第 4 轮**：证伪了 `"#"→"/"` 转换层的存在（§9），把一个 P2 问题降级为**已知边界**。
+> **当前状态**：耳机子树的功能机制已全部解出，剩余项均为静态分析无法覆盖的部分。
+
+### 10.1 已知边界（非"待解问题"）
+
+| 项 | 状态 | 需要什么才能解开 |
+| --- | --- | --- |
+| **XML `w:target="page#key"` 的运行时解析** | **已排除 5 种假说**（§9.5），确认不在 `qd0.u` 与 `n91.w` 两条机制内 | **动态调试**：在 `findPreference` 下断点看实参 |
+| `x80` 的 `ra1` 授权回调 | 已定位到 `sa1:924` 传入，未展开 | 读 `ra1.smali`（142 行，成本低但收益也低）|
+| `n81.uri` 的构造点 | 全库无 `new-instance n81` | 可能在 native 层或反射创建 |
+
+### 10.2 为什么停止
+
+耳机子树的**功能行为已 100% 可解释**：
+
+| 维度 | 覆盖度 |
+| --- | --- |
+| 根页 18 个 key 的语义与落地 | ✅ 全部 |
+| 3 层依赖链 | ✅ 声明式，零代码 |
+| 按键运行时（`rk0`/`w8`/`s91` 状态机） | ✅ 全部 |
+| 1 个真子页 `commands_history` | ✅ 记录结构 + 数据源 + 刷新机制 |
+| 2 个跨分支跳转 | ✅ 目标页 + 落点 + 参数语义 |
+| 跨页跳转的三层机制 | ✅ 已定位两层，第三层为边界 |
+
+**剩余项的共同特点**：都不影响"这个功能怎么工作"的理解，只影响"某一行代码在哪个文件"的完备性。
+
+### 10.3 若将来要继续
+
+按成本排序：
+
+1. **读 `ra1.smali`（142 行）** —— 半小时内可完成，能闭合 `x80` 回调
+2. **动态调试 `findPreference`** —— 需要搭 frida/Xposed 环境
+3. **反编译 native 层找 `n81` 构造** —— 成本最高，收益最低
+
+## 11. 证据索引
+
+### 11.1 XML / 资源
 
 | 位置 | 内容 |
 | --- | --- |
@@ -953,7 +1096,7 @@ if-gtz p2, :cond_2          // 超过 30 秒则跳过
 | `misc.xml:35` | `long_volume_controls` + `w:sup` 实验徽标 |
 | `public.xml` | 59 个 `type="xml"` 页面 id |
 
-### 10.2 smali
+### 11.2 smali
 
 | 位置 | 内容 |
 | --- | --- |
@@ -987,7 +1130,7 @@ if-gtz p2, :cond_2          // 超过 30 秒则跳过
 | `vr.smali:1804-1816` | `long_volume_controls` → `vr->E0` |
 | `vr.smali:1417-3503` | `audio_focus` 9 个字段 |
 
-### 10.2b 第 2 轮新增定位（记录结构）
+### 11.2b 第 2 轮新增定位（记录结构）
 
 | 位置 | 内容 |
 | --- | --- |
@@ -1021,7 +1164,7 @@ if-gtz p2, :cond_2          // 超过 30 秒则跳过
 | `oo0.smali:311` | `RESUME resume_on_mount` |
 | `t4.smali:2085` | `handleSearchAndPlay` |
 
-### 10.2c 第 3 轮新增定位（跳转机制）
+### 11.2c 第 3 轮新增定位（跳转机制）
 
 | 位置 | 内容 |
 | --- | --- |
@@ -1050,7 +1193,37 @@ if-gtz p2, :cond_2          // 超过 30 秒则跳过
 | `dy1.smali:6798-6801` | 服务层命令 |
 | `jl0.smali:6227-6230` | 播放核心事件 |
 
-### 10.3 交叉引用
+### 11.2d 第 4 轮新增定位（证伪排查）
+
+| 位置 | 内容 |
+| --- | --- |
+| **`qd0.smali:9720-9836`** | **`u(String)` target 解析器（116 行）** |
+| `qd0.smali:9727` | 清空 `у` 字段 |
+| `qd0.smali:9739` | `setFragment(null)` —— 不走 Android Fragment |
+| `qd0.smali:9744` | 保存原始 target 到 `К` |
+| `qd0.smali:9752-9784` | `http:` / `https://` 直接透传 |
+| **`qd0.smali:9788-9818`** | **非 URL：拼 `"settings/" + target`（`#` 保留）** |
+| **`ee1.smali:308-340`** | **`a(a,b,c)` = 纯字符串拼接（33 行）** |
+| `PrefBase.smali:439-464` | `setTarget()` → `qd0.u()` |
+| `PrefBase.smali:83-87` | `new qd0(this)` 构造 |
+| `RawTextPreference.smali:294` | 从 styleable 读 target 后调 `setTarget` |
+| `n91.smali:2766-2914` | `w()` 读 `getExtraOpenPath()` |
+| `n91.smali:2874` | `findPreference(parts[1])` 直接当 key 用 |
+| `SettingsActivity.smali:1163-1188` | `isValidFragment` 只允许 `u61` |
+| `SettingsActivity.smali:3506-3720` | `startActivity`（215 行，未展开）|
+
+**排除的 6 处 `replace(CC)`**：
+
+| 类 | 行 | 替换对 |
+| --- | ---: | --- |
+| `dn0` | 1611 | `\` → `/` |
+| `ne` | 754 | `/` → `_` |
+| `q10`/`v10`/`y10` | 30 | `.` 相关 |
+| `jn0` | 2250/2286 | （非路径）|
+
+**排除的 3 处 `const 0x23`**：`b12:1177`、`n71:1866`、`z22:1046` —— 均为数字格式化/字符范围判断。
+
+### 11.3 交叉引用
 
 | 文档 | 关系 |
 | --- | --- |

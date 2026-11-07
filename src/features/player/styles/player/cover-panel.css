@@ -1,0 +1,84 @@
+.cover-frame {
+  position: absolute;
+  top: calc(87 * var(--prototype-unit));
+  left: calc(120 * var(--prototype-unit));
+  width: calc(980 * var(--prototype-unit));
+  height: calc(980 * var(--prototype-unit));
+  border-radius: var(--player-cover-radius);
+  box-shadow: var(--player-cover-shadow);
+}
+
+.cover-art {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  background: transparent;
+}
+
+.cover-art[data-has-image="false"]::before { content: ""; position: absolute; inset: 0; background: var(--cover-art); box-shadow: inset 0 1px 0 var(--cover-placeholder-sheen); pointer-events: none; }
+.cover-art::before, .cover-art::after, .cover-image { border-radius: inherit; }
+.cover-art::after { content: ""; position: absolute; z-index: 1; inset: 0; background: linear-gradient(transparent 70%, rgba(7, 22, 30, 0.08)); pointer-events: none; }
+.cover-image { position: absolute; z-index: 0; inset: 0; width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+.cover-mark { position: absolute; z-index: 2; left: 10%; top: 28%; display: grid; color: var(--player-ink); }
+.cover-mark svg { width: calc(72 * var(--prototype-unit)); height: calc(72 * var(--prototype-unit)); }
+.cover-mark strong { font-size: calc(62 * var(--prototype-unit)); letter-spacing: -.06em; }
+.cover-mark span { font-size: calc(12 * var(--prototype-unit)); font-weight: 700; letter-spacing: .22em; }
+
+.cover-actions { display: contents; }
+.cover-art .cover-collapse-button {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border-radius: inherit;
+  background: transparent;
+  box-shadow: none;
+  cursor: inherit;
+  transform: none;
+  translate: none;
+}
+.cover-art .cover-collapse-button:focus-visible {
+  outline: 2px solid var(--player-blue-ink);
+  outline-offset: -4px;
+}
+.cover-feedback { position: absolute; z-index: 3; left: calc(11 * var(--prototype-unit)); bottom: calc(23 * var(--prototype-unit)); display: flex; gap: calc(9 * var(--prototype-unit)); }
+.cover-actions button { min-width: 0; padding: 0; border-radius: 999px; background: var(--player-blue-soft); color: var(--player-blue-ink); box-shadow: 0 calc(4 * var(--prototype-unit)) calc(4 * var(--prototype-unit)) rgba(0,0,0,.25); }
+.cover-art .cover-press-feedback-button:hover,
+.cover-art .cover-press-feedback-button:active {
+  background: var(--player-blue-soft);
+  color: var(--player-blue-ink);
+  transform: none;
+  translate: none;
+  scale: none;
+}
+.cover-art button svg { width: 100%; height: 100%; }
+.cover-feedback > button { width: calc(100 * var(--prototype-unit)); height: calc(72 * var(--prototype-unit)); }
+.cover-art button[data-selected="true"] { background: var(--player-blue-soft); color: var(--player-blue-ink); }
+.cover-art .more-button { position: absolute; z-index: 3; right: calc(13 * var(--prototype-unit)); bottom: calc(24 * var(--prototype-unit)); width: calc(72 * var(--prototype-unit)); height: calc(72 * var(--prototype-unit)); }
+
+/* Shared rating geometry scales with the same units as each existing surface. */
+.star-rating { --rating-unit: var(--prototype-unit); display: inline-flex; align-items: center; padding: calc(12 * var(--rating-unit)) calc(20 * var(--rating-unit)); border-radius: 999px; background: transparent; color: var(--player-blue-ink); box-shadow: none; }
+.star-rating .star-rating-button { flex: 0 0 auto; width: calc(58 * var(--rating-unit)); height: calc(48 * var(--rating-unit)); min-width: 0; padding: 0 calc(5 * var(--rating-unit)); border-radius: 0; background: transparent; color: inherit; box-shadow: none; }
+.star-rating .star-rating-button svg, .star-rating .star-rating-button .rating-star-outline { display: block; width: 100%; height: 100%; object-fit: contain; }
+.star-rating .star-rating-button:focus-visible { outline: 2px solid currentColor; outline-offset: 1px; border-radius: 4px; }
+.rating-star-outline { background: currentColor; mask-position: center; mask-repeat: no-repeat; mask-size: contain; }
+
+/* Keep an invariant five-slot interaction track behind the animated viewport. */
+.star-rating { position: relative; width: calc((290 + var(--rating-padding, 40)) * var(--rating-unit)); box-sizing: border-box; flex: 0 0 auto; overflow: visible; touch-action: none; user-select: none; transform-origin: left center; transition: transform var(--app-motion-fast) var(--app-motion-easing); }
+.star-rating[data-pressed="true"] { transform: scale(1.04); }
+.star-rating .star-rating-button { box-sizing: border-box; }
+@media (prefers-reduced-motion: reduce) { .star-rating { transition: none; } .star-rating[data-pressed="true"] { transform: none; } }
+
+.star-rating[data-motion-disabled="true"] { transition: none; }
+.star-rating[data-motion-disabled="true"][data-pressed="true"] { transform: none; }
+
+/* Clip the five-slot row at the content edge, before the pill padding. */
+.star-rating-track { position: relative; display: flex; flex: 0 0 auto; min-width: 0; width: calc(var(--rating-visible-count) * 58 * var(--rating-unit)); overflow: hidden; transition: width calc(var(--app-motion-prototype-smart) * .833333) var(--app-motion-easing); }
+
+/* Only the visual pill contracts; all five coordinate slots remain interactive. */
+.star-rating::before { content: ""; position: absolute; inset: 0 auto 0 0; width: calc((var(--rating-visible-count) * 58 + var(--rating-padding, 40)) * var(--rating-unit)); pointer-events: none; border-radius: inherit; background: var(--rating-surface, var(--player-blue-soft)); box-shadow: var(--rating-shadow, 0 calc(4 * var(--rating-unit)) calc(4 * var(--rating-unit)) color-mix(in srgb, var(--player-ink) 25%, transparent)); transition: width calc(var(--app-motion-prototype-smart) * .833333) var(--app-motion-easing); }
+.star-rating[data-motion-disabled="true"]::before, .star-rating[data-motion-disabled="true"] .star-rating-track { transition: none; }
+@media (prefers-reduced-motion: reduce) { .star-rating::before, .star-rating-track { transition: none; } }

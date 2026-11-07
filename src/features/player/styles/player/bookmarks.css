@@ -1,0 +1,25 @@
+.bookmarks-content .playlist-management-heading { min-height: 151px; gap: 36px; padding: 16px 24px 19px; }
+.bookmarks-content .playlist-management-heading h2 { font-size: 57px; line-height: 64px; }
+.bookmarks-content .playlist-management-category { width: 84px; height: 84px; }
+.bookmarks-content .playlist-management-actions { gap: 8px; }
+.bookmarks-content .playlist-management-toolbar { min-height: 64px; padding-block: 0; }
+.bookmarks-content .playlist-management-actions button { height: 54px; border-width: 1px; padding: 5px 20px; }
+.bookmarks-content .playlist-management-actions button img { width: 32px; height: 32px; }
+.bookmarks-content .playlist-management-selection-more button { width: 64px; height: 64px; }
+.bookmarks-content .playlist-management-selection-more svg { width: 48px; height: 48px; }
+/* Match the all-songs scrollport, whose quick index removes the scrollbar
+   gutter, so both grids have identical usable width at every layout level. */
+.bookmarks-management > .playlist-management-content.bookmarks-content { scrollbar-width: none; scrollbar-gutter: auto; }
+.bookmarks-management > .playlist-management-content.bookmarks-content::-webkit-scrollbar { display: none; }
+/* A cover animates from its former tile bounds into a smaller row. During
+   that transition the row must not paint-contain the moving descendants. */
+.bookmarks-content .bookmarks-list[data-layout-transition='active'] > .playlist-card {
+  content-visibility: visible;
+  contain-intrinsic-block-size: none;
+}
+.bookmarks-list .playlist-card-format-separator { white-space: pre; }
+@media (width <= 540px) {
+  .bookmarks-content .playlist-management-heading { gap: 24px; }
+  .bookmarks-content .playlist-management-heading h2 { font-size: 40px; }
+  .bookmarks-content .playlist-management-actions button { padding-inline: 12px; }
+}

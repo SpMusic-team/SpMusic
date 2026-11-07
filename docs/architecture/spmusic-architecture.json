@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "SpMusic 模块架构",
+    "quality_profile": "showcase"
+  },
+  "components": [
+    { "id": "ui-kit", "type": "frontend", "label": "UI 组件库", "sublabel": "Base UI · components/ui", "pos": [40, 100], "size": [170, 64] },
+    { "id": "player-ui", "type": "frontend", "label": "播放器界面", "sublabel": "React 19 · features/player", "pos": [40, 300], "size": [170, 72] },
+    { "id": "appearance", "type": "frontend", "label": "外观与主题", "sublabel": "features/appearance", "pos": [40, 500], "size": [170, 64] },
+    { "id": "decoder", "type": "backend", "label": "解码器", "sublabel": "Symphonia · OPUS/Matroska", "pos": [350, 100], "size": [170, 64] },
+    { "id": "controller", "type": "backend", "label": "AudioController", "sublabel": "Tauri 命令 · 状态机", "pos": [350, 300], "size": [170, 72] },
+    { "id": "cache", "type": "backend", "label": "歌词 / 封面缓存", "sublabel": "lyrics / cover cache", "pos": [350, 500], "size": [170, 64] },
+    { "id": "metadata", "type": "backend", "label": "元数据与标签", "sublabel": "lofty · tag_writer", "pos": [670, 100], "size": [170, 64] },
+    { "id": "runtime", "type": "backend", "label": "音频运行时", "sublabel": "rodio 播放", "pos": [670, 300], "size": [170, 72] },
+    { "id": "app-paths", "type": "backend", "label": "应用路径", "sublabel": "config / data / cache", "pos": [670, 500], "size": [170, 64] },
+    { "id": "audio-device", "type": "external", "label": "音频输出设备", "sublabel": "Windows Core Audio", "pos": [980, 300], "size": [170, 72] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "React 前端层", "wraps": ["ui-kit", "player-ui", "appearance"] },
+    { "kind": "region", "label": "Rust 音频引擎", "wraps": ["decoder", "controller", "cache", "metadata", "runtime", "app-paths"] }
+  ],
+  "connections": [
+    { "id": "ui-to-controller", "from": "player-ui", "to": "controller", "label": "Tauri invoke (audio_*)", "variant": "emphasis" },
+    { "id": "controller-to-runtime", "from": "controller", "to": "runtime", "label": "播放控制", "variant": "emphasis", "labelAt": [571, 350] },
+    { "id": "runtime-to-device", "from": "runtime", "to": "audio-device", "label": "音频输出", "variant": "emphasis" },
+    { "id": "controller-to-decoder", "from": "controller", "to": "decoder", "label": "解码加载" },
+    { "id": "controller-to-metadata", "from": "controller", "to": "metadata", "label": "读取元数据" },
+    { "id": "controller-to-cache", "from": "controller", "to": "cache", "label": "读写缓存", "labelAt": [435, 386] },
+    { "id": "paths-to-cache", "from": "app-paths", "to": "cache", "label": "缓存目录" },
+    { "id": "ui-to-kit", "from": "player-ui", "to": "ui-kit", "label": "组件依赖" },
+    { "id": "ui-to-appearance", "from": "player-ui", "to": "appearance", "label": "主题应用", "labelAt": [125, 386] }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "前端", "items": ["React 19 + Vite + TypeScript 播放器界面（无边框窗口）", "外观主题与运行时切换（CSS token + 动效配置）", "Base UI 组件库与图标体系"] },
+    { "dot": "emerald", "title": "音频引擎", "items": ["AudioController 统一 audio_* Tauri 命令与播放状态机", "rodio 运行时播放，Symphonia 解码（OPUS / Matroska）", "lofty 元数据解析与标签写入，嵌入歌词 / 封面缓存"] },
+    { "dot": "rose", "title": "桌面集成", "items": ["Windows Core Audio 设备输出与设备切换处理", "config / data / cache 应用目录管理", "会话内临时队列（目录枚举 / 本地 .m3u8）"] }
+  ]
+}

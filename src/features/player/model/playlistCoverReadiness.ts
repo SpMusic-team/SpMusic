@@ -58,3 +58,26 @@ export function markPlaylistCoverDecoded(image: PlaylistCoverImage): void {
 export function forgetPlaylistCoverDecoded(image: PlaylistCoverImage): void {
   decodedCovers.delete(image)
 }
+
+/**
+ * Release a cover URL only when it is an object URL this app created.
+ *
+ * A cover's `src` is one of two kinds, and they have opposite release rules:
+ *
+ * - A **blob object URL** (the pixel fallback's `playlistCoverImageFromPixels`)
+ *   holds the bitmap alive on the JS side, so it must be revoked explicitly.
+ * - An **asset-protocol URL** (the path lane's `convertFileSrc`) does not. Its
+ *   decoded bitmap belongs to the WebView and is released when the last `<img>`
+ *   referencing it unmounts; `URL.revokeObjectURL` is a spec-level no-op on it.
+ *
+ * Guarding on the scheme turns that distinction into structure instead of a
+ * comment a reader has to trust. Today the unguarded call happens to be harmless
+ * for asset URLs, so a regression here would not show up immediately — but a later
+ * refactor to reference counting, or a wrapper that only accepts `blob:` URLs,
+ * would start silently releasing live list covers. Call this instead of
+ * `URL.revokeObjectURL` at every site whose URL may have come from either lane.
+ */
+export function releasePlaylistCoverUrl(url: string | undefined | null): void {
+  if (!url || !url.startsWith('blob:')) return
+  URL.revokeObjectURL(url)
+}

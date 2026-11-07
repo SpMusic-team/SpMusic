@@ -18,8 +18,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use super::{
     cover_pixels::{
         decode_playlist_and_pack, load_folder_track_thumbnail_blocking, ordinary_directory,
-        ordinary_file, playlist_pixels_from_bytes, playlist_thumbnail_path_from_bytes,
-        read_bounded_file, CoverPixelsError, CoverPixelsErrorCode, PlaylistThumbnailPath,
+        ordinary_file, playlist_pixels_from_bytes, prepare_thumbnail_path, read_bounded_file,
+        CoverPixelsError, CoverPixelsErrorCode, DecodeSlot, PlaylistThumbnailPath,
+        ThumbnailPathPreparation,
     },
     playlist::has_supported_audio_extension,
 };
@@ -705,6 +706,7 @@ pub(super) fn load_sibling_thumbnail_path(
     source_path: &str,
     max_edge: u32,
     is_current: impl FnOnce() -> bool + Copy,
+    slot: &DecodeSlot,
 ) -> Result<Option<PlaylistThumbnailPath>, CoverPixelsError> {
     current(is_current)?;
     let SiblingPictures {
@@ -714,7 +716,14 @@ pub(super) fn load_sibling_thumbnail_path(
     let mut incomplete = None;
     for path in pictures {
         current(is_current)?;
-        match picture_thumbnail_path_in(app_cache_dir, &directory, &path, max_edge, is_current) {
+        match picture_thumbnail_path_in(
+            app_cache_dir,
+            &directory,
+            &path,
+            max_edge,
+            is_current,
+            slot,
+        ) {
             Ok(published) => {
                 current(is_current)?;
                 return Ok(Some(published));
@@ -741,8 +750,11 @@ fn picture_thumbnail_path(
     path: &Path,
     max_edge: u32,
     is_current: impl FnOnce() -> bool + Copy,
+    slot: &DecodeSlot,
 ) -> Result<PlaylistThumbnailPath, CoverPixelsError> {
-    picture_thumbnail_path_with(app_cache_dir, max_edge, is_current, || picture_bytes(path))
+    picture_thumbnail_path_with(app_cache_dir, max_edge, is_current, slot, || {
+        picture_bytes(path)
+    })
 }
 
 /// Path-lane counterpart of [`picture_pixels_in`]: reuses the directory the
@@ -753,8 +765,9 @@ fn picture_thumbnail_path_in(
     path: &Path,
     max_edge: u32,
     is_current: impl FnOnce() -> bool + Copy,
+    slot: &DecodeSlot,
 ) -> Result<PlaylistThumbnailPath, CoverPixelsError> {
-    picture_thumbnail_path_with(app_cache_dir, max_edge, is_current, || {
+    picture_thumbnail_path_with(app_cache_dir, max_edge, is_current, slot, || {
         picture_bytes_in(directory, path)
     })
 }
@@ -763,6 +776,7 @@ fn picture_thumbnail_path_with(
     app_cache_dir: &Path,
     max_edge: u32,
     is_current: impl FnOnce() -> bool + Copy,
+    slot: &DecodeSlot,
     read: impl FnOnce() -> Result<Vec<u8>, CoverPixelsError>,
 ) -> Result<PlaylistThumbnailPath, CoverPixelsError> {
     let bytes = read()?;
@@ -772,13 +786,21 @@ fn picture_thumbnail_path_with(
     // predicate, which clippy cannot see as non-redundant.
     #[allow(clippy::redundant_closure)]
     let current_predicate = || is_current();
-    playlist_thumbnail_path_from_bytes(
+    // Decode and encode happen here, with the permit still held; the publish wait
+    // that follows must not hold it. See `DecodeSlot`.
+    match prepare_thumbnail_path(
         app_cache_dir,
         &bytes,
         blake3::hash(&bytes),
         max_edge,
         current_predicate,
-    )
+    )? {
+        ThumbnailPathPreparation::Ready(published) => Ok(published),
+        ThumbnailPathPreparation::ReadyToPublish(job) => {
+            slot.release();
+            job.publish()
+        }
+    }
 }
 
 /// Path-lane counterpart of [`load_folder_thumbnail_blocking`].
@@ -794,6 +816,7 @@ pub(super) fn load_folder_thumbnail_path_blocking(
     directory_path: &str,
     max_edge: u32,
     is_current: impl Fn() -> bool + Copy,
+    slot: &DecodeSlot,
 ) -> Result<Option<PlaylistThumbnailPath>, CoverPixelsError> {
     current(is_current)?;
     // The path command family validates against ALLOWED_PLAYLIST_MAX_EDGES at the
@@ -912,17 +935,24 @@ pub(super) fn load_folder_thumbnail_path_blocking(
                 #[allow(clippy::redundant_closure)]
                 let current_predicate = || is_current();
                 let result: Result<Option<PlaylistThumbnailPath>, CoverPixelsError> = if image {
-                    picture_thumbnail_path(app_cache_dir, &path, max_edge, current_predicate)
+                    picture_thumbnail_path(app_cache_dir, &path, max_edge, current_predicate, slot)
                         .map(Some)
                 } else {
                     // A track hit inside the folder walk uses the same path lane,
                     // including its negative-index semantics, but a proven absence
-                    // must keep walking instead of ending the search.
+                    // must keep walking instead of ending the search. The folder
+                    // walk is therefore `skip_invalid_tags = true`, exactly like
+                    // the pixel lane's folder entry point: one corrupt audio file
+                    // must not turn "this directory has no cover" into an error,
+                    // because that would feed the frontend's fallback counter for
+                    // a directory the pixel lane answers as a clean absence.
                     super::cover_pixels::load_track_thumbnail_path_blocking(
                         app_cache_dir,
                         &path.to_string_lossy(),
                         max_edge,
+                        true,
                         current_predicate,
+                        slot,
                     )
                 };
                 current(is_current)?;

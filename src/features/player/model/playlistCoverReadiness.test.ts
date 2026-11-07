@@ -5,7 +5,7 @@ import { createRequire } from 'node:module'
 import { createElement, type ComponentType } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import ts from 'typescript'
-import { forgetPlaylistCoverDecoded, isPlaylistCoverDecoded, markPlaylistCoverDecoded } from './playlistCoverReadiness.ts'
+import { forgetPlaylistCoverDecoded, isPlaylistCoverDecoded, markPlaylistCoverDecoded, releasePlaylistCoverUrl } from './playlistCoverReadiness.ts'
 import * as playlistCoverReadiness from './playlistCoverReadiness.ts'
 
 // Exercise the real TSX consumers with the project's existing React/TypeScript
@@ -27,6 +27,37 @@ function loadComponent(name: string): ComponentType<Record<string, unknown>> {
   new Function('require', 'module', 'exports', compiled)(resolve, module, module.exports)
   return module.exports[name]!
 }
+
+test('only blob object URLs are released; asset-lane URLs are left to the WebView', () => {
+  const revoked: string[] = []
+  const original = URL.revokeObjectURL
+  // The guard exists so a caller cannot accidentally release artwork the WebView
+  // owns. Assert the *call* is suppressed, not merely that some implementation
+  // happens to tolerate the URL.
+  URL.revokeObjectURL = (url: string | URL) => { revoked.push(String(url)) }
+  try {
+    releasePlaylistCoverUrl('blob:http://localhost/cover')
+    assert.deepEqual(revoked, ['blob:http://localhost/cover'], 'an object URL must still be released')
+
+    revoked.length = 0
+    // Both shapes `convertFileSrc` produces: the bare `asset:` scheme and the
+    // Windows loopback form. Neither owns a JS-side bitmap.
+    for (const url of [
+      'asset://localhost/%2Fcache%2Fcover.jpg',
+      'http://asset.localhost/%2Fcache%2Fcover.jpg',
+      'https://asset.localhost/%2Fcache%2Fcover.jpg',
+      'data:image/png;base64,AAAA',
+      '',
+      undefined,
+      null,
+    ]) {
+      releasePlaylistCoverUrl(url)
+    }
+    assert.deepEqual(revoked, [], 'non-object URLs are never passed to revokeObjectURL')
+  } finally {
+    URL.revokeObjectURL = original
+  }
+})
 
 test('a successfully loaded cover stays ready across temporary consumers', () => {
   const image = { src: 'blob:cover', width: 128, height: 128, encodedBytes: 65536 }

@@ -42,7 +42,7 @@ import {
 } from '@/features/player/model/playbackSessionStorage'
 import { createPlaylistArtworkGrace } from '@/features/player/model/playlistArtworkGrace'
 import { playlistCoverImageFromPixels } from '@/features/player/model/playlistCoverPixels'
-import { decodePlaylistCover, isPlaylistCoverDecoded } from '@/features/player/model/playlistCoverReadiness'
+import { decodePlaylistCover, isPlaylistCoverDecoded, releasePlaylistCoverUrl } from '@/features/player/model/playlistCoverReadiness'
 import { createPlaylistArtworkStore, playlistArtworkKey } from '@/features/player/model/playlistArtworkStore'
 import { MAX_CONCURRENT, schedulePlaylistCoverPixels, scheduleTrackThumbnail } from '@/features/player/services/playlistCoverScheduler'
 import {
@@ -233,7 +233,7 @@ function createPlaylistCoverClientId(): string {
 
 function releasePlaylistVisuals(visuals: Readonly<Record<string, PlaylistTrackVisual>>) {
   for (const visual of Object.values(visuals)) {
-    if (visual.coverThumbnail) URL.revokeObjectURL(visual.coverThumbnail.src)
+    if (visual.coverThumbnail) releasePlaylistCoverUrl(visual.coverThumbnail.src)
   }
 }
 
@@ -782,9 +782,9 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     playlistVisualStaleIdsRef.current.clear()
     for (const pending of playlistPendingReplacementRef.current.values()) {
       for (const older of pending.olderVisuals) {
-        if (older.visual.coverThumbnail) URL.revokeObjectURL(older.visual.coverThumbnail.src)
+        if (older.visual.coverThumbnail) releasePlaylistCoverUrl(older.visual.coverThumbnail.src)
       }
-      if (pending.previous.coverThumbnail) URL.revokeObjectURL(pending.previous.coverThumbnail.src)
+      if (pending.previous.coverThumbnail) releasePlaylistCoverUrl(pending.previous.coverThumbnail.src)
     }
     playlistPendingReplacementRef.current.clear()
     void requestPlaylistCoverWindowGeneration().catch(() => undefined)
@@ -1822,9 +1822,9 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     playlistVisualStaleIdsRef.current.clear()
     for (const pending of playlistPendingReplacementRef.current.values()) {
       for (const older of pending.olderVisuals) {
-        if (older.visual.coverThumbnail) URL.revokeObjectURL(older.visual.coverThumbnail.src)
+        if (older.visual.coverThumbnail) releasePlaylistCoverUrl(older.visual.coverThumbnail.src)
       }
-      if (pending.previous.coverThumbnail) URL.revokeObjectURL(pending.previous.coverThumbnail.src)
+      if (pending.previous.coverThumbnail) releasePlaylistCoverUrl(pending.previous.coverThumbnail.src)
     }
     playlistPendingReplacementRef.current.clear()
     playlistScopeEpochRef.current += 1
@@ -2228,7 +2228,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
             }
             if (coverThumbnail && !isPlaylistCoverDecoded(coverThumbnail)) {
               try { await decodePlaylistCover(coverThumbnail) }
-              catch (error) { URL.revokeObjectURL(coverThumbnail.src); throw error }
+              catch (error) { releasePlaylistCoverUrl(coverThumbnail.src); throw error }
             }
 
             if (
@@ -2237,7 +2237,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
                 && !playlistVisualStaleIdsRef.current.has(job.trackId)
                 && (playlistVisualEdgeRef.current.get(job.trackId) ?? 0) >= job.maxEdge)
             ) {
-              if (coverThumbnail) URL.revokeObjectURL(coverThumbnail.src)
+              if (coverThumbnail) releasePlaylistCoverUrl(coverThumbnail.src)
               return
             }
             const previousVisual = playlistTrackVisualsRef.current[job.trackId]
@@ -2277,10 +2277,10 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
               const pendingPrevious = playlistPendingReplacementRef.current.get(previousThumbnail.src)
               playlistPendingReplacementRef.current.delete(previousThumbnail.src)
               requestAnimationFrame(() => {
-                URL.revokeObjectURL(previousThumbnail.src)
-                if (pendingPrevious?.previous.coverThumbnail) URL.revokeObjectURL(pendingPrevious.previous.coverThumbnail.src)
+                releasePlaylistCoverUrl(previousThumbnail.src)
+                if (pendingPrevious?.previous.coverThumbnail) releasePlaylistCoverUrl(pendingPrevious.previous.coverThumbnail.src)
                 for (const older of pendingPrevious?.olderVisuals ?? []) {
-                  if (older.visual.coverThumbnail) URL.revokeObjectURL(older.visual.coverThumbnail.src)
+                  if (older.visual.coverThumbnail) releasePlaylistCoverUrl(older.visual.coverThumbnail.src)
                 }
               })
             }
@@ -2512,14 +2512,14 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     for (const [trackId, visual] of Object.entries(currentVisuals)) {
       const sourceChanged = playlistVisualSourceRef.current.get(trackId) !== normalizeAudioSourcePath(descriptorsById.get(trackId)?.sourcePath ?? '')
       if ((!residentIds.has(trackId) || sourceChanged) && visual.coverThumbnail) {
-        URL.revokeObjectURL(visual.coverThumbnail.src)
+        releasePlaylistCoverUrl(visual.coverThumbnail.src)
       }
       if (!residentIds.has(trackId) || sourceChanged) {
         for (const [src, pending] of playlistPendingReplacementRef.current) {
           if (pending.trackId !== trackId) continue
-          if (pending.previous.coverThumbnail) URL.revokeObjectURL(pending.previous.coverThumbnail.src)
+          if (pending.previous.coverThumbnail) releasePlaylistCoverUrl(pending.previous.coverThumbnail.src)
           for (const older of pending.olderVisuals) {
-            if (older.visual.coverThumbnail) URL.revokeObjectURL(older.visual.coverThumbnail.src)
+            if (older.visual.coverThumbnail) releasePlaylistCoverUrl(older.visual.coverThumbnail.src)
           }
           playlistPendingReplacementRef.current.delete(src)
         }
@@ -2629,9 +2629,9 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
         .filter((url): url is string => Boolean(url) && url !== src)
       if ([...document.querySelectorAll<HTMLImageElement>('img')].some((image) => oldUrls.includes(image.src))) return
       playlistPendingReplacementRef.current.delete(src)
-      if (pending.previous.coverThumbnail?.src !== src && pending.previous.coverThumbnail) URL.revokeObjectURL(pending.previous.coverThumbnail.src)
+      if (pending.previous.coverThumbnail?.src !== src && pending.previous.coverThumbnail) releasePlaylistCoverUrl(pending.previous.coverThumbnail.src)
       for (const older of pending.olderVisuals) {
-        if (older.visual.coverThumbnail) URL.revokeObjectURL(older.visual.coverThumbnail.src)
+        if (older.visual.coverThumbnail) releasePlaylistCoverUrl(older.visual.coverThumbnail.src)
       }
     }
     const onImageLoad = (event: Event) => {
@@ -2664,7 +2664,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
             olderVisuals: remainingFallbacks,
           })
         }
-        URL.revokeObjectURL(src)
+        releasePlaylistCoverUrl(src)
         return
       }
       const failures = (playlistImageErrorCountsRef.current.get(trackId) ?? 0) + 1
@@ -2675,7 +2675,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       playlistVisualEdgeRef.current.delete(trackId)
       playlistVisualSourceRef.current.delete(trackId)
       publishPlaylistVisuals(next)
-      URL.revokeObjectURL(src)
+      releasePlaylistCoverUrl(src)
       if (failures > 2) {
         const sourcePath = folderPlaylistRef.current?.tracks.find((track) => track.id === trackId)?.sourcePath
         if (sourcePath) playlistVisualFailedRef.current.set(trackId, normalizeAudioSourcePath(sourcePath))

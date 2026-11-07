@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { normalizeAudioSourcePath } from '@/features/player/model/playlistTrackSummary'
 import { playlistCoverImageFromPixels } from '@/features/player/model/playlistCoverPixels'
-import { decodePlaylistCover, isPlaylistCoverDecoded } from '@/features/player/model/playlistCoverReadiness'
+import { decodePlaylistCover, isPlaylistCoverDecoded, releasePlaylistCoverUrl } from '@/features/player/model/playlistCoverReadiness'
 import { createPlaylistArtworkStore, playlistArtworkKey } from '@/features/player/model/playlistArtworkStore'
 import { admitLibraryArtwork } from '@/features/player/model/libraryArtworkAdmission'
 import { playlistArtworkRevision } from '@/features/player/model/playlistArtworkRevision'
@@ -137,13 +137,13 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
         const key = selectArtworkEvictionKey(candidates, desired, runtime.pinned)
         if (key === undefined) break
         const entry = runtime.cache.get(key)
-        if (entry?.row.coverThumbnail) URL.revokeObjectURL(entry.row.coverThumbnail.src)
+        if (entry?.row.coverThumbnail) releasePlaylistCoverUrl(entry.row.coverThumbnail.src)
         runtime.cache.delete(key)
         changed = true
         for (const [src, pending] of runtime.pendingReplacements) {
           if (pending.key !== key) continue
-          if (pending.previous.row.coverThumbnail) URL.revokeObjectURL(pending.previous.row.coverThumbnail.src)
-          for (const older of pending.older) if (older.row.coverThumbnail) URL.revokeObjectURL(older.row.coverThumbnail.src)
+          if (pending.previous.row.coverThumbnail) releasePlaylistCoverUrl(pending.previous.row.coverThumbnail.src)
+          for (const older of pending.older) if (older.row.coverThumbnail) releasePlaylistCoverUrl(older.row.coverThumbnail.src)
           runtime.pendingReplacements.delete(src)
         }
       }
@@ -270,7 +270,7 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
                 runtime.pendingReplacements.set(thumbnail.src, {
                   key, previous, older: older ? [older.previous, ...older.older] : [],
                 })
-              } else URL.revokeObjectURL(previous.row.coverThumbnail.src)
+              } else releasePlaylistCoverUrl(previous.row.coverThumbnail.src)
             }
             thumbnail = undefined
             publish()
@@ -287,7 +287,7 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
               publish()
             }
           } finally {
-            if (thumbnail) URL.revokeObjectURL(thumbnail.src)
+            if (thumbnail) releasePlaylistCoverUrl(thumbnail.src)
             runtime.queued.delete(key)
             runtime.active -= 1
             runtime.pump()
@@ -381,7 +381,7 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
         .map((entry) => entry.row.coverThumbnail?.src).filter((url): url is string => Boolean(url))
       if (images.some((image) => oldSources.includes(image.src))) return
       runtime.pendingReplacements.delete(src)
-      for (const oldSource of oldSources) URL.revokeObjectURL(oldSource)
+      for (const oldSource of oldSources) releasePlaylistCoverUrl(oldSource)
     }
     const onImageLoad = (event: Event) => {
       const src = (event as CustomEvent<unknown>).detail
@@ -400,7 +400,7 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
           key: pending.key, previous: pending.older[0]!, older: pending.older.slice(1),
         })
       }
-      URL.revokeObjectURL(src)
+      releasePlaylistCoverUrl(src)
       publish()
       runtime.refresh()
     }
@@ -418,10 +418,10 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
       replacementObserver.disconnect()
       window.removeEventListener('spmusic:playlist-cover-image-load', onImageLoad)
       window.removeEventListener('spmusic:playlist-cover-image-error', onImageError)
-      for (const entry of runtime.cache.values()) if (entry.row.coverThumbnail) URL.revokeObjectURL(entry.row.coverThumbnail.src)
+      for (const entry of runtime.cache.values()) if (entry.row.coverThumbnail) releasePlaylistCoverUrl(entry.row.coverThumbnail.src)
       for (const pending of runtime.pendingReplacements.values()) {
-        if (pending.previous.row.coverThumbnail) URL.revokeObjectURL(pending.previous.row.coverThumbnail.src)
-        for (const older of pending.older) if (older.row.coverThumbnail) URL.revokeObjectURL(older.row.coverThumbnail.src)
+        if (pending.previous.row.coverThumbnail) releasePlaylistCoverUrl(pending.previous.row.coverThumbnail.src)
+        for (const older of pending.older) if (older.row.coverThumbnail) releasePlaylistCoverUrl(older.row.coverThumbnail.src)
       }
       runtime.cache.clear()
       runtime.rows = EMPTY_ROWS
@@ -459,13 +459,13 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
         if (descriptor.artworkRevision !== entry.artworkRevision) runtime.failedUpgrades.delete(key)
         continue
       }
-      if (entry.row.coverThumbnail) URL.revokeObjectURL(entry.row.coverThumbnail.src)
+      if (entry.row.coverThumbnail) releasePlaylistCoverUrl(entry.row.coverThumbnail.src)
       runtime.cache.delete(key)
       runtime.failedUpgrades.delete(key)
       for (const [src, pending] of runtime.pendingReplacements) {
         if (pending.key !== key) continue
-        if (pending.previous.row.coverThumbnail) URL.revokeObjectURL(pending.previous.row.coverThumbnail.src)
-        for (const older of pending.older) if (older.row.coverThumbnail) URL.revokeObjectURL(older.row.coverThumbnail.src)
+        if (pending.previous.row.coverThumbnail) releasePlaylistCoverUrl(pending.previous.row.coverThumbnail.src)
+        for (const older of pending.older) if (older.row.coverThumbnail) releasePlaylistCoverUrl(older.row.coverThumbnail.src)
         runtime.pendingReplacements.delete(src)
       }
     }

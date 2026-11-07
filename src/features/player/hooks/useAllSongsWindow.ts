@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSyncExternalStore, type RefObject } from 'react'
 import { playlistCoverImageFromPixels } from '@/features/player/model/playlistCoverPixels'
-import { decodePlaylistCover } from '@/features/player/model/playlistCoverReadiness'
+import { decodePlaylistCover, releasePlaylistCoverUrl } from '@/features/player/model/playlistCoverReadiness'
 import type { AllSongsItem } from '@/features/player/model/playerUiViewModel'
 import { beginAudioPlaylistCoverWindow } from '@/features/player/services/audioCommands'
 import { scheduleFolderThumbnail, scheduleTrackThumbnail } from '@/features/player/services/playlistCoverScheduler'
@@ -58,13 +58,20 @@ export function createAllSongsCoverStore(): AllSongsCoverStore {
   const listeners = new Map<string, Set<() => void>>()
   const leases = new Map<string, number>()
   const retired = new Map<string, Set<string>>()
+  // Releases the URLs a row no longer displays. `retire` receives URLs from both
+  // lanes: blob object URLs from the pixel fallback, and asset-protocol URLs from
+  // the path lane. Only the former has an explicit release step, so the call goes
+  // through `releasePlaylistCoverUrl`, which is a no-op for asset URLs. Their
+  // decoded bitmaps belong to the WebView and are freed when the `<img>` unmounts.
+  // Do not "fix" this into a refcount: that would add bookkeeping to a URL whose
+  // release does not happen here at all.
   const sweep = () => {
     const used = new Set([...document.querySelectorAll<HTMLImageElement>('img')].map(image => image.src))
     for (const [key, urls] of retired) {
       if (leases.has(key)) continue
       for (const url of urls) {
         if (used.has(url)) continue
-        URL.revokeObjectURL(url)
+        releasePlaylistCoverUrl(url)
         urls.delete(url)
       }
       if (!urls.size) retired.delete(key)

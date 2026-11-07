@@ -666,7 +666,98 @@ impl PlaylistDecodeSlots {
     }
 }
 
-struct PlaylistDecodePermit {
+/// Holds one decode permit for exactly as long as a lane performs CPU work.
+///
+/// A path-lane request has two phases with very different resource needs: decode
+/// plus JPEG encode (CPU bound, this is what the permit exists for) and the
+/// write-then-publish handshake (`wait_path_idle`, which waits on the single
+/// cache writer and burns no CPU at all). Keeping the permit across the wait
+/// would let one cold request hold a slot 閳?on a four-core host the pool is
+/// exactly one 閳?for the publish budget, starving every visible cover behind it.
+/// Worse, a slow disk can make that wait time out, which surfaces as a publish
+/// failure and drives the frontend's circuit breaker toward a permanent fallback.
+///
+/// The release is therefore an explicit, idempotent step: the lane calls
+/// [`Self::release`] once encoding is finished and before it blocks on the
+/// writer, and the permit's `Drop` covers every early-return path.
+pub(super) struct DecodeSlot {
+    permit: StdMutex<Option<PlaylistDecodePermit>>,
+    /// Fires after the permit is back in the pool, before the publish wait.
+    #[cfg(test)]
+    on_release: StdMutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+}
+
+impl DecodeSlot {
+    pub(super) fn new(permit: PlaylistDecodePermit) -> Self {
+        Self {
+            permit: StdMutex::new(Some(permit)),
+            #[cfg(test)]
+            on_release: StdMutex::new(None),
+        }
+    }
+
+    /// Returns the decode permit to the pool. Safe to call more than once.
+    ///
+    /// Idempotent because the folder walk and the sibling search may each reach a
+    /// publish point through different candidate branches, and every one of them
+    /// wants to release before waiting without having to reason about which
+    /// branch ran first.
+    pub(super) fn release(&self) {
+        let released = {
+            let mut slot = self
+                .permit
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            slot.take()
+        };
+        // Dropping outside the lock keeps the pool's wake-up from running while
+        // this mutex is held.
+        drop(released);
+        #[cfg(test)]
+        if let Some(hook) = self
+            .on_release
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+        {
+            hook();
+        }
+    }
+
+    #[cfg(test)]
+    fn set_on_release(&self, hook: Arc<dyn Fn() + Send + Sync>) {
+        *self
+            .on_release
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(hook);
+    }
+
+    /// Slot that owns no permit: for direct blocking-helper tests, which exercise
+    /// the encode/publish split without going through the async admission path.
+    #[cfg(test)]
+    pub(super) fn detached() -> Self {
+        Self {
+            permit: StdMutex::new(None),
+            on_release: StdMutex::new(None),
+        }
+    }
+
+    /// Slot bound to a real pool permit, for tests that assert release timing.
+    #[cfg(test)]
+    pub(super) fn for_test(permit: PlaylistDecodePermit) -> Self {
+        Self::new(permit)
+    }
+
+    #[cfg(test)]
+    fn is_released(&self) -> bool {
+        self.permit
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_none()
+    }
+}
+
+pub(super) struct PlaylistDecodePermit {
     release: tauri::async_runtime::Sender<()>,
     held: Arc<AtomicUsize>,
 }
@@ -1067,6 +1158,10 @@ impl PlaylistCoverRequestCoordinator {
     /// check, request reservation, decode permit, worker-side re-check, and a
     /// final publish-time check. Decision 7 keeps this width unchanged because
     /// the miss branch still performs the same decode and resize work.
+    ///
+    /// Unlike the pixel lane, the decode permit does not live for the whole
+    /// closure: it is released inside the blocking worker once the JPEG is
+    /// encoded, so the publish wait cannot occupy a decode slot.
     async fn load_playlist_path(
         self: &Arc<Self>,
         app_cache_dir: PathBuf,
@@ -1080,8 +1175,8 @@ impl PlaylistCoverRequestCoordinator {
         let coordinator = Arc::clone(self);
         let worker_input = input.clone();
         let published = tauri::async_runtime::spawn_blocking(move || {
-            let _permit = permit;
             let _request = request;
+            let slot = DecodeSlot::new(permit);
             coordinator.ensure_current(
                 &worker_input.client_id,
                 worker_input.window_generation,
@@ -1095,6 +1190,7 @@ impl PlaylistCoverRequestCoordinator {
                         .ensure_current(&worker_input.client_id, worker_input.window_generation)
                         .is_ok()
                 },
+                &slot,
             )?;
             coordinator
                 .ensure_current(&worker_input.client_id, worker_input.window_generation)?;
@@ -1125,8 +1221,8 @@ impl PlaylistCoverRequestCoordinator {
         let coordinator = Arc::clone(self);
         let worker_input = input.clone();
         tauri::async_runtime::spawn_blocking(move || {
-            let _permit = permit;
             let _request = request;
+            let slot = DecodeSlot::new(permit);
             let current = || {
                 coordinator
                     .ensure_current(&worker_input.client_id, worker_input.window_generation)
@@ -1140,7 +1236,11 @@ impl PlaylistCoverRequestCoordinator {
                 &app_cache_dir,
                 &worker_input.source_path,
                 worker_input.max_edge,
+                // A single song is a real cover request, not a folder walk: a
+                // malformed tag is an error here, exactly as in the pixel lane.
+                false,
                 current,
+                &slot,
             )?;
             coordinator
                 .ensure_current(&worker_input.client_id, worker_input.window_generation)?;
@@ -1164,8 +1264,8 @@ impl PlaylistCoverRequestCoordinator {
         let coordinator = Arc::clone(self);
         let worker_input = input.clone();
         tauri::async_runtime::spawn_blocking(move || {
-            let _permit = permit;
             let _request = request;
+            let slot = DecodeSlot::new(permit);
             let current = || {
                 coordinator
                     .ensure_current(&worker_input.client_id, worker_input.window_generation)
@@ -1181,6 +1281,7 @@ impl PlaylistCoverRequestCoordinator {
                 &worker_input.directory_path,
                 worker_input.max_edge,
                 current,
+                &slot,
             )?;
             coordinator
                 .ensure_current(&worker_input.client_id, worker_input.window_generation)?;
@@ -1718,11 +1819,21 @@ fn load_track_thumbnail_blocking_with_mode(
 /// publishes a `.jpg` and returns its path. `Ok(None)` means artwork absence is
 /// confirmed, which the frontend maps to the same "no cover" state as the pixel
 /// lane's empty response.
+///
+/// `skip_invalid_tags` mirrors the pixel lane's flag exactly. The folder walk
+/// passes `true` so a directory containing one corrupt audio file still reports a
+/// confirmed absence instead of an `InvalidPath` error; otherwise the path lane
+/// would classify the same "no artwork here" directory differently from the pixel
+/// lane and feed the frontend's failure counter for free.
+///
+/// `slot` is released once encoding finishes and before the publish wait.
 pub(super) fn load_track_thumbnail_path_blocking(
     app_cache_dir: &Path,
     source_path: &str,
     max_edge: u32,
+    skip_invalid_tags: bool,
     is_current: impl FnOnce() -> bool + Copy,
+    slot: &DecodeSlot,
 ) -> Result<Option<PlaylistThumbnailPath>, CoverPixelsError> {
     let fingerprint = source_fingerprint(source_path)?;
     let cache_dir = app_cache_dir
@@ -1731,12 +1842,19 @@ pub(super) fn load_track_thumbnail_path_blocking(
     if let Some(indexed) = read_track_index(app_cache_dir, source_path, fingerprint) {
         match indexed {
             None => {
-                return super::folder_cover::load_sibling_thumbnail_path(
-                    app_cache_dir,
-                    source_path,
-                    max_edge,
-                    is_current,
-                );
+                return if skip_invalid_tags {
+                    // Indexed as "no artwork": proven absence, exactly like the
+                    // pixel lane's `Ok(Vec::new())`.
+                    Ok(None)
+                } else {
+                    super::folder_cover::load_sibling_thumbnail_path(
+                        app_cache_dir,
+                        source_path,
+                        max_edge,
+                        is_current,
+                        slot,
+                    )
+                };
             }
             Some(hash) => {
                 let filename = playlist_thumbnail_path_filename(hash, max_edge);
@@ -1753,18 +1871,24 @@ pub(super) fn load_track_thumbnail_path_blocking(
         app_cache_dir,
         source_path,
         fingerprint,
-        false,
+        skip_invalid_tags,
         current,
     )? {
         TrackCoverProbe::Bytes(bytes) => {
             let hash = blake3::hash(&bytes);
-            let published = playlist_thumbnail_path_from_bytes(
+            let published = match prepare_thumbnail_path(
                 app_cache_dir,
                 &bytes,
                 hash,
                 max_edge,
                 current,
-            )?;
+            )? {
+                ThumbnailPathPreparation::Ready(published) => published,
+                ThumbnailPathPreparation::ReadyToPublish(job) => {
+                    slot.release();
+                    job.publish()?
+                }
+            };
             if is_current() && source_fingerprint(source_path).ok() == Some(fingerprint) {
                 let _ = write_track_index(app_cache_dir, source_path, fingerprint, Some(hash));
             }
@@ -1776,6 +1900,7 @@ pub(super) fn load_track_thumbnail_path_blocking(
             source_path,
             max_edge,
             is_current,
+            slot,
         ),
     }
 }
@@ -1840,11 +1965,15 @@ pub(crate) struct TrackWarmupOutcome {
 /// Reads the cover blob the playlist probe cached, then publishes its `.jpg`.
 /// The pixel lane's `pending` map cannot help here, so publication is awaited
 /// before the path is handed out (decision 3.4).
+///
+/// `slot` is released as soon as the JPEG is encoded, before the publish wait,
+/// so a cold cover cannot hold the decode pool across a disk stall.
 fn load_playlist_thumbnail_path_blocking(
     app_cache_dir: &Path,
     requested_path: &str,
     max_edge: u32,
     is_current: impl Fn() -> bool + Copy,
+    slot: &DecodeSlot,
 ) -> Result<Option<PlaylistThumbnailPath>, CoverPixelsError> {
     validate_playlist_max_edge(max_edge)?;
     let covers_root = app_cache_dir
@@ -1852,13 +1981,19 @@ fn load_playlist_thumbnail_path_blocking(
         .join(COVER_DIRECTORY);
     let path = validate_cover_path(&covers_root, Path::new(requested_path))?;
     let bytes = read_bounded_file(&path)?;
-    let published = playlist_thumbnail_path_from_bytes(
+    let published = match prepare_thumbnail_path(
         app_cache_dir,
         &bytes,
         blake3::hash(&bytes),
         max_edge,
         is_current,
-    )?;
+    )? {
+        ThumbnailPathPreparation::Ready(published) => published,
+        ThumbnailPathPreparation::ReadyToPublish(job) => {
+            slot.release();
+            job.publish()?
+        }
+    };
     Ok(Some(published))
 }
 
@@ -1886,16 +2021,20 @@ pub(crate) async fn try_warm_track_thumbnail_path(
         return Ok(None);
     }
     tauri::async_runtime::spawn_blocking(move || {
-        let _permit = permit;
+        let slot = DecodeSlot::new(permit);
         let published = load_track_thumbnail_path_blocking(
             &app_cache_dir,
             &source_path,
             max_edge,
+            false,
             || true,
+            &slot,
         )?;
         // Release the decode slot before waiting on the single cache writer, so a
-        // visible cover can decode while the writer drains this entry.
-        drop(_permit);
+        // visible cover can decode while the writer drains this entry. The blocking
+        // helper already released it on the publish branch; this covers the cache
+        // hit and the confirmed-absence branches.
+        slot.release();
         let cache_dir = app_cache_dir
             .join(AUDIO_CACHE_DIRECTORY)
             .join(THUMBNAIL_DIRECTORY);
@@ -2197,23 +2336,53 @@ fn publish_playlist_thumbnail_path(
     })
 }
 
-/// Cache lookup, then decode -> encode -> publish for one known artwork blob.
+/// Outcome of the CPU half of the path lane.
 ///
-/// Shared by the playlist, track, and folder path lanes so all three emit the
-/// same filename key and the same publish handshake.
-pub(super) fn playlist_thumbnail_path_from_bytes(
+/// Split out so a caller can release its decode permit between the two phases.
+/// A cache hit needs no permit at all and is answered immediately; a miss hands
+/// back the encoded JPEG plus the exact key needed to publish it. See
+/// [`DecodeSlot`] for why that boundary is load-bearing.
+pub(super) enum ThumbnailPathPreparation {
+    /// Already published and validated: nothing left to wait for.
+    Ready(PlaylistThumbnailPath),
+    /// Encoded but not yet on disk. The caller must publish and wait.
+    ReadyToPublish(ThumbnailPublishJob),
+}
+
+pub(super) struct ThumbnailPublishJob {
+    cache_dir: PathBuf,
+    filename: String,
+    jpeg: Vec<u8>,
+}
+
+impl ThumbnailPublishJob {
+    /// Enqueues, waits for the writer, then re-validates (decision 3.4).
+    ///
+    /// Callers must have dropped their decode permit before this point: every
+    /// branch here is disk-bound, and the permit's whole purpose is to bound CPU.
+    pub(super) fn publish(self) -> Result<PlaylistThumbnailPath, CoverPixelsError> {
+        publish_playlist_thumbnail_path(self.cache_dir, self.filename, &self.jpeg)
+    }
+}
+
+/// CPU half of the path lane: cache lookup, then decode and JPEG encode.
+///
+/// This is the only function in the path family that performs image work, so it
+/// is the only one that legitimately holds a decode permit. Everything after it
+/// is a disk handshake and must run with the permit released.
+pub(super) fn prepare_thumbnail_path(
     app_cache_dir: &Path,
     bytes: &[u8],
     source_hash: blake3::Hash,
     max_edge: u32,
     is_current: impl Fn() -> bool + Copy,
-) -> Result<PlaylistThumbnailPath, CoverPixelsError> {
+) -> Result<ThumbnailPathPreparation, CoverPixelsError> {
     let cache_dir = app_cache_dir
         .join(AUDIO_CACHE_DIRECTORY)
         .join(THUMBNAIL_DIRECTORY);
     let filename = playlist_thumbnail_path_filename(source_hash, max_edge);
     if let Some(hit) = read_playlist_thumbnail_path_cache(&cache_dir, &filename) {
-        return Ok(hit);
+        return Ok(ThumbnailPathPreparation::Ready(hit));
     }
     if !is_current() {
         return Err(CoverPixelsError::stale());
@@ -2225,7 +2394,32 @@ pub(super) fn playlist_thumbnail_path_from_bytes(
     if !is_current() {
         return Err(CoverPixelsError::stale());
     }
-    publish_playlist_thumbnail_path(cache_dir, filename, &jpeg)
+    Ok(ThumbnailPathPreparation::ReadyToPublish(
+        ThumbnailPublishJob {
+            cache_dir,
+            filename,
+            jpeg,
+        },
+    ))
+}
+
+/// Convenience wrapper for callers that own no decode permit and have no slot to
+/// release (tests, and the background warmup once it has already dropped its
+/// permit). Foreground path lanes must use [`prepare_thumbnail_path`] plus an
+/// explicit [`DecodeSlot::release`] instead, or they reintroduce the stall this
+/// split exists to remove.
+#[cfg(test)]
+pub(super) fn playlist_thumbnail_path_from_bytes(
+    app_cache_dir: &Path,
+    bytes: &[u8],
+    source_hash: blake3::Hash,
+    max_edge: u32,
+    is_current: impl Fn() -> bool + Copy,
+) -> Result<PlaylistThumbnailPath, CoverPixelsError> {
+    match prepare_thumbnail_path(app_cache_dir, bytes, source_hash, max_edge, is_current)? {
+        ThumbnailPathPreparation::Ready(published) => Ok(published),
+        ThumbnailPathPreparation::ReadyToPublish(job) => job.publish(),
+    }
 }
 
 fn read_thumbnail_cache(cache_dir: &Path, filename: &str, max_edge: u32) -> Option<Vec<u8>> {
@@ -2282,9 +2476,9 @@ fn parse_thumbnail_cache(bytes: &[u8], max_edge: u32) -> Option<Vec<u8>> {
 
 /// Reads and validates a published playlist `.jpg` (decision 3.3).
 ///
-/// Applies the same defences as [`read_thumbnail_cache`] — ordinary file, size
+/// Applies the same defences as [`read_thumbnail_cache`] 閳?ordinary file, size
 /// bounds, canonical containment inside `cache_dir`, delete-and-miss on any
-/// failure — but validates the JPEG container instead of the SPTC/SPXR headers,
+/// failure 閳?but validates the JPEG container instead of the SPTC/SPXR headers,
 /// because a `.jpg` carries neither. On a hit the mtime is refreshed so the
 /// shared mtime eviction order still reflects recent use.
 fn read_playlist_thumbnail_path_cache(
@@ -3076,7 +3270,7 @@ fn decode_playlist_image(
 ///
 /// Alpha is dropped with `to_rgb8()` exactly as the list lane's BMP path already
 /// does, no EXIF is written (orientation was applied during decode, so the
-/// WebView must not rotate again), and no ICC conversion is performed — matching
+/// WebView must not rotate again), and no ICC conversion is performed 閳?matching
 /// the existing SPXR lane's stated channel-layout-only contract.
 fn encode_playlist_jpeg(image: DynamicImage) -> Result<Vec<u8>, CoverPixelsError> {
     let rgb = image.to_rgb8();
@@ -5717,6 +5911,7 @@ mod tests {
             root.to_str().unwrap(),
             256,
             || true,
+            &DecodeSlot::detached(),
         )
         .expect("folder artwork lookup")
         .expect("an ordinary directory image is a confirmed cover");
@@ -5736,6 +5931,7 @@ mod tests {
                 empty.to_str().unwrap(),
                 256,
                 || true,
+                &DecodeSlot::detached(),
             )
             .expect("an exhausted walk is not an error")
             .is_none()
@@ -5759,5 +5955,157 @@ mod tests {
             assert_eq!(&packed[..4], b"SPXR");
             assert!(valid_cached_spxr(&packed, edge));
         }
+    }
+
+    // --- F1: the decode permit must not survive into the publish wait -----
+
+    /// F1: a `.jpg` publish leaves the decode pool free while it waits on disk.
+    ///
+    /// The defect was that the three foreground path lanes held their decode
+    /// permit for the whole blocking closure, so `wait_path_idle` 鈥?pure waiting on
+    /// the single cache writer 鈥?occupied a slot. On a four-core host the pool is
+    /// one token wide, so a single cold cover could starve every other cover for
+    /// the entire 2 s publish budget.
+    ///
+    /// This drives the real encode/publish split through `prepare_thumbnail_path`
+    /// with a permit taken from a real pool, then proves the pool is free at the
+    /// exact moment the publish wait begins: the `on_release` hook fires after the
+    /// permit is returned and before `job.publish()` blocks.
+    #[test]
+    fn publish_wait_does_not_hold_the_decode_permit() {
+        let directory = TestDirectory::new();
+        let coordinator = PlaylistCoverRequestCoordinator::new();
+        let permit = tauri::async_runtime::block_on(coordinator.slots.acquire())
+            .expect("decode permit is available on an idle pool");
+        assert_eq!(
+            coordinator.slots.held.load(Ordering::Acquire),
+            1,
+            "the permit under test must actually be held"
+        );
+
+        let slot = Arc::new(DecodeSlot::for_test(permit));
+        let observed = Arc::new(StdMutex::new(None::<(bool, usize)>));
+        {
+            let observed = Arc::clone(&observed);
+            let slots_held = Arc::clone(&coordinator.slots.held);
+            slot.set_on_release(Arc::new(move || {
+                // Read the pool state at the release point, before the writer is
+                // ever asked to do anything.
+                *observed.lock().unwrap() =
+                    Some((true, slots_held.load(Ordering::Acquire)));
+            }));
+        }
+
+        let bytes = png_bytes(64, 48);
+        let preparation = prepare_thumbnail_path(
+            directory.path(),
+            &bytes,
+            blake3::hash(&bytes),
+            256,
+            || true,
+        )
+        .expect("misssssing cover encodes");
+        let job = match preparation {
+            ThumbnailPathPreparation::ReadyToPublish(job) => job,
+            ThumbnailPathPreparation::Ready(_) => panic!("first request must be a miss"),
+        };
+        // Encoding is finished and the permit is still held: this is the state the
+        // bug depended on being carried into the publish wait.
+        assert!(
+            !slot.is_released(),
+            "the permit must be held until encoding is complete"
+        );
+
+        slot.release();
+        let (released, held) = observed
+            .lock()
+            .unwrap()
+            .expect("the release hook must fire exactly once");
+        assert!(released);
+        assert_eq!(
+            held, 0,
+            "the pool must show no held slots at the publish-wait boundary"
+        );
+        assert!(slot.is_released());
+        // Releasing twice must be harmless: the walk may reach a publish point
+        // from more than one candidate branch.
+        slot.release();
+
+        // And the publish still completes and still yields a durable path.
+        let published = job.publish().expect("publish after releasing the permit");
+        assert!(Path::new(&published.path).is_file());
+        assert_eq!((published.width, published.height), (64, 48));
+    }
+
+    /// F1: the pool genuinely admits another request while a publish is waiting.
+    ///
+    /// The point of releasing early is that a *second* cold cover can decode while
+    /// the first is still draining through the writer. With the pool width at one
+    /// on a four-core host, a permit held across the wait would block it.
+    #[test]
+    fn another_request_can_acquire_while_a_publish_is_waiting() {
+        let coordinator = PlaylistCoverRequestCoordinator::new();
+        let permit = tauri::async_runtime::block_on(coordinator.slots.acquire()).unwrap();
+        let slot = DecodeSlot::for_test(permit);
+
+        slot.release();
+        // The released permit must be immediately visible to a competing acquire.
+        let second = tauri::async_runtime::block_on(coordinator.slots.acquire())
+            .expect("the pool must admit a second decode after the first released");
+        assert_eq!(coordinator.slots.held.load(Ordering::Acquire), 1);
+        drop(second);
+        assert_eq!(
+            coordinator.slots.held.load(Ordering::Acquire),
+            0,
+            "the pool returns to empty when every permit is dropped"
+        );
+    }
+
+    /// F2: a corrupt audio file inside a folder still yields a confirmed absence.
+    ///
+    /// The pixel lane's folder entry point passes `skip_invalid_tags = true`, so a
+    /// directory holding one malformed track reports "no artwork here" and the walk
+    /// continues. The path lane previously hard-coded `false`, which turned the same
+    /// directory into `InvalidPath` 鈥?an error the frontend counts toward its
+    /// fallback circuit breaker, for a directory the pixel lane answers cleanly.
+    #[test]
+    fn folder_path_lane_treats_corrupt_audio_as_confirmed_absence() {
+        let directory = TestDirectory::new();
+        let root = directory.path().join("root");
+        fs::create_dir_all(&root).unwrap();
+        // A file with a supported audio extension but no parseable container.
+        fs::write(root.join("broken.wav"), b"not a real wave file at all").unwrap();
+
+        let result = super::super::folder_cover::load_folder_thumbnail_path_blocking(
+            directory.path(),
+            root.to_str().unwrap(),
+            root.to_str().unwrap(),
+            256,
+            || true,
+            &DecodeSlot::detached(),
+        );
+        let published = result.expect(
+            "a corrupt track must not surface as an error: the pixel lane reports a \
+             confirmed absence for the same directory",
+        );
+        assert!(
+            published.is_none(),
+            "no readable artwork exists, so this must be Ok(None), not a path"
+        );
+
+        // The pixel lane over the same directory must agree. Its folder entry
+        // point lives in `folder_cover` and is only visible to the `audio` module,
+        // so assert the equivalent contract directly: a corrupt track probed with
+        // folder semantics is a confirmed absence, not an error.
+        assert!(
+            load_folder_track_thumbnail_blocking(
+                directory.path(),
+                root.join("broken.wav").to_str().unwrap(),
+                256,
+                || true,
+            )
+            .expect("the pixel lane's folder mode reports a confirmed absence")
+            .is_empty()
+        );
     }
 }

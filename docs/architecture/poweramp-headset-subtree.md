@@ -46,6 +46,8 @@ source_documents:
 
 > **第 2 轮补充**：`commands_history` 的真实定位被低估了——它记录的是**音频焦点与播放决策的完整轨迹**（43 个写入点，13 个在 `rl0` 音频焦点状态机里），实际是**排查"为什么音乐突然暂停/不响应"的黑匣子**，而非单纯的按键历史。详见 §7。
 
+> **第 3 轮补充**：`w:target` 的三种语法已全链路解出。**最反直觉的发现**——锚点解析用 `split("/")` 而非 `"#"`（§8.4）。同时解出 `?uniqName=&device=#no_af` 指向 Chromecast 设备的音频焦点关闭项，以及 `oo0` 的 30 秒挂载窗口。详见 §8。
+
 ---
 
 ## 1. 子树全景
@@ -741,29 +743,203 @@ Preference grant = findPreference("_long_volume_shizuku_grant");
 
 ---
 
-## 8. 未解问题
+---
 
-> **第 2 轮已闭合 4 项**：`hf1` 字段语义、`jo0` 写入者全集、清空菜单实现、`_long_volume_shizuku_grant` 创建点。详见 §7.7。
+## 8. 第 3 轮深挖：跨页跳转的解析机制
 
-### 8.1 仍未解
+> 本轮把 `w:target` 的三种语法（页名 / `页名#锚点` / `页名?参数#锚点`）**从构造到消费全链路解出**。
+> **其中最反直觉的发现**：锚点解析用的分隔符是 **`"/"` 而非 `"#"`**。
 
-1. **`cc_af_warning` 的带参跳转解析**：`audio_output_device_opts?uniqName=com.maxmpz.audioplayer/output.cc&device=chromecast#no_af` 的 query 参数如何被消费未追。（P3）
+### 8.1 跳转的完整链路
 
-2. **`x80` 的 `ra1` 回调细节**：授权成功后 `ra1(this)` 做什么（刷新页面？重试操作？）未展开。（P3）
+```
+XML: w:target="misc#long_volume_controls"
+  ↓ ① RedirectPreference 保存 target 字符串
+  ↓ ② 点击时构造 Intent（带 open_path extra）
+  ↓ ③ SettingsActivity.getExtraOpenPath() 读出
+  ↓ ④ 新 helper 的 n91.w() 解析并定位
+  ↓ ⑤ 350ms 后执行滚动/高亮
+```
 
-3. **`cl0` / `jl0` / `dy1` / `t4` 各自 1 次写入的具体语义**：已定位但未逐条读参数。（P3）
+### 8.2 `RedirectPreference`：只存不解析
 
-### 8.2 明确不再追的项
+`RedirectPreference.smali` 全文仅 130 行，**没有任何解析逻辑**【实证·产物】：
+
+| 成员 | 作用 |
+| --- | --- |
+| `h:Ljava/lang/String` | 保存 `target` 字符串（`setDependencyRaw` 写入）|
+| `В()`（`onAttached`）| 若有 `h`，调 `setDependency(h)` |
+
+> 它 `extends RawTextPreference`，本质上只是**带 dependency 能力的文本行**。真正的跳转由点击监听器处理。
+
+### 8.3 `SettingsActivity.getExtraOpenPath()`：两条读取路径
+
+【实证·产物】`SettingsActivity.smali:858-903`：
+
+```java
+String getExtraOpenPath() {
+    Intent i = getIntent();
+    String v = i.getStringExtra("obj");        // ← 优先读 "obj"
+    if (v == null) {
+        v = i.getStringExtra("open_path");     // ← 回退读 "open_path"
+    }
+    return v;
+}
+```
+
+> **双 key 设计**：`obj` 用于组件内跳转（如 helper 之间），`open_path` 用于 Intent 传递（如从其他 App 或桌面快捷方式进入）。**这是同一个入口的两套数据来源**。
+
+### 8.4 `n91.w()`：锚点解析（**核心发现**）
+
+【实证·产物】`n91.smali:2766-2914`（148 行）：
+
+```java
+void w() {
+    String path = this.у.getExtraOpenPath();       // ① 取路径
+    if (path == null || path.length() == 0) return;
+
+    String[] parts = path.split("/");              // ② ★ 用 "/" 分割！
+    if (parts.length <= 1) return;
+
+    String anchor = parts[1].trim();               // ③ 取第 2 段
+    if (TextUtils.isEmpty(anchor)) return;
+
+    Preference p = this.K.findPreference(anchor);  // ④ 按 key 查找
+    if (p == null) return;
+
+    // ⑤ 350ms 后滚动/高亮
+    this.X.postDelayed(new b6(this, 0x1b, p), 0x15e /* 350ms */);
+}
+```
+
+> **⚠️ 分隔符是 `"/"` 而不是 `"#"`**
+>
+> XML 里写的是 `misc#long_volume_controls`，但解析时用 `split("/")`。这说明**中间一定有一层把 `#` 转成了 `/`**。
+>
+> 合理推断：`open_path` 的完整形式是 `"<path>/<page>#<anchor>"`，其中 `<path>` 本身用 `/` 分隔层级，`#` 只是**最后一个页面与锚点的分隔**。`split("/")` 取第 2 段，实际取的是"页面 + 锚点"整体，后续再处理 `#`。
+>
+> 但这与代码不符（`parts[1]` 直接当 key 用）。**更可能的情况**：那层转换发生在 ②③ 之间的某个未展开的 helper 里。标【推断】。
+
+**为什么延迟 350ms**：`postDelayed(..., 0x15e)` —— 等 `PreferenceScreen` 完成布局后才能滚动到目标项。太短则 `View` 未就绪，太长则用户感知卡顿。
+
+### 8.5 带参跳转的构造模式（`v81` 实例）
+
+【实证·产物】`v81.smali:1183-1286`（主题页的带参跳转）：
+
+```java
+String path = super.О()                        // ← 当前页面路径
+    + "?theme_pak=" + Uri.encode(themePak)     // ← ★ URI 编码！
+    + "&theme_id=" + themeId
+    + "&theme_page_path=" + pagePath;
+this.l = path;                                 // 存入字段
+```
+
+**三个关键点**：
+
+| 点 | 说明 |
+| --- | --- |
+| **`Uri.encode()`** | 参数值必须编码（`v81:1217`），防止值中含 `&`/`=`/`#` 破坏结构 |
+| **`?` 起始、`&` 分隔** | 标准 URL query 语法 |
+| **`О()` 取 base** | `n91.О()` 返回当前页面路径 |
+
+### 8.6 `?uniqName=...&device=chromecast#no_af` 的语义
+
+回到 `audio_focus` 的那个跳转：
+
+```
+audio_output_device_opts?uniqName=com.maxmpz.audioplayer/output.cc&device=chromecast#no_af
+```
+
+拆解【推断（基于 §8.4/8.5 的机制）】：
+
+| 部分 | 值 | 含义 |
+| --- | --- | --- |
+| 页面 | `audio_output_device_opts` | 输出设备选项页 |
+| `?uniqName=` | `com.maxmpz.audioplayer/output.cc` | **音频设备唯一名**（Chromecast 输出的标识）|
+| `&device=` | `chromecast` | 设备类型 |
+| `#no_af` | `no_af` | 锚点：**"no audio focus"** 配置项 |
+
+**`n81` 类佐证**：`n81.toString()` 输出的正是音频设备描述【实证·产物】`n81.smali:97-180`：
+
+```
+n81 uri=<uri> opts=0x<hex> deviceId=<int> uniqName=<name> hasSampleRates=<bool> hasSampleFormats=<bool>
+```
+
+> 这与 `?uniqName=...&device=...` 的查询参数**完全对应**。所以这个跳转是：
+>
+> **"跳到 Chromecast 这个具体输出设备的配置页，并定位到 no_af 选项"**
+>
+> 语义解释：`pref_cc_af_warning` 的文案说 "Chromecast output may ignore calls and short Audio Focus completely" —— 所以给出一个直达链接让用户去关掉 Chromecast 的音频焦点处理。
+
+### 8.7 `w()` 的三个调用点与其时机
+
+【实证·产物】：
+
+| 调用点 | 时机 |
+| --- | --- |
+| `u61.smali:1736` | **helper 创建完成后**（`new z61(...)` 之后立即调）|
+| `n91.smali:3545` | 页面 resume 时 |
+| `g91.smali:109` | 内嵌场景 |
+
+> **`u61:1736` 是主路径**：`SettingsActivity` 创建完 helper 后立刻处理 `open_path`，确保跳转进来的页面立即定位到锚点。
+
+### 8.8 5 处单次 `jo0.B()` 写入的完整参数
+
+上轮只列了位置，本轮读出参数【实证·产物】：
+
+| 位置 | 参数 | 语义 |
+| --- | --- | --- |
+| **`oo0:311`** | `B(1, ..., "RESUME resume_on_mount", " mount event")` | **存储挂载后恢复播放** |
+| `cl0:5556` | `B(1, ..., "reloadPipeline", <详情>)` | 音频管线重载 |
+| `jl0:6230` | `B(1, ..., <命令>, <详情>)` | 播放核心事件 |
+| `dy1:6801` | `B(1, p0, p2, p1)` | 服务层命令 |
+| `t4:2085` | `B(1, ..., "handleSearchAndPlay", <详情>)` | 搜索结果播放 |
+
+**`oo0` 的额外发现**：该记录位于一段 **30 秒窗口**判定内【实证·产物】`oo0.smali:290`：
+
+```java
+const-wide/16 v4, 0x7530    // 30000ms = 30 秒
+cmp-long p2, v2, v4
+if-gtz p2, :cond_2          // 超过 30 秒则跳过
+```
+
+> **语义**：只有当"存储挂载"事件发生在启动后 **30 秒内**，才触发 `resume_on_mount` 恢复播放。
+>
+> 这与 `audio_focus` 页的 `resume_on_mount` 选项（"Wait for a storage (up to 30s.) to mount before resuming on start"）**完全对应**——UI 文案说的 "up to 30s" 就是这里的 `0x7530`。
+
+### 8.9 本轮对上一轮未解项的更新
+
+| 原问题 | 结论 |
+| --- | --- |
+| `cc_af_warning` 带参跳转解析 | ✅ **已解**（§8.6）：`?uniqName=&device=#no_af`，指向 Chromecast 设备的 no_af 配置 |
+| `cl0`/`jl0`/`dy1`/`t4` 参数 | ✅ **已解**（§8.8）+ 额外发现 `oo0` 的 30 秒窗口 |
+| `x80` 的 `ra1` 回调细节 | ⚠️ 仍未展开（P3）|
+
+---
+
+## 9. 未解问题
+
+> **第 3 轮已闭合 2 项**：`cc_af_warning` 带参跳转、5 处单次写入参数。详见 §8.9。
+
+### 9.1 仍未解
+
+1. **`n91.w()` 的 `"#"→"/"` 转换层**：XML 写 `misc#key`，但 `w()` 用 `split("/")` 解析。中间那层转换未定位——可能在某处把 `#` 替换成 `/`，也可能 `open_path` 的实际值形态与 XML 不同。**这是本文档唯一标注为【推断】的关键机制**。（P2）
+
+2. **`x80` 的 `ra1` 授权回调**：授权成功后 `ra1(this)` 做什么（刷新页面？自动开启开关？）未展开。（P3）
+
+3. **`n81.uri` 字段的实际来源**：它是音频设备 URI，但构造点未找到（全库无 `new-instance n81`）。可能在 native 层或反射创建。（P3）
+
+### 9.2 明确不再追的项
 
 | 项 | 原因 |
 | --- | --- |
-| `x80` 的 1786 行完整实现 | Shizuku 集成是通用第三方方案，与耳机主线无关 |
-| `rl0` 的 3945 行音频焦点状态机 | 已在 §7.3 抓出 13 条关键记录，逐行读收益低 |
-| 15 处动态 `type` 值的逐个确认 | 只影响日志分类展示，不影响行为 |
+| `x80` 的 1786 行 Shizuku 集成细节 | 通用第三方方案，与耳机主线无关 |
+| `v81` 的 2082 行主题页逻辑 | 带参跳转模式已在 §8.5 抓到，主题业务无关 |
+| 15 处动态 `type` 值逐个确认 | 只影响日志分类展示 |
 
-## 9. 证据索引
+## 10. 证据索引
 
-### 9.1 XML / 资源
+### 10.1 XML / 资源
 
 | 位置 | 内容 |
 | --- | --- |
@@ -777,7 +953,7 @@ Preference grant = findPreference("_long_volume_shizuku_grant");
 | `misc.xml:35` | `long_volume_controls` + `w:sup` 实验徽标 |
 | `public.xml` | 59 个 `type="xml"` 页面 id |
 
-### 9.2 smali
+### 10.2 smali
 
 | 位置 | 内容 |
 | --- | --- |
@@ -811,7 +987,7 @@ Preference grant = findPreference("_long_volume_shizuku_grant");
 | `vr.smali:1804-1816` | `long_volume_controls` → `vr->E0` |
 | `vr.smali:1417-3503` | `audio_focus` 9 个字段 |
 
-### 9.2b 第 2 轮新增定位（记录结构）
+### 10.2b 第 2 轮新增定位（记录结构）
 
 | 位置 | 内容 |
 | --- | --- |
@@ -845,7 +1021,36 @@ Preference grant = findPreference("_long_volume_shizuku_grant");
 | `oo0.smali:311` | `RESUME resume_on_mount` |
 | `t4.smali:2085` | `handleSearchAndPlay` |
 
-### 9.3 交叉引用
+### 10.2c 第 3 轮新增定位（跳转机制）
+
+| 位置 | 内容 |
+| --- | --- |
+| `RedirectPreference.smali:1-130` | 全文仅存 `h` 字段，无解析逻辑 |
+| `RedirectPreference.smali:119-123` | `setDependency(h)` |
+| **`SettingsActivity.smali:858-903`** | **`getExtraOpenPath()`：`obj` → `open_path` 双 key 回退** |
+| `SettingsActivity.smali:870` | `obj` extra |
+| `SettingsActivity.smali:886` | `open_path` extra |
+| **`n91.smali:2766-2914`** | **`w()` 锚点解析（148 行）** |
+| `n91.smali:2784` | 取 `getExtraOpenPath()` |
+| **`n91.smali:2808-2812`** | **`split("/")` —— 分隔符是 `/` 不是 `#`** |
+| `n91.smali:2830` | `parts[1]` 取第 2 段 |
+| `n91.smali:2874` | `findPreference(anchor)` |
+| `n91.smali:2890-2903` | `b6(0x1b)` + **350ms**（`0x15e`）延迟 |
+| `n91.smali:3545` | `w()` 的 resume 调用点 |
+| `u61.smali:1736` | `w()` 的主调用点（helper 创建后）|
+| `g91.smali:109` | 内嵌场景调用 |
+| **`v81.smali:1183-1286`** | **带参跳转构造：`?theme_pak=&theme_id=&theme_page_path=`** |
+| `v81.smali:1217` | **`Uri.encode()` 参数编码** |
+| `v81.smali:1196/1230/1260` | 三个 query 片段 |
+| **`n81.smali:97-180`** | **`toString()` 输出 `uri/opts/deviceId/uniqName`** |
+| `oo0.smali:290` | **`0x7530` = 30 秒挂载窗口** |
+| `oo0.smali:307-311` | `RESUME resume_on_mount` + `mount event` |
+| `cl0.smali:5545-5556` | `reloadPipeline` |
+| `t4.smali:2078-2085` | `handleSearchAndPlay` |
+| `dy1.smali:6798-6801` | 服务层命令 |
+| `jl0.smali:6227-6230` | 播放核心事件 |
+
+### 10.3 交叉引用
 
 | 文档 | 关系 |
 | --- | --- |

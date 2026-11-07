@@ -483,8 +483,8 @@ export function PlayerShell() {
   const streamKeys = useMemo(() => streamRows.map(item => item.key).join('\u0000'), [streamRows])
   const streamShuffleKeys = useMemo(() => streamKeys.split('\u0000').map(key => ({ key, order: [...key].reduce((hash, char) => Math.imul(hash ^ char.charCodeAt(0), 16777619), Math.floor(streamShuffleSeed * 0xffffffff)) >>> 0 }))
     .sort((a, b) => a.order - b.order).map(item => item.key), [streamKeys, streamShuffleSeed])
-  const streamSongs = useMemo(() => sortStreamSongs(streamRows, streamSort, player.mostPlayed, player.feedbackByTrackId,
-    player.streamPlaylist?.tracks ?? [], streamShuffleKeys, player.recentlyPlayed), [streamRows, streamSort, player.mostPlayed, player.feedbackByTrackId, player.streamPlaylist, streamShuffleKeys, player.recentlyPlayed])
+  const streamSongs = useMemo(() => sortStreamSongs(streamRows, streamSort, player.mostPlayed, player.ratingsByTrackId,
+    player.streamPlaylist?.tracks ?? [], streamShuffleKeys, player.recentlyPlayed), [streamRows, streamSort, player.mostPlayed, player.ratingsByTrackId, player.streamPlaylist, streamShuffleKeys, player.recentlyPlayed])
   const searchSongs = useMemo<AllSongsItem[]>(() => isSearchOpen ? librarySources.filter(source => source.sourceKind !== 'streams').flatMap(source => {
     const scope = playlistScope(source)
     return source.tracks.filter(descriptor => !isStreamSource(descriptor)).map(descriptor => {
@@ -800,6 +800,8 @@ export function PlayerShell() {
       onVisibleTrackIdsChange: isBrowsingActive ? player.setVisiblePlaylistTrackIds : handleLibraryVisibleTrackIds,
     },
     feedback: {
+      ratingsByTrackId: player.ratingsByTrackId,
+      onRatingChange: player.setTrackRating,
       value: player.currentFeedback,
       valuesByTrackId: player.feedbackByTrackId,
       onToggle: handleFeedbackToggle,

@@ -2,7 +2,7 @@ import type { RecentlyPlayedEntry } from './recentlyPlayed'
 import type { AllSongsItem } from './playerUiViewModel'
 import type { AudioFolderPlaylist, AudioFolderTrackRef } from '../services/audioCommands'
 import type { MostPlayedEntry } from './mostPlayed'
-import type { TrackFeedback } from './playerTypes'
+import type { TrackRating } from './playerTypes'
 import { compareByQuickIndex } from './quickIndex'
 
 export const STREAMS_LAYOUT_STORAGE_KEY = 'spmusic.streams.layout-level.v1'
@@ -26,13 +26,13 @@ export function validStreamsPlaylist(value: AudioFolderPlaylist): boolean {
       && typeof item.sourcePath === 'string' && validateStreamAddress(item.sourcePath)))
 }
 export function sortStreamSongs(songs: readonly AllSongsItem[], sort: StreamSort,
-  counts: readonly MostPlayedEntry[], feedback: Readonly<Record<string, TrackFeedback>>,
+  counts: readonly MostPlayedEntry[], feedback: Readonly<Record<string, TrackRating>>,
   descriptors: readonly AudioFolderTrackRef[], shuffleKeys: readonly string[], recents: readonly RecentlyPlayedEntry[] = []): AllSongsItem[] {
   const statistics = new Map(counts.map(item => [item.sourcePath, item]))
   const recentTimes = new Map(recents.map(item => [item.sourcePath, item.lastPlayedAt]))
   const created = new Map(descriptors.map(item => [item.id, item.createdAtMs ?? 0]))
   const shuffle = new Map(shuffleKeys.map((key, index) => [key, index]))
-  const rating = (id: string) => feedback[id] === 'liked' ? 1 : feedback[id] === 'disliked' ? -1 : 0
+  const rating = (id: string) => feedback[id] ?? 0
   return [...songs].sort((a, b) => {
     const delta = sort === 'rating' ? rating(b.trackId) - rating(a.trackId)
       : sort === 'play-count' ? (statistics.get(b.sourcePath)?.playCount ?? 0) - (statistics.get(a.sourcePath)?.playCount ?? 0)

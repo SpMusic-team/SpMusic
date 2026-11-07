@@ -1,3 +1,4 @@
+import type { TrackRating } from '@/features/player/model/playerTypes'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { PlayerSurface } from '@/features/player/components/PlayerSurface'
@@ -30,7 +31,8 @@ export function DemoPlayerPage() {
   const [queueOpen, setQueueOpen] = useState(false)
   const [shuffleMode, setShuffleMode] = useState<ShuffleMode>('none')
   const [repeatMode, setRepeatMode] = useState<RepeatMode>('list-loop')
-  const [feedbackByTrackId, setFeedbackByTrackId] = useState<Record<string, TrackFeedback>>({})
+  const [ratingsByTrackId, setRatingsByTrackId] = useState<Record<string, TrackRating>>({})
+  const feedbackByTrackId: Record<string, TrackFeedback> = Object.fromEntries(Object.entries(ratingsByTrackId).flatMap<[string, TrackFeedback]>(([id, rating]) => rating === 5 ? [[id, 'liked']] : rating === 1 ? [[id, 'disliked']] : []))
   const lastFrameRef = useRef<number | null>(null)
   const endingTrackRef = useRef<string | null>(null)
   const pageShuffleSessionRef = useRef<PageShuffleSession | null>(null)
@@ -122,12 +124,8 @@ export function DemoPlayerPage() {
   }, [changeTrack, playing, timelineInteraction, track])
 
   function toggleTrackFeedback(trackId: string, feedback: TrackFeedback) {
-    setFeedbackByTrackId((previous) => {
-      if (previous[trackId] !== feedback) return { ...previous, [trackId]: feedback }
-      const next = { ...previous }
-      delete next[trackId]
-      return next
-    })
+    const rating = feedback === 'liked' ? 5 : 1
+    setRatingsByTrackId(previous => ({ ...previous, [trackId]: previous[trackId] === rating ? 0 : rating }))
   }
 
   const viewModel: PlayerUiViewModel = {
@@ -255,6 +253,9 @@ export function DemoPlayerPage() {
       },
     },
     feedback: {
+      ratingsByTrackId,
+      valuesByTrackId: feedbackByTrackId,
+      onRatingChange: (id, rating) => setRatingsByTrackId(previous => ({ ...previous, [id]: rating })),
       value: track ? feedbackByTrackId[track.id] : undefined,
       onToggle: (feedback) => {
         if (track) toggleTrackFeedback(track.id, feedback)

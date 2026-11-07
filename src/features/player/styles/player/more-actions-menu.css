@@ -191,3 +191,11 @@ body:has(.responsive-player-layout[data-player-layout="horizontal"]) .more-actio
     max-height: min(calc(var(--more-leading-height, 100svh) + 24 * var(--more-unit)), calc(100svh - 32px));
   }
 }
+
+/* Ratings in the summary are a compact icon row, without a pill surface. */
+.more-feedback-actions .star-rating { --rating-unit: calc(.6 * var(--more-unit)); padding: 0; border-radius: 0; background: transparent; box-shadow: none; color: var(--player-inverse-primary); }
+.more-feedback-actions .star-rating .star-rating-button { padding: 0; background: transparent; box-shadow: none; }
+
+.more-feedback-actions .star-rating { --rating-padding: 0; }
+
+.more-feedback-actions .star-rating { --rating-surface: transparent; --rating-shadow: none; }

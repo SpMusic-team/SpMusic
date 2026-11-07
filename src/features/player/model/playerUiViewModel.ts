@@ -6,7 +6,7 @@ import type { LibraryFolderSettings, DirectoryChildren, ReplaceLibraryFoldersInp
 import type { PlaylistArtworkSource } from '@/features/player/model/playlistArtworkStore'
 import type { RepeatMode, ShuffleMode } from '@/features/player/model/playbackModes'
 import type { PlaylistDurationStatus } from '@/features/player/model/playlistDuration'
-import type { Track, TrackArtwork, TrackArtworkPrefetchCandidate, TrackFeedback, TrackSummary } from '@/features/player/model/playerTypes'
+import type { Track, TrackArtwork, TrackArtworkPrefetchCandidate, TrackFeedback, TrackRating, TrackSummary } from '@/features/player/model/playerTypes'
 import type { PlayerVisualTimelineClock } from '@/features/player/model/visualTimelineClock'
 import type { PlaybackQueueEntry } from '@/features/player/model/playbackQueue'
 import type { AudioOutputInfo, AudioTransportTarget, AudioTransportTransition } from '@/features/player/services/audioCommands'
@@ -338,6 +338,8 @@ export type PlaylistArtworkDemand = {
 }
 
 export type PlayerFeedbackViewModel = {
+  ratingsByTrackId?: Readonly<Record<string, TrackRating>>
+  onRatingChange?: (trackId: string, rating: TrackRating) => void
   value?: TrackFeedback
   valuesByTrackId?: Readonly<Record<string, TrackFeedback>>
   onToggle: (feedback: TrackFeedback) => void

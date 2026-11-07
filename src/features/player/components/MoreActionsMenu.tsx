@@ -34,6 +34,9 @@ import { appCopy } from '@/features/player/model/playerCopy'
 import type { ArtworkSourceView } from '@/features/player/hooks/useArtworkVisualResource'
 import type { Track } from '@/features/player/model/playerTypes'
 import { formatCompactDuration } from '@/features/player/model/trackUtils'
+import { StarRating } from './StarRating'
+import type { RatingMode } from '../model/trackRating'
+import type { TrackRating } from '../model/playerTypes'
 import type { SystemIcon } from '@/icons/systemIcons'
 import { cn } from '@/lib/utils'
 import { ArtworkCanvas } from './ArtworkCanvas'
@@ -44,6 +47,9 @@ type MoreActionsMenuProps = {
   coverSource?: ArtworkSourceView
   likeIcon: SystemIcon
   dislikeIcon: SystemIcon
+  ratingMode?: RatingMode
+  rating?: TrackRating
+  onRatingChange?: (rating: TrackRating) => void
   liked: boolean
   disliked: boolean
   onLike: () => void
@@ -94,6 +100,9 @@ export function MoreActionsMenu({
   coverSource,
   likeIcon: LikeIcon,
   dislikeIcon: DislikeIcon,
+  ratingMode = 'thumbs',
+  rating = 0,
+  onRatingChange,
   liked,
   disliked,
   onLike,
@@ -157,7 +166,9 @@ export function MoreActionsMenu({
   }
   const navigate = (action: (() => void) | undefined) => action ? () => { onOpenChange?.(false); action() } : undefined
   const systemIcons = useSystemIcons()
+  const menuFocusRef = useRef<HTMLDivElement | null>(null)
   const measureMenu = useCallback((menu: HTMLDivElement | null) => {
+    menuFocusRef.current = menu
     if (!menu) return
     const leading = menu.querySelector<HTMLElement>('.more-actions-leading')
     const scroll = menu.querySelector<HTMLDivElement>('.more-actions-scroll')
@@ -201,7 +212,7 @@ export function MoreActionsMenu({
         <TooltipContent>{appCopy.controls.more}</TooltipContent>
       </Tooltip>
 
-      <DialogContent ref={measureMenu} className="more-actions-menu" overlayClassName="more-actions-overlay" showCloseButton={false}>
+      <DialogContent ref={measureMenu} initialFocus={() => menuFocusRef.current} className="more-actions-menu" overlayClassName="more-actions-overlay" showCloseButton={false}>
         <div className="more-actions-scroll" onScroll={(event) => syncScrollMarker(event.currentTarget)}>
           <DialogTitle className="sr-only">{appCopy.moreMenu.title}</DialogTitle>
           <DialogDescription className="sr-only">{track.title}</DialogDescription>
@@ -225,6 +236,7 @@ export function MoreActionsMenu({
                     <span><MusicNote124Regular />{formatCompactDuration(track.durationSeconds)} | {track.fileExtension ?? 'flac'}</span>
                   </div>
                   <div className="more-feedback-actions">
+                    {ratingMode === 'stars' ? <StarRating key={track.id} value={rating} onChange={value => onRatingChange?.(value)} disabled={!onRatingChange} /> : <>
                     <IconButton
                       className="more-feedback-action"
                       animated
@@ -243,6 +255,7 @@ export function MoreActionsMenu({
                       selected={disliked}
                       onClick={onDislike}
                     />
+                    </>}
                   </div>
                 </div>
               </div>

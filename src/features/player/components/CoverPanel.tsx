@@ -4,6 +4,9 @@ import { motion } from 'motion/react'
 import { Button } from '@/components/ui/button'
 import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { appCopy } from '@/features/player/model/playerCopy'
+import { StarRating } from './StarRating'
+import type { RatingMode } from '../model/trackRating'
+import type { TrackRating } from '../model/playerTypes'
 import type { SystemIcon } from '@/icons/systemIcons'
 import type { ArtworkVisualLayer } from '@/features/player/hooks/useArtworkVisualResource'
 import { playerViewTransitionLayoutId } from '@/features/player/model/playerViewTransition'
@@ -15,6 +18,9 @@ type CoverPanelProps = {
   layer: ArtworkVisualLayer | null
   likeIcon: SystemIcon
   dislikeIcon: SystemIcon
+  ratingMode?: RatingMode
+  rating?: TrackRating
+  onRatingChange?: (rating: TrackRating) => void
   liked: boolean
   disliked: boolean
   onLike: () => void
@@ -32,6 +38,9 @@ export const CoverPanel = memo(function CoverPanel({
   layer,
   likeIcon,
   dislikeIcon,
+  ratingMode = 'thumbs',
+  rating = 0,
+  onRatingChange,
   liked,
   disliked,
   onLike,
@@ -96,15 +105,20 @@ export const CoverPanel = memo(function CoverPanel({
               }}
             />
             <div className="cover-actions">
-              <div className="cover-feedback">
+              <div className="cover-feedback" data-rating-mode={ratingMode}>
+                {ratingMode === 'stars' ? <StarRating key={track.id} value={rating} onChange={value => onRatingChange?.(value)} disabled={!onRatingChange || phase !== 'active'} /> : <>
                 <IconButton animated pressFeedback icon={likeIcon} label={appCopy.controls.like} selected={liked} onClick={onLike} />
                 <IconButton animated pressFeedback icon={dislikeIcon} label={appCopy.controls.dislike} selected={disliked} onClick={onDislike} />
+                </>}
               </div>
               <MoreActionsMenu
                 track={track}
                 coverSource={artwork.id === track.id ? coverSource : undefined}
                 likeIcon={likeIcon}
                 dislikeIcon={dislikeIcon}
+                ratingMode={ratingMode}
+                rating={rating}
+                onRatingChange={phase === 'active' ? onRatingChange : undefined}
                 liked={liked}
                 disliked={disliked}
                 onLike={onLike}

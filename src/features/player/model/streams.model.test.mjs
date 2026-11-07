@@ -59,14 +59,21 @@ test('six sorts use independent real records and retain shuffle order without mu
   const counts = [{ sourcePath: songs[2].sourcePath, playCount: 5, lastPlayedAt: 900 }]
   const recents = [{ sourcePath: songs[0].sourcePath, lastPlayedAt: 800 }]
   const descriptors = [{ id: 'A', createdAtMs: 1 }, { id: 'B', createdAtMs: 3 }, { id: 'C', createdAtMs: 2 }]
-  const order = mode => streams.sortStreamSongs(songs, mode, counts, { B: 'liked', C: 'disliked' }, descriptors, ['C', 'A', 'B'], recents).map(row => row.trackId)
+  const order = mode => streams.sortStreamSongs(songs, mode, counts, { B: 5, C: 1 }, descriptors, ['C', 'A', 'B'], recents).map(row => row.trackId)
   assert.equal(streams.STREAM_SORTS.length, 6)
   assert.deepEqual(order('name'), ['A', 'B', 'C'])
-  assert.deepEqual(order('rating'), ['B', 'A', 'C'])
+  assert.deepEqual(order('rating'), ['B', 'C', 'A'])
   assert.deepEqual(order('play-count'), ['C', 'A', 'B'])
   assert.deepEqual(order('last-played'), ['A', 'B', 'C'])
   assert.deepEqual(order('created'), ['B', 'C', 'A'])
   assert.deepEqual(order('shuffle'), ['C', 'A', 'B'])
   assert.deepEqual(order('shuffle'), ['C', 'A', 'B'])
   assert.deepEqual(songs.map(row => row.trackId), ['A', 'B', 'C'])
+})
+
+
+test('rating sorting retains all intermediate scores above unrated tracks', () => {
+  const songs = [0, 1, 2, 3, 4, 5].map(n => song(String(n), String(9-n)))
+  const ratings = { '1':1, '2':2, '3':3, '4':4, '5':5 }
+  assert.deepEqual(streams.sortStreamSongs(songs, 'rating', [], ratings, [], []).map(row => row.trackId), ['5','4','3','2','1','0'])
 })

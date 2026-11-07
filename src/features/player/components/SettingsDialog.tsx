@@ -14,6 +14,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { IconButton } from '@/features/player/components/IconButton'
 import { appCopy } from '@/features/player/model/playerCopy'
+import type { RatingMode } from '../model/trackRating'
 import type { PlaylistControllerMode } from '@/features/player/model/playlistControllerMode'
 import { persistStartupPage, readStartupPage, type StartupPage } from '@/features/player/model/startupPageStorage'
 import { GlobalShortcutSettings } from '@/features/shortcuts/components/GlobalShortcutSettings'
@@ -29,6 +30,8 @@ const DevAudioSettingsField = import.meta.env.DEV
   : null
 
 type SettingsDialogProps = {
+  ratingMode?: RatingMode
+  onRatingModeChange?: (mode: RatingMode) => void
   controllerMode?: PlaylistControllerMode
   onControllerModeChange?: (mode: PlaylistControllerMode) => void
   debugToolsEnabled?: boolean
@@ -43,6 +46,8 @@ type SettingsDialogProps = {
 }
 
 export function SettingsDialog({
+  ratingMode = 'thumbs',
+  onRatingModeChange,
   controllerMode = 'movable',
   onControllerModeChange,
   debugToolsEnabled = false,
@@ -81,6 +86,13 @@ export function SettingsDialog({
         </DialogHeader>
 
         <FieldGroup className="player-settings-group">
+          <Field className="player-settings-row" orientation="horizontal">
+            <FieldContent><FieldLabel htmlFor="player-rating-mode">评分模式</FieldLabel><FieldDescription>切换封面及更多操作中的评分方式，保留已有评分。</FieldDescription></FieldContent>
+            <Select items={[{value:'thumbs',label:'赞／踩'},{value:'stars',label:'五星评分'}]} value={ratingMode} disabled={!onRatingModeChange} onValueChange={value => { if(value === 'thumbs' || value === 'stars') onRatingModeChange?.(value) }}>
+              <SelectTrigger id="player-rating-mode"><SelectValue /></SelectTrigger>
+              <SelectContent><SelectGroup><SelectItem value="thumbs">赞／踩</SelectItem><SelectItem value="stars">五星评分</SelectItem></SelectGroup></SelectContent>
+            </Select>
+          </Field>
           <Field className="player-settings-row" orientation="horizontal">
             <FieldContent>
               <FieldLabel htmlFor="playlist-controller-mode">{settingsCopy.controller.title}</FieldLabel>

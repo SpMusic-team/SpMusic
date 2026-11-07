@@ -37,6 +37,8 @@ import { PlaylistPanel } from '@/features/player/components/PlaylistPanel'
 import { QueuePanel } from '@/features/player/components/QueuePanel'
 import { ResponsivePlayerLayout } from '@/features/player/components/ResponsivePlayerLayout'
 import { TrackMeta } from '@/features/player/components/TrackMeta'
+import { readRatingMode, persistRatingMode, feedbackFromRating, type RatingMode } from '../model/trackRating'
+import type { TrackRating } from '../model/playerTypes'
 import { WindowBar, type WindowLayoutState } from '@/features/player/components/WindowBar'
 import { ArtworkCanvas } from '@/features/player/components/ArtworkCanvas'
 import { appCopy } from '@/features/player/model/playerCopy'
@@ -231,6 +233,9 @@ const ArtworkReadinessProbe = memo(function ArtworkReadinessProbe({
 
 type TrackCardMotionLayerProps = {
   layer: ArtworkVisualLayer
+  ratingMode: RatingMode
+  rating: TrackRating
+  onRatingChange?: (trackId: string, rating: TrackRating) => void
   feedbackValue?: TrackFeedback
   onFeedbackToggle: (feedback: TrackFeedback) => void
   onReady: (layerId: number) => void
@@ -255,6 +260,9 @@ type TrackCardMotionLayerProps = {
 
 const TrackCardMotionLayer = memo(function TrackCardMotionLayer({
   layer,
+  ratingMode,
+  rating,
+  onRatingChange,
   feedbackValue,
   onFeedbackToggle,
   onReady,
@@ -365,8 +373,9 @@ const TrackCardMotionLayer = memo(function TrackCardMotionLayer({
   const handleLoadError = useCallback(() => {
     if (layer.phase === 'incoming') onLoadError(layer.id)
   }, [layer, onLoadError])
-  const handleLike = useCallback(() => onFeedbackToggle('liked'), [onFeedbackToggle])
-  const handleDislike = useCallback(() => onFeedbackToggle('disliked'), [onFeedbackToggle])
+  const handleLike = useCallback(() => { if (onRatingChange) onRatingChange(layer.track.id, rating === 5 ? 0 : 5); else if (layer.phase === 'active') onFeedbackToggle('liked') }, [onRatingChange, layer.track.id, layer.phase, rating, onFeedbackToggle])
+  const handleDislike = useCallback(() => { if (onRatingChange) onRatingChange(layer.track.id, rating === 1 ? 0 : 1); else if (layer.phase === 'active') onFeedbackToggle('disliked') }, [onRatingChange, layer.track.id, layer.phase, rating, onFeedbackToggle])
+  const handleRatingChange = useCallback((value: TrackRating) => onRatingChange?.(layer.track.id, value), [onRatingChange, layer.track.id])
   const LikeIcon = feedbackValue === 'liked' ? systemIcons.likeSelected : systemIcons.like
   const DislikeIcon = feedbackValue === 'disliked' ? systemIcons.dislikeSelected : systemIcons.dislike
 
@@ -425,6 +434,9 @@ const TrackCardMotionLayer = memo(function TrackCardMotionLayer({
           layer={layer}
           likeIcon={LikeIcon}
           dislikeIcon={DislikeIcon}
+          ratingMode={ratingMode}
+          rating={rating}
+          onRatingChange={onRatingChange ? handleRatingChange : undefined}
           liked={feedbackValue === 'liked'}
           disliked={feedbackValue === 'disliked'}
           onLike={handleLike}
@@ -1084,6 +1096,8 @@ export function PlayerSurface({
   }, [playlistOpen])
   const [compactPlaylist, setCompactPlaylist] = useState(() => window.matchMedia('(width <= 1024px)').matches)
   const [searchRequestId, setSearchRequestId] = useState(0)
+  const [ratingMode, setRatingMode] = useState(readRatingMode)
+  const handleRatingModeChange = useCallback((mode: RatingMode) => { setRatingMode(mode); persistRatingMode(mode) }, [])
   const [controllerMode, setControllerMode] = useState(readPlaylistControllerMode)
   const handleControllerModeChange = useCallback((mode: PlaylistControllerMode) => {
     setControllerMode(mode)
@@ -2992,6 +3006,8 @@ export function PlayerSurface({
             nativeWindowState={nativeWindowState}
             windowBar={(
               <WindowBar
+                ratingMode={ratingMode}
+                onRatingModeChange={handleRatingModeChange}
                 controllerMode={controllerMode}
                 onControllerModeChange={handleControllerModeChange}
                 onWindowStateChange={setNativeWindowState}
@@ -3071,7 +3087,10 @@ export function PlayerSurface({
                         key={`track-card:${layer.id}`}
                         layer={layer}
                         onCollapse={collapsePlayer}
-                        feedbackValue={feedback.valuesByTrackId?.[layer.track.id]}
+                        ratingMode={ratingMode}
+                        rating={feedback.ratingsByTrackId?.[layer.track.id] ?? (feedback.valuesByTrackId?.[layer.track.id] === 'liked' ? 5 : feedback.valuesByTrackId?.[layer.track.id] === 'disliked' ? 1 : 0)}
+                        onRatingChange={feedback.onRatingChange}
+                        feedbackValue={feedback.ratingsByTrackId ? feedbackFromRating(feedback.ratingsByTrackId[layer.track.id] ?? 0) : feedback.valuesByTrackId?.[layer.track.id]}
                         onFeedbackToggle={feedback.onToggle}
                         onReady={markArtworkReady}
                         onLoadError={markArtworkLoadError}

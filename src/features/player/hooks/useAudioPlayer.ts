@@ -81,6 +81,7 @@ import type {
   TrackArtwork,
   TrackArtworkPrefetchCandidate,
   TrackFeedback,
+  TrackRating,
   TrackSummary,
 } from '@/features/player/model/playerTypes'
 import { createPlayerVisualTimelineClock } from '@/features/player/model/visualTimelineClock'
@@ -442,7 +443,8 @@ function audioStatusText(
 
 export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed = true, playerVisible = false) {
   const [queueTracks, setQueueTracks] = useState<TrackSummary[]>([])
-  const [feedbackByTrackId, setFeedbackByTrackId] = useState<Record<string, TrackFeedback>>({})
+  const [ratingsByTrackId, setRatingsByTrackId] = useState<Record<string, TrackRating>>({})
+  const feedbackByTrackId = useMemo(() => Object.fromEntries(Object.entries(ratingsByTrackId).flatMap<[string, TrackFeedback]>(([id, rating]) => rating === 5 ? [[id, 'liked' as const]] : rating === 1 ? [[id, 'disliked' as const]] : [])), [ratingsByTrackId])
   const [shuffleMode, setShuffleMode] = useState<ShuffleMode>(readShuffleMode)
   const [repeatMode, setRepeatMode] = useState<RepeatMode>(readRepeatMode)
 
@@ -4444,13 +4446,13 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     })
   }
 
+  const setTrackRating = useCallback((trackId: string, rating: TrackRating) => {
+    if (!Number.isInteger(rating) || rating < 0 || rating > 5) return
+    setRatingsByTrackId(previous => ({ ...previous, [trackId]: rating }))
+  }, [])
   const toggleTrackFeedback = useCallback((trackId: string, feedback: TrackFeedback) => {
-    setFeedbackByTrackId((previous) => {
-      if (previous[trackId] !== feedback) return { ...previous, [trackId]: feedback }
-      const next = { ...previous }
-      delete next[trackId]
-      return next
-    })
+    const rating = feedback === 'liked' ? 5 : 1
+    setRatingsByTrackId(previous => ({ ...previous, [trackId]: previous[trackId] === rating ? 0 : rating }))
   }, [])
 
   function changeVolume(nextVolume: number) {
@@ -5257,6 +5259,8 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     playlistName: folderPlaylist ? playlistDisplayName(folderPlaylist) : undefined,
     currentFeedback: track ? feedbackByTrackId[track.id] : undefined,
     feedbackByTrackId,
+    ratingsByTrackId,
+    setTrackRating,
     shuffleMode,
     repeatMode,
     queueOpen,

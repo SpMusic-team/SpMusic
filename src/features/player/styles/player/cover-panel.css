@@ -55,6 +55,30 @@
   scale: none;
 }
 .cover-art button svg { width: 100%; height: 100%; }
-.cover-feedback button { width: calc(100 * var(--prototype-unit)); height: calc(72 * var(--prototype-unit)); }
+.cover-feedback > button { width: calc(100 * var(--prototype-unit)); height: calc(72 * var(--prototype-unit)); }
 .cover-art button[data-selected="true"] { background: var(--player-blue-soft); color: var(--player-blue-ink); }
 .cover-art .more-button { position: absolute; z-index: 3; right: calc(13 * var(--prototype-unit)); bottom: calc(24 * var(--prototype-unit)); width: calc(72 * var(--prototype-unit)); height: calc(72 * var(--prototype-unit)); }
+
+/* Shared rating geometry scales with the same units as each existing surface. */
+.star-rating { --rating-unit: var(--prototype-unit); display: inline-flex; align-items: center; padding: calc(12 * var(--rating-unit)) calc(20 * var(--rating-unit)); border-radius: 999px; background: transparent; color: var(--player-blue-ink); box-shadow: none; }
+.star-rating .star-rating-button { flex: 0 0 auto; width: calc(58 * var(--rating-unit)); height: calc(48 * var(--rating-unit)); min-width: 0; padding: 0 calc(5 * var(--rating-unit)); border-radius: 0; background: transparent; color: inherit; box-shadow: none; }
+.star-rating .star-rating-button svg, .star-rating .star-rating-button .rating-star-outline { display: block; width: 100%; height: 100%; object-fit: contain; }
+.star-rating .star-rating-button:focus-visible { outline: 2px solid currentColor; outline-offset: 1px; border-radius: 4px; }
+.rating-star-outline { background: currentColor; mask-position: center; mask-repeat: no-repeat; mask-size: contain; }
+
+/* Keep an invariant five-slot interaction track behind the animated viewport. */
+.star-rating { position: relative; width: calc((290 + var(--rating-padding, 40)) * var(--rating-unit)); box-sizing: border-box; flex: 0 0 auto; overflow: visible; touch-action: none; user-select: none; transform-origin: left center; transition: transform var(--app-motion-fast) var(--app-motion-easing); }
+.star-rating[data-pressed="true"] { transform: scale(1.04); }
+.star-rating .star-rating-button { box-sizing: border-box; }
+@media (prefers-reduced-motion: reduce) { .star-rating { transition: none; } .star-rating[data-pressed="true"] { transform: none; } }
+
+.star-rating[data-motion-disabled="true"] { transition: none; }
+.star-rating[data-motion-disabled="true"][data-pressed="true"] { transform: none; }
+
+/* Clip the five-slot row at the content edge, before the pill padding. */
+.star-rating-track { position: relative; display: flex; flex: 0 0 auto; min-width: 0; width: calc(var(--rating-visible-count) * 58 * var(--rating-unit)); overflow: hidden; transition: width calc(var(--app-motion-prototype-smart) * .833333) var(--app-motion-easing); }
+
+/* Only the visual pill contracts; all five coordinate slots remain interactive. */
+.star-rating::before { content: ""; position: absolute; inset: 0 auto 0 0; width: calc((var(--rating-visible-count) * 58 + var(--rating-padding, 40)) * var(--rating-unit)); pointer-events: none; border-radius: inherit; background: var(--rating-surface, var(--player-blue-soft)); box-shadow: var(--rating-shadow, 0 calc(4 * var(--rating-unit)) calc(4 * var(--rating-unit)) color-mix(in srgb, var(--player-ink) 25%, transparent)); transition: width calc(var(--app-motion-prototype-smart) * .833333) var(--app-motion-easing); }
+.star-rating[data-motion-disabled="true"]::before, .star-rating[data-motion-disabled="true"] .star-rating-track { transition: none; }
+@media (prefers-reduced-motion: reduce) { .star-rating::before, .star-rating-track { transition: none; } }

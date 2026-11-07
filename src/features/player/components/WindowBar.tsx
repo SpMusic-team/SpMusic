@@ -2,6 +2,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useEffect, useState, type PointerEvent } from 'react'
 import { useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { appCopy } from '@/features/player/model/playerCopy'
+import type { RatingMode } from '../model/trackRating'
 import type { PlaylistControllerMode } from '@/features/player/model/playlistControllerMode'
 import { IconButton } from './IconButton'
 import { SettingsDialog } from './SettingsDialog'
@@ -14,6 +15,8 @@ export type WindowLayoutState = {
 }
 
 type WindowBarProps = {
+  ratingMode?: RatingMode
+  onRatingModeChange?: (mode: RatingMode) => void
   controllerMode?: PlaylistControllerMode
   onControllerModeChange?: (mode: PlaylistControllerMode) => void
   onWindowStateChange: (state: WindowLayoutState) => void
@@ -40,6 +43,8 @@ function getTauriWindow(): TauriWindow | null {
 }
 
 export function WindowBar({
+  ratingMode = 'thumbs',
+  onRatingModeChange,
   controllerMode = 'movable',
   onControllerModeChange,
   onWindowStateChange,
@@ -166,6 +171,8 @@ export function WindowBar({
       <h1 id="app-title" className="sr-only">{appCopy.appTitle}</h1>
       <div className="window-actions" onDoubleClick={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
         <SettingsDialog
+          ratingMode={ratingMode}
+          onRatingModeChange={onRatingModeChange}
           controllerMode={controllerMode}
           onControllerModeChange={onControllerModeChange}
           debugToolsEnabled={debugToolsEnabled}

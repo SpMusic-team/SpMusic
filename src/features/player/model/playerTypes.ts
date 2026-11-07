@@ -44,3 +44,4 @@ export type DemoLyricLine = {
 }
 
 export type TrackFeedback = 'liked' | 'disliked'
+export type TrackRating = 0 | 1 | 2 | 3 | 4 | 5

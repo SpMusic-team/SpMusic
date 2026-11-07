@@ -235,7 +235,7 @@
   gap: calc(24 * var(--player-layout-unit));
 }
 
-.responsive-player-layout .cover-feedback button {
+.responsive-player-layout .cover-feedback > button {
   width: calc(106 * var(--player-layout-unit));
   height: calc(72 * var(--player-layout-unit));
 }
@@ -274,7 +274,7 @@
   gap: 24px;
 }
 
-.responsive-player-layout[data-player-layout="full"] .cover-feedback button {
+.responsive-player-layout[data-player-layout="full"] .cover-feedback > button {
   width: 106px;
   height: 72px;
   flex: 0 0 106px;
@@ -753,7 +753,7 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
   gap: calc(24 * var(--horizontal-control-unit));
 }
 
-.responsive-player-layout[data-player-layout="horizontal"] .cover-feedback button {
+.responsive-player-layout[data-player-layout="horizontal"] .cover-feedback > button {
   width: calc(106 * var(--horizontal-control-unit));
   height: calc(72 * var(--horizontal-control-unit));
   flex: 0 0 calc(106 * var(--horizontal-control-unit));
@@ -1364,7 +1364,7 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
   gap: 24px;
 }
 
-.responsive-player-layout[data-player-layout="quarter"] .cover-feedback button {
+.responsive-player-layout[data-player-layout="quarter"] .cover-feedback > button {
   width: 106px;
   height: 72px;
   flex: 0 0 106px;
@@ -2239,7 +2239,7 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
   gap: calc(24 * var(--player-ui-px));
 }
 
-.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .cover-feedback button {
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .cover-feedback > button {
   width: calc(106 * var(--player-ui-px));
   height: calc(72 * var(--player-ui-px));
   flex-basis: calc(106 * var(--player-ui-px));
@@ -2351,7 +2351,7 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
   gap: 6px;
 }
 
-.responsive-player-layout[data-player-layout="quarter"][data-player-short="true"] .cover-feedback button {
+.responsive-player-layout[data-player-layout="quarter"][data-player-short="true"] .cover-feedback > button {
   width: 48px;
   height: 38px;
 }
@@ -2561,7 +2561,7 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
   gap: 24px;
 }
 
-.responsive-player-layout[data-player-layout="compact"] .cover-feedback button {
+.responsive-player-layout[data-player-layout="compact"] .cover-feedback > button {
   width: 106px;
   height: 72px;
   flex: 0 0 106px;
@@ -3017,3 +3017,18 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout .progre
   grid-template-columns: minmax(0, 1fr);
   gap: 0;
 }
+
+.responsive-player-layout .cover-feedback .star-rating { --rating-unit: var(--player-layout-unit); }
+.responsive-player-layout[data-player-layout="full"] .cover-feedback .star-rating,
+.responsive-player-layout[data-player-layout="compact"] .cover-feedback .star-rating { --rating-unit: 1px; }
+.responsive-player-layout[data-player-layout="horizontal"] .cover-feedback .star-rating { --rating-unit: var(--horizontal-control-unit); }
+.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .cover-feedback .star-rating { --rating-unit: var(--player-ui-px); }
+.responsive-player-layout[data-player-layout="quarter"][data-player-short="true"] .cover-feedback .star-rating { --rating-unit: .5px; }
+.responsive-player-layout[data-player-layout] .cover-feedback[data-rating-mode="stars"] { width: auto; flex: 0 0 auto; }
+
+/* Fit the five-star pill and overflow control inside every artwork size. */
+.responsive-player-layout .cover-art:has(.star-rating) { container-type: inline-size; }
+.responsive-player-layout[data-player-layout] .cover-art:has(.star-rating) .cover-actions { position: absolute; left: 12px; right: 12px; bottom: 24px; height: auto; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.responsive-player-layout[data-player-layout] .cover-feedback[data-rating-mode="stars"] { position: static; height: auto; }
+.responsive-player-layout[data-player-layout] .cover-feedback[data-rating-mode="stars"] .star-rating { --rating-unit: calc(100cqw / 990); }
+.responsive-player-layout[data-player-layout] .cover-art:has(.star-rating) .cover-actions .more-button { position: static; flex: 0 0 auto; }

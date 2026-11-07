@@ -15,6 +15,9 @@ source_documents:
 
 # OPT-0018 真机实测指引
 
+> **状态更新（2026-11-08）**：本指引针对**第一轮**实施（已回退）。其中的自动化数字已失准——`cargo test --lib` 实测为 **398 passed / 10 ignored**（本文写 386），`useAllSongsWindow.test.mjs` 实际是长期失效的陈旧 harness（本文的「import 变 9」应为 8，且改对条数后仍 19/23 失败）。
+> 重做版的完整实测数据与判定依据见 **[OPT-0018-v2-result.md](./OPT-0018-v2-result.md)**。§4 的判断清单仍可复用，但请先读该文的 §10「复现测量」，其中记录了两个会让测量结论失真的环境陷阱（asset 协议 scope、`npx tauri build` 的 custom-protocol 特性）。
+
 本分支 `feature/album-cover-asset-pipeline` 已实现「列表封面 JPEG + asset 协议路径下发」。
 下面是打包、观测、判定与回滚的完整操作清单。
 

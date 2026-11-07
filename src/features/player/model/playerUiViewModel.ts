@@ -257,6 +257,8 @@ export type PlaylistLibraryViewModel = PlaylistAddCallbacks & {
   onSelectCategory?: (categoryId: MediaLibraryCategoryId) => void
   isOpen: boolean
   items: readonly PlaylistLibraryItem[]
+  lowestRatedSongs?: readonly AllSongsItem[]
+  highestRatedSongs?: readonly AllSongsItem[]
   mostPlayedSongs?: readonly AllSongsItem[]
   mostPlayedCounts?: ReadonlyMap<string, number>
   mostPlayedOptions?: MostPlayedOptions

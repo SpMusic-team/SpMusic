@@ -77,11 +77,6 @@
   transform: none;
 }
 
-/* A fail-safe viewport can collapse the cover completely. Cover feedback and
-   more actions are secondary controls and have no safe anchor in that state. */
-.responsive-player-layout[data-player-layout-fallback="true"]:not([data-player-layout="compact"]) .cover-actions {
-  display: none;
-}
 
 .responsive-player-layout[data-player-layout="full"] .player-stage {
   --full-stage-top: max(40px, calc(56 * var(--player-layout-unit)));
@@ -229,78 +224,7 @@
   width: calc(var(--full-cover-size) - 30 * var(--player-layout-unit));
 }
 
-.responsive-player-layout .cover-feedback {
-  left: 0;
-  bottom: calc(23 * var(--player-layout-unit));
-  gap: calc(24 * var(--player-layout-unit));
-}
 
-.responsive-player-layout .cover-feedback > button {
-  width: calc(106 * var(--player-layout-unit));
-  height: calc(72 * var(--player-layout-unit));
-}
-
-.responsive-player-layout .cover-art .player-control-icon-frame {
-  width: calc(48 * var(--player-layout-unit));
-  height: calc(48 * var(--player-layout-unit));
-}
-
-.responsive-player-layout .cover-art .more-button {
-  right: calc(13 * var(--player-layout-unit));
-  bottom: calc(23 * var(--player-layout-unit));
-  width: calc(72 * var(--player-layout-unit));
-  height: calc(72 * var(--player-layout-unit));
-}
-
-/* Full-layout cover actions are fixed-size controls anchored to the artwork.
-   Only the flexible space between both action groups changes with the cover. */
-.responsive-player-layout[data-player-layout="full"] .cover-actions {
-  position: absolute;
-  z-index: 3;
-  left: 12px;
-  right: 12px;
-  bottom: 24px;
-  height: 72px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.responsive-player-layout[data-player-layout="full"] .cover-feedback {
-  position: static;
-  width: 236px;
-  height: 72px;
-  flex: 0 0 236px;
-  gap: 24px;
-}
-
-.responsive-player-layout[data-player-layout="full"] .cover-feedback > button {
-  width: 106px;
-  height: 72px;
-  flex: 0 0 106px;
-}
-
-.responsive-player-layout[data-player-layout="full"] .cover-art .player-control-icon-frame {
-  width: 48px;
-  height: 48px;
-}
-
-.responsive-player-layout[data-player-layout="full"] .cover-actions .more-button {
-  /* Keep the button in normal flex flow while preserving it as the absolute
-     ripple's containing block. The generic cover rule supplies right/bottom
-     offsets for absolutely positioned layouts, so neutralize those here. */
-  position: relative;
-  right: auto;
-  bottom: auto;
-  width: 72px;
-  height: 68px;
-  flex: 0 0 72px;
-}
-
-.responsive-player-layout[data-player-layout="full"] .cover-actions .more-button > svg {
-  width: 48px;
-  height: 48px;
-}
 
 .responsive-player-layout .track-pills {
   grid-area: meta;
@@ -733,50 +657,7 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
   justify-items: center;
 }
 
-.responsive-player-layout[data-player-layout="horizontal"] .cover-actions {
-  position: absolute;
-  z-index: 3;
-  left: 12px;
-  right: 12px;
-  bottom: 24px;
-  height: calc(72 * var(--horizontal-control-unit));
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
 
-.responsive-player-layout[data-player-layout="horizontal"] .cover-feedback {
-  position: static;
-  width: calc(236 * var(--horizontal-control-unit));
-  height: calc(72 * var(--horizontal-control-unit));
-  flex: 0 0 calc(236 * var(--horizontal-control-unit));
-  gap: calc(24 * var(--horizontal-control-unit));
-}
-
-.responsive-player-layout[data-player-layout="horizontal"] .cover-feedback > button {
-  width: calc(106 * var(--horizontal-control-unit));
-  height: calc(72 * var(--horizontal-control-unit));
-  flex: 0 0 calc(106 * var(--horizontal-control-unit));
-}
-
-.responsive-player-layout[data-player-layout="horizontal"] .cover-art .player-control-icon-frame {
-  width: calc(48 * var(--horizontal-control-unit));
-  height: calc(48 * var(--horizontal-control-unit));
-}
-
-.responsive-player-layout[data-player-layout="horizontal"] .cover-actions .more-button {
-  position: relative;
-  right: auto;
-  bottom: auto;
-  width: calc(72 * var(--horizontal-control-unit));
-  height: calc(68 * var(--horizontal-control-unit));
-  flex: 0 0 calc(72 * var(--horizontal-control-unit));
-}
-
-.responsive-player-layout[data-player-layout="horizontal"] .cover-actions .more-button > svg {
-  width: calc(48 * var(--horizontal-control-unit));
-  height: calc(48 * var(--horizontal-control-unit));
-}
 
 .responsive-player-layout[data-player-layout="horizontal"] .track-card-deck {
   height: 100%;
@@ -1344,50 +1225,7 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
   justify-items: center;
 }
 
-.responsive-player-layout[data-player-layout="quarter"] .cover-actions {
-  position: absolute;
-  z-index: 3;
-  left: 12px;
-  right: 12px;
-  bottom: 24px;
-  height: 72px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
 
-.responsive-player-layout[data-player-layout="quarter"] .cover-feedback {
-  position: static;
-  width: 236px;
-  height: 72px;
-  flex: 0 0 236px;
-  gap: 24px;
-}
-
-.responsive-player-layout[data-player-layout="quarter"] .cover-feedback > button {
-  width: 106px;
-  height: 72px;
-  flex: 0 0 106px;
-}
-
-.responsive-player-layout[data-player-layout="quarter"] .cover-art .player-control-icon-frame {
-  width: 48px;
-  height: 48px;
-}
-
-.responsive-player-layout[data-player-layout="quarter"] .cover-actions .more-button {
-  position: relative;
-  right: auto;
-  bottom: auto;
-  width: 72px;
-  height: 68px;
-  flex: 0 0 72px;
-}
-
-.responsive-player-layout[data-player-layout="quarter"] .cover-actions .more-button > svg {
-  width: 48px;
-  height: 48px;
-}
 
 .responsive-player-layout[data-player-layout="quarter"] .track-card-deck {
   height: calc(var(--quarter-cover-size) + var(--track-card-meta-height));
@@ -2232,34 +2070,7 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
   gap: calc(36 * var(--player-ui-px));
 }
 
-.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .cover-feedback {
-  width: calc(236 * var(--player-ui-px));
-  height: calc(72 * var(--player-ui-px));
-  flex-basis: calc(236 * var(--player-ui-px));
-  gap: calc(24 * var(--player-ui-px));
-}
 
-.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .cover-feedback > button {
-  width: calc(106 * var(--player-ui-px));
-  height: calc(72 * var(--player-ui-px));
-  flex-basis: calc(106 * var(--player-ui-px));
-}
-
-.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .cover-art .player-control-icon-frame {
-  width: calc(48 * var(--player-ui-px));
-  height: calc(48 * var(--player-ui-px));
-}
-
-.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .cover-actions .more-button {
-  width: calc(72 * var(--player-ui-px));
-  height: calc(68 * var(--player-ui-px));
-  flex-basis: calc(72 * var(--player-ui-px));
-}
-
-.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .cover-actions .more-button > svg {
-  width: calc(48 * var(--player-ui-px));
-  height: calc(48 * var(--player-ui-px));
-}
 
 .responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .track-pills .track-pill {
   padding: calc(10 * var(--player-ui-px)) calc(20 * var(--player-ui-px));
@@ -2345,28 +2156,7 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
   height: calc(var(--short-cover-size) + var(--track-card-meta-height));
 }
 
-.responsive-player-layout[data-player-layout="quarter"][data-player-short="true"] .cover-feedback {
-  left: 8px;
-  bottom: 8px;
-  gap: 6px;
-}
 
-.responsive-player-layout[data-player-layout="quarter"][data-player-short="true"] .cover-feedback > button {
-  width: 48px;
-  height: 38px;
-}
-
-.responsive-player-layout[data-player-layout="quarter"][data-player-short="true"] .cover-art .player-control-icon-frame {
-  width: 24px;
-  height: 24px;
-}
-
-.responsive-player-layout[data-player-layout="quarter"][data-player-short="true"] .cover-art .more-button {
-  right: 8px;
-  bottom: 8px;
-  width: 38px;
-  height: 38px;
-}
 
 .responsive-player-layout[data-player-layout="quarter"][data-player-short="true"] .track-pills {
   width: min(100%, 680px);
@@ -2541,50 +2331,7 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout[data-pl
   justify-items: center;
 }
 
-.responsive-player-layout[data-player-layout="compact"] .cover-actions {
-  position: absolute;
-  z-index: 3;
-  left: 12px;
-  right: 12px;
-  bottom: 24px;
-  height: 72px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
 
-.responsive-player-layout[data-player-layout="compact"] .cover-feedback {
-  position: static;
-  width: 236px;
-  height: 72px;
-  flex: 0 0 236px;
-  gap: 24px;
-}
-
-.responsive-player-layout[data-player-layout="compact"] .cover-feedback > button {
-  width: 106px;
-  height: 72px;
-  flex: 0 0 106px;
-}
-
-.responsive-player-layout[data-player-layout="compact"] .cover-art .player-control-icon-frame {
-  width: 48px;
-  height: 48px;
-}
-
-.responsive-player-layout[data-player-layout="compact"] .cover-actions .more-button {
-  position: relative;
-  right: auto;
-  bottom: auto;
-  width: 72px;
-  height: 68px;
-  flex: 0 0 72px;
-}
-
-.responsive-player-layout[data-player-layout="compact"] .cover-actions .more-button > svg {
-  width: 48px;
-  height: 48px;
-}
 
 .responsive-player-layout[data-player-layout="compact"] .track-meta-layout-spacer {
   display: block;
@@ -3017,18 +2764,3 @@ body[data-player-controls-time-labels="false"] .responsive-player-layout .progre
   grid-template-columns: minmax(0, 1fr);
   gap: 0;
 }
-
-.responsive-player-layout .cover-feedback .star-rating { --rating-unit: var(--player-layout-unit); }
-.responsive-player-layout[data-player-layout="full"] .cover-feedback .star-rating,
-.responsive-player-layout[data-player-layout="compact"] .cover-feedback .star-rating { --rating-unit: 1px; }
-.responsive-player-layout[data-player-layout="horizontal"] .cover-feedback .star-rating { --rating-unit: var(--horizontal-control-unit); }
-.responsive-player-layout[data-player-layout="quarter"]:not([data-player-short="true"]) .cover-feedback .star-rating { --rating-unit: var(--player-ui-px); }
-.responsive-player-layout[data-player-layout="quarter"][data-player-short="true"] .cover-feedback .star-rating { --rating-unit: .5px; }
-.responsive-player-layout[data-player-layout] .cover-feedback[data-rating-mode="stars"] { width: auto; flex: 0 0 auto; }
-
-/* Fit the five-star pill and overflow control inside every artwork size. */
-.responsive-player-layout .cover-art:has(.star-rating) { container-type: inline-size; }
-.responsive-player-layout[data-player-layout] .cover-art:has(.star-rating) .cover-actions { position: absolute; left: 12px; right: 12px; bottom: 24px; height: auto; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.responsive-player-layout[data-player-layout] .cover-feedback[data-rating-mode="stars"] { position: static; height: auto; }
-.responsive-player-layout[data-player-layout] .cover-feedback[data-rating-mode="stars"] .star-rating { --rating-unit: calc(100cqw / 990); }
-.responsive-player-layout[data-player-layout] .cover-art:has(.star-rating) .cover-actions .more-button { position: static; flex: 0 0 auto; }

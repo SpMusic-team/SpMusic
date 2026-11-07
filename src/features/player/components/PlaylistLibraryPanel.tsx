@@ -1,3 +1,6 @@
+import { highestRatedSongs } from '../model/highestRated'
+import type { RatingMode } from '../model/trackRating'
+import type { TrackRating } from '../model/playerTypes'
 import streamRootIcon from '@/assets/media-library/streams-root.svg'
 import { STREAMS_SCOPE, STREAMS_LAYOUT_STORAGE_KEY, defaultStreamsLevel } from '../model/streams'
 import { normalizeAudioSourcePath, playlistCardContentShape } from '../model/playlistTrackSummary'
@@ -51,6 +54,8 @@ const ALL_SONGS_LAYOUT_SELECTORS = {
 }
 const MotionEmpty = motion.create(Empty)
 type Props = {
+  ratingMode?: RatingMode
+  ratingsByTrackId?: Readonly<Record<string, TrackRating>>
   controllerMode?: PlaylistControllerMode
   entryPosition?: PlayerPlaylistViewModel['entryPosition']
   playlist: PlayerPlaylistViewModel
@@ -67,6 +72,8 @@ type Props = {
 }
 
 type AllSongsCardProps = {
+  rating?: TrackRating
+  ratingMode?: RatingMode
   playCount?: number
   item: AllSongsItem
   index: number
@@ -90,13 +97,13 @@ type AllSongsCardProps = {
 // Covers are layered in the card from the artwork stores instead of being merged
 // into the aggregated rows. The rows therefore keep their identity while covers
 // arrive, and only the card whose own store entry changed re-renders.
-const AllSongsCard = memo(function AllSongsCard({ playCount, item, index, store, artworkSource, fallbackArtworkSource, current,
+const AllSongsCard = memo(function AllSongsCard({ rating, ratingMode, playCount, item, index, store, artworkSource, fallbackArtworkSource, current,
   canActivate, selectMode, showReorderHandle, selected, artworkVisible, showExtendedMetadata, coverFailed, onCoverFailed, onActivate,
   onToggleSelect, onEnterSelectMode }: AllSongsCardProps) {
   const coverUrl = useAllSongsCoverUrl(store, item.key, item.trackId, item.sourcePath)
   const track = item.track
   const contentShape = playlistCardContentShape(track)
-  return <PlaylistCard playCount={playCount} songKey={item.key} track={track} index={index} coverUrl={coverUrl}
+  return <PlaylistCard rating={rating} ratingMode={ratingMode} playCount={playCount} songKey={item.key} track={track} index={index} coverUrl={coverUrl}
     artworkSource={artworkSource} fallbackArtworkSource={fallbackArtworkSource}
     current={current} unavailable={!item.available} canSelectUnavailable canActivate={canActivate}
     selectMode={selectMode} showReorderHandle={showReorderHandle} selected={selected} artworkVisible={artworkVisible}
@@ -105,7 +112,7 @@ const AllSongsCard = memo(function AllSongsCard({ playCount, item, index, store,
     onActivate={onActivate} onToggleSelect={onToggleSelect} onEnterSelectMode={onEnterSelectMode} />
 })
 
-export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverStore, librarySidebarOpen, onLibrarySidebarOpenChange, searchRequestId = 0, controllerMode = 'movable', playback, timeline }: Props) {
+export function PlaylistLibraryPanel({ ratingMode = 'thumbs', ratingsByTrackId, playlist, entryPosition, allSongsCoverStore, librarySidebarOpen, onLibrarySidebarOpenChange, searchRequestId = 0, controllerMode = 'movable', playback, timeline }: Props) {
   const appearanceMotion = useAppearanceMotion()
   const systemIcons = useSystemIcons()
   const MoreIcon = systemIcons.more
@@ -118,14 +125,17 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
   const library = playlist.library!
   const categoryId = library.route?.view === 'category' ? library.route.categoryId : 'playlists'
   const category = mediaLibraryCategories.find((item) => item.id === categoryId)!
+  const isLowest = categoryId === 'lowest-rated'
+  const isHighest = categoryId === 'highest-rated'
   const isMost = categoryId === 'most-played'
   const isRecentAdded = categoryId === 'recent-added'
-  const isRecent = categoryId === 'recent-played' || isRecentAdded || isMost
+  const isRecent = categoryId === 'recent-played' || isRecentAdded || isMost || isHighest || isLowest
   const isLong = categoryId === 'long-tracks'
   const isStreams = categoryId === 'streams'
   const songsLoading = isStreams ? Boolean(library.streamsLoading) : library.allSongsMetadataStatus === 'loading'
   const isSongs = categoryId === 'songs' || isRecent || isLong || isStreams
-  const sourceSongs = isStreams ? library.streamSongs : isMost ? library.mostPlayedSongs : isLong ? library.longSongs : isRecentAdded ? library.recentAddedSongs : isRecent ? library.recentSongs : library.allSongs
+  const highestSongs = useMemo(() => highestRatedSongs(library.highestRatedSongs ?? [], ratingsByTrackId ?? {}, ratingMode), [library.highestRatedSongs, ratingsByTrackId, ratingMode])
+  const sourceSongs = isLowest ? library.lowestRatedSongs : isHighest ? highestSongs : isStreams ? library.streamSongs : isMost ? library.mostPlayedSongs : isLong ? library.longSongs : isRecentAdded ? library.recentAddedSongs : isRecent ? library.recentSongs : library.allSongs
   const hasDataSource = isSongs || categoryId === 'playlists' || categoryId === 'folder'
   const categoryItems = useMemo(() => categoryId === 'playlists' ? library.items.filter((item) => item.sourceKind !== 'folder') : categoryId === 'folder' ? library.items.filter((item) => item.sourceKind === 'folder') : [], [categoryId, library.items])
   const [query, setQuery] = useState('')
@@ -455,7 +465,7 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
   function toggleSelection() { setSelectMode(!selectMode); setSelected(new Set()) }
   function openCreatePlaylist() { setPlaylistName(''); setCreateError(''); setCreateOpen(true) }
   function renderMore(compact = false) {
-    if (!compact || isLong || isMost || isStreams) return <LibraryRootMenu key={categoryId} categoryId={categoryId} library={library} rootToolbar={!compact} />
+    if (!compact || isLong || isMost || isHighest || isLowest || isStreams) return <LibraryRootMenu key={categoryId} categoryId={categoryId} library={library} rootToolbar={!compact} />
     return <DropdownMenu>
       <DropdownMenuTrigger render={<Button className={compact ? 'playlist-hero-icon playlist-hero-more-button' : 'playlist-management-more'}
         variant={compact ? 'ghost' : 'outline'} size={compact ? 'icon' : 'default'} aria-label="更多列表操作">
@@ -579,11 +589,11 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
           panel.scrollTop += space.getBoundingClientRect().top - panel.getBoundingClientRect().top + Math.floor(next / songsLayout.columns) * songsWindow.stride
         }}
         style={{ ...songsLayout.style, touchAction: 'pan-y', transformOrigin: 'left top', ...songsWindow.gridStyle }}>
-        {renderedSongs.map((item, index) => <AllSongsCard key={item.key} item={item} playCount={isMost ? library.mostPlayedCounts?.get(normalizeAudioSourcePath(item.sourcePath)) : undefined} index={songsWindow.first + index} store={coverStore}
+        {renderedSongs.map((item, index) => <AllSongsCard key={item.key} item={item} rating={isHighest || isLowest ? ratingsByTrackId?.[item.trackId] ?? 0 : undefined} ratingMode={ratingMode} playCount={isMost ? library.mostPlayedCounts?.get(normalizeAudioSourcePath(item.sourcePath)) : undefined} index={songsWindow.first + index} store={coverStore}
             artworkSource={playlist.artworkSource} fallbackArtworkSource={playlist.fallbackArtworkSource}
             current={item.trackId === playlist.currentTrackId}
             canActivate={!songActivationLocked}
-            selectMode={selectMode} showReorderHandle={categoryId !== 'songs' && !isMost && !isStreams} selected={selected.has(item.key)}
+            selectMode={selectMode} showReorderHandle={categoryId !== 'songs' && !isMost && !isHighest && !isLowest && !isStreams} selected={selected.has(item.key)}
             artworkVisible={songsLayout.showArtwork} showExtendedMetadata={songsLayout.flow !== 'tile'}
             coverFailed={failedSongCovers.has(item.key)}
             onCoverFailed={handleSongCoverFailed}
@@ -593,7 +603,7 @@ export function PlaylistLibraryPanel({ playlist, entryPosition, allSongsCoverSto
             // card's memo on the exit animation's first frame. Long-press still
             // cannot enter selection mode while leaving; the section is `inert`.
             onToggleSelect={handleSongToggleSelect} onEnterSelectMode={handleSongEnterSelectMode} />)}
-      </motion.div></div> : <MotionEmpty className="playlist-management-empty" variants={navigationMotion.chrome} initial={false} animate="animate"><EmptyHeader><EmptyTitle>{(sourceSongs?.length ?? 0) ? '没有匹配的歌曲' : isStreams ? '暂无流' : isLong ? '暂无符合时长的歌曲' : isRecent ? `暂无${category.label}` : '暂无歌曲'}</EmptyTitle><EmptyDescription>{(sourceSongs?.length ?? 0) ? '尝试其他名称，或清空搜索。' : isStreams ? '在更多操作中添加 HTTP(S) 地址，或导入包含网络地址的 M3U / M3U8 播放列表。' : isLong ? `这里显示时长达到 ${(library.longTracksMinDurationMs ?? DEFAULT_LONG_TRACKS_MIN_DURATION_MS) / 60000} 分钟的歌曲，可在更多操作的列表选项中调整最小时长。` : isRecentAdded ? '选择音乐文件夹后，这里会按文件创建时间显示歌曲。' : isRecent ? '歌曲实际播放达到一半后，会显示在这里。' : '选择音乐文件夹后，这里会汇总其中及子文件夹内的歌曲；不会自动创建播放列表。下次启动会重新扫描。'}</EmptyDescription></EmptyHeader>{!isRecent || (sourceSongs?.length ?? 0) > 0 ? <Button disabled={library.isImportPending} onClick={(sourceSongs?.length ?? 0) ? () => setQuery('') : isStreams ? library.onImportPlaylist : library.onSelectFolders}>{(sourceSongs?.length ?? 0) ? '清空搜索' : isStreams ? '导入播放列表' : '选择文件夹'}</Button> : null}</MotionEmpty>) : categoryId === 'playlists' && library.isPlaylistRestorePending && !visible.length ? <Empty className="playlist-management-empty"><EmptyHeader><EmptyTitle>正在恢复播放列表</EmptyTitle><EmptyDescription>正在读取已保存的 M3U8 清单。</EmptyDescription></EmptyHeader></Empty> : visible.length ? <div ref={gridRef} className="playlist-management-grid"
+      </motion.div></div> : <MotionEmpty className="playlist-management-empty" variants={navigationMotion.chrome} initial={false} animate="animate"><EmptyHeader><EmptyTitle>{(sourceSongs?.length ?? 0) ? '没有匹配的歌曲' : isStreams ? '暂无流' : isLong ? '暂无符合时长的歌曲' : isRecent ? `暂无${category.label}` : '暂无歌曲'}</EmptyTitle><EmptyDescription>{(sourceSongs?.length ?? 0) ? '尝试其他名称，或清空搜索。' : isStreams ? '在更多操作中添加 HTTP(S) 地址，或导入包含网络地址的 M3U / M3U8 播放列表。' : isLong ? `这里显示时长达到 ${(library.longTracksMinDurationMs ?? DEFAULT_LONG_TRACKS_MIN_DURATION_MS) / 60000} 分钟的歌曲，可在更多操作的列表选项中调整最小时长。` : isLowest ? '标记为不喜欢（1 星）的歌曲会显示在这里。' : isHighest ? ratingMode === 'thumbs' ? '标记为喜欢的歌曲会显示在这里。' : '评分为 2～5 星的歌曲会显示在这里。' : isRecentAdded ? '选择音乐文件夹后，这里会按文件创建时间显示歌曲。' : isRecent ? '歌曲实际播放达到一半后，会显示在这里。' : '选择音乐文件夹后，这里会汇总其中及子文件夹内的歌曲；不会自动创建播放列表。下次启动会重新扫描。'}</EmptyDescription></EmptyHeader>{!isRecent || (sourceSongs?.length ?? 0) > 0 ? <Button disabled={library.isImportPending} onClick={(sourceSongs?.length ?? 0) ? () => setQuery('') : isStreams ? library.onImportPlaylist : library.onSelectFolders}>{(sourceSongs?.length ?? 0) ? '清空搜索' : isStreams ? '导入播放列表' : '选择文件夹'}</Button> : null}</MotionEmpty>) : categoryId === 'playlists' && library.isPlaylistRestorePending && !visible.length ? <Empty className="playlist-management-empty"><EmptyHeader><EmptyTitle>正在恢复播放列表</EmptyTitle><EmptyDescription>正在读取已保存的 M3U8 清单。</EmptyDescription></EmptyHeader></Empty> : visible.length ? <div ref={gridRef} className="playlist-management-grid"
         data-layout-level={layout.level} data-layout-flow={layout.flow} data-layout-artwork={layout.showArtwork}
         aria-label={layout.label} style={{ ...layout.style, touchAction: 'pan-y' }}>
         {visible.map((item) => <motion.div key={item.scope} className="playlist-management-card"

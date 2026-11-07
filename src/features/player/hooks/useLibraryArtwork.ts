@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { normalizeAudioSourcePath } from '@/features/player/model/playlistTrackSummary'
 import { playlistCoverImageFromPixels } from '@/features/player/model/playlistCoverPixels'
-import { decodePlaylistCover } from '@/features/player/model/playlistCoverReadiness'
+import { decodePlaylistCover, isPlaylistCoverDecoded } from '@/features/player/model/playlistCoverReadiness'
 import { createPlaylistArtworkStore, playlistArtworkKey } from '@/features/player/model/playlistArtworkStore'
 import { admitLibraryArtwork } from '@/features/player/model/libraryArtworkAdmission'
 import { playlistArtworkRevision } from '@/features/player/model/playlistArtworkRevision'
@@ -15,6 +15,11 @@ import {
   type AudioFolderPlaylist, type AudioFolderTrackRef,
 } from '@/features/player/services/audioCommands'
 import { schedulePlaylistCoverPixels, scheduleTrackThumbnail } from '@/features/player/services/playlistCoverScheduler'
+import {
+  attemptPlaylistCoverThumbnailPath,
+  attemptTrackThumbnailPath,
+  type AttemptOptions,
+} from '@/features/player/services/playlistCoverPathLane'
 
 type ArtworkRow = ReadOnlyArtworkRow
 type CacheEntry = { row: ArtworkRow; edge: number; trackId: string; artworkRevision: number }
@@ -178,15 +183,38 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
             if (generation === null) throw new Error('媒体库封面窗口不可用')
             let hasLocalArtwork = false
             if (edge <= 256) {
-              const pixels = await scheduleTrackThumbnail(
+              // Asset path lane first; the pixel lane below is entered only after a
+              // real failure. `missing` from the path lane is a confirmed-absent
+              // verdict and is published as a placeholder, never as a reason to
+              // spend a second decode on the same absence.
+              const priority = [...runtime.previews.values()].includes(key) ? 0
+                : runtime.detailVisiblePaths.has(key) ? 1 : 2
+              // `current` is the positive predicate: it is `true` while this
+              // descriptor/window may still publish.
+              const attemptOptions: AttemptOptions = { priority, signal: runtime.controller.signal, isCurrent: current }
+              const attempt = await attemptTrackThumbnailPath(
                 { clientId, sourcePath: descriptor.sourcePath, maxEdge: 256, windowGeneration: generation },
-                { priority: [...runtime.previews.values()].includes(key) ? 0
-                  : runtime.detailVisiblePaths.has(key) ? 1 : 2,
-                  signal: runtime.controller.signal, isCurrent: current },
+                attemptOptions,
               )
+              if (attempt.status === 'dropped') return
               if (!current()) return
-              hasLocalArtwork = pixels !== null
-              if (pixels) thumbnail = playlistCoverImageFromPixels(pixels)
+              if (attempt.status === 'missing') {
+                // Confirmed absent artwork: settle this descriptor as "no artwork"
+                // and stop. The pixel lane would decode once more only to learn the
+                // same thing.
+                hasLocalArtwork = false
+              } else if (attempt.status === 'ready') {
+                thumbnail = attempt.image
+                hasLocalArtwork = true
+              } else {
+                const pixels = await scheduleTrackThumbnail(
+                  { clientId, sourcePath: descriptor.sourcePath, maxEdge: 256, windowGeneration: generation },
+                  attemptOptions,
+                )
+                if (!current()) return
+                hasLocalArtwork = pixels !== null
+                if (pixels) thumbnail = playlistCoverImageFromPixels(pixels)
+              }
             } else {
               const cover = await probeAudioPlaylistCover(descriptor.sourcePath)
               if (!current()) return
@@ -195,20 +223,40 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
               }
               hasLocalArtwork = cover.coverArt !== null
               if (cover.coverArt?.filePath) {
-                const pixels = await schedulePlaylistCoverPixels(
+                // The 512 hero shares the path lane with the list rows. `missing`
+                // is definitive (no fallback, like the 256 branch); a real failure
+                // falls back to the existing pixel command unchanged.
+                const attemptOptions: AttemptOptions = { priority: 2, signal: runtime.controller.signal, isCurrent: current }
+                const attempt = await attemptPlaylistCoverThumbnailPath(
                   { clientId, filePath: cover.coverArt.filePath, maxEdge: edge, windowGeneration: generation },
-                  { priority: 2,
-                    signal: runtime.controller.signal, isCurrent: current },
+                  attemptOptions,
                 )
-                if (!pixels) return
+                if (attempt.status === 'dropped') return
                 if (!current()) return
-                thumbnail = playlistCoverImageFromPixels(pixels)
+                if (attempt.status === 'missing') {
+                  // Confirmed absent: settle nothing, exactly as an empty pixel
+                  // response did before this lane existed.
+                  return
+                }
+                if (attempt.status === 'ready') {
+                  thumbnail = attempt.image
+                } else {
+                  const pixels = await schedulePlaylistCoverPixels(
+                    { clientId, filePath: cover.coverArt.filePath, maxEdge: edge, windowGeneration: generation },
+                    attemptOptions,
+                  )
+                  if (!pixels) return
+                  if (!current()) return
+                  thumbnail = playlistCoverImageFromPixels(pixels)
+                }
               } else if (cover.coverArt?.dataUrl) {
                 thumbnail = await dataUrlThumbnail(cover.coverArt.dataUrl, edge)
               }
             }
             if (thumbnail) {
-              await decodePlaylistCover(thumbnail)
+              // A path-lane image is already predecoded; repeating the decode would
+              // only spend a second protocol request on the same URL.
+              if (!isPlaylistCoverDecoded(thumbnail)) await decodePlaylistCover(thumbnail)
               if (!current()) return
             }
             const previous = runtime.cache.get(key)

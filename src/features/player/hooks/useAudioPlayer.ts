@@ -42,9 +42,14 @@ import {
 } from '@/features/player/model/playbackSessionStorage'
 import { createPlaylistArtworkGrace } from '@/features/player/model/playlistArtworkGrace'
 import { playlistCoverImageFromPixels } from '@/features/player/model/playlistCoverPixels'
-import { decodePlaylistCover } from '@/features/player/model/playlistCoverReadiness'
+import { decodePlaylistCover, isPlaylistCoverDecoded } from '@/features/player/model/playlistCoverReadiness'
 import { createPlaylistArtworkStore, playlistArtworkKey } from '@/features/player/model/playlistArtworkStore'
 import { MAX_CONCURRENT, schedulePlaylistCoverPixels, scheduleTrackThumbnail } from '@/features/player/services/playlistCoverScheduler'
+import {
+  attemptPlaylistCoverThumbnailPath,
+  attemptTrackThumbnailPath,
+  type AttemptOptions,
+} from '@/features/player/services/playlistCoverPathLane'
 import {
   chunkPlaylistSummaryPaths,
   pendingPlaylistTrackRow,
@@ -2141,24 +2146,46 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
             let hasLocalArtwork: boolean
             let hasUnrenderableCover = false
             const edge = job.maxEdge
+            // `jobIsStale` is the *negative* predicate: it reports that this job no
+            // longer owns the row. The path lane's option is positive
+            // (`isCurrent: true` means "may publish"), so it is inverted exactly
+            // once, here, instead of being passed through under a different name.
+            const isCurrent = () => !jobIsStale()
             if (edge <= 256) {
               const currentTrackId = logicalCursorTrackIdRef.current
                 ?? presentationTrackRef.current?.id
                 ?? latestAudioStateRef.current?.currentTrackId
               loadingSource = false
-              const pixels = await scheduleTrackThumbnail({
+              const priority = job.trackId === currentTrackId ? 0
+                : libraryVisibleRef.current && playlistVisualRequiredIdsRef.current.has(job.trackId) ? 1 : 2
+              const attemptOptions: AttemptOptions = { priority, isCurrent }
+              // Asset path lane first: a `null` verdict is confirmed-absent artwork
+              // and is not re-proven through the pixel lane. Only a real failure
+              // falls through, once.
+              const attempt = await attemptTrackThumbnailPath({
                 clientId: job.clientId,
                 sourcePath: job.sourcePath,
                 maxEdge: 256,
                 windowGeneration: job.backendGeneration,
-              }, {
-                priority: job.trackId === currentTrackId ? 0
-                  : libraryVisibleRef.current && playlistVisualRequiredIdsRef.current.has(job.trackId) ? 1 : 2,
-                isCurrent: () => !jobIsStale(),
-              })
+              }, attemptOptions)
+              if (attempt.status === 'dropped') return
               if (jobIsStale()) return
-              hasLocalArtwork = pixels !== null
-              if (pixels) coverThumbnail = playlistCoverImageFromPixels(pixels)
+              if (attempt.status === 'ready') {
+                coverThumbnail = attempt.image
+                hasLocalArtwork = true
+              } else if (attempt.status === 'missing') {
+                hasLocalArtwork = false
+              } else {
+                const pixels = await scheduleTrackThumbnail({
+                  clientId: job.clientId,
+                  sourcePath: job.sourcePath,
+                  maxEdge: 256,
+                  windowGeneration: job.backendGeneration,
+                }, attemptOptions)
+                if (jobIsStale()) return
+                hasLocalArtwork = pixels !== null
+                if (pixels) coverThumbnail = playlistCoverImageFromPixels(pixels)
+              }
             } else {
               const coverSource = await probeAudioPlaylistCover(job.sourcePath)
               if (jobIsStale()) return
@@ -2174,19 +2201,32 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
                 const currentTrackId = logicalCursorTrackIdRef.current
                   ?? presentationTrackRef.current?.id
                   ?? latestAudioStateRef.current?.currentTrackId
-                const pixels = await schedulePlaylistCoverPixels({
+                const priority = job.trackId === currentTrackId ? 0
+                  : libraryVisibleRef.current && playlistVisualRequiredIdsRef.current.has(job.trackId) ? 1 : 2
+                const attemptOptions: AttemptOptions = { priority, isCurrent }
+                // The 512 hero shares the path lane with the list rows. `missing` is
+                // definitive and settles the visual as absent, exactly as a `null`
+                // pixel response did before this lane existed.
+                const attempt = await attemptPlaylistCoverThumbnailPath({
                   clientId: job.clientId, filePath: coverFilePath, maxEdge: edge,
                   windowGeneration: job.backendGeneration,
-                }, {
-                  priority: job.trackId === currentTrackId ? 0
-                    : libraryVisibleRef.current && playlistVisualRequiredIdsRef.current.has(job.trackId) ? 1 : 2,
-                  isCurrent: () => !jobIsStale(),
-                })
-                if (!pixels || jobIsStale()) return
-                coverThumbnail = playlistCoverImageFromPixels(pixels)
+                }, attemptOptions)
+                if (attempt.status === 'dropped') return
+                if (jobIsStale()) return
+                if (attempt.status === 'missing') return
+                if (attempt.status === 'ready') {
+                  coverThumbnail = attempt.image
+                } else {
+                  const pixels = await schedulePlaylistCoverPixels({
+                    clientId: job.clientId, filePath: coverFilePath, maxEdge: edge,
+                    windowGeneration: job.backendGeneration,
+                  }, attemptOptions)
+                  if (!pixels || jobIsStale()) return
+                  coverThumbnail = playlistCoverImageFromPixels(pixels)
+                }
               }
             }
-            if (coverThumbnail) {
+            if (coverThumbnail && !isPlaylistCoverDecoded(coverThumbnail)) {
               try { await decodePlaylistCover(coverThumbnail) }
               catch (error) { URL.revokeObjectURL(coverThumbnail.src); throw error }
             }

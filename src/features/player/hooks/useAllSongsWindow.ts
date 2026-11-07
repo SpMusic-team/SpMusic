@@ -4,6 +4,7 @@ import { decodePlaylistCover } from '@/features/player/model/playlistCoverReadin
 import type { AllSongsItem } from '@/features/player/model/playerUiViewModel'
 import { beginAudioPlaylistCoverWindow } from '@/features/player/services/audioCommands'
 import { scheduleFolderThumbnail, scheduleTrackThumbnail } from '@/features/player/services/playlistCoverScheduler'
+import { attemptFolderThumbnailPath, attemptTrackThumbnailPath, type AttemptOptions } from '@/features/player/services/playlistCoverPathLane'
 import { orderPlaylistArtworkRows, type PlaylistArtworkDirection } from '@/features/player/model/playlistArtworkOrder'
 import { isStreamSource } from '../model/streams'
 
@@ -252,7 +253,17 @@ export function useAllSongsWindow(items: readonly AllSongsCoverItem[], panelRef:
         runtime.coverQueued.add(item.key)
         runtime.coverActive += 1
         void (async () => {
-          let coverUrl: string | undefined
+          // Two independent owners of a publishable URL:
+          //
+          // - `bitmapUrl` wraps a blob object URL created by the pixel fallback. It
+          //   must be released unless it is published, which is why it is cleared
+          //   only on a successful `publish`.
+          // - `preparedUrl` is the URL that may be published. For the asset lane it
+          //   is a protocol URL that must never be revoked: the decoded bitmap
+          //   belongs to the WebView and is released when the `<img>` unmounts. Do
+          //   not convert that into a reference count.
+          let bitmapUrl: string | undefined
+          let preparedUrl: string | undefined
           const itemIsCurrent = () => {
             const current = itemsByKeyRef.current.get(item.key)
             return runtime.mounted && runtime.desired.has(item.key)
@@ -265,38 +276,101 @@ export function useAllSongsWindow(items: readonly AllSongsCoverItem[], panelRef:
               return
             }
             if (!itemIsCurrent()) return
-            const options = { priority: coverPriority(item.key), signal: runtime.controller.signal, isCurrent: itemIsCurrent }
-            let pixels: Awaited<ReturnType<typeof scheduleTrackThumbnail>> = null
+            // `isCurrent` states the positive contract: `true` means this row is
+            // still the desired descriptor, so a prepared image may be published.
+            const attemptOptions: AttemptOptions = {
+              priority: coverPriority(item.key),
+              signal: runtime.controller.signal,
+              isCurrent: itemIsCurrent,
+            }
+            const pixelOptions = { priority: attemptOptions.priority, signal: attemptOptions.signal, isCurrent: itemIsCurrent }
+            let hasArtwork = false
+            // A candidate whose path attempt failed on a real error may still be
+            // readable through the pixel lane. Tracked separately from `hasArtwork`
+            // so a fully-failed row still settles as a transient failure.
             let candidateFailure = false
             if ('kind' in item && item.kind === 'track-candidates') {
-              // A missing first cover does not represent the whole directory.
-              // Keep the existing scheduler and cancellation owner for every read.
+              // A missing cover does not represent the whole directory: only an
+              // exhausted candidate list confirms that the group has no artwork.
               for (const candidate of item.candidates) {
                 if (!itemIsCurrent()) return
                 if (!candidate.available || isStreamSource(candidate)) continue
+                const attempt = await attemptTrackThumbnailPath(
+                  { clientId, sourcePath: candidate.sourcePath, maxEdge: 256, windowGeneration: coverGeneration },
+                  attemptOptions,
+                )
+                // A superseded candidate request ends this row without publishing
+                // and without starting another candidate.
+                if (attempt.status === 'dropped') return
+                if (!itemIsCurrent()) return
+                if (attempt.status === 'ready') {
+                  preparedUrl = attempt.image.src
+                  hasArtwork = true
+                  break
+                }
+                // Confirmed absent artwork is a verdict about this candidate only;
+                // the next candidate may still have a cover.
+                if (attempt.status === 'missing') continue
+                // The path attempt already counted its failure. Retry this same
+                // candidate once through the original pixel command, then move on.
+                let pixels: Awaited<ReturnType<typeof scheduleTrackThumbnail>> = null
                 try {
-                  pixels = await scheduleTrackThumbnail({ clientId, sourcePath: candidate.sourcePath, maxEdge: 256, windowGeneration: coverGeneration }, options)
+                  pixels = await scheduleTrackThumbnail(
+                    { clientId, sourcePath: candidate.sourcePath, maxEdge: 256, windowGeneration: coverGeneration },
+                    pixelOptions,
+                  )
                 } catch {
                   candidateFailure = true
                 }
                 if (!itemIsCurrent()) return
-                if (pixels) break
+                if (pixels) {
+                  const image = playlistCoverImageFromPixels(pixels)
+                  bitmapUrl = image.src
+                  await decodePlaylistCover(image)
+                  if (!itemIsCurrent()) return
+                  preparedUrl = image.src
+                  hasArtwork = true
+                  break
+                }
               }
             } else if ('kind' in item || !isStreamSource(item)) {
-              pixels = await ('kind' in item
-                ? scheduleFolderThumbnail({ clientId, rootPath: item.rootPath, directoryPath: item.directoryPath, maxEdge: 256, windowGeneration: coverGeneration }, options)
-                : scheduleTrackThumbnail({ clientId, sourcePath: item.sourcePath, maxEdge: 256, windowGeneration: coverGeneration }, options))
+              const attempt = 'kind' in item
+                ? await attemptFolderThumbnailPath(
+                  { clientId, rootPath: item.rootPath, directoryPath: item.directoryPath, maxEdge: 256, windowGeneration: coverGeneration },
+                  attemptOptions,
+                )
+                : await attemptTrackThumbnailPath(
+                  { clientId, sourcePath: item.sourcePath, maxEdge: 256, windowGeneration: coverGeneration },
+                  attemptOptions,
+                )
+              if (attempt.status === 'dropped') return
+              if (!itemIsCurrent()) return
+              if (attempt.status === 'ready') {
+                preparedUrl = attempt.image.src
+                hasArtwork = true
+              } else if (attempt.status === 'fallback') {
+                // A real path failure, already counted once. The pixel lane below is
+                // the single fallback; `missing` deliberately skips it, because the
+                // pixel lane would decode once more only to re-learn an absence.
+                const pixels = await ('kind' in item
+                  ? scheduleFolderThumbnail({ clientId, rootPath: item.rootPath, directoryPath: item.directoryPath, maxEdge: 256, windowGeneration: coverGeneration }, pixelOptions)
+                  : scheduleTrackThumbnail({ clientId, sourcePath: item.sourcePath, maxEdge: 256, windowGeneration: coverGeneration }, pixelOptions))
+                if (!itemIsCurrent()) return
+                if (pixels) {
+                  const image = playlistCoverImageFromPixels(pixels)
+                  bitmapUrl = image.src
+                  await decodePlaylistCover(image)
+                  if (!itemIsCurrent()) return
+                  preparedUrl = image.src
+                  hasArtwork = true
+                }
+              }
             }
             if (!itemIsCurrent()) return
-            if (pixels) {
-              if (!itemIsCurrent()) return
-              const thumbnail = playlistCoverImageFromPixels(pixels)
-              coverUrl = thumbnail.src
-              await decodePlaylistCover(thumbnail)
-              if (!itemIsCurrent()) return
-            }
-            if (itemIsCurrent() && publish(item.key, { ...cacheDescriptor(item), coverUrl, ...(!pixels && candidateFailure ? { transientFailure: true } : {}) })) {
-              coverUrl = undefined
+            if (itemIsCurrent() && publish(item.key, { ...cacheDescriptor(item), coverUrl: preparedUrl, ...(!hasArtwork && candidateFailure ? { transientFailure: true } : {}) })) {
+              // The store now owns the published URL, so the finally block must not
+              // release it. Only an object URL needs that handoff.
+              bitmapUrl = undefined
             }
           } catch {
             // Missing artwork leaves the prepared text and duration untouched.
@@ -304,7 +378,7 @@ export function useAllSongsWindow(items: readonly AllSongsCoverItem[], panelRef:
             // missing artwork, and cannot suppress a replacement descriptor.
             if (itemIsCurrent()) publish(item.key, { ...cacheDescriptor(item), coverUrl: runtime.cache.get(item.key)?.coverUrl, transientFailure: true })
           } finally {
-            if (coverUrl) store.retire(item.key, coverUrl)
+            if (bitmapUrl) store.retire(item.key, bitmapUrl)
             runtime.coverQueued.delete(item.key)
             runtime.coverActive -= 1
             runtime.pump()

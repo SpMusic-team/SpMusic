@@ -32,12 +32,14 @@ mod visualization;
 mod source_tests;
 
 pub use controller::AudioController;
-pub(crate) use cover_pixels::try_warm_track_thumbnail;
+pub(crate) use cover_pixels::try_warm_track_thumbnail_path;
 pub use cover_pixels::{
     begin_playlist_cover_window, load_cover_pixels, load_folder_thumbnail,
-    load_playlist_cover_pixels, load_track_thumbnail, shutdown_playlist_cover_cache,
+    load_folder_thumbnail_path, load_playlist_cover_pixels, load_playlist_cover_thumbnail_path,
+    load_track_thumbnail, load_track_thumbnail_path, shutdown_playlist_cover_cache,
     AudioBeginPlaylistCoverWindowInput, AudioLoadCoverPixelsInput, AudioLoadFolderThumbnailInput,
     AudioLoadPlaylistCoverPixelsInput, AudioLoadTrackThumbnailInput, CoverPixelsError,
+    PlaylistThumbnailPath,
 };
 pub(crate) use device::current_output_info;
 pub use error::AudioCommandError;

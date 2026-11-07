@@ -18,8 +18,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use super::{
     cover_pixels::{
         decode_playlist_and_pack, load_folder_track_thumbnail_blocking, ordinary_directory,
-        ordinary_file, playlist_pixels_from_bytes, read_bounded_file, CoverPixelsError,
-        CoverPixelsErrorCode,
+        ordinary_file, playlist_pixels_from_bytes, playlist_thumbnail_path_from_bytes,
+        read_bounded_file, CoverPixelsError, CoverPixelsErrorCode, PlaylistThumbnailPath,
     },
     playlist::has_supported_audio_extension,
 };
@@ -692,6 +692,265 @@ pub(super) fn load_folder_thumbnail_blocking(
         Err(error)
     } else {
         Ok(Vec::new())
+    }
+}
+
+/// Path-lane counterpart of [`load_sibling_thumbnail`].
+///
+/// Identical candidate order and `is_current` checkpoints; only the encoder
+/// differs. `Ok(None)` means the directory holds no usable artwork, matching the
+/// pixel lane's empty response.
+pub(super) fn load_sibling_thumbnail_path(
+    app_cache_dir: &Path,
+    source_path: &str,
+    max_edge: u32,
+    is_current: impl FnOnce() -> bool + Copy,
+) -> Result<Option<PlaylistThumbnailPath>, CoverPixelsError> {
+    current(is_current)?;
+    let SiblingPictures {
+        directory,
+        pictures,
+    } = sibling_pictures(source_path)?;
+    let mut incomplete = None;
+    for path in pictures {
+        current(is_current)?;
+        match picture_thumbnail_path_in(app_cache_dir, &directory, &path, max_edge, is_current) {
+            Ok(published) => {
+                current(is_current)?;
+                return Ok(Some(published));
+            }
+            Err(error) if unusable_candidate(&error) => {
+                if matches!(error.code, CoverPixelsErrorCode::InvalidPath) {
+                    incomplete = Some(error);
+                }
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    current(is_current)?;
+    if let Some(error) = incomplete {
+        Err(error)
+    } else {
+        Ok(None)
+    }
+}
+
+/// Path-lane counterpart of [`picture_pixels`].
+fn picture_thumbnail_path(
+    app_cache_dir: &Path,
+    path: &Path,
+    max_edge: u32,
+    is_current: impl FnOnce() -> bool + Copy,
+) -> Result<PlaylistThumbnailPath, CoverPixelsError> {
+    picture_thumbnail_path_with(app_cache_dir, max_edge, is_current, || picture_bytes(path))
+}
+
+/// Path-lane counterpart of [`picture_pixels_in`]: reuses the directory the
+/// sibling discovery already canonicalised, while keeping every file-level check.
+fn picture_thumbnail_path_in(
+    app_cache_dir: &Path,
+    directory: &Path,
+    path: &Path,
+    max_edge: u32,
+    is_current: impl FnOnce() -> bool + Copy,
+) -> Result<PlaylistThumbnailPath, CoverPixelsError> {
+    picture_thumbnail_path_with(app_cache_dir, max_edge, is_current, || {
+        picture_bytes_in(directory, path)
+    })
+}
+
+fn picture_thumbnail_path_with(
+    app_cache_dir: &Path,
+    max_edge: u32,
+    is_current: impl FnOnce() -> bool + Copy,
+    read: impl FnOnce() -> Result<Vec<u8>, CoverPixelsError>,
+) -> Result<PlaylistThumbnailPath, CoverPixelsError> {
+    let bytes = read()?;
+    current(is_current)?;
+    // The path publisher re-checks staleness around its decode and publish wait,
+    // so it needs `Fn`; this closure upgrades the pixel lane's `Copy + FnOnce`
+    // predicate, which clippy cannot see as non-redundant.
+    #[allow(clippy::redundant_closure)]
+    let current_predicate = || is_current();
+    playlist_thumbnail_path_from_bytes(
+        app_cache_dir,
+        &bytes,
+        blake3::hash(&bytes),
+        max_edge,
+        current_predicate,
+    )
+}
+
+/// Path-lane counterpart of [`load_folder_thumbnail_blocking`].
+///
+/// Same breadth-first directory walk, same canonical containment checks, same
+/// image-before-track ordering per depth, and the same "unreadable candidate
+/// cannot prove absence" rule. The only difference is the terminal encoder:
+/// this lane publishes a `.jpg` and returns its path, while a genuinely
+/// exhausted walk returns `Ok(None)`.
+pub(super) fn load_folder_thumbnail_path_blocking(
+    app_cache_dir: &Path,
+    root_path: &str,
+    directory_path: &str,
+    max_edge: u32,
+    is_current: impl Fn() -> bool + Copy,
+) -> Result<Option<PlaylistThumbnailPath>, CoverPixelsError> {
+    current(is_current)?;
+    // The path command family validates against ALLOWED_PLAYLIST_MAX_EDGES at the
+    // coordinator, so this lane accepts the same 128/256/512 set. Narrowing it
+    // here would make the command advertise an edge it then always rejects.
+    super::cover_pixels::validate_playlist_max_edge(max_edge)?;
+    let root = canonical_directory(Path::new(root_path))?;
+    let target = canonical_directory(Path::new(directory_path))?;
+    if !target.starts_with(&root) {
+        return Err(invalid_path(
+            "folder artwork directory is outside its selected root",
+        ));
+    }
+    let mut level = vec![target.clone()];
+    let mut visited = HashSet::new();
+    let mut incomplete = None;
+    while !level.is_empty() {
+        let mut next = Vec::new();
+        let mut pictures = Vec::new();
+        let mut tracks = Vec::new();
+        for directory in level {
+            current(is_current)?;
+            if !visited.insert(directory.clone()) {
+                continue;
+            }
+            let entries = match fs::read_dir(&directory) {
+                Ok(entries) => entries,
+                Err(error) => {
+                    incomplete = Some(invalid_path(format!(
+                        "cannot read artwork directory: {error}"
+                    )));
+                    continue;
+                }
+            };
+            for entry in entries {
+                current(is_current)?;
+                let path = match entry {
+                    Ok(entry) => entry.path(),
+                    Err(error) => {
+                        incomplete =
+                            Some(invalid_path(format!("cannot read artwork entry: {error}")));
+                        continue;
+                    }
+                };
+                let metadata = match fs::symlink_metadata(&path) {
+                    Ok(metadata) => metadata,
+                    Err(error) => {
+                        incomplete = Some(invalid_path(format!(
+                            "artwork entry is unavailable: {error}"
+                        )));
+                        continue;
+                    }
+                };
+                if !ordinary_directory(&metadata) && !ordinary_file(&metadata) {
+                    continue;
+                }
+                let path = match fs::canonicalize(&path) {
+                    Ok(path) if path.starts_with(&root) && path.starts_with(&target) => path,
+                    Ok(_) => continue,
+                    Err(error) => {
+                        incomplete = Some(invalid_path(format!(
+                            "cannot resolve artwork entry: {error}"
+                        )));
+                        continue;
+                    }
+                };
+                if ordinary_directory(&metadata) {
+                    next.push(path);
+                } else if image_candidate(&path) {
+                    pictures.push(path);
+                } else if has_supported_audio_extension(&path) {
+                    tracks.push(path);
+                }
+            }
+        }
+        sort_paths(&mut pictures);
+        sort_paths(&mut tracks);
+        sort_paths(&mut next);
+        // Complete the whole depth's image lane before attempting any song.
+        for (paths, image) in [(pictures, true), (tracks, false)] {
+            for path in paths {
+                current(is_current)?;
+                // Revalidate immediately before opening; a candidate may have
+                // been replaced since its directory was enumerated.
+                let metadata = match fs::symlink_metadata(&path) {
+                    Ok(metadata) => metadata,
+                    Err(error) => {
+                        incomplete = Some(invalid_path(format!(
+                            "artwork candidate is unavailable: {error}"
+                        )));
+                        continue;
+                    }
+                };
+                if !ordinary_file(&metadata) {
+                    continue;
+                }
+                match fs::canonicalize(&path) {
+                    Ok(resolved)
+                        if resolved.starts_with(&root) && resolved.starts_with(&target) => {}
+                    Ok(_) => continue,
+                    Err(error) => {
+                        incomplete = Some(invalid_path(format!(
+                            "cannot resolve artwork candidate: {error}"
+                        )));
+                        continue;
+                    }
+                }
+                if let Err(error) = fs::File::open(&path) {
+                    incomplete = Some(invalid_path(format!(
+                        "cannot open artwork candidate: {error}"
+                    )));
+                    continue;
+                }
+                // The path helpers re-check staleness, so they need `Fn`; the
+                // pixel lane's predicate is `Copy + FnOnce`, hence the upgrade.
+                #[allow(clippy::redundant_closure)]
+                let current_predicate = || is_current();
+                let result: Result<Option<PlaylistThumbnailPath>, CoverPixelsError> = if image {
+                    picture_thumbnail_path(app_cache_dir, &path, max_edge, current_predicate)
+                        .map(Some)
+                } else {
+                    // A track hit inside the folder walk uses the same path lane,
+                    // including its negative-index semantics, but a proven absence
+                    // must keep walking instead of ending the search.
+                    super::cover_pixels::load_track_thumbnail_path_blocking(
+                        app_cache_dir,
+                        &path.to_string_lossy(),
+                        max_edge,
+                        current_predicate,
+                    )
+                };
+                current(is_current)?;
+                let published = match result {
+                    Ok(published) => published,
+                    Err(error) if unusable_candidate(&error) => {
+                        tracing::debug!(path = %path.display(), code = ?error.code, "skipping unusable folder artwork candidate");
+                        // Both lanes distinguish invalid content from I/O;
+                        // an unreadable candidate cannot prove artwork absent.
+                        if matches!(error.code, CoverPixelsErrorCode::InvalidPath) {
+                            incomplete = Some(error);
+                        }
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
+                if let Some(published) = published {
+                    return Ok(Some(published));
+                }
+            }
+        }
+        level = next;
+    }
+    current(is_current)?;
+    if let Some(error) = incomplete {
+        Err(error)
+    } else {
+        Ok(None)
     }
 }
 

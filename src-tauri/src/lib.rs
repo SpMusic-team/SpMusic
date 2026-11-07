@@ -21,7 +21,8 @@ use audio::{
 };
 use audio::{
     begin_playlist_cover_window, load_cover_pixels, load_folder_thumbnail,
-    load_playlist_cover_pixels, load_track_thumbnail, probe_playlist_cover,
+    load_folder_thumbnail_path, load_playlist_cover_pixels, load_playlist_cover_thumbnail_path,
+    load_track_thumbnail, load_track_thumbnail_path, probe_playlist_cover,
     probe_playlist_durations, probe_playlist_track_summaries, shutdown_playlist_cover_cache,
     AudioBeginPlaylistCoverWindowInput, AudioCommandError, AudioController, AudioEmbedLyricsInput,
     AudioFolderPlaylist, AudioFolderPlaylistInput, AudioLoadAndPlayInput, AudioLoadAndPlayResult,
@@ -31,6 +32,7 @@ use audio::{
     AudioPlaylistCoverSource, AudioPlaylistDurationItem, AudioPlaylistTrackSummaryItem,
     AudioProbePlaylistDurationsInput, AudioProbePlaylistTrackSummariesInput, AudioSeekInput,
     AudioSetVolumeInput, AudioTrackRef, AudioTransitionPlaybackInput, CoverPixelsError,
+    PlaylistThumbnailPath,
 };
 use global_shortcuts::{
     global_shortcuts_get_settings, global_shortcuts_set_suspended, global_shortcuts_update_settings,
@@ -769,6 +771,57 @@ async fn audio_load_folder_thumbnail(
     Ok(Response::new(response))
 }
 
+// Playlist thumbnail *path* lane (decisions 1 and 2).
+//
+// These are additive commands, not parameters on the three pixel commands above.
+// The pixel commands still return `Response` and are byte-for-byte unchanged,
+// which is what makes the frontend's fallback structurally safe: a path-lane
+// failure can always re-issue the original request.
+#[tauri::command]
+async fn audio_load_track_thumbnail_path(
+    state: State<'_, AppPaths>,
+    input: AudioLoadTrackThumbnailInput,
+) -> Result<Option<PlaylistThumbnailPath>, CoverPixelsError> {
+    tracing::debug!(
+        command = "audio_load_track_thumbnail_path",
+        path = %input.source_path,
+        max_edge = input.max_edge,
+        "Tauri command invoked",
+    );
+    load_track_thumbnail_path(state.cache_dir.clone(), input).await
+}
+
+#[tauri::command]
+async fn audio_load_folder_thumbnail_path(
+    state: State<'_, AppPaths>,
+    input: AudioLoadFolderThumbnailInput,
+) -> Result<Option<PlaylistThumbnailPath>, CoverPixelsError> {
+    tracing::debug!(
+        command = "audio_load_folder_thumbnail_path",
+        root_path = %input.root_path,
+        directory_path = %input.directory_path,
+        max_edge = input.max_edge,
+        "Tauri command invoked",
+    );
+    load_folder_thumbnail_path(state.cache_dir.clone(), input).await
+}
+
+#[tauri::command]
+async fn audio_load_playlist_cover_thumbnail_path(
+    state: State<'_, AppPaths>,
+    input: AudioLoadPlaylistCoverPixelsInput,
+) -> Result<Option<PlaylistThumbnailPath>, CoverPixelsError> {
+    tracing::debug!(
+        command = "audio_load_playlist_cover_thumbnail_path",
+        client_id = %input.client_id,
+        path = %input.file_path,
+        max_edge = input.max_edge,
+        window_generation = input.window_generation,
+        "Tauri command invoked",
+    );
+    load_playlist_cover_thumbnail_path(state.cache_dir.clone(), input).await
+}
+
 #[tauri::command]
 fn audio_begin_playlist_cover_window(
     input: AudioBeginPlaylistCoverWindowInput,
@@ -876,6 +929,9 @@ pub fn run() {
             audio_load_playlist_cover_pixels,
             audio_load_track_thumbnail,
             audio_load_folder_thumbnail,
+            audio_load_track_thumbnail_path,
+            audio_load_folder_thumbnail_path,
+            audio_load_playlist_cover_thumbnail_path,
         ])
         .setup(|app| {
             let app_paths = AppPaths::prepare()?;

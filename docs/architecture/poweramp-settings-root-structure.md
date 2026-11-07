@@ -357,6 +357,7 @@ flowchart TD
 | 分支·深 | `poweramp-library-full-implementation.md` | 媒体库**整棵子树**（7 页 92 key + 实现机制） |
 | 分支 | `poweramp-headset-settings.md` | 耳机/蓝牙 `headset`（偏好结构视角）|
 | 分支·深 | `poweramp-headset-full-implementation.md` | 耳机/蓝牙**完整实现**（`u91`/`s91`/`rk0`/消息链）|
+| 分支·深 | `poweramp-headset-subtree.md` | 耳机/蓝牙**子树全貌**（`commands_history`/`audio_focus`/`long_volume_controls`）|
 | 分支 | `poweramp-lockscreen-settings.md` | 锁屏 `lockscreen` |
 | 分支 | `poweramp-misc-settings.md` | 其他 `misc`（27 key，最长页） |
 | 分支 | `poweramp-about-and-support-settings.md` | 关于/支持/命令历史/翻译 4 页合并 |

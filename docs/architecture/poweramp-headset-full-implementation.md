@@ -56,6 +56,7 @@ source_documents:
 | 9 条按键诊断日志 | **§11.4** |
 | 跨页跳转与锚点 | **§7** |
 | 与已有 `poweramp-headset-settings.md` 的关系 | **§8** |
+| **子树全貌**（子页/跳转/资源细节）| **`poweramp-headset-subtree.md`** |
 | 未解问题 | **§9** |
 | 证据索引 | **§10** |
 

@@ -134,6 +134,43 @@ export type AudioLoadFolderThumbnailInput = {
   windowGeneration: number
 }
 
+/**
+ * List-cover reference returned by the asset path lane.
+ *
+ * The path is absolute and may only be handed to {@link audioThumbnailPathUrl}
+ * (`convertFileSrc`). `width`/`height` are the real JPEG dimensions rather than
+ * an echo of `maxEdge`, because small originals are never upscaled. `byteLength`
+ * is the encoded JPEG size, which is what the renderer budgets against.
+ */
+export type AudioThumbnailPath = {
+  path: string
+  width: number
+  height: number
+  byteLength: number
+}
+
+export type AudioLoadTrackThumbnailPathInput = {
+  clientId: string
+  sourcePath: string
+  maxEdge: 128 | 256 | 512
+  windowGeneration: number
+}
+
+export type AudioLoadFolderThumbnailPathInput = {
+  clientId: string
+  rootPath: string
+  directoryPath: string
+  maxEdge: 128 | 256 | 512
+  windowGeneration: number
+}
+
+export type AudioLoadPlaylistCoverThumbnailPathInput = {
+  clientId: string
+  filePath: string
+  maxEdge: 128 | 256 | 512
+  windowGeneration: number
+}
+
 export type AudioCoverPixels = {
   width: number
   height: number
@@ -525,6 +562,73 @@ export async function loadAudioFolderThumbnail(input: AudioLoadFolderThumbnailIn
   return parseCoverPixels(response, input.maxEdge)
 }
 
+// The path lane never carries pixels: it returns an absolute path that the
+// WebView fetches through the asset protocol and decodes itself.
+const THUMBNAIL_PATH_MAX_EDGE = 512
+// Mirrors the backend `THUMBNAIL_PATH_MAX_BYTES` acceptance bound
+// (`src-tauri/src/audio/cover_pixels.rs`); anything larger cannot be a JPEG this
+// lane produced, so it is a protocol error rather than asset artwork.
+const THUMBNAIL_PATH_MAX_BYTES = 1024 * 1024
+
+// Validate as strictly as `parseCoverPixels` does for its header. `null` is a
+// verdict, not a failure: it means the backend confirmed there is no artwork, and
+// callers must render the placeholder instead of falling back to the pixel lane.
+function parseAudioThumbnailPath(response: unknown, maxEdge: number): AudioThumbnailPath | null {
+  if (response === null || response === undefined) return null
+  if (!response || typeof response !== 'object') throw new Error('Thumbnail path response is not an object')
+  const candidate = response as Partial<AudioThumbnailPath>
+  if (typeof candidate.path !== 'string' || !candidate.path.trim()) {
+    throw new Error('Thumbnail path response path is invalid')
+  }
+  if (
+    !Number.isSafeInteger(candidate.width)
+    || !Number.isSafeInteger(candidate.height)
+    || !Number.isSafeInteger(candidate.byteLength)
+  ) throw new Error('Thumbnail path response dimensions are not integers')
+  const { width, height, byteLength } = candidate as AudioThumbnailPath
+  if (
+    width <= 0
+    || height <= 0
+    || width > maxEdge
+    || height > maxEdge
+    || width > THUMBNAIL_PATH_MAX_EDGE
+    || height > THUMBNAIL_PATH_MAX_EDGE
+    || byteLength <= 0
+    || byteLength > THUMBNAIL_PATH_MAX_BYTES
+  ) throw new Error('Thumbnail path response metadata is inconsistent')
+  return { path: candidate.path, width, height, byteLength }
+}
+
+export async function loadAudioTrackThumbnailPath(
+  input: AudioLoadTrackThumbnailPathInput,
+): Promise<AudioThumbnailPath | null> {
+  return parseAudioThumbnailPath(await invoke<unknown>('audio_load_track_thumbnail_path', { input }), input.maxEdge)
+}
+
+export async function loadAudioFolderThumbnailPath(
+  input: AudioLoadFolderThumbnailPathInput,
+): Promise<AudioThumbnailPath | null> {
+  return parseAudioThumbnailPath(await invoke<unknown>('audio_load_folder_thumbnail_path', { input }), input.maxEdge)
+}
+
+export async function loadAudioPlaylistCoverThumbnailPath(
+  input: AudioLoadPlaylistCoverThumbnailPathInput,
+): Promise<AudioThumbnailPath | null> {
+  return parseAudioThumbnailPath(await invoke<unknown>('audio_load_playlist_cover_thumbnail_path', { input }), input.maxEdge)
+}
+
+/**
+ * Resolve a path-lane reference for an `<img src>`.
+ *
+ * `thumbnail.path` must not be concatenated, truncated, or fed to `fetch`. A
+ * `blob:` detour would copy the bytes back onto the JS main thread, which is the
+ * cost this lane removes. Throws only if the runtime rejects the path, which
+ * callers treat as a lane failure and fall back on.
+ */
+export function audioThumbnailPathUrl(thumbnail: AudioThumbnailPath): string {
+  return convertFileSrc(thumbnail.path)
+}
+
 export async function beginAudioPlaylistCoverWindow(clientId: string): Promise<number> {
   return invoke<number>('audio_begin_playlist_cover_window', { input: { clientId } })
 }
@@ -533,6 +637,15 @@ export function isAudioCoverPixelsError(error: unknown): error is AudioCoverPixe
   if (!error || typeof error !== 'object') return false
   const candidate = error as Partial<AudioCoverPixelsError>
   return typeof candidate.code === 'string' && typeof candidate.message === 'string'
+}
+
+/**
+ * A superseded cover request. It is a controlled abort, not a failure: the only
+ * correct response is to drop the result, never to pay for a fallback decode of a
+ * request whose generation has already been replaced.
+ */
+export function isStaleCoverPixelsError(error: unknown): boolean {
+  return isAudioCoverPixelsError(error) && error.code === 'STALE_REQUEST'
 }
 
 export function audioCoverArtUrl(coverArt: AudioCoverArt | null): string | undefined {

@@ -12,9 +12,11 @@ import {
 } from '@/features/player/model/playlistArtworkFallback'
 import {
   beginAudioPlaylistCoverWindow, probeAudioPlaylistCover,
-  type AudioFolderPlaylist, type AudioFolderTrackRef,
+  audioThumbnailPathUrl,
+  type AudioFolderPlaylist, type AudioFolderTrackRef, type AudioThumbnailPath,
 } from '@/features/player/services/audioCommands'
 import { schedulePlaylistCoverPixels, scheduleTrackThumbnail } from '@/features/player/services/playlistCoverScheduler'
+import { pathLaneAvailable, runPathLaneCall, schedulePlaylistCoverThumbnailPath, scheduleTrackThumbnailPath, PATH_LANE_DISABLED } from '@/features/player/services/playlistCoverPathLane'
 
 type ArtworkRow = ReadOnlyArtworkRow
 type CacheEntry = { row: ArtworkRow; edge: number; trackId: string; artworkRevision: number }
@@ -55,6 +57,19 @@ function protectedArtworkPaths(runtime: Runtime): Set<string> {
     if (runtime.detailPaths.has(key)) paths.add(key)
   }
   return paths
+}
+
+/**
+ * Build the publishable image for one asset-lane reference.
+ *
+ * The URL is an asset URL, not an object URL: `URL.revokeObjectURL` cannot free
+ * its decoded bitmap, which the WebView owns for as long as an `<img>` references
+ * it. Release is node teardown, never a revoke — do not add revoke-based cleanup
+ * for these. `encodedBytes` is the JPEG size so resident-byte accounting stays
+ * conservative against the 4 B/px decoded bitmap.
+ */
+function pathLaneThumbnail(reference: AudioThumbnailPath, url: string): PlaylistCoverImage {
+  return { src: url, width: reference.width, height: reference.height, encodedBytes: reference.byteLength }
 }
 
 async function dataUrlThumbnail(dataUrl: string, maxEdge: number): Promise<PlaylistCoverImage> {
@@ -178,15 +193,37 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
             if (generation === null) throw new Error('媒体库封面窗口不可用')
             let hasLocalArtwork = false
             if (edge <= 256) {
-              const pixels = await scheduleTrackThumbnail(
-                { clientId, sourcePath: descriptor.sourcePath, maxEdge: 256, windowGeneration: generation },
-                { priority: [...runtime.previews.values()].includes(key) ? 0
-                  : runtime.detailVisiblePaths.has(key) ? 1 : 2,
-                  signal: runtime.controller.signal, isCurrent: current },
-              )
+              // Asset path lane first; the pixel lane below is the fallback and is
+              // entered only on a real failure. `null` from the path lane is a
+              // confirmed-absent verdict and publishes as a placeholder, never as a
+              // reason to spend a second decode on the same absence.
+              const pathPriority = [...runtime.previews.values()].includes(key) ? 0
+                : runtime.detailVisiblePaths.has(key) ? 1 : 2
+              const pathAttempt = pathLaneAvailable()
+                ? await runPathLaneCall(
+                  () => scheduleTrackThumbnailPath(
+                    { clientId, sourcePath: descriptor.sourcePath, maxEdge: 256, windowGeneration: generation },
+                    { priority: pathPriority, signal: runtime.controller.signal, isCurrent: current },
+                  ),
+                  current,
+                  audioThumbnailPathUrl,
+                )
+                : PATH_LANE_DISABLED
               if (!current()) return
-              hasLocalArtwork = pixels !== null
-              if (pixels) thumbnail = playlistCoverImageFromPixels(pixels)
+              if (pathAttempt.status === 'dropped') return
+              if (pathAttempt.status === 'use') {
+                thumbnail = pathLaneThumbnail(pathAttempt.value.reference, pathAttempt.value.url)
+                hasLocalArtwork = true
+              } else if (pathAttempt.status === 'fallback') {
+                const pixels = await scheduleTrackThumbnail(
+                  { clientId, sourcePath: descriptor.sourcePath, maxEdge: 256, windowGeneration: generation },
+                  { priority: pathPriority, signal: runtime.controller.signal, isCurrent: current },
+                )
+                if (!current()) return
+                hasLocalArtwork = pixels !== null
+                if (pixels) thumbnail = playlistCoverImageFromPixels(pixels)
+              }
+              // 'missing' leaves both unset: confirmed absent artwork.
             } else {
               const cover = await probeAudioPlaylistCover(descriptor.sourcePath)
               if (!current()) return
@@ -195,14 +232,34 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
               }
               hasLocalArtwork = cover.coverArt !== null
               if (cover.coverArt?.filePath) {
-                const pixels = await schedulePlaylistCoverPixels(
-                  { clientId, filePath: cover.coverArt.filePath, maxEdge: edge, windowGeneration: generation },
-                  { priority: 2,
-                    signal: runtime.controller.signal, isCurrent: current },
-                )
-                if (!pixels) return
+                // The 512 hero shares the path lane with the list rows. A `null`
+                // verdict is definitive (no fallback, like the 256 branch); a real
+                // failure falls back to the existing pixel command unchanged.
+                const pathAttempt = pathLaneAvailable()
+                  ? await runPathLaneCall(
+                    () => schedulePlaylistCoverThumbnailPath(
+                      { clientId, filePath: cover.coverArt!.filePath!, maxEdge: edge, windowGeneration: generation },
+                      { priority: 2, signal: runtime.controller.signal, isCurrent: current },
+                    ),
+                    current,
+                    audioThumbnailPathUrl,
+                  )
+                  : PATH_LANE_DISABLED
                 if (!current()) return
-                thumbnail = playlistCoverImageFromPixels(pixels)
+                if (pathAttempt.status === 'dropped') return
+                if (pathAttempt.status === 'missing') return
+                if (pathAttempt.status === 'use') {
+                  thumbnail = pathLaneThumbnail(pathAttempt.value.reference, pathAttempt.value.url)
+                } else {
+                  const pixels = await schedulePlaylistCoverPixels(
+                    { clientId, filePath: cover.coverArt.filePath, maxEdge: edge, windowGeneration: generation },
+                    { priority: 2,
+                      signal: runtime.controller.signal, isCurrent: current },
+                  )
+                  if (!pixels) return
+                  if (!current()) return
+                  thumbnail = playlistCoverImageFromPixels(pixels)
+                }
               } else if (cover.coverArt?.dataUrl) {
                 thumbnail = await dataUrlThumbnail(cover.coverArt.dataUrl, edge)
               }

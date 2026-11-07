@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSyncExternalStore, type RefObject } from 'react'
 import { playlistCoverImageFromPixels } from '@/features/player/model/playlistCoverPixels'
 import { decodePlaylistCover } from '@/features/player/model/playlistCoverReadiness'
-import type { AllSongsItem, PlaylistCoverImage } from '@/features/player/model/playerUiViewModel'
-import { audioThumbnailPathUrl, beginAudioPlaylistCoverWindow, type AudioThumbnailPath } from '@/features/player/services/audioCommands'
+import type { AllSongsItem } from '@/features/player/model/playerUiViewModel'
+import { beginAudioPlaylistCoverWindow } from '@/features/player/services/audioCommands'
 import { scheduleFolderThumbnail, scheduleTrackThumbnail } from '@/features/player/services/playlistCoverScheduler'
-import { pathLaneAvailable, runPathLaneCall, scheduleFolderThumbnailPath, scheduleTrackThumbnailPath, PATH_LANE_DISABLED } from '@/features/player/services/playlistCoverPathLane'
 import { orderPlaylistArtworkRows, type PlaylistArtworkDirection } from '@/features/player/model/playlistArtworkOrder'
 import { isStreamSource } from '../model/streams'
 
@@ -54,30 +53,10 @@ type WindowRuntime = {
 const WINDOW_CONCURRENCY = 2
 const CACHE_LIMIT = 60
 
-/**
- * Build the publishable image for one asset-lane reference.
- *
- * The asset URL is not an object URL: `URL.revokeObjectURL` cannot release its
- * decoded bitmap. That bitmap belongs to the WebView and lives as long as the
- * `<img>` that references it, so release is node teardown (the `contentVisible`
- * gate plus virtualisation), never a revoke call.
- */
-function pathThumbnailFrom(reference: AudioThumbnailPath, url: string): PlaylistCoverImage {
-  return { src: url, width: reference.width, height: reference.height, encodedBytes: reference.byteLength }
-}
-
 export function createAllSongsCoverStore(): AllSongsCoverStore {
   const listeners = new Map<string, Set<() => void>>()
   const leases = new Map<string, number>()
   const retired = new Map<string, Set<string>>()
-  // Sweeps the URLs a row no longer displays. It is unchanged by the asset path
-  // lane on purpose, and the contract is worth stating: `URL.revokeObjectURL` is a
-  // spec-level no-op for a non-`blob:` URL, so an asset URL survives it harmlessly
-  // and still leaves the `retired` set, which is what keeps this from leaking.
-  // An asset URL's decoded bitmap belongs to the WebView and is released by
-  // unmounting the `<img>`, never by revoking. Do not "fix" this into a refcount:
-  // assuming a revoke can free asset artwork would add bookkeeping that cannot
-  // affect the decoded bitmap and would only risk revoking live blob URLs.
   const sweep = () => {
     const used = new Set([...document.querySelectorAll<HTMLImageElement>('img')].map(image => image.src))
     for (const [key, urls] of retired) {
@@ -287,104 +266,38 @@ export function useAllSongsWindow(items: readonly AllSongsCoverItem[], panelRef:
             }
             if (!itemIsCurrent()) return
             const options = { priority: coverPriority(item.key), signal: runtime.controller.signal, isCurrent: itemIsCurrent }
-            // Try the asset path lane first: the backend answers with an absolute
-            // JPEG path that the WebView fetches and decodes itself, which keeps
-            // ~256 KiB of RGBA per cover off IPC and off the main thread. The pixel
-            // lane below is the fallback, reached only on a real failure. A path
-            // verdict of `null` is "confirmed no artwork" and is published as a
-            // placeholder without ever entering the fallback.
-            let pathThumbnail: PlaylistCoverImage | undefined
+            let pixels: Awaited<ReturnType<typeof scheduleTrackThumbnail>> = null
             let candidateFailure = false
-            // A candidate source that failed on the path lane may still resolve on
-            // the pixel lane, so it is retried there; nothing else falls back.
-            let pathLaneFallback = false
             if ('kind' in item && item.kind === 'track-candidates') {
               // A missing first cover does not represent the whole directory.
               // Keep the existing scheduler and cancellation owner for every read.
               for (const candidate of item.candidates) {
                 if (!itemIsCurrent()) return
                 if (!candidate.available || isStreamSource(candidate)) continue
-                // A tripped breaker goes straight to the pixel lane by treating it
-                // as an already-decided fallback.
-                const attempt = pathLaneAvailable()
-                  ? await runPathLaneCall(
-                    () => scheduleTrackThumbnailPath({ clientId, sourcePath: candidate.sourcePath, maxEdge: 256, windowGeneration: coverGeneration }, options),
-                    itemIsCurrent,
-                    audioThumbnailPathUrl,
-                  )
-                  : PATH_LANE_DISABLED
-                if (!itemIsCurrent()) return
-                // A superseded candidate request ends this row without publishing.
-                if (attempt.status === 'dropped') return
-                if (attempt.status === 'missing') break
-                if (attempt.status === 'use') {
-                  pathThumbnail = pathThumbnailFrom(attempt.value.reference, attempt.value.url)
-                  break
+                try {
+                  pixels = await scheduleTrackThumbnail({ clientId, sourcePath: candidate.sourcePath, maxEdge: 256, windowGeneration: coverGeneration }, options)
+                } catch {
+                  candidateFailure = true
                 }
-                pathLaneFallback = attempt.status === 'fallback'
+                if (!itemIsCurrent()) return
+                if (pixels) break
               }
             } else if ('kind' in item || !isStreamSource(item)) {
-              const attempt = pathLaneAvailable()
-                ? await runPathLaneCall(
-                  () => 'kind' in item
-                    ? scheduleFolderThumbnailPath({ clientId, rootPath: item.rootPath, directoryPath: item.directoryPath, maxEdge: 256, windowGeneration: coverGeneration }, options)
-                    : scheduleTrackThumbnailPath({ clientId, sourcePath: item.sourcePath, maxEdge: 256, windowGeneration: coverGeneration }, options),
-                  itemIsCurrent,
-                  audioThumbnailPathUrl,
-                )
-                : PATH_LANE_DISABLED
-              if (!itemIsCurrent()) return
-              if (attempt.status === 'dropped') return
-              if (attempt.status === 'missing') {
-                // Confirmed absent artwork: publish the placeholder and stop. The
-                // pixel lane would decode once more only to learn the same thing.
-                if (itemIsCurrent()) publish(item.key, { ...cacheDescriptor(item), coverUrl })
-                return
-              }
-              if (attempt.status === 'use') pathThumbnail = pathThumbnailFrom(attempt.value.reference, attempt.value.url)
-              pathLaneFallback = attempt.status === 'fallback'
+              pixels = await ('kind' in item
+                ? scheduleFolderThumbnail({ clientId, rootPath: item.rootPath, directoryPath: item.directoryPath, maxEdge: 256, windowGeneration: coverGeneration }, options)
+                : scheduleTrackThumbnail({ clientId, sourcePath: item.sourcePath, maxEdge: 256, windowGeneration: coverGeneration }, options))
             }
             if (!itemIsCurrent()) return
-            // The BMP + object-URL conversion stays exclusive to the fallback and
-            // breaker-off paths; it must never run for asset artwork.
-            let pixels: Awaited<ReturnType<typeof scheduleTrackThumbnail>> = null
-            if (!pathThumbnail && pathLaneFallback) {
-              if ('kind' in item && item.kind === 'track-candidates') {
-                for (const candidate of item.candidates) {
-                  if (!itemIsCurrent()) return
-                  if (!candidate.available || isStreamSource(candidate)) continue
-                  try {
-                    pixels = await scheduleTrackThumbnail({ clientId, sourcePath: candidate.sourcePath, maxEdge: 256, windowGeneration: coverGeneration }, options)
-                  } catch {
-                    candidateFailure = true
-                  }
-                  if (!itemIsCurrent()) return
-                  if (pixels) break
-                }
-              } else {
-                pixels = await ('kind' in item
-                  ? scheduleFolderThumbnail({ clientId, rootPath: item.rootPath, directoryPath: item.directoryPath, maxEdge: 256, windowGeneration: coverGeneration }, options)
-                  : scheduleTrackThumbnail({ clientId, sourcePath: item.sourcePath, maxEdge: 256, windowGeneration: coverGeneration }, options))
-              }
-            }
-            if (!itemIsCurrent()) return
-            let hasArtwork = false
-            if (pathThumbnail) {
-              hasArtwork = true
-              coverUrl = pathThumbnail.src
-              await decodePlaylistCover(pathThumbnail)
-              if (!itemIsCurrent()) return
-            } else if (pixels) {
+            if (pixels) {
               if (!itemIsCurrent()) return
               const thumbnail = playlistCoverImageFromPixels(pixels)
               coverUrl = thumbnail.src
               await decodePlaylistCover(thumbnail)
               if (!itemIsCurrent()) return
             }
-            if (itemIsCurrent() && publish(item.key, { ...cacheDescriptor(item), coverUrl, ...(!hasArtwork && candidateFailure ? { transientFailure: true } : {}) })) {
+            if (itemIsCurrent() && publish(item.key, { ...cacheDescriptor(item), coverUrl, ...(!pixels && candidateFailure ? { transientFailure: true } : {}) })) {
               coverUrl = undefined
             }
-
           } catch {
             // Missing artwork leaves the prepared text and duration untouched.
             // Terminal failures share the bounded cache with successful and

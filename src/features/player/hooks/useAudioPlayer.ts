@@ -44,8 +44,7 @@ import { createPlaylistArtworkGrace } from '@/features/player/model/playlistArtw
 import { playlistCoverImageFromPixels } from '@/features/player/model/playlistCoverPixels'
 import { decodePlaylistCover } from '@/features/player/model/playlistCoverReadiness'
 import { createPlaylistArtworkStore, playlistArtworkKey } from '@/features/player/model/playlistArtworkStore'
-import { schedulePlaylistCoverPixels, scheduleTrackThumbnail, MAX_CONCURRENT } from '@/features/player/services/playlistCoverScheduler'
-import { pathLaneAvailable, runPathLaneCall, schedulePlaylistCoverThumbnailPath, scheduleTrackThumbnailPath, PATH_LANE_DISABLED } from '@/features/player/services/playlistCoverPathLane'
+import { MAX_CONCURRENT, schedulePlaylistCoverPixels, scheduleTrackThumbnail } from '@/features/player/services/playlistCoverScheduler'
 import {
   chunkPlaylistSummaryPaths,
   pendingPlaylistTrackRow,
@@ -111,7 +110,6 @@ import {
   importAudioPlaylist,
   isAudioCoverPixelsError,
   isAudioCommandError,
-  audioThumbnailPathUrl,
   listAudioFolderTracks,
   listenAudioTrackDetailsChanged,
   listenAudioStateChanged,
@@ -136,7 +134,6 @@ import {
   type AudioPlaylistTrackSummaryItem,
   type AudioTransitionPlaybackInput,
   type AudioTrackRef,
-  type AudioThumbnailPath,
   type AudioTrackDetailsChanged,
 } from '@/features/player/services/audioCommands'
 
@@ -218,20 +215,6 @@ const PLAYLIST_ARTWORK_INFLIGHT_BUDGET = MAX_CONCURRENT * 512 * 512 * 4
 
 function playlistImageBytes(image: PlaylistCoverImage): number {
   return image.encodedBytes + image.width * image.height * 4
-}
-
-/**
- * Build the publishable image for one asset-lane reference.
- *
- * The URL is an asset URL rather than an object URL. `URL.revokeObjectURL` on it
- * is a spec-level no-op, so the many `revokeObjectURL(coverThumbnail.src)` sites
- * in this hook remain correct and must not be "fixed" into ownership bookkeeping:
- * the decoded bitmap belongs to the WebView and is released when the `<img>` is
- * torn down, not by a revoke. `encodedBytes` carries the JPEG size, so
- * {@link playlistImageBytes} stays an upper bound rather than an undercount.
- */
-function pathLaneThumbnail(reference: AudioThumbnailPath, url: string): PlaylistCoverImage {
-  return { src: url, width: reference.width, height: reference.height, encodedBytes: reference.byteLength }
 }
 
 function playlistArtworkBytes(edge: number): number {
@@ -2163,42 +2146,19 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
                 ?? presentationTrackRef.current?.id
                 ?? latestAudioStateRef.current?.currentTrackId
               loadingSource = false
-              const priority = job.trackId === currentTrackId ? 0
-                : libraryVisibleRef.current && playlistVisualRequiredIdsRef.current.has(job.trackId) ? 1 : 2
-              // Asset path lane first. A `null` verdict is confirmed-absent artwork:
-              // publish it without falling back, so the pixel lane is never asked to
-              // re-prove an absence. Only a real failure falls through.
-              const pathAttempt = pathLaneAvailable()
-                ? await runPathLaneCall(
-                  () => scheduleTrackThumbnailPath({
-                    clientId: job.clientId,
-                    sourcePath: job.sourcePath,
-                    maxEdge: 256,
-                    windowGeneration: job.backendGeneration,
-                  }, { priority, isCurrent: () => !jobIsStale() }),
-                  jobIsStale,
-                  audioThumbnailPathUrl,
-                )
-                : PATH_LANE_DISABLED
+              const pixels = await scheduleTrackThumbnail({
+                clientId: job.clientId,
+                sourcePath: job.sourcePath,
+                maxEdge: 256,
+                windowGeneration: job.backendGeneration,
+              }, {
+                priority: job.trackId === currentTrackId ? 0
+                  : libraryVisibleRef.current && playlistVisualRequiredIdsRef.current.has(job.trackId) ? 1 : 2,
+                isCurrent: () => !jobIsStale(),
+              })
               if (jobIsStale()) return
-              if (pathAttempt.status === 'dropped') return
-              if (pathAttempt.status === 'use') {
-                coverThumbnail = pathLaneThumbnail(pathAttempt.value.reference, pathAttempt.value.url)
-                hasLocalArtwork = true
-              } else if (pathAttempt.status === 'fallback') {
-                const pixels = await scheduleTrackThumbnail({
-                  clientId: job.clientId,
-                  sourcePath: job.sourcePath,
-                  maxEdge: 256,
-                  windowGeneration: job.backendGeneration,
-                }, { priority, isCurrent: () => !jobIsStale() })
-                if (jobIsStale()) return
-                hasLocalArtwork = pixels !== null
-                if (pixels) coverThumbnail = playlistCoverImageFromPixels(pixels)
-              } else {
-                // 'missing': confirmed absent artwork, same branch as `pixels === null`.
-                hasLocalArtwork = false
-              }
+              hasLocalArtwork = pixels !== null
+              if (pixels) coverThumbnail = playlistCoverImageFromPixels(pixels)
             } else {
               const coverSource = await probeAudioPlaylistCover(job.sourcePath)
               if (jobIsStale()) return
@@ -2214,34 +2174,16 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
                 const currentTrackId = logicalCursorTrackIdRef.current
                   ?? presentationTrackRef.current?.id
                   ?? latestAudioStateRef.current?.currentTrackId
-                const priority = job.trackId === currentTrackId ? 0
-                  : libraryVisibleRef.current && playlistVisualRequiredIdsRef.current.has(job.trackId) ? 1 : 2
-                // The 512 hero uses the path lane too. `missing` is definitive and
-                // must not fall back; anything else settles the visual as absent,
-                // exactly as `!pixels` did before this lane existed.
-                const pathAttempt = pathLaneAvailable()
-                  ? await runPathLaneCall(
-                    () => schedulePlaylistCoverThumbnailPath({
-                      clientId: job.clientId, filePath: coverFilePath, maxEdge: edge,
-                      windowGeneration: job.backendGeneration,
-                    }, { priority, isCurrent: () => !jobIsStale() }),
-                    jobIsStale,
-                    audioThumbnailPathUrl,
-                  )
-                  : PATH_LANE_DISABLED
-                if (jobIsStale()) return
-                if (pathAttempt.status === 'dropped') return
-                if (pathAttempt.status === 'missing') return
-                if (pathAttempt.status === 'use') {
-                  coverThumbnail = pathLaneThumbnail(pathAttempt.value.reference, pathAttempt.value.url)
-                } else {
-                  const pixels = await schedulePlaylistCoverPixels({
-                    clientId: job.clientId, filePath: coverFilePath, maxEdge: edge,
-                    windowGeneration: job.backendGeneration,
-                  }, { priority, isCurrent: () => !jobIsStale() })
-                  if (!pixels || jobIsStale()) return
-                  coverThumbnail = playlistCoverImageFromPixels(pixels)
-                }
+                const pixels = await schedulePlaylistCoverPixels({
+                  clientId: job.clientId, filePath: coverFilePath, maxEdge: edge,
+                  windowGeneration: job.backendGeneration,
+                }, {
+                  priority: job.trackId === currentTrackId ? 0
+                    : libraryVisibleRef.current && playlistVisualRequiredIdsRef.current.has(job.trackId) ? 1 : 2,
+                  isCurrent: () => !jobIsStale(),
+                })
+                if (!pixels || jobIsStale()) return
+                coverThumbnail = playlistCoverImageFromPixels(pixels)
               }
             }
             if (coverThumbnail) {

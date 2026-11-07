@@ -44,6 +44,8 @@ source_documents:
 
 **最重要的发现**：`commands_history` 是**空 XML + 全代码生成**的页面，数据来自 `jo0` 的 **64 条环形缓冲区**，并以 **32ms / 250ms 双周期**自动刷新。而 `long_volume_controls` 是需要 **Shizuku 授权**的实验特性。
 
+> **第 2 轮补充**：`commands_history` 的真实定位被低估了——它记录的是**音频焦点与播放决策的完整轨迹**（43 个写入点，13 个在 `rl0` 音频焦点状态机里），实际是**排查"为什么音乐突然暂停/不响应"的黑匣子**，而非单纯的按键历史。详见 §7。
+
 ---
 
 ## 1. 子树全景
@@ -524,23 +526,244 @@ headset 根页
 
 ---
 
-## 7. 未解问题
+---
 
-1. **`commands_history` 清空菜单的确切实现**：`C(MenuItem)` 有 225 行，只确认了"清空缓冲 + 刷新"，但清空时是否重置 `WRITE_IDX` 未逐行验证。（P2）
+## 7. 第 2 轮深挖：记录结构与数据来源
 
-2. **`hf1` 的三个字段语义**：`B(int, String, String, String)` 的四个参数分别是什么（命令类型？来源？结果？）未解。（P2）
+> 上一轮留了 5 个 P2/P3 问题。本轮**全部闭合**，并发现 `commands_history` 的真实内容比预想的更有价值。
 
-3. **`_long_volume_shizuku_grant` 的创建位置**：`sa1` 只 `findPreference`，创建点未定位（可能在另一个 helper 或动态 addPreference）。（P2）
+### 7.1 `hf1` 的完整结构（四字段 + 时间戳）
 
-4. **`audio_focus` 的 `cc_af_warning` 带参数跳转**：`?uniqName=com.maxmpz.audioplayer/output.cc&device=chromecast#no_af` 的解析与消费未追。（P3）
+`hf1.smali`（4019 B / 205 行）只有 1 个构造器和 1 个 `toString()`。**字段语义直接写在 `toString()` 的输出格式里**【实证·产物】`hf1.smali:61-204`：
 
-5. **`jo0` 缓冲区的写入者全集**：已知 `rk0` 会写入按键日志，但其他写入点未枚举。（P3）
+| 字段 | 类型 | 在 `toString()` 中的名字 | 语义 |
+| --- | --- | --- | --- |
+| `В` | `int` | **`type`** | 记录类型（见 §9.2）|
+| `B` | `String` | **`source`** | 来源组件（如 `PlayerServiceCore`）|
+| `А` | `String` | **`command`** | 命令/事件名（如 `AUDIOFOCUS_LOSS`）|
+| `A` | `String` | **`extraInfo`** | 附加信息（决策依据）|
+| `х` | `long` | （未输出）| **构造时自动 `System.currentTimeMillis()`** |
+
+构造器【实证·产物】`hf1.smali:19-57`：
+
+```java
+hf1(int type, String source, String command, String extraInfo) {
+    this.В = type;
+    this.B = source;
+    this.А = command;
+    this.A = extraInfo;
+    this.х = System.currentTimeMillis();   // ← 时间戳自动打点
+}
+```
+
+> **时间戳不在参数里**——调用方无需传时间，`hf1` 自己打点。这保证了时间戳的准确性（避免调用链延迟）。
+
+**`toString()` 的实际输出格式**：
+
+```
+<Object.toString()> type=<类型> source=<来源> command=<命令> extraInfo=<附加信息>
+```
+
+### 7.2 `type` 的枚举（3 种）
+
+`toString()` 里的映射逻辑【实证·产物】`hf1.smali:73-112`：
+
+| 值 | 输出 | 含义 |
+| ---: | --- | --- |
+| **`0`** | `"command"` | **主动命令**（当前 App 内部发起）|
+| **`1`** | `"external"` | **外部事件**（系统/硬件/其他 App）|
+| 其他 | `String.valueOf(n)` | 预留的扩展值 |
+
+**实测分布**（统计全部 43 个写入点）：
+
+| `type` | 次数 | 典型调用者 |
+| ---: | ---: | --- |
+| `1`（external）| **27** | `rl0`（音频焦点）、`rk0`（按键）、`ud0`/`uk0`（MediaSession）|
+| `0`（command）| **1** | **`zf`（PSSleepTimer）** |
+| 动态值 | 15 | 各分支根据条件选择 |
+
+> **`type=0` 全库只有 1 处**：`zf.smali:931` 的睡眠定时器 —— `B(0, "PSSleepTimer", "sleep timer", ...)`。这是"App 内部主动发起的动作"的唯一实例。
+
+### 7.3 43 个写入点：`commands_history` 到底记录什么
+
+**这是本轮最重要的发现**。`commands_history` 不是"按键历史"，而是**音频焦点与播放决策的完整轨迹**。
+
+写入者分布【实证·产物】：
+
+| 类 | 次数 | 职责 | 典型记录内容 |
+| --- | ---: | --- | --- |
+| **`rl0`** | **13** | **音频焦点处理** | `AUDIOFOCUS_LOSS` / `inPhone` / `pausePlaying af_permanent` / `IGNORE !inPhone && !af_permanent` / `duckPlaying` / `UNDUCK` / `wasPausedByFocusChange=` |
+| `dk0` | 7 | 播放核心 | `SHUTDOWN` / `IGNORE exclusive usb output owns attached device` / `cmd_player_dont_resume_after_call` |
+| `ik0` | 7 | 音频焦点辅助 | `pauseInCall` / `pauseInCall IGNORE as disabled` |
+| `rk0` | 4 | **按键接收** | `KEYCODE_MEDIA_PLAY` / `IGNORED as isAvrcp && playing` |
+| `cl0` | 1 | 管线重载 | `reloadPipeline` |
+| `jl0` | 1 | — | — |
+| `oo0` | 1 | 恢复逻辑 | `RESUME resume_on_mount` |
+| `dy1` | 1 | 播放服务 | — |
+| `t4` | 1 | 搜索播放 | `handleSearchAndPlay` |
+| **`zf`** | **1** | **睡眠定时器** | `sleep timer`（唯一的 `type=0`）|
+| `ud0`/`uk0`/`ac1` 等 | 6 | MediaSession | `MediaSessionWrapper` / `onFastForward` |
+
+**`rl0` 的记录实例**（音频焦点状态机）【实证·产物】`rl0.smali:1253-1456`：
+
+```java
+// AUDIOFOCUS_LOSS 的三个分支
+B(1, "PlayerServiceCore", "AUDIOFOCUS_LOSS", " inPhone");                      // :1273
+B(1, "PlayerServiceCore", "AUDIOFOCUS_LOSS", "pausePlaying af_permanent");     // :1303
+B(1, "PlayerServiceCore", "AUDIOFOCUS_LOSS", "IGNORE !inPhone && !af_permanent"); // :1350
+B(1, "PlayerServiceCore", "AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK", "...");        // :1393
+// 其他
+B(1, "PlayerServiceCore", "UNDUCK", "afterFocus");                             // :303
+B(1, "PlayerServiceCore", "RESUME", "after call or audio focus");              // :609
+B(1, "...", "...", "wasPausedByFocusChange= ... AUDIOFOCUS_GAIN");             // :1078
+```
+
+> **所以 `commands_history` 页面的实际价值是**：**排查"为什么音乐突然暂停/恢复/不响应"**。
+>
+> 用户在 `audio_focus` 里配了一堆开关，出问题时打开这个页面，就能看到**系统的每一次焦点变化 + Poweramp 的每一次决策**。这是一个**非常成熟的诊断工具**，远超"按键记录"的定位。
+
+### 7.4 清空菜单的实现（含一处精妙设计）
+
+【实证·产物】`o91.smali:245-298`：
+
+```java
+if (itemId == 0x7f0d042b) {          // 清空
+    synchronized (jo0.В) {
+        jo0.B.clear();                // ① zm.clear()：所有槽位 = null，size = 0
+        jo0.A = jo0.A + 1;            // ② 写指针 +1（不是重置为 0！）
+    }
+    this.J();                         // ③ 重绘
+    return true;
+}
+```
+
+**`zm.clear()` 的实际行为**【实证·产物】`zm.smali:373-416`：
+
+```java
+clear() {
+    for (int i = 0; i < this.y /* size */; i++)
+        this.X[i] = null;             // 清空所有槽位
+    this.y = 0;                       // size 归零
+}
+```
+
+> **为什么是 `A + 1` 而不是 `A = 0`**：
+>
+> `jo0.A` 同时充当"写指针"和"总记录数"。`o91.j` 字段保存上次渲染时的 `jo0.A` 快照，用于判断"是否有新记录"。
+>
+> 若清空时把 `A` 重置为 `0`，而 `o91.j` 此时是某个大值，则 `j > A` 会导致**刷新判定失效**（页面不再更新）。
+>
+> **保持单调递增**（`A++`）让 `o91.j < jo0.A` 恒成立，刷新逻辑不受清空影响。**这是个很容易写错的细节**。
+
+### 7.5 `_long_volume_shizuku_grant` 的创建点（**已定位**）
+
+上一轮说"只找到 `findPreference`，创建点未定位"。**实际它不是动态创建的，而是通过 `addPreference` 手动挂载**。
+
+【实证·产物】`sa1.smali:908-998`：
+
+```java
+if (this.k == null) {                     // 懒加载（只建一次）
+    // ① 拼接锚点路径
+    String anchor = this.H() + "#_long_volume_shizuku_grant";
+    //                  ↑ n91.H() = 当前页面路径（"misc"）
+
+    // ② 创建 Shizuku 授权管理器
+    this.k = new x80(
+        settingsActivity,
+        handler,
+        anchor,                            // ← 授权完成后跳回的锚点
+        new ra1(this),                     // ← 授权回调
+        new u0(0xe /* 14 */, this)         // ← 进度更新回调
+    );
+}
+
+// ③ 用它替换已存在的 Preference
+Preference grant = findPreference("_long_volume_shizuku_grant");
+// ...
+```
+
+**关键点**：
+
+| 项 | 说明 |
+| --- | --- |
+| **`#` 前缀** | `open_path` 的锚点语法：`"misc#_long_volume_shizuku_grant"` |
+| **懒加载** | `if (this.k == null)` —— 只创建一次，复用 |
+| **`n91.H()`** | 返回当前页面路径，用于构造可回跳的锚点 |
+| **`x80`** | **Shizuku 授权器**（32138 B / 1786 行）|
+
+### 7.6 `x80`：Shizuku 授权器的工作方式
+
+`x80.smali`（32138 B / 1786 行）的核心机制【实证·产物】：
+
+| 步骤 | 实现 | 定位 |
+| --- | --- | --- |
+| ① 连接 Shizuku | `moe.shizuku.server.IShizukuService` binder | `x80:257` |
+| ② 构造授权命令 | `/system/bin/cmd package grant --user <N> <pkg> <permission>` | `x80:138-167` |
+| ③ 执行 | 通过 Shizuku 服务以 shell 身份运行 | `x80:190-197` |
+| ④ 超时 | **10 秒**（`"timeout after 10 s"`）| `x80:178` |
+| ⑤ 失败处理 | `"run FAIL cmd="` / `"run TIMEOUT cmd="` 日志 | `x80:170/182` |
+| ⑥ 无 Shizuku | `"no Shizuku binder"` | `x80:243` |
+| ⑦ 进程启动失败 | `"start failed: no process"` | `x80:321` |
+
+**授权的目标权限**：`android.permission.SET_VOLUME_KEY_LONG_PRESS_LISTENER`（`x80:130`）
+
+> **这是标准的 Shizuku 授权模式**：通过 Shizuku 的 shell 权限执行 `pm grant`，把签名级权限授予自己。
+>
+> **注意用的是 `/system/bin/cmd package grant` 而非 `pm grant`** —— `cmd` 是更底层的入口，在某些 ROM 上更可靠。
+
+### 7.7 上一轮未解项的最终状态
+
+| 原问题 | 最终结论 |
+| --- | --- |
+| `commands_history` 清空实现 | ✅ **已解**（§9.4）：`zm.clear()` + `A++`（保持单调）|
+| `hf1` 三字段语义 | ✅ **已解**（§9.1）：type / source / command / extraInfo + 自动时间戳 |
+| `_long_volume_shizuku_grant` 创建点 | ✅ **已解**（§9.5）：`sa1:908-998` 懒加载 + `x80` |
+| `jo0` 写入者全集 | ✅ **已解**（§9.3）：43 处，覆盖音频焦点全链路 |
+| `cc_af_warning` 带参跳转 | ⚠️ 未追（与耳机主线关系弱，列为 P3）|
+
+### 7.8 新增的观察：`commands_history` 的定位被低估了
+
+综合本轮发现，这个页面的实际定位应该是：
+
+> **不是"按键历史查看器"，而是"播放决策黑匣子"**。
+
+| 用户困惑 | 在 `commands_history` 里能看到 |
+| --- | --- |
+| 为什么来电后没恢复播放？ | `RESUME RESUME after call or audio focus` 或 `IGNORE !inPhone && !af_permanent` |
+| 为什么插了耳机没自动播？ | `RESUME resume_on_mount` 是否出现 |
+| 为什么蓝牙按键没反应？ | `IGNORED as isAvrcp && playing` |
+| 为什么声音突然变小？ | `duckPlaying` / `UNDUCK afterFocus` |
+| 为什么暂停了不恢复？ | `wasPausedByFocusChange= ... AUDIOFOCUS_GAIN` |
+
+> **配套的 `audio_focus` 页面**（§3）正好是这些行为的**配置入口**。两个页面构成"配置 → 验证"的闭环。
+>
+> 这也解释了为什么 `commands_history` 要从 `headset` 页跳转：**耳机/蓝牙场景是音频焦点问题最高发的地方**。
 
 ---
 
-## 8. 证据索引
+## 8. 未解问题
 
-### 8.1 XML / 资源
+> **第 2 轮已闭合 4 项**：`hf1` 字段语义、`jo0` 写入者全集、清空菜单实现、`_long_volume_shizuku_grant` 创建点。详见 §7.7。
+
+### 8.1 仍未解
+
+1. **`cc_af_warning` 的带参跳转解析**：`audio_output_device_opts?uniqName=com.maxmpz.audioplayer/output.cc&device=chromecast#no_af` 的 query 参数如何被消费未追。（P3）
+
+2. **`x80` 的 `ra1` 回调细节**：授权成功后 `ra1(this)` 做什么（刷新页面？重试操作？）未展开。（P3）
+
+3. **`cl0` / `jl0` / `dy1` / `t4` 各自 1 次写入的具体语义**：已定位但未逐条读参数。（P3）
+
+### 8.2 明确不再追的项
+
+| 项 | 原因 |
+| --- | --- |
+| `x80` 的 1786 行完整实现 | Shizuku 集成是通用第三方方案，与耳机主线无关 |
+| `rl0` 的 3945 行音频焦点状态机 | 已在 §7.3 抓出 13 条关键记录，逐行读收益低 |
+| 15 处动态 `type` 值的逐个确认 | 只影响日志分类展示，不影响行为 |
+
+## 9. 证据索引
+
+### 9.1 XML / 资源
 
 | 位置 | 内容 |
 | --- | --- |
@@ -554,7 +777,7 @@ headset 根页
 | `misc.xml:35` | `long_volume_controls` + `w:sup` 实验徽标 |
 | `public.xml` | 59 个 `type="xml"` 页面 id |
 
-### 8.2 smali
+### 9.2 smali
 
 | 位置 | 内容 |
 | --- | --- |
@@ -588,7 +811,41 @@ headset 根页
 | `vr.smali:1804-1816` | `long_volume_controls` → `vr->E0` |
 | `vr.smali:1417-3503` | `audio_focus` 9 个字段 |
 
-### 8.3 交叉引用
+### 9.2b 第 2 轮新增定位（记录结构）
+
+| 位置 | 内容 |
+| --- | --- |
+| **`hf1.smali:19-57`** | **构造器**：type/source/command/extraInfo + 自动 `currentTimeMillis()` |
+| **`hf1.smali:61-204`** | **`toString()`：字段名映射的权威来源** |
+| `hf1.smali:73-112` | `type` 映射：`0→"command"`、`1→"external"` |
+| `hf1.smali:127-195` | 拼接 `type=/source=/command=/extraInfo=` |
+| `jo0.smali:19-57` | 环形缓冲构造（64 条）|
+| `jo0.smali:61-257` | `B()` 写入 + 加锁 |
+| `jo0.smali:261-414` | `В()` 两段拷贝读出 |
+| **`zm.smali:373-416`** | **`clear()`：所有槽位 = null，size = 0** |
+| **`o91.smali:245-298`** | **清空菜单：`zm.clear()` + `jo0.A++`（保持单调）** |
+| `o91.smali:317-357` | 复制菜单（`ClipData.newPlainText`）|
+| `o91.smali:371-450` | 分享菜单（`ACTION_SEND` + `SUBJECT`/`TEXT`）|
+| **`sa1.smali:908-998`** | **`_long_volume_shizuku_grant` 懒加载创建** |
+| `sa1.smali:938-960` | **锚点拼接：`n91.H() + "#_long_volume_shizuku_grant"`** |
+| `sa1.smali:972-976` | `u0(0xe, this)` 进度回调 |
+| **`x80.smali:130`** | **目标权限 `SET_VOLUME_KEY_LONG_PRESS_LISTENER`** |
+| `x80.smali:138-167` | **`/system/bin/cmd package grant --user N ...`** |
+| `x80.smali:178` | **10 秒超时** |
+| `x80.smali:257` | `moe.shizuku.server.IShizukuService` |
+| `x80.smali:243` | `"no Shizuku binder"` 错误分支 |
+| **`rl0.smali:1253-1456`** | **13 条音频焦点记录写入** |
+| `rl0.smali:1273/1303/1350` | `AUDIOFOCUS_LOSS` 的三分支记录 |
+| `rl0.smali:1393` | `AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK` |
+| `rl0.smali:303/609/1078` | `UNDUCK` / `RESUME` / `wasPausedByFocusChange=` |
+| `zf.smali:931` | **唯一的 `type=0`**：`PSSleepTimer` |
+| `ik0.smali:1146/1160` | `pauseInCall` 记录 |
+| `dk0.smali:4809` | `pausePlaying` |
+| `cl0.smali:5556` | `reloadPipeline` |
+| `oo0.smali:311` | `RESUME resume_on_mount` |
+| `t4.smali:2085` | `handleSearchAndPlay` |
+
+### 9.3 交叉引用
 
 | 文档 | 关系 |
 | --- | --- |

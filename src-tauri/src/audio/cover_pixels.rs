@@ -2319,9 +2319,15 @@ fn read_playlist_thumbnail_path_cache(
         return None;
     };
     let _ = File::open(&path).and_then(|file| file.set_modified(SystemTime::now()));
-    let absolute = fs::canonicalize(&path).ok()?;
+    // Return the plain absolute path, never a `fs::canonicalize` result.
+    //
+    // On Windows `canonicalize` yields a verbatim path (`\\?\C:\...`). The asset
+    // protocol receives this string through `convertFileSrc`, and a verbatim
+    // path is not what its scope matching and `File::open` expect, so every
+    // thumbnail fails to load. `cache_dir` is already an absolute, non-verbatim
+    // path that `starts_with`/containment above validated, so joining is enough.
     Some(PlaylistThumbnailPath {
-        path: absolute.to_string_lossy().into_owned(),
+        path: path.to_string_lossy().into_owned(),
         width,
         height,
         byte_len: metadata.len(),
@@ -5325,6 +5331,21 @@ mod tests {
                 .expect("publish thumbnail JPEG");
         assert_eq!((published.width, published.height), (64, 48));
         assert!(published.path.ends_with("-256-t2-j1.jpg"));
+        // The frontend hands this string straight to `convertFileSrc`, so it must
+        // stay a plain path. On Windows a `fs::canonicalize` result starts with
+        // `\\?\`, which the asset protocol cannot serve; every list cover would
+        // fail to load. Keep the assertion portable: only Windows produces it.
+        #[cfg(windows)]
+        assert!(
+            !published.path.starts_with(r"\\?\"),
+            "returned path must not be a verbatim Windows path: {}",
+            published.path
+        );
+        assert!(
+            Path::new(&published.path).is_absolute(),
+            "returned path must be absolute for convertFileSrc: {}",
+            published.path
+        );
         assert!(
             Path::new(&published.path).exists(),
             "the returned path must already exist (decision 3.4 / acceptance 5)"

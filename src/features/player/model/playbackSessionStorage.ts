@@ -25,7 +25,7 @@ export function readPlaybackSession(): SavedPlaybackSession | null {
     const session = value as Partial<SavedPlaybackSession>
     const playlist = session.playlist
     if (session.version !== 1 || typeof session.sourcePath !== 'string' || !session.sourcePath
-      || !playlist || !['folder', 'm3u8', 'custom'].includes(playlist.sourceKind ?? '')
+      || !playlist || !['folder', 'm3u8', 'custom', 'streams'].includes(playlist.sourceKind ?? '')
       || typeof playlist.sourcePath !== 'string' || !playlist.sourcePath
       || !Number.isFinite(session.positionMs) || (session.positionMs ?? -1) < 0
       || typeof session.wasPlaying !== 'boolean' || typeof session.wasPaused !== 'boolean'

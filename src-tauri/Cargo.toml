@@ -62,6 +62,7 @@ symphonia-adapter-libopus = { version = "0.2.0", features = ["bundled"] }
 matroska-demuxer = { path = "vendor/matroska-demuxer", version = "=0.8.0" }
 blake3 = "1.8.5"
 base64 = "0.22.1"
+reqwest = { version = "=0.13.4", default-features = false, features = ["blocking", "rustls"] }
 image = { version = "0.25.10", default-features = false, features = [
   "bmp",
   "gif",

@@ -7,6 +7,7 @@
  * ruling 7 / risk R7).
  */
 export const AUDIO_PLAYLIST_DURATION_BATCH_LIMIT = 256
+const isRemoteSource = (sourcePath: string) => /^https?:\/\//i.test(sourcePath)
 
 export type PlaylistDurationStatus = 'loading' | 'ready' | 'unknown' | 'error'
 export type PlaylistDurationResult = {
@@ -111,7 +112,7 @@ export function createPlaylistDurationScanner(probe: PlaylistDurationProbe) {
         if (entry.available !== false && validDuration(entry.durationMs)) durationsByPath.set(entry.sourcePath, entry.durationMs)
       }
       const result: PlaylistDurationScanResult = { durationsByPath, itemFailures }
-      const paths = [...new Set(entries.filter((entry) => entry.available !== false).map((entry) => entry.sourcePath))].filter((path) => !durationsByPath.has(path))
+      const paths = [...new Set(entries.filter((entry) => entry.available !== false && !isRemoteSource(entry.sourcePath)).map((entry) => entry.sourcePath))].filter((path) => !durationsByPath.has(path))
       for (let index = 0; index < paths.length; index += AUDIO_PLAYLIST_DURATION_BATCH_LIMIT) {
         if (!isCurrent()) return null
         const batch = paths.slice(index, index + AUDIO_PLAYLIST_DURATION_BATCH_LIMIT)

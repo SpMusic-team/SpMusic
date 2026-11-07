@@ -1,7 +1,7 @@
 use std::{
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{Receiver, Sender, SyncSender},
         Arc, Mutex, MutexGuard,
     },
@@ -110,6 +110,7 @@ pub(crate) enum AudioRuntimeRequest {
     },
     Play {
         input: Option<AudioPlayInput>,
+        network_epoch: u64,
         reply: Sender<Result<AudioPlaybackState, AudioCommandError>>,
     },
     Pause {
@@ -117,6 +118,7 @@ pub(crate) enum AudioRuntimeRequest {
     },
     TransitionPlayback {
         input: AudioTransitionPlaybackInput,
+        network_epoch: u64,
         reply: Sender<Result<AudioPlaybackState, AudioCommandError>>,
     },
     Stop {
@@ -158,6 +160,7 @@ pub(crate) enum AudioRuntimeRequest {
 /// state side effects.
 pub(crate) struct LatestLoadAndPlayIntent {
     latest_request_id: AtomicU64,
+    cancelled: AtomicBool,
     commit_gate: Mutex<()>,
 }
 
@@ -165,6 +168,7 @@ impl Default for LatestLoadAndPlayIntent {
     fn default() -> Self {
         Self {
             latest_request_id: AtomicU64::new(0),
+            cancelled: AtomicBool::new(false),
             commit_gate: Mutex::new(()),
         }
     }
@@ -184,6 +188,7 @@ impl LatestLoadAndPlayIntent {
             return Err(superseded_error(request_id, latest_request_id));
         }
         self.latest_request_id.store(request_id, Ordering::Release);
+        self.cancelled.store(false, Ordering::Release);
         Ok(())
     }
 
@@ -193,11 +198,16 @@ impl LatestLoadAndPlayIntent {
 
     pub(crate) fn ensure_latest(&self, request_id: u64) -> Result<(), AudioCommandError> {
         let latest_request_id = self.latest_request_id();
-        if latest_request_id == request_id {
+        if latest_request_id == request_id && !self.cancelled.load(Ordering::Acquire) {
             Ok(())
         } else {
             Err(superseded_error(request_id, latest_request_id))
         }
+    }
+
+    pub(crate) fn cancel(&self) {
+        let _gate = self.lock_commit_gate();
+        self.cancelled.store(true, Ordering::Release);
     }
 
     pub(crate) fn commit_if_latest<T>(
@@ -219,14 +229,22 @@ pub(crate) struct TrackParseRequest {
 
 pub(crate) enum TrackParsePurpose {
     LegacyLoad,
-    Details { request_id: u64, track_id: String },
+    Details {
+        request_id: u64,
+        track_id: String,
+        station_name: Option<String>,
+    },
 }
+
+pub(crate) type StreamMetadataCache =
+    Arc<dyn Fn(&str, Option<&str>) -> Option<String> + Send + Sync>;
 
 pub(crate) fn start_track_parser(
     rx: Receiver<TrackParseRequest>,
     runtime_tx: Sender<AudioRuntimeRequest>,
     cover_cache_dir: PathBuf,
     lyrics_cache: Arc<LyricsCache>,
+    stream_metadata_cache: StreamMetadataCache,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         tracing::info!(
@@ -241,8 +259,25 @@ pub(crate) fn start_track_parser(
                 generation = request.generation,
                 "parsing audio track on worker",
             );
-            let result =
+            let mut result =
                 hydrate_track_ref(&request.path, Some(&cover_cache_dir), Some(&lyrics_cache));
+            if let Ok(track) = &mut result {
+                if super::network::is_stream(&track.source_path) {
+                    let discovered = match &request.purpose {
+                        TrackParsePurpose::Details { station_name, .. } => station_name.clone(),
+                        TrackParsePurpose::LegacyLoad => None,
+                    }
+                    .as_deref()
+                    .and_then(super::network::valid_station_name);
+                    // Persistence is metadata work: never fsync on the runtime or
+                    // while holding its latest-intent commit gate.
+                    let cached = stream_metadata_cache(&track.source_path, discovered.as_deref());
+                    super::source::apply_station_name(
+                        track,
+                        discovered.as_deref().or(cached.as_deref()),
+                    );
+                }
+            }
             let elapsed_ms = started_at.elapsed().as_millis() as u64;
             match &result {
                 Ok(track) => tracing::info!(
@@ -273,6 +308,7 @@ pub(crate) fn start_track_parser(
                 TrackParsePurpose::Details {
                     request_id,
                     track_id,
+                    ..
                 } => AudioRuntimeRequest::TrackDetailsHydrated {
                     request_id,
                     generation: request.generation,
@@ -301,6 +337,9 @@ pub(crate) struct AudioRuntime {
     sink: Option<Sink>,
     current_track: Option<AudioTrackRef>,
     current_path: Option<PathBuf>,
+    current_stream_status: Option<Arc<super::network::StreamStatus>>,
+    current_stream_request_id: Option<u64>,
+    network_epoch: u64,
     phase: AudioPlaybackPhase,
     accumulated: Duration,
     started_at: Option<Instant>,
@@ -328,6 +367,9 @@ impl Default for AudioRuntime {
             sink: None,
             current_track: None,
             current_path: None,
+            current_stream_status: None,
+            current_stream_request_id: None,
+            network_epoch: super::network::cancellation_epoch(),
             phase: AudioPlaybackPhase::Idle,
             accumulated: Duration::ZERO,
             started_at: None,
@@ -348,6 +390,10 @@ impl Default for AudioRuntime {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "stream_runtime_tests.rs"]
+mod stream_runtime_tests;
 
 #[derive(Debug, Clone)]
 struct TransportEnvelope {
@@ -458,18 +504,37 @@ impl AudioRuntime {
         latest_intent.ensure_latest(request_id)?;
 
         let preparation = (|| {
-            validate_existing_file(&path)?;
-            let normalized_path = path.canonicalize().map_err(|error| {
-                audio_error(
-                    AudioErrorCode::UnreadableFile,
-                    format!("Failed to normalize audio path: {error}"),
-                    true,
-                )
-            })?;
-            let source = open_source_fast(&normalized_path)?;
+            let is_stream = super::network::is_stream(&path.to_string_lossy());
+            let normalized_path = if is_stream {
+                PathBuf::from(super::network::canonical_url(&path.to_string_lossy())?)
+            } else {
+                validate_existing_file(&path)?;
+                path.canonicalize().map_err(|error| {
+                    audio_error(
+                        AudioErrorCode::UnreadableFile,
+                        format!("Failed to normalize audio path: {error}"),
+                        true,
+                    )
+                })?
+            };
+            let (source, stream_status) = if is_stream {
+                let (source, status) = super::network::open_with_status(&normalized_path, || {
+                    latest_intent.ensure_latest(request_id).is_err()
+                })?;
+                (source, Some(status))
+            } else {
+                (open_source_fast(&normalized_path)?, None)
+            };
             let source_duration = source.total_duration();
-            let track = playback_track_ref(&normalized_path, source_duration);
-            let initial_position = clamp_position_ms(initial_position_ms, track.duration_ms);
+            let mut track = playback_track_ref(&normalized_path, source_duration);
+            if let Some(status) = &stream_status {
+                super::source::apply_station_name(&mut track, status.station_name().as_deref());
+            }
+            let initial_position = if is_stream {
+                Duration::ZERO
+            } else {
+                clamp_position_ms(initial_position_ms, track.duration_ms)
+            };
             latest_intent.ensure_latest(request_id)?;
             tracing::info!(
                 operation = "audio.transaction.load_and_play.source_ready",
@@ -514,6 +579,7 @@ impl AudioRuntime {
                 sink,
                 visualization_revision,
                 initial_position,
+                stream_status,
             ))
         })();
 
@@ -523,29 +589,38 @@ impl AudioRuntime {
             self.current_generation = Some(generation);
             self.invalidate_loaded_audio();
 
-            let (normalized_path, track, sink, visualization_revision, initial_position) =
-                match preparation {
-                    Ok(prepared) => prepared,
-                    Err(error) => {
-                        self.phase = AudioPlaybackPhase::Error;
-                        self.error = Some(error.clone());
-                        tracing::warn!(
-                            operation = "audio.transaction.load_and_play.end",
-                            path = %path.display(),
-                            request_id,
-                            generation,
-                            error_code = ?error.code,
-                            error = %error.message,
-                            elapsed_ms = started_at.elapsed().as_millis() as u64,
-                            "audio load-and-play transaction failed",
-                        );
-                        return Err(error);
-                    }
-                };
+            let (
+                normalized_path,
+                track,
+                sink,
+                visualization_revision,
+                initial_position,
+                stream_status,
+            ) = match preparation {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    self.phase = AudioPlaybackPhase::Error;
+                    self.error = Some(error.clone());
+                    tracing::warn!(
+                        operation = "audio.transaction.load_and_play.end",
+                        path = %path.display(),
+                        request_id,
+                        generation,
+                        error_code = ?error.code,
+                        error = %error.message,
+                        elapsed_ms = started_at.elapsed().as_millis() as u64,
+                        "audio load-and-play transaction failed",
+                    );
+                    return Err(error);
+                }
+            };
 
             let track_id = track.id.clone();
             let file_name = track.file_name.clone();
             self.current_path = Some(normalized_path);
+            self.current_stream_request_id = stream_status.as_ref().map(|_| request_id);
+            self.current_stream_status = stream_status;
+            self.network_epoch = super::network::cancellation_epoch();
             self.current_track = Some(track);
             self.install_prepared_sink(sink);
             if let Some((revision, source_revision)) = visualization_revision {
@@ -603,7 +678,25 @@ impl AudioRuntime {
         }
 
         if let Ok(track) = result {
-            self.current_track = Some(track.clone());
+            let mut track = track.clone();
+            if track.station_name.is_none() {
+                let name = self
+                    .current_stream_status
+                    .as_ref()
+                    .and_then(|status| status.station_name())
+                    .or_else(|| {
+                        self.current_track
+                            .as_ref()
+                            .and_then(|current| current.station_name.clone())
+                    });
+                super::source::apply_station_name(&mut track, name.as_deref());
+            }
+            // ICY is live session data. A late static metadata result must not
+            // erase an observed author, including an explicit author clear.
+            if let Some(artist) = self.current_stream_status.as_ref().and_then(|status| status.artist()) {
+                track.metadata.artist = artist;
+            }
+            self.current_track = Some(track);
         }
         true
     }
@@ -657,6 +750,18 @@ impl AudioRuntime {
             }
         }
         true
+    }
+
+    pub(crate) fn set_network_intent(&mut self, epoch: u64) -> Result<(), AudioCommandError> {
+        if super::network::cancellation_epoch() != epoch {
+            return Err(audio_error(
+                AudioErrorCode::Superseded,
+                "播放请求已取消",
+                true,
+            ));
+        }
+        self.network_epoch = epoch;
+        Ok(())
     }
 
     pub(crate) fn play(
@@ -1025,6 +1130,21 @@ impl AudioRuntime {
         &mut self,
         input: AudioSeekInput,
     ) -> Result<AudioPlaybackState, AudioCommandError> {
+        if self
+            .current_path
+            .as_ref()
+            .is_some_and(|path| super::network::is_stream(&path.to_string_lossy()))
+        {
+            return if input.position_ms == 0 {
+                Ok(self.state())
+            } else {
+                Err(audio_error(
+                    AudioErrorCode::UnsupportedOperation,
+                    "网络流不支持跳转播放位置",
+                    true,
+                ))
+            };
+        }
         let started_at = Instant::now();
         self.cancel_transport_transition(true);
         self.clear_error();
@@ -1168,6 +1288,18 @@ impl AudioRuntime {
         self.current_track.clone()
     }
 
+    /// Polled on the existing runtime owner thread; never from an audio callback.
+    pub(crate) fn refresh_stream_artist(&mut self) -> Option<(u64, u64, AudioTrackRef)> {
+        if !matches!(self.phase, AudioPlaybackPhase::Playing | AudioPlaybackPhase::Paused) {
+            return None;
+        }
+        let artist = self.current_stream_status.as_ref()?.artist()?;
+        let track = self.current_track.as_mut()?;
+        if track.metadata.artist == artist { return None; }
+        track.metadata.artist = artist;
+        Some((self.current_stream_request_id?, self.current_generation?, track.clone()))
+    }
+
     pub(crate) fn unload_for_deletion(
         &mut self,
         paths: &[(String, PathBuf)],
@@ -1199,6 +1331,10 @@ impl AudioRuntime {
         self.latest_transport_request_id = None;
         self.transport_settled_request_id = None;
         stop_and_take_sink(&mut self.sink);
+        if let Some(status) = self.current_stream_status.take() {
+            status.cancel();
+        }
+        self.current_stream_request_id = None;
         self.current_path = None;
         self.current_track = None;
         self.accumulated = Duration::ZERO;
@@ -1423,6 +1559,11 @@ impl AudioRuntime {
                 true,
             )
         })?;
+        let position = if super::network::is_stream(&path.to_string_lossy()) {
+            Duration::ZERO
+        } else {
+            position
+        };
         tracing::info!(
             operation = "audio.runtime.rebuild_sink",
             path = %path.display(),
@@ -1444,7 +1585,15 @@ impl AudioRuntime {
                 true,
             )
         })?;
-        let source = open_source(&path)?;
+        let (source, stream_status) = if super::network::is_stream(&path.to_string_lossy()) {
+            let epoch = self.network_epoch;
+            let (source, status) = super::network::open_with_status(&path, || {
+                super::network::cancellation_epoch() != epoch
+            })?;
+            (source, Some(status))
+        } else {
+            (open_source(&path)?, None)
+        };
         let (source, visualization_revision) = if let (Some(tx), Some(generation), Some(track)) = (
             &self.visualization_tx,
             self.current_generation,
@@ -1479,6 +1628,15 @@ impl AudioRuntime {
             )
         })?;
         self.sink = Some(sink);
+        self.current_stream_status = stream_status;
+        if let Some(status) = &self.current_stream_status {
+            if status.artist().is_none() {
+                // A restarted connection must clear the prior programme's
+                // author through the same change event, not silently in Track.
+                status.set_artist(None);
+            }
+        }
+        self.accumulated = position;
         if let Some((revision, source_revision)) = visualization_revision {
             self.visualization_source_revision = Some(source_revision);
             self.visualization_session.activate(revision);
@@ -1494,6 +1652,24 @@ impl AudioRuntime {
     }
 
     fn state(&mut self) -> AudioPlaybackState {
+        if matches!(
+            self.phase,
+            AudioPlaybackPhase::Playing | AudioPlaybackPhase::Paused
+        ) {
+            let network_error = self
+                .current_stream_status
+                .as_ref()
+                .and_then(|status| status.error());
+            if let Some(error) = network_error {
+                if let Some(sink) = self.sink.take() {
+                    sink.stop();
+                }
+                self.accumulated = self.position();
+                self.started_at = None;
+                self.phase = AudioPlaybackPhase::Error;
+                self.error = Some(error);
+            }
+        }
         if matches!(self.phase, AudioPlaybackPhase::Playing) {
             if let Some(sink) = &self.sink {
                 if sink.empty() {
@@ -1733,6 +1909,8 @@ mod tests {
 
     fn loaded_test_track() -> AudioTrackRef {
         AudioTrackRef {
+            station_name: None,
+            source_kind: None,
             id: "old-track".to_string(),
             source_path: "old.flac".to_string(),
             file_name: "old.flac".to_string(),
@@ -2484,6 +2662,175 @@ mod tests {
     }
 
     #[test]
+    fn stream_details_worker_persists_before_ready_and_preserves_response_name() {
+        let root = std::env::temp_dir().join(format!(
+            "spmusic-station-worker-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let registry = Arc::new(crate::library_streams::LibraryStreamRegistry::new(&root));
+        let url = "https://127.0.0.1:1/NoNetwork";
+        let before = registry
+            .add(crate::library_streams::AddStreamInput {
+                url: url.into(),
+                title: None,
+            })
+            .unwrap();
+        let worker_registry = registry.clone();
+        let calling_thread = std::thread::current().id();
+        let cache: StreamMetadataCache = Arc::new(move |url, name| {
+            assert_ne!(
+                std::thread::current().id(),
+                calling_thread,
+                "storage stays off the caller/control thread"
+            );
+            worker_registry.remember_station_name(url, name).unwrap()
+        });
+        let (runtime_tx, runtime_rx) = mpsc::channel();
+        let (parser_tx, parser_rx) = mpsc::channel();
+        let worker = start_track_parser(
+            parser_rx,
+            runtime_tx,
+            root.join("cache"),
+            Arc::new(LyricsCache::new(8)),
+            cache,
+        );
+        parser_tx
+            .send(TrackParseRequest {
+                generation: 4,
+                path: PathBuf::from(url),
+                purpose: TrackParsePurpose::Details {
+                    request_id: 7,
+                    track_id: before.tracks[0].id.clone(),
+                    station_name: Some("Station A".into()),
+                },
+            })
+            .unwrap();
+        let track = match runtime_rx.recv_timeout(Duration::from_secs(5)).unwrap() {
+            AudioRuntimeRequest::TrackDetailsHydrated {
+                request_id: 7,
+                generation: 4,
+                result,
+                ..
+            } => result.unwrap(),
+            _ => panic!("expected current stream details"),
+        };
+        assert_eq!(track.station_name.as_deref(), Some("Station A"));
+        assert_eq!(track.metadata.title.as_deref(), Some("Station A"));
+        assert_eq!(track.file_name, "Station A");
+        assert_eq!(
+            registry.get().unwrap().tracks[0].file_name,
+            "Station A",
+            "ready cannot race ahead of persistence"
+        );
+        drop(parser_tx);
+        worker.join().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn late_hydration_cannot_erase_current_stream_station_name() {
+        let mut runtime = AudioRuntime::default();
+        let mut initial = playback_track_ref(Path::new("https://example.invalid/radio"), None);
+        super::super::source::apply_station_name(&mut initial, Some("Station A"));
+        runtime.current_generation = Some(4);
+        runtime.current_track = Some(initial.clone());
+        let bare = playback_track_ref(Path::new(&initial.source_path), None);
+        assert!(runtime.apply_track_details(4, &initial.id, &Ok(bare.clone())));
+        assert_eq!(
+            runtime.get_current_track().unwrap().station_name.as_deref(),
+            Some("Station A")
+        );
+        assert!(!runtime.apply_track_details(3, &initial.id, &Ok(bare)));
+        assert_eq!(
+            runtime
+                .get_current_track()
+                .unwrap()
+                .metadata
+                .title
+                .as_deref(),
+            Some("Station A")
+        );
+    }
+
+    #[test]
+    fn stream_artist_refresh_hydration_clear_and_session_isolation() {
+        let status = Arc::new(super::super::network::StreamStatus::default());
+        let initial = playback_track_ref(Path::new("https://example.invalid/radio"), None);
+        let mut runtime = AudioRuntime {
+            phase: AudioPlaybackPhase::Playing,
+            current_generation: Some(4),
+            current_stream_request_id: Some(7),
+            current_track: Some(initial.clone()),
+            current_stream_status: Some(status.clone()),
+            ..AudioRuntime::default()
+        };
+        assert!(runtime.refresh_stream_artist().is_none());
+        status.set_artist(Some("First artist".into()));
+        let (request_id, generation, track) = runtime.refresh_stream_artist().unwrap();
+        assert_eq!((request_id, generation), (7, 4));
+        assert_eq!(track.metadata.artist.as_deref(), Some("First artist"));
+        assert!(runtime.refresh_stream_artist().is_none(), "unchanged artist cannot emit repeatedly");
+        assert!(runtime.apply_track_details(4, &initial.id, &Ok(initial.clone())));
+        assert_eq!(runtime.get_current_track().unwrap().metadata.artist.as_deref(), Some("First artist"));
+        status.set_artist(Some("Second artist".into()));
+        assert_eq!(runtime.refresh_stream_artist().unwrap().2.metadata.artist.as_deref(), Some("Second artist"));
+        status.set_artist(None);
+        assert!(runtime.refresh_stream_artist().unwrap().2.metadata.artist.is_none());
+        let mut stale = initial.clone();
+        stale.metadata.artist = Some("Outdated artist".into());
+        assert!(runtime.apply_track_details(4, &initial.id, &Ok(stale.clone())));
+        assert!(runtime.get_current_track().unwrap().metadata.artist.is_none());
+        assert!(!runtime.apply_track_details(3, &initial.id, &Ok(stale)));
+        runtime.phase = AudioPlaybackPhase::Stopped;
+        status.set_artist(Some("After stop".into()));
+        assert!(runtime.refresh_stream_artist().is_none());
+        runtime.invalidate_loaded_audio();
+        runtime.current_track = Some(playback_track_ref(Path::new("https://example.invalid/other"), None));
+        runtime.phase = AudioPlaybackPhase::Playing;
+        runtime.current_stream_status = Some(Arc::new(super::super::network::StreamStatus::default()));
+        assert!(runtime.refresh_stream_artist().is_none());
+        assert!(runtime.get_current_track().unwrap().metadata.artist.is_none());
+    }
+
+    #[test]
+    fn station_response_name_survives_unavailable_metadata_cache() {
+        let (runtime_tx, runtime_rx) = mpsc::channel();
+        let (parser_tx, parser_rx) = mpsc::channel();
+        let worker = start_track_parser(
+            parser_rx,
+            runtime_tx,
+            std::env::temp_dir(),
+            Arc::new(LyricsCache::new(8)),
+            Arc::new(|_, _| None),
+        );
+        parser_tx
+            .send(TrackParseRequest {
+                generation: 8,
+                path: PathBuf::from("https://127.0.0.1:1/offline-cache"),
+                purpose: TrackParsePurpose::Details {
+                    request_id: 9,
+                    track_id: "stream".into(),
+                    station_name: Some("Live station".into()),
+                },
+            })
+            .unwrap();
+        match runtime_rx.recv_timeout(Duration::from_secs(5)).unwrap() {
+            AudioRuntimeRequest::TrackDetailsHydrated { result, .. } => {
+                let track = result.expect("cache availability cannot fail audio metadata");
+                assert_eq!(track.station_name.as_deref(), Some("Live station"));
+                assert_eq!(track.metadata.title.as_deref(), Some("Live station"));
+            }
+            _ => panic!("expected stream details"),
+        }
+        drop(parser_tx);
+        worker.join().unwrap();
+    }
+
+    #[test]
     fn track_parser_worker_forwards_results_to_the_runtime_channel() {
         let (runtime_tx, runtime_rx) = mpsc::channel::<AudioRuntimeRequest>();
         let (parser_tx, parser_rx) = mpsc::channel::<TrackParseRequest>();
@@ -2492,6 +2839,7 @@ mod tests {
             runtime_tx,
             std::env::temp_dir(),
             std::sync::Arc::new(LyricsCache::new(LyricsCache::MAX_LYRICS_CACHE_ENTRIES)),
+            Arc::new(|_, _| None),
         );
 
         let missing = std::env::temp_dir().join(format!(

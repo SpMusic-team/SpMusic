@@ -32,6 +32,7 @@ import { usePlaylistControllerSwipe } from '@/features/player/hooks/usePlaylistC
 import type { Track, TrackArtwork } from '@/features/player/model/playerTypes'
 import { playerViewTransitionLayoutId } from '@/features/player/model/playerViewTransition'
 import { cn } from '@/lib/utils'
+import streamGlyph from '@/assets/media-library/streams-root.svg'
 
 type PlaylistPlaybackDockProps = {
   controllerRef?: RefObject<HTMLElement | null>
@@ -177,7 +178,7 @@ function SelectionPanel({ selection }: { selection: LibraryDockSelection }) {
     </div>
     {deleteError && !deleteSnapshot ? <p className="playlist-selection-error" role="alert">{deleteError}</p> : null}
     </div>}
-    <PlaylistDeleteDialog open={Boolean(deleteSnapshot) && present} container={panelRef} mode={deleteMode} canRemoveFromList={deleteCanRemoveFromList} busy={deleteBusy} error={deleteError}
+    <PlaylistDeleteDialog open={Boolean(deleteSnapshot) && present} container={panelRef} mode={deleteMode} canRemoveFromList={deleteCanRemoveFromList} canDeleteFiles={deleteSnapshot?.canDeleteFiles} busy={deleteBusy} error={deleteError}
       onCancel={() => { setDeleteSnapshot(null); setDeleteError(null) }} onModeChange={mode => { setDeleteMode(mode); setDeleteError(null) }} onConfirm={() => { void confirmDelete() }} />
     {addRequest ? <PlaylistAddDialog selection={selection} request={addRequest} container={panelRef} active={present}
       onCancel={() => setAddRequest(null)} onDone={(targetScope, outcome) => {
@@ -370,7 +371,7 @@ export function PlaylistPlaybackDock({
     const matchingPlaylistTrack = playlistTrack?.id === track?.id ? playlistTrack : undefined
     // Never render a dangling separator: an unknown artist or album is simply
     // omitted instead of leaving `/` or `-` in the row.
-    const trackMeta = [track?.artist?.trim(), track?.album?.trim()].filter(
+    const trackMeta = track?.stream ? track.artist?.trim() || track.stream.url : [track?.artist?.trim(), track?.album?.trim()].filter(
       (part): part is string => Boolean(part),
     ).join('/')
     const imageFallback = matchingArtwork?.coverImageFallback ?? track?.coverImageFallback
@@ -422,7 +423,7 @@ export function PlaylistPlaybackDock({
             ) : null}
             {coverState === 'empty' ? (
               <span className="playlist-playback-cover-mark">
-                <systemIcons.music />
+                {track?.stream ? <span className="playlist-playback-stream-mark" style={{ maskImage: `url("${streamGlyph}")` }} /> : <systemIcons.music />}
               </span>
             ) : null}
           </motion.span></DockProjectionPresence>
@@ -434,7 +435,9 @@ export function PlaylistPlaybackDock({
             transition={{ layout: layoutTransition }}
           >
             <strong>{track?.title ?? '未在播放'}</strong>
-            {track ? (trackMeta ? <span>{trackMeta}</span> : null) : <span>选择一首歌曲开始播放</span>}
+            {track?.stream ? <span className="playlist-playback-stream-details">
+              <span className="playlist-playback-stream-url" title={trackMeta}>{trackMeta}</span>
+            </span> : track ? (trackMeta ? <span>{trackMeta}</span> : null) : <span>选择一首歌曲开始播放</span>}
           </motion.span></DockProjectionPresence>
         </button>
         <PressFeedbackButton
@@ -504,6 +507,7 @@ export function PlaylistPlaybackDock({
       aria-hidden={controllerHidden && !selectionActive || !isPresent || undefined}
       data-playback-command-busy={commandBusy && !disabled ? '' : undefined}
       data-playback-track-present={track ? '' : undefined}
+      data-playback-stream={track?.stream ? '' : undefined}
       variants={appearanceMotion.variants.backdrop}
       initial="initial"
       animate="animate"

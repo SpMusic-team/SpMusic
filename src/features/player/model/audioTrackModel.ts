@@ -1,10 +1,13 @@
 import { splitLyricTranslation } from '@/features/player/model/lyrics'
+import { isStreamSource } from './streams'
 import {
   coverToneForTrackId,
   fileExtension,
   fileNameTitle,
   nonEmptyText,
   normalizeAudioSourcePath,
+  streamInformation,
+  streamTrackTitle,
 } from '@/features/player/model/playlistTrackSummary'
 import type { PlaylistTrackMetadata } from '@/features/player/model/playerUiViewModel'
 import type { DemoLyricLine, Track } from '@/features/player/model/playerTypes'
@@ -48,12 +51,14 @@ export function singleTrackFolderPlaylist(track: AudioTrackRef): AudioFolderPlay
 
 export function audioFolderTrackPlaceholder(track: AudioFolderTrackRef): AudioTrackRef {
   return {
+    sourceKind: track.sourceKind,
+    ...(track.stationName ? { stationName: track.stationName } : {}),
     id: track.id,
     sourcePath: track.sourcePath,
     fileName: track.fileName,
     durationMs: null,
     metadata: {
-      title: null,
+      title: track.title ?? null,
       artist: null,
       album: null,
       albumArtist: null,
@@ -121,41 +126,45 @@ function metadataLyricsToLines(track: AudioTrackRef, durationSeconds: number): D
 }
 
 export function audioTrackToTrack(track: AudioTrackRef): Track {
+  const stream = isStreamSource(track)
   const durationSeconds = track.durationMs ? track.durationMs / 1000 : 0
-  const title = nonEmptyText(track.metadata.title) ?? fileNameTitle(track.fileName)
-  const artist = nonEmptyText(track.metadata.artist) ?? nonEmptyText(track.metadata.albumArtist) ?? '本地音频'
-  const album = nonEmptyText(track.metadata.album) ?? '本地音频'
+  const title = stream ? streamTrackTitle({ ...track, title: track.metadata.title ?? undefined }) : nonEmptyText(track.metadata.title) ?? fileNameTitle(track.fileName)
+  const artist = nonEmptyText(track.metadata.artist) ?? nonEmptyText(track.metadata.albumArtist) ?? (stream ? '' : '本地音频')
+  const album = stream ? '' : nonEmptyText(track.metadata.album) ?? '本地音频'
 
   return {
     id: track.id,
     sourcePath: track.sourcePath,
+    ...(stream ? { stream: streamInformation(track) } : {}),
     title,
     artist,
     album,
-    category: 'local-audio',
-    fileExtension: fileExtension(track.fileName),
+    category: stream ? 'stream' : 'local-audio',
+    fileExtension: stream ? undefined : fileExtension(track.fileName),
     durationSeconds,
     coverTone: 'blue',
     coverFilePath: track.metadata.coverArt?.filePath ?? undefined,
     coverImage: audioCoverArtUrl(track.metadata.coverArt),
     coverImageFallback: audioCoverArtFallbackUrl(track.metadata.coverArt),
-    lyrics: metadataLyricsToLines(track, durationSeconds),
+    lyrics: stream ? [] : metadataLyricsToLines(track, durationSeconds),
     audioFormat: track.metadata.audioFormat ?? undefined,
   }
 }
 
 export function audioTrackToPlaylistVisual(track: AudioTrackRef): PlaylistTrackMetadata {
-  const title = nonEmptyText(track.metadata.title) ?? fileNameTitle(track.fileName)
-  const artist = nonEmptyText(track.metadata.artist) ?? nonEmptyText(track.metadata.albumArtist) ?? '本地音频'
-  const album = nonEmptyText(track.metadata.album) ?? '本地音频'
+  const stream = isStreamSource(track)
+  const title = stream ? streamTrackTitle({ ...track, title: track.metadata.title ?? undefined }) : nonEmptyText(track.metadata.title) ?? fileNameTitle(track.fileName)
+  const artist = stream ? '' : nonEmptyText(track.metadata.artist) ?? nonEmptyText(track.metadata.albumArtist) ?? '本地音频'
+  const album = stream ? '' : nonEmptyText(track.metadata.album) ?? '本地音频'
 
   return {
     id: track.id,
     title,
     artist,
     album,
+    ...(stream ? { stream: streamInformation(track) } : {}),
     durationSeconds: track.durationMs ? track.durationMs / 1000 : 0,
-    fileExtension: fileExtension(track.fileName),
+    fileExtension: stream ? undefined : fileExtension(track.fileName),
     coverTone: coverToneForTrackId(track.id),
     audioFormat: track.metadata.audioFormat ?? undefined,
     hasLocalArtwork: track.metadata.coverArt !== null,
@@ -191,6 +200,8 @@ export function trackPresentationEqual(left: Track, right: Track): boolean {
   return left === right || (
     left.id === right.id
     && left.sourcePath === right.sourcePath
+    && left.stream?.url === right.stream?.url
+    && left.stream?.stationName === right.stream?.stationName
     && left.title === right.title
     && left.artist === right.artist
     && left.album === right.album

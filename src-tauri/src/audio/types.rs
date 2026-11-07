@@ -6,6 +6,12 @@ use super::error::AudioCommandError;
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AudioTrackRef {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub station_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub source_kind: Option<AudioTrackSourceKind>,
     pub id: String,
     pub source_path: String,
     pub file_name: String,
@@ -301,11 +307,31 @@ pub struct AudioFolderPlaylist {
 pub enum AudioPlaylistSourceKind {
     Folder,
     M3u8,
+    Streams,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum AudioTrackSourceKind {
+    File,
+    Stream,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AudioFolderTrackRef {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub station_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub source_kind: Option<AudioTrackSourceKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub created_at_ms: Option<u64>,
     pub id: String,
     pub source_path: String,
     pub file_name: String,
@@ -503,6 +529,8 @@ mod tests {
             request_id: 3,
             generation: 4,
             track: AudioTrackRef {
+                station_name: None,
+                source_kind: None,
                 id: "local-track".to_owned(),
                 source_path: "music.flac".to_owned(),
                 file_name: "music.flac".to_owned(),
@@ -547,6 +575,8 @@ mod tests {
 
         let result = AudioOpenSourceResult::Track {
             track: Box::new(AudioTrackRef {
+                station_name: None,
+                source_kind: None,
                 id: "local-track".to_owned(),
                 source_path: "music.flac".to_owned(),
                 file_name: "music.flac".to_owned(),

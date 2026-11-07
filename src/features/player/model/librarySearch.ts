@@ -1,3 +1,4 @@
+import { isStreamSource } from './streams'
 import { albumEntries } from './albumLibrary'
 import { artistEntries } from './artistLibrary'
 import { genreEntries } from './genreLibrary'
@@ -19,7 +20,7 @@ export function uniqueSearchSongs(songs: readonly AllSongsItem[]): AllSongsItem[
 }
 
 export function searchLibrary(library: PlaylistLibraryViewModel | undefined, query: string, selected: readonly SearchCategory[]): SearchSection[] {
-  const songs = uniqueSearchSongs(library?.allSongs ?? [])
+  const songs = uniqueSearchSongs((library?.allSongs ?? []).filter(song => !isStreamSource(song)))
   const needle = query.trim().toLocaleLowerCase()
   const matches = (...text: (string | number | null | undefined)[]) => text.some(value => String(value ?? '').toLocaleLowerCase().includes(needle))
   const groups = (field: 'libraryGenreName' | 'libraryYear', label: string): SearchCollection[] => {
@@ -41,6 +42,6 @@ export function searchLibrary(library: PlaylistLibraryViewModel | undefined, que
     if (category === 'year') collections = groups('libraryYear', label)
     if (category === 'playlists') collections = (library?.items ?? []).filter(item => item.sourceKind !== 'folder').map(item => ({ key: item.scope, scope: item.scope, name: item.name, subtitle: '', songs: uniqueSearchSongs((library?.allSongs ?? []).filter(song => song.scope === item.scope)) }))
     return { category, label, collections: collections.filter(item => matches(item.name, item.subtitle)),
-      songs: category === 'songs' ? songs.filter(item => matches(item.track.title, item.track.artist, item.track.album, item.track.libraryComposerName, item.track.libraryGenreName, item.track.libraryYear)) : [] }
+      songs: category === 'streams' ? uniqueSearchSongs(library?.streamSongs ?? []).filter(item => matches(item.track.title, item.sourcePath)) : category === 'songs' ? songs.filter(item => matches(item.track.title, item.track.artist, item.track.album, item.track.libraryComposerName, item.track.libraryGenreName, item.track.libraryYear)) : [] }
   })
 }

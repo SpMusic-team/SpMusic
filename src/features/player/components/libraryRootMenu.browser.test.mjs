@@ -24,6 +24,7 @@ window.backendInvoke=async(command,args)=>{
  if(command==='library_get_folders')return {revision:0,roots:[{path:'/music',selected:true,directoryRules:[]}]};
  if(command==='library_select_folders')return null;
  if(command==='audio_import_playlist')return null;
+ if(command==='library_get_streams')return {directoryPath:'',directoryName:'流',sourceKind:'streams',sourcePath:'streams:library',sourceName:'流',selectedIndex:0,tracks:[]};
  return originalInvoke(command,args);
 };
 ReactDOM.createRoot(document.getElementById('root')).render(`)
@@ -71,7 +72,7 @@ const cases = [
   ['album', '专辑', common], ['artist', '艺术家', common], ['album-artist', '专辑艺术家', common],
   ['genre', '流派', common], ['year', '年份', common], ['composer', '作曲家', common],
   ['playlists', '播放列表', ['导出', '重新扫描/解析播放列表', '在侧栏置顶', '列表选项', '新增']],
-  ['streams', '流', ['选择文件夹', '重新扫描', '添加地址', '在侧栏置顶', '列表选项']],
+  ['streams', '流', ['添加地址', '导入播放列表', '重新排序', '在侧栏置顶', '列表选项']],
   ['queue', '队列', ['重新扫描', '重新排序', '在侧栏置顶', '列表选项', '清空队列']],
   ['bookmarks', '书签', ['选择文件夹', '重新扫描', '重新排序', '在侧栏置顶', '列表选项']],
   ['most-played', '最常播放', [...common, '查看全部', '清空']],
@@ -115,8 +116,9 @@ try {
     evidence.push({ scenario: 'category-design-' + id, labels, geometry })
   }
 
-  // Every unavailable action is interactive and honest; none modifies native data.
-  for (const [id, label, labels] of cases.filter(row => row[0] !== 'folders')) {
+  // Stream actions are now implemented and covered by streamsAcceptance; this
+  // legacy placeholder check continues to cover the remaining categories.
+  for (const [id, label, labels] of cases.filter(row => !['folders', 'streams'].includes(row[0]))) {
     await select(page, id)
     const placeholders = labels.filter(item => !['选择文件夹', '重新扫描', '在侧栏置顶'].includes(item))
     for (const item of placeholders) {

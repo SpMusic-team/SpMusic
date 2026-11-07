@@ -8,6 +8,7 @@ import type { PlaylistTrackItemViewModel } from '@/features/player/model/playerU
 import type { PlaylistArtworkSource } from '@/features/player/model/playlistArtworkStore'
 import checkbox from '@/assets/song-card/checkbox-unchecked.svg'
 import arrowMove from '@/assets/song-card/arrow-move.svg'
+import streamGlyph from '@/assets/media-library/streams-root.svg'
 
 type PlaylistCardProps = {
   playCount?: number
@@ -43,7 +44,7 @@ type PlaylistCardCoverState = 'ready' | 'loading' | 'empty' | 'idle' | 'error'
 
 const COVER_STAGGER_STEP_MS = 120
 const COVER_STAGGER_PHASES = 7
-const cardStyles = Array.from({ length: 16 }, (_, shape) => Array.from({ length: COVER_STAGGER_PHASES }, (_, phase) => ({
+const cardStyles = Array.from({ length: 32 }, (_, shape) => Array.from({ length: COVER_STAGGER_PHASES }, (_, phase) => ({
   '--cover-placeholder-stagger': `${phase * COVER_STAGGER_STEP_MS}ms`,
   '--playlist-card-slot-min-height': `var(--playlist-content-height-${shape}, 0px)`,
 }) as CSSProperties))
@@ -154,6 +155,7 @@ export const PlaylistCard = memo(function PlaylistCard({
     <button
       type="button"
       className="playlist-card"
+      data-source-kind={track.stream ? 'stream' : undefined}
       data-playlist-track-id={track.id}
       data-has-play-count={playCount !== undefined || undefined}
       data-song-key={songKey}
@@ -185,7 +187,7 @@ export const PlaylistCard = memo(function PlaylistCard({
 function PlaylistCardContent({ playCount, track, positionMs, songKey, coverUrl, artworkVisible, selectMode, showReorderHandle, unavailable, showExtendedMetadata, coverState, coverFailed, onCoverFailed }: Pick<PlaylistCardProps, 'playCount' | 'track' | 'positionMs' | 'songKey' | 'coverUrl' | 'artworkVisible' | 'selectMode' | 'showReorderHandle' | 'unavailable' | 'showExtendedMetadata' | 'coverFailed' | 'onCoverFailed'> & { coverState: PlaylistCardCoverState }) {
   const systemIcons = useSystemIcons()
   const coverSource = coverUrl ?? track.coverImage ?? track.coverImageFallback
-  const coverMarkVisible = coverState === 'empty' || coverState === 'error'
+  const coverMarkVisible = Boolean(track.stream && coverState !== 'ready') || coverState === 'empty' || coverState === 'error'
   // Empty text means "unknown", so a missing artist/album must not leave an
   // empty line behind. `playlistCardContentShape` already counts these bits.
   const artistText = track.artist?.trim() ?? ''
@@ -219,7 +221,7 @@ function PlaylistCardContent({ playCount, track, positionMs, songKey, coverUrl, 
         ) : null}
         {coverMarkVisible ? (
           <span className="playlist-card-cover-mark">
-            <systemIcons.music />
+            {track.stream ? <SongCardGlyph className="playlist-card-stream-cover-mark" src={streamGlyph} /> : <systemIcons.music />}
           </span>
         ) : null}
         {playCount !== undefined ? <span className="playlist-card-play-count playlist-card-cover-play-count">{playCount}</span> : null}
@@ -239,8 +241,11 @@ function PlaylistCardContent({ playCount, track, positionMs, songKey, coverUrl, 
       <span className="playlist-card-copy">
         <span className="playlist-card-title">{track.title}</span>
         {playCount !== undefined ? <span className="playlist-card-play-count playlist-card-compact-play-count" aria-hidden="true">{playCount}</span> : null}
-        {artistAlbum ? <span className="playlist-card-artist">{artistAlbum}</span> : null}
-        {formatParts.length || showExtendedMetadata && playCount !== undefined ? (
+        {track.stream ? <>
+          <span className="playlist-card-stream-url" title={artistText || track.stream.url}>{artistText || track.stream.url}</span>
+          <span className="playlist-card-stream-source"><systemIcons.music aria-hidden="true" /><span>流</span></span>
+        </> : artistAlbum ? <span className="playlist-card-artist">{artistAlbum}</span> : null}
+        {!track.stream && (formatParts.length || showExtendedMetadata && playCount !== undefined) ? (
           <span className="playlist-card-format">
             {formatParts.length ? <systemIcons.music aria-hidden="true" /> : null}
             {formatParts.map((part, index) => (

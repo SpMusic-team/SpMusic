@@ -54,6 +54,8 @@ export type AudioErrorCode =
   | 'INTERNAL_ERROR'
 
 export type AudioTrackRef = {
+  sourceKind?: 'file' | 'stream'
+  stationName?: string
   id: string
   sourcePath: string
   fileName: string
@@ -320,6 +322,10 @@ export type AudioOpenFileInput = {
 }
 
 export type AudioFolderTrackRef = {
+  sourceKind?: 'file' | 'stream'
+  stationName?: string
+  title?: string
+  createdAtMs?: number
   id: string
   sourcePath: string
   fileName: string
@@ -328,7 +334,7 @@ export type AudioFolderTrackRef = {
   fileCreatedAtMs?: number | null
 }
 
-export type AudioPlaylistSourceKind = 'folder' | 'm3u8' | 'custom'
+export type AudioPlaylistSourceKind = 'folder' | 'm3u8' | 'custom' | 'streams'
 
 export type AudioFolderPlaylist = {
   directoryPaths?: string[]
@@ -618,6 +624,18 @@ export async function selectLibraryFolders(): Promise<string[] | null> {
 
 export async function importAudioPlaylist(): Promise<AudioFolderPlaylist | null> {
   return invoke<AudioFolderPlaylist | null>('audio_import_playlist')
+}
+
+export async function getLibraryStreams(): Promise<AudioFolderPlaylist> {
+  return invoke<AudioFolderPlaylist>('library_get_streams')
+}
+
+export async function addLibraryStream(input: { url: string; title?: string }): Promise<AudioFolderPlaylist> {
+  return invoke<AudioFolderPlaylist>('library_add_stream', { input })
+}
+
+export async function removeLibraryStreams(ids: string[]): Promise<AudioFolderPlaylist> {
+  return invoke<AudioFolderPlaylist>('library_remove_streams', { input: { ids } })
 }
 
 export async function getLibraryPlaylists(): Promise<AudioFolderPlaylist[]> {

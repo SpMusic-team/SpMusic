@@ -58,6 +58,18 @@ import {
 } from '@/features/player/model/trackCardGesture'
 import { selectPlayerViewTransitionOwnerIds } from '@/features/player/model/playerViewTransition'
 
+// A resolved source-less stream uses the existing cover fallback. It can own
+// a drag pair without a canvas; pending or failed image requests cannot.
+function isResolvedEmptyStreamPreview(token: TrackCardPreviewToken, layer: ArtworkVisualLayer | null | undefined) {
+  return Boolean(token.track.stream && layer?.track.stream
+    && layer.track.id === token.targetTrackId
+    && layer.track.stream.url === token.track.stream.url
+    && layer.previewTokenId === token.id
+    && !layer.resource.view
+    && !token.artwork.coverFilePath && !token.artwork.coverImage && !token.artwork.coverImageFallback
+    && !layer.requestedArtwork.coverFilePath && !layer.requestedArtwork.coverImage && !layer.requestedArtwork.coverImageFallback)
+}
+
 export type PlayerSurfaceDevAudioTools = {
   isOpen: boolean
   onOpenChange: (isOpen: boolean) => void
@@ -1022,7 +1034,7 @@ export function PlayerSurface({
       && incoming?.track.id === token.targetTrackId
       && (incoming.phase === 'preview' || incoming.phase === 'incoming')
       && incoming.previewTokenId === token.id
-      && incoming.resource.view
+      && (incoming.resource.view || isResolvedEmptyStreamPreview(token, incoming))
       && (incoming.phase === 'preview'
         || incoming.transitionIntent?.requestId === latestTrackContextRef.current.intent?.requestId)
       && selectionMatchesTrackCardSession(session, token.targetTrackId))
@@ -1237,6 +1249,9 @@ export function PlayerSurface({
   ].join(':')
 
   useLayoutEffect(() => {
+    // The detail deck unmounts in the library. A source-less stream may keep
+    // the same active artwork layer and playback state when it mounts again.
+    if (playlist.isOpen) return
     const deck = trackCardDeckRef.current
     if (!deck || activeArtworkLayerId === null) return
     const cover = deck.querySelector<HTMLElement>(
@@ -1300,7 +1315,7 @@ export function PlayerSurface({
       observer.disconnect()
       if (frameId !== null) cancelAnimationFrame(frameId)
     }
-  }, [activeArtworkLayerId, visualPlaybackState])
+  }, [activeArtworkLayerId, playlist.isOpen, visualPlaybackState])
 
   const stopTrackCardAnimation = useCallback((clearSettle = true) => {
     // This monotonic run id is also the settle id: all completion callbacks are
@@ -2304,10 +2319,11 @@ export function PlayerSurface({
   }, [clearCoverPress, discardCoverDrag, handleCoverPointerCancel, handleCoverPointerUp])
 
   useLayoutEffect(() => {
-    if (!trackCardPreviewToken || !previewArtworkReady) return
+    if (!trackCardPreviewToken) return
     const gesture = coverDragRef.current
     const outgoing = artworkSlots.find((layer) => layer?.phase === 'active')
     const incoming = artworkSlots.find((layer) => layer?.previewTokenId === trackCardPreviewToken.id)
+    if (!previewArtworkReady && !(previewArtworkEmpty && isResolvedEmptyStreamPreview(trackCardPreviewToken, incoming))) return
     if (
       !gesture
       || gesture.released
@@ -2353,7 +2369,7 @@ export function PlayerSurface({
     gesture.progress = Math.abs(gesture.signedProgress)
     gesture.velocityX = 0
     gesture.latestAt = performance.now()
-  }, [artworkSlots, previewArtworkReady, publishTrackCardSession, trackCardPreviewToken])
+  }, [artworkSlots, previewArtworkEmpty, previewArtworkReady, publishTrackCardSession, trackCardPreviewToken])
 
   useLayoutEffect(() => {
     const gesture = coverDragRef.current

@@ -413,7 +413,7 @@ function FolderHierarchyScene({ categoryId = 'folders', playlist, allSongsCoverS
         </>}
       </div>
     </motion.section>
-    {!location && present ? <CollectionQuickIndex panelRef={panelRef} names={visibleDirectories.map(item => item.name)} /> : null}
+    {flat && !location && present ? <CollectionQuickIndex panelRef={panelRef} names={visibleDirectories.map(item => item.name)} /> : null}
     {renderHeroActions(true)}
   </>
 }

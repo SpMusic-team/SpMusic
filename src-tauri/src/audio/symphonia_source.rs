@@ -17,7 +17,7 @@ use symphonia::{
         },
         errors::Error as SymphoniaError,
         formats::{FormatOptions, FormatReader, Packet, SeekedTo},
-        io::MediaSourceStream,
+        io::{MediaSource, MediaSourceStream},
         meta::MetadataOptions,
         probe::Hint,
         units::{self, Time, TimeBase},
@@ -32,6 +32,9 @@ const MP3_SEEK_PRE_ROLL: Duration = Duration::from_millis(100);
 const AAC_SEEK_PRE_ROLL: Duration = Duration::from_millis(100);
 const VORBIS_SEEK_PRE_ROLL: Duration = Duration::from_millis(100);
 const MATROSKA_SEEK_LOOK_BEHIND: Duration = Duration::from_millis(100);
+
+#[path = "network_adts.rs"]
+mod network_adts;
 
 pub(crate) struct SymphoniaAudioSource {
     codec: CodecType,
@@ -65,7 +68,57 @@ impl SymphoniaAudioSource {
         );
         let reported_duration = adts_scanned_duration(path)?;
         let file = File::open(path)?;
-        let media_source = MediaSourceStream::new(Box::new(file), Default::default());
+        Self::open_media_source(path, Box::new(file), reported_duration, started_at, false)
+    }
+
+    pub(crate) fn open_stream(
+        path: &Path,
+        source: Box<dyn MediaSource>,
+    ) -> Result<Self, SymphoniaError> {
+        Self::open_media_source(path, source, None, Instant::now(), true)
+    }
+
+    /// PCM containers declare exact uncompressed frame counts. Comparing
+    /// these samples detects a truncated WAV body without draining HTTP tags
+    /// or treating compressed encoder padding as missing audible samples.
+    pub(crate) fn expected_pcm_samples(&self) -> Option<u64> {
+        use symphonia::core::codecs::*;
+        if !matches!(
+            self.codec,
+            CODEC_TYPE_PCM_S8
+                | CODEC_TYPE_PCM_U8
+                | CODEC_TYPE_PCM_S16LE
+                | CODEC_TYPE_PCM_S16BE
+                | CODEC_TYPE_PCM_U16LE
+                | CODEC_TYPE_PCM_U16BE
+                | CODEC_TYPE_PCM_S24LE
+                | CODEC_TYPE_PCM_S24BE
+                | CODEC_TYPE_PCM_U24LE
+                | CODEC_TYPE_PCM_U24BE
+                | CODEC_TYPE_PCM_S32LE
+                | CODEC_TYPE_PCM_S32BE
+                | CODEC_TYPE_PCM_U32LE
+                | CODEC_TYPE_PCM_U32BE
+                | CODEC_TYPE_PCM_F32LE
+                | CODEC_TYPE_PCM_F32BE
+                | CODEC_TYPE_PCM_F64LE
+                | CODEC_TYPE_PCM_F64BE
+        ) {
+            return None;
+        }
+        self.codec_params
+            .n_frames?
+            .checked_mul(self.channels() as u64)
+    }
+
+    fn open_media_source(
+        path: &Path,
+        source: Box<dyn MediaSource>,
+        reported_duration: Option<Duration>,
+        started_at: Instant,
+        network: bool,
+    ) -> Result<Self, SymphoniaError> {
+        let mut media_source = MediaSourceStream::new(source, Default::default());
         let mut hint = Hint::new();
 
         if let Some(extension) = path.extension().and_then(|extension| extension.to_str()) {
@@ -77,15 +130,22 @@ impl SymphoniaAudioSource {
             ..Default::default()
         };
         let metadata_options = MetadataOptions::default();
-        let mut probed =
-            get_probe().format(&hint, media_source, &format_options, &metadata_options)?;
+        let mut format: Box<dyn FormatReader> =
+            if network && network_adts::matches(&mut media_source)? {
+                Box::new(network_adts::NetworkAdtsReader::try_new(
+                    media_source,
+                    &format_options,
+                )?)
+            } else {
+                get_probe()
+                    .format(&hint, media_source, &format_options, &metadata_options)?
+                    .format
+            };
 
-        let track_id = probed
-            .format
+        let track_id = format
             .default_track()
             .or_else(|| {
-                probed
-                    .format
+                format
                     .tracks()
                     .iter()
                     .find(|track| track.codec_params.codec != CODEC_TYPE_NULL)
@@ -93,8 +153,7 @@ impl SymphoniaAudioSource {
             .ok_or(SymphoniaError::Unsupported("no decodable audio track"))?
             .id;
 
-        let track = probed
-            .format
+        let track = format
             .tracks()
             .iter()
             .find(|track| track.id == track_id)
@@ -110,8 +169,7 @@ impl SymphoniaAudioSource {
         let time_base = track.codec_params.time_base;
         let codec = track.codec_params.codec;
         let codec_params = track.codec_params.clone();
-        let (buffer, spec) =
-            decode_next_sample_buffer(&mut *probed.format, &mut *decoder, track_id)?;
+        let (buffer, spec) = decode_next_sample_buffer(&mut *format, &mut *decoder, track_id)?;
 
         tracing::info!(
             operation = "audio.symphonia.open",
@@ -131,7 +189,7 @@ impl SymphoniaAudioSource {
             codec_params,
             decoder,
             current_frame_offset: 0,
-            format: probed.format,
+            format,
             indexed_matroska: None,
             path: path.to_path_buf(),
             track_id,
@@ -141,6 +199,24 @@ impl SymphoniaAudioSource {
             spec,
             time_base,
         })
+    }
+
+    /// Unlike Iterator, preserve read/decode failures for the network runtime.
+    pub(crate) fn next_checked(&mut self) -> Result<Option<i16>, SymphoniaError> {
+        if self.current_frame_offset >= self.buffer.len() {
+            let (buffer, spec) =
+                decode_next_sample_buffer(&mut *self.format, &mut *self.decoder, self.track_id)?;
+            self.spec = spec;
+            self.buffer = buffer;
+            self.current_frame_offset = 0;
+        }
+        let sample = self
+            .buffer
+            .samples()
+            .get(self.current_frame_offset)
+            .copied();
+        self.current_frame_offset += 1;
+        Ok(sample)
     }
 
     fn refine_position(&mut self, seeked_to: SeekedTo) -> Result<(), rodio::source::SeekError> {

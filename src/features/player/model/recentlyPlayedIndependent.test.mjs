@@ -45,6 +45,21 @@ test('generation switch resets incomplete accumulation',()=>{
  assert.equal(t.sample(state(1000,{generation:2}),2600),false)
  assert.equal(t.sample(state(2000,{generation:2}),3600),true)
 })
+
+test('unknown-duration streams count after thirty seconds of playback and exclude paused time',()=>{
+ const tracker=new RecentlyPlayedTracker()
+ const stream=(positionMs,phase='playing',generation=1)=>state(positionMs,{phase,generation,durationMs:null})
+ assert.equal(tracker.sample(stream(0),0,false,true,true),false)
+ for(let second=1;second<=20;second++) assert.equal(tracker.sample(stream(second*1000),second*1000,false,true,true),false)
+ assert.equal(tracker.sample(stream(20000,'paused'),21000,false,true,true),false)
+ assert.equal(tracker.sample(stream(20000,'paused'),81000,false,true,true),false)
+ assert.equal(tracker.sample(stream(20000),82000,false,true,true),false)
+ for(let second=1;second<10;second++) assert.equal(tracker.sample(stream(20000+second*1000),82000+second*1000,false,true,true),false)
+ assert.equal(tracker.sample(stream(30000),92000,false,true,true),true)
+ assert.equal(tracker.sample(stream(31000),93000,false,true,true),false,'one count per activation')
+ assert.equal(tracker.sample(stream(0,'playing',2),94000,false,true,true),false,'new generation starts a fresh threshold')
+ assert.equal(tracker.sample(stream(30000,'playing',2),94001,false,true,true),false,'a position jump does not earn listening')
+})
 test('missing metadata delays commit without discarding already earned playback',()=>{
  const t=new RecentlyPlayedTracker();t.sample(state(0),0,false,false)
  t.sample(state(1000),1000,false,false)

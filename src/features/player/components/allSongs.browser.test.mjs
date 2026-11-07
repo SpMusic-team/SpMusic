@@ -206,7 +206,7 @@ async function playbackCoverRegression(baselineHook = false, initialExternal = f
     await page.waitForFunction(() => Boolean(window.viewModel.queue.tracks.find(item=>item.id==='many-2')?.coverThumbnail))
   }
   await page.evaluate(() => window.viewModel.playlist.library.onSelectCategory('songs'))
-  await page.getByRole('heading', { name: '全部歌曲' }).waitFor()
+  await page.getByRole('heading', { name: '所有歌曲' }).waitFor()
   const key = '/audio/many/2.flac'
   const card = page.locator(`[data-song-key="${key}"]`)
   await card.scrollIntoViewIfNeeded()
@@ -328,7 +328,7 @@ try {
     await importChoice(page, 'b')
     await importChoice(page, 'c')
     await page.evaluate(() => window.viewModel.playlist.library.onSelectCategory('songs'))
-    await page.getByRole('heading', { name: '全部歌曲' }).waitFor()
+    await page.getByRole('heading', { name: '所有歌曲' }).waitFor()
     await page.waitForFunction(() => [...document.querySelectorAll('.all-songs-list .playlist-card-title')].some(node => node.textContent === 'Shared Song'))
     assert.deepEqual(await page.evaluate(() => window.viewModel.playlist.library.allSongs.map(item => item.trackId)), ['a-0', 'shared', 'b-0'], 'folders aggregate and duplicate paths appear once; m3u8 excluded')
     assert.equal(await page.locator('.all-songs-list .playlist-card').count(), 3)
@@ -389,7 +389,7 @@ try {
     assert.equal(await page.evaluate(() => localStorage.getItem('spmusic.playlist.layout-level.v1')), playlistChanged, 'playlist detail persists under its own key')
     assert.equal(await page.evaluate(() => localStorage.getItem('spmusic.all-songs.layout-level.v1')), '5', 'playlist detail does not overwrite all-songs layout')
     await page.evaluate(() => window.viewModel.playlist.library.onSelectCategory('songs'))
-    await page.getByRole('heading', { name: '全部歌曲' }).waitFor()
+    await page.getByRole('heading', { name: '所有歌曲' }).waitFor()
     assert.equal(await page.locator('.all-songs-list').getAttribute('data-layout-level'), '5', 'all-songs view survives navigation through playlist detail')
     assert.deepEqual(errors, [], 'no browser errors')
     console.log(`all songs ${width}px: aggregation, dedupe, independent views, search, select, index, play passed`)
@@ -400,7 +400,7 @@ try {
     await page.evaluate(() => { window.summaryGate = true })
     await importChoice(page, 'a')
     await page.evaluate(() => window.viewModel.playlist.library.onSelectCategory('songs'))
-    await page.getByRole('heading', { name: '全部歌曲' }).waitFor()
+    await page.getByRole('heading', { name: '所有歌曲' }).waitFor()
     assert.equal(await page.locator('.all-songs-list .playlist-card').count(), 0, 'pending summary holds the list in a non-scrollable loading state')
     assert.equal(await page.locator('.all-songs-list .playlist-card').filter({ hasText: 'Shared Song' }).count(), 0, 'unresolved tag title is not fabricated')
     await page.evaluate(() => { window.summaryGate = false; window.pendingSummaries.splice(0).forEach(resolve => resolve()); window.pendingHydrations.splice(0).forEach(resolve => resolve()) })
@@ -414,7 +414,7 @@ try {
     await page.evaluate(() => { window.summaryGate = true; window.reverseManyTitles = true })
     await importChoice(page, 'many')
     await page.evaluate(() => window.viewModel.playlist.library.onSelectCategory('songs'))
-    await page.getByRole('heading', { name: '全部歌曲' }).waitFor()
+    await page.getByRole('heading', { name: '所有歌曲' }).waitFor()
     await page.waitForFunction(() => window.pendingSummaries.length > 0)
     assert.equal(await page.locator('.all-songs-list .playlist-card').count(), 0, 'summary loading still hides unresolved rows')
     await page.waitForFunction(() => window.calls.some(call => call.command === 'audio_load_track_thumbnail' && call.input.sourcePath === '/audio/many/0.flac'))
@@ -441,7 +441,7 @@ try {
       window.coverPerfPixelGate = true
       window.viewModel.playlist.library.onSelectCategory('songs')
     })
-    await page.getByRole('heading', { name: '全部歌曲' }).waitFor()
+    await page.getByRole('heading', { name: '所有歌曲' }).waitFor()
     // The shared scheduler admits up to MAX_CONCURRENT native pixel loads at
     // once, so the gate fills more than one entry. Only "at least one held
     // request" is meaningful here; the ceiling is asserted where it matters.
@@ -467,7 +467,7 @@ try {
     const { page, errors } = await open(640)
     await importChoice(page, 'many')
     await page.evaluate(() => window.viewModel.playlist.library.onSelectCategory('songs'))
-    await page.getByRole('heading', { name: '全部歌曲' }).waitFor()
+    await page.getByRole('heading', { name: '所有歌曲' }).waitFor()
     await page.waitForFunction(() => document.querySelector('.all-songs-list .playlist-card-title')?.textContent?.startsWith('A Song'))
     await page.getByRole('button', { name: '查找 Z 开头的歌曲' }).click()
     assert(await page.locator('.playlist-management-content').evaluate(node => node.scrollTop) > 0, 'index jumps to Z group')
@@ -481,7 +481,7 @@ try {
     const { page, errors } = await open(640)
     await importChoice(page, 'order')
     await page.evaluate(() => window.viewModel.playlist.library.onSelectCategory('songs'))
-    await page.getByRole('heading', { name: '全部歌曲' }).waitFor()
+    await page.getByRole('heading', { name: '所有歌曲' }).waitFor()
     await page.waitForFunction(() => [...document.querySelectorAll('.all-songs-list .playlist-card-title')].some(node => node.textContent === 'Вдох'))
     const titles = await page.locator('.all-songs-list .playlist-card-title').allTextContents()
     assert.deepEqual(titles.slice(0, 4), ['#Lov3 #Ngẫu Hứng', '#ТАМАДА (DJ Mexx & DJ Dikson Remix)', '(What Is) Love?', '+ERABY+E CONNEC+1ON'], 'exactly the four screenshot titles appear above numbers in the shown order')
@@ -564,7 +564,7 @@ try {
       HTMLCanvasElement.prototype.toBlob = () => { throw new Error('all-songs cover conversion must not serialize PNG on the main thread') }
       window.viewModel.playlist.library.onSelectCategory('songs')
     })
-    await page.getByRole('heading', { name: '全部歌曲' }).waitFor()
+    await page.getByRole('heading', { name: '所有歌曲' }).waitFor()
     await page.waitForFunction(() => [...document.querySelectorAll('.all-songs-list .playlist-card-format')].some(node => node.textContent?.includes('3:00')))
     await page.waitForFunction(() => [...document.querySelectorAll('.all-songs-list .playlist-card-cover-image')].some(image => image.complete && image.naturalWidth > 0), null, { timeout: 5000 })
     const evidence = await page.evaluate(() => ({

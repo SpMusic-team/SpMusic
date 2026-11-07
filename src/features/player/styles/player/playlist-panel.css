@@ -791,6 +791,50 @@
 
 .playlist-card-format > svg { width: 1.05em; height: 1.05em; flex: 0 0 auto; margin-right: 0.35em; }
 
+/* Stream metadata has its own identity; an address is not an artist/album. */
+.playlist-card-stream-url {
+  display: block;
+  min-width: 0;
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--playlist-card-artist-size, 24px);
+  line-height: 1.3;
+}
+.playlist-card-stream-source {
+  display: inline-flex;
+  width: max-content;
+  align-items: center;
+  gap: .35em;
+  flex-shrink: 0;
+  color: var(--player-inverse-primary);
+  font-size: var(--playlist-card-format-size, 18px);
+  font-weight: 500;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+.playlist-card-stream-source > svg { width: 1.05em; height: 1.05em; flex: 0 0 auto; }
+.playlist-card[data-source-kind='stream'] .playlist-card-cover-mark {
+  width: 65%;
+  border-radius: 0;
+  background: transparent;
+  color: var(--player-blue);
+}
+.playlist-card-stream-cover-mark { width: 100%; height: 100%; }
+.playlist-grid[data-layout-flow='tile'] .playlist-card-stream-source { display: none; }
+.playlist-grid[data-layout-level='5'] .playlist-card[data-source-kind='stream'] .playlist-card-copy {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  gap: 0 16px;
+}
+.playlist-grid:is([data-layout-level='5'], [data-layout-flow='text']) .playlist-card[data-source-kind='stream'] .playlist-card-title { grid-column: 1; grid-row: 1; }
+.playlist-grid:is([data-layout-level='5'], [data-layout-flow='text']) .playlist-card-stream-url { grid-column: 1; grid-row: 2; }
+.playlist-grid:is([data-layout-level='5'], [data-layout-flow='text']) .playlist-card-stream-source { grid-column: 2; grid-row: 2; align-self: center; }
+.playlist-grid:is([data-layout-level='7'], [data-layout-level='8'], [data-layout-level='9']) .playlist-card-stream-url { display: none; }
+.playlist-grid:is([data-layout-level='7'], [data-layout-level='8'], [data-layout-level='9']) .playlist-card-stream-source { grid-row: 1; align-self: center; }
+
 .playlist-grid[data-layout-flow="tile"] .playlist-card {
   display: flex;
   min-height: 0;
@@ -950,7 +994,7 @@
   padding-inline: 6px;
   border-radius: var(--app-radius-pill);
   background: var(--app-bg);
-  color: var(--player-blue);
+  color: var(--player-inverse-primary, var(--player-blue));
   pointer-events: none;
 }
 .playlist-grid[data-layout-level="2"] .playlist-card-cover-play-count { top: 7px; }

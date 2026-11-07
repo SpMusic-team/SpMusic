@@ -164,7 +164,12 @@ pub(crate) fn hydrate_track_ref(
 }
 
 pub(crate) fn playback_track_ref(path: &Path, duration: Option<Duration>) -> AudioTrackRef {
+    if super::network::is_stream(&path.to_string_lossy()) {
+        return stream_track_ref(&path.to_string_lossy());
+    }
     AudioTrackRef {
+        station_name: None,
+        source_kind: None,
         id: track_id(path),
         source_path: path.to_string_lossy().into_owned(),
         file_name: path
@@ -183,6 +188,10 @@ fn load_track_ref_with_options(
     cover_cache_dir: Option<&Path>,
     lyrics_cache: Option<&LyricsCache>,
 ) -> Result<AudioTrackRef, AudioCommandError> {
+    if super::network::is_stream(&path.to_string_lossy()) {
+        let url = super::network::canonical_url(&path.to_string_lossy())?;
+        return Ok(stream_track_ref(&url));
+    }
     let started_at = std::time::Instant::now();
     tracing::info!(
         operation = "audio.source.load_track_ref",
@@ -229,6 +238,8 @@ fn load_track_ref_with_options(
     );
 
     Ok(AudioTrackRef {
+        station_name: None,
+        source_kind: None,
         id: track_id,
         source_path: path.to_string_lossy().into_owned(),
         file_name,
@@ -253,6 +264,9 @@ fn open_source_with_replay_gain(
     path: &Path,
     replay_gain_policy: ReplayGainPolicy,
 ) -> Result<AudioSource, AudioCommandError> {
+    if super::network::is_stream(&path.to_string_lossy()) {
+        return super::network::open(path, || false);
+    }
     let started_at = std::time::Instant::now();
     tracing::info!(
         operation = "audio.source.open",
@@ -346,6 +360,11 @@ pub(super) fn validate_existing_file(path: &Path) -> Result<(), AudioCommandErro
 }
 
 pub(super) fn track_id(path: &Path) -> String {
+    if super::network::is_stream(&path.to_string_lossy()) {
+        let url = super::network::canonical_url(&path.to_string_lossy())
+            .unwrap_or_else(|_| path.to_string_lossy().into_owned());
+        return super::network::stream_id(&url);
+    }
     let stable_path = path
         .canonicalize()
         .unwrap_or_else(|_| path.to_path_buf())
@@ -353,6 +372,29 @@ pub(super) fn track_id(path: &Path) -> String {
         .to_lowercase();
     let hash = blake3::hash(stable_path.as_bytes());
     format!("local-{}", &hash.to_hex()[..16])
+}
+
+fn stream_track_ref(url: &str) -> AudioTrackRef {
+    AudioTrackRef {
+        station_name: None,
+        source_kind: Some(super::types::AudioTrackSourceKind::Stream),
+        id: super::network::stream_id(url),
+        source_path: url.into(),
+        file_name: super::network::display_name(url),
+        duration_ms: None,
+        metadata: AudioTrackMetadata::default(),
+    }
+}
+
+pub(crate) fn apply_station_name(track: &mut AudioTrackRef, name: Option<&str>) {
+    if !super::network::is_stream(&track.source_path) {
+        return;
+    }
+    if let Some(name) = name.and_then(super::network::valid_station_name) {
+        track.station_name = Some(name.clone());
+        track.metadata.title = Some(name.clone());
+        track.file_name = name;
+    }
 }
 
 #[cfg(test)]

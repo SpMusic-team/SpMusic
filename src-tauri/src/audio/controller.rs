@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 use super::{
     device::{
@@ -19,7 +19,7 @@ use super::{
     duration_cache::DurationCache,
     error::{audio_error, superseded_error, unavailable_state, AudioCommandError, AudioErrorCode},
     lyrics_cache::LyricsCache,
-    playlist::{default_filters, load_folder_playlist, source_filters},
+    playlist::load_folder_playlist,
     runtime::{
         start_track_parser, AudioRuntime, AudioRuntimeRequest, LatestLoadAndPlayIntent,
         TrackParsePurpose, TrackParseRequest,
@@ -28,9 +28,9 @@ use super::{
     tag_writer,
     types::{
         AudioEmbedLyricsInput, AudioFolderPlaylist, AudioFolderPlaylistInput,
-        AudioLoadAndPlayInput, AudioLoadAndPlayResult, AudioLoadFileInput, AudioOpenFileInput,
-        AudioOpenSourceResult, AudioPlayInput, AudioPlaybackState, AudioSeekInput,
-        AudioSetVolumeInput, AudioTrackDetailsChanged, AudioTrackRef, AudioTransitionPlaybackInput,
+        AudioLoadAndPlayInput, AudioLoadAndPlayResult, AudioLoadFileInput, AudioOpenSourceResult,
+        AudioPlayInput, AudioPlaybackState, AudioSeekInput, AudioSetVolumeInput,
+        AudioTrackDetailsChanged, AudioTrackRef, AudioTransitionPlaybackInput,
     },
     visualization::{run_visualization_bridge, VisualizationSession},
     AUDIO_STATE_CHANGED_EVENT, AUDIO_TRACK_DETAILS_CHANGED_EVENT,
@@ -77,6 +77,7 @@ impl LoadAndPlayQueue {
         let request_id = pending.request_id;
         let (replaced, needs_wake) = {
             let mut state = self.lock_state();
+            super::network::cancel_all();
             let replaced = state.pending.replace(pending);
             let needs_wake = !state.wake_scheduled;
             if needs_wake {
@@ -170,6 +171,21 @@ impl AudioController {
         let (parser_tx, parser_rx) = mpsc::channel::<TrackParseRequest>();
         let parser_runtime_tx = tx.clone();
         let parser_cover_cache_dir = runtime_cover_cache_dir.clone();
+        let parser_app_handle = app_handle.clone();
+        let stream_metadata_cache = Arc::new(move |url: &str, discovered: Option<&str>| {
+            let Some(registry) =
+                parser_app_handle.try_state::<crate::library_streams::LibraryStreamRegistry>()
+            else {
+                return None;
+            };
+            match registry.remember_station_name(url, discovered) {
+                Ok(cached) => cached,
+                Err(error) => {
+                    tracing::warn!(operation = "audio.stream.station_cache", error = %error.message, "station metadata could not be saved; playback remains available");
+                    None
+                }
+            }
+        });
         // start_track_parser spawns the worker thread itself; dropping the
         // returned join handle detaches it for the process lifetime.
         let _parser_handle = start_track_parser(
@@ -177,6 +193,7 @@ impl AudioController {
             parser_runtime_tx,
             parser_cover_cache_dir,
             parser_lyrics_cache,
+            stream_metadata_cache,
         );
 
         let runtime_parser_tx = parser_tx.clone();
@@ -326,6 +343,9 @@ impl AudioController {
                                                 purpose: TrackParsePurpose::Details {
                                                     request_id,
                                                     track_id: track_id.clone(),
+                                                    station_name: runtime
+                                                        .get_current_track()
+                                                        .and_then(|track| track.station_name),
                                                 },
                                             };
                                             tracing::info!(
@@ -415,7 +435,7 @@ impl AudioController {
                                     Ok(track) => AudioTrackDetailsChanged::Ready {
                                         request_id,
                                         generation,
-                                        track,
+                                        track: runtime.get_current_track().unwrap_or(track),
                                     },
                                     Err(error) => AudioTrackDetailsChanged::Error {
                                         request_id,
@@ -439,7 +459,11 @@ impl AudioController {
                             );
                         }
                     }
-                    AudioRuntimeRequest::Play { input, reply } => {
+                    AudioRuntimeRequest::Play {
+                        input,
+                        reply,
+                        network_epoch,
+                    } => {
                         tracing::info!(
                             operation = "audio.play",
                             restart = input.as_ref().and_then(|value| value.restart),
@@ -450,7 +474,10 @@ impl AudioController {
                             &mut runtime,
                             "audio.play",
                             reply,
-                            |runtime| runtime.play(input),
+                            |runtime| {
+                                runtime.set_network_intent(network_epoch)?;
+                                runtime.play(input)
+                            },
                         );
                     }
                     AudioRuntimeRequest::Pause { reply } => {
@@ -463,7 +490,11 @@ impl AudioController {
                             AudioRuntime::pause,
                         );
                     }
-                    AudioRuntimeRequest::TransitionPlayback { input, reply } => {
+                    AudioRuntimeRequest::TransitionPlayback {
+                        input,
+                        reply,
+                        network_epoch,
+                    } => {
                         tracing::info!(
                             operation = "audio.transition_playback",
                             request_id = input.request_id,
@@ -477,7 +508,10 @@ impl AudioController {
                             &mut runtime,
                             "audio.transition_playback",
                             reply,
-                            |runtime| runtime.transition_playback(input),
+                            |runtime| {
+                                runtime.set_network_intent(network_epoch)?;
+                                runtime.transition_playback(input)
+                            },
                         );
                     }
                     AudioRuntimeRequest::Stop { reply } => {
@@ -563,13 +597,24 @@ impl AudioController {
                     }
                     AudioRuntimeRequest::GetState { reply } => {
                         tracing::debug!(operation = "audio.get_state", "runtime state requested");
-                        let _ = reply.send(runtime.get_state());
+                        let state = runtime.get_state();
+                        if let Some((request_id, generation, track)) = runtime.refresh_stream_artist() {
+                            emit_track_details_changed(&app_handle, AudioTrackDetailsChanged::Ready {
+                                request_id, generation, track,
+                            });
+                        }
+                        let _ = reply.send(state);
                     }
                     AudioRuntimeRequest::GetCurrentTrack { reply } => {
                         tracing::debug!(
                             operation = "audio.get_current_track",
                             "runtime current track requested",
                         );
+                        if let Some((request_id, generation, track)) = runtime.refresh_stream_artist() {
+                            emit_track_details_changed(&app_handle, AudioTrackDetailsChanged::Ready {
+                                request_id, generation, track,
+                            });
+                        }
                         let _ = reply.send(runtime.get_current_track());
                     }
                     AudioRuntimeRequest::OutputDeviceInterrupted => {
@@ -669,99 +714,16 @@ impl AudioController {
         })
     }
 
-    pub fn open_file(
+    pub(crate) fn load_source_path(
         &self,
-        input: Option<AudioOpenFileInput>,
-    ) -> Result<AudioTrackRef, AudioCommandError> {
-        tracing::info!(
-            operation = "audio.open_file_dialog",
-            has_custom_filters = input.is_some(),
-            "opening audio file dialog",
-        );
-        let mut dialog = rfd::FileDialog::new();
-
-        if let Some(input) = input {
-            for filter in input.filters.unwrap_or_else(default_filters) {
-                let extensions = filter
-                    .extensions
-                    .iter()
-                    .map(String::as_str)
-                    .collect::<Vec<_>>();
-                if !extensions.is_empty() {
-                    dialog = dialog.add_filter(&filter.name, &extensions);
-                }
-            }
-        } else {
-            for filter in default_filters() {
-                let extensions = filter
-                    .extensions
-                    .iter()
-                    .map(String::as_str)
-                    .collect::<Vec<_>>();
-                dialog = dialog.add_filter(&filter.name, &extensions);
-            }
-        }
-
-        let Some(path) = dialog.pick_file() else {
-            tracing::info!(
-                operation = "audio.open_file_dialog",
-                "audio file dialog cancelled",
-            );
-            return Err(audio_error(
-                AudioErrorCode::UserCancelled,
-                "User cancelled audio file selection",
-                true,
-            ));
-        };
-
-        tracing::info!(
-            operation = "audio.open_file_dialog",
-            path = %path.display(),
-            "audio file selected",
-        );
-        self.load_file_path(path)
-    }
-
-    pub fn open_source(&self) -> Result<AudioOpenSourceResult, AudioCommandError> {
-        tracing::info!(
-            operation = "audio.open_source_dialog",
-            "opening audio source dialog",
-        );
-        let mut dialog = rfd::FileDialog::new();
-
-        for filter in source_filters() {
-            let extensions = filter
-                .extensions
-                .iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>();
-            if !extensions.is_empty() {
-                dialog = dialog.add_filter(&filter.name, &extensions);
-            }
-        }
-
-        let Some(path) = dialog.pick_file() else {
-            tracing::info!(
-                operation = "audio.open_source_dialog",
-                "audio source dialog cancelled",
-            );
-            return Err(audio_error(
-                AudioErrorCode::UserCancelled,
-                "User cancelled audio source selection",
-                true,
-            ));
-        };
-
-        tracing::info!(
-            operation = "audio.open_source_dialog",
-            path = %path.display(),
-            "audio source selected",
-        );
-
+        path: PathBuf,
+    ) -> Result<AudioOpenSourceResult, AudioCommandError> {
         if path
             .extension()
             .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("m3u8"))
+            .is_some_and(|extension| {
+                extension.eq_ignore_ascii_case("m3u8") || extension.eq_ignore_ascii_case("m3u")
+            })
         {
             return load_folder_playlist(&path).map(|playlist| {
                 self.remember_playlist(&playlist);
@@ -914,12 +876,17 @@ impl AudioController {
         hydrate_track_ref(&path, Some(&self.cover_cache_dir), Some(&self.lyrics_cache))
     }
 
-    pub fn play(
+    pub(crate) fn play_with_epoch(
         &self,
         input: Option<AudioPlayInput>,
+        network_epoch: u64,
     ) -> Result<AudioPlaybackState, AudioCommandError> {
         self.request_state("audio.controller.play_round_trip", |reply| {
-            AudioRuntimeRequest::Play { input, reply }
+            AudioRuntimeRequest::Play {
+                input,
+                reply,
+                network_epoch,
+            }
         })
     }
 
@@ -929,16 +896,23 @@ impl AudioController {
         })
     }
 
-    pub fn transition_playback(
+    pub(crate) fn transition_playback_with_epoch(
         &self,
         input: AudioTransitionPlaybackInput,
+        network_epoch: u64,
     ) -> Result<AudioPlaybackState, AudioCommandError> {
         self.request_state("audio.controller.transition_playback_round_trip", |reply| {
-            AudioRuntimeRequest::TransitionPlayback { input, reply }
+            AudioRuntimeRequest::TransitionPlayback {
+                input,
+                reply,
+                network_epoch,
+            }
         })
     }
 
     pub fn stop(&self) -> Result<AudioPlaybackState, AudioCommandError> {
+        self.load_and_play_queue.latest_intent.cancel();
+        super::network::cancel_all();
         self.request_state("audio.controller.stop_round_trip", |reply| {
             AudioRuntimeRequest::Stop { reply }
         })
@@ -985,6 +959,8 @@ impl AudioController {
     }
 
     fn load_file_path(&self, path: PathBuf) -> Result<AudioTrackRef, AudioCommandError> {
+        self.load_and_play_queue.latest_intent.cancel();
+        super::network::cancel_all();
         let (reply, rx) = mpsc::channel();
         self.send(AudioRuntimeRequest::LoadFile { path, reply })?;
         let result = self.recv_track(rx)?;

@@ -268,6 +268,12 @@ const verifyArtistSongsPage=async()=>{
  await selectCategory('artist');await artist('Singer A').click();await allArtistSongs().waitFor()
  const referenceTypography=await page.locator('.album-library-content:not([inert]) .playlist-hero-title').evaluate(node=>{const style=getComputedStyle(node);return [style.fontSize,style.lineHeight]})
  await allArtistSongs().click();await songs().first().waitFor()
+ const songIndex=page.getByRole('navigation',{name:'歌曲快速查找'})
+ await songIndex.waitFor();assert.equal(await songIndex.count(),1,'artist songs show the song quick index')
+ await songIndex.getByRole('button',{name:'查找 T 开头的歌曲'}).focus();await page.keyboard.press('Enter')
+ assert.equal(await songIndex.getByRole('button',{name:'查找 T 开头的歌曲'}).getAttribute('aria-current'),'true','song index supports keyboard navigation')
+ await songIndex.getByRole('button',{name:'返回列表顶部'}).focus();await page.keyboard.press('Enter')
+ await page.waitForFunction(()=>document.querySelector('.album-library-content:not([inert])').scrollTop===0)
  const hero=page.locator('.album-library-content:not([inert]) > .playlist-hero')
  const measure=()=>hero.evaluate(node=>{
   const rect=el=>{const r=el.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height}}

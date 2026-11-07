@@ -23,6 +23,9 @@ impl DeleteFailure {
 }
 
 pub(crate) fn path_key(value: &str) -> String {
+    if crate::audio::network::is_stream(value) {
+        return value.to_owned();
+    }
     #[cfg(target_os = "windows")]
     {
         let value = value.replace('/', "\\");

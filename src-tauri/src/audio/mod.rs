@@ -12,6 +12,8 @@ mod error;
 mod folder_cover;
 mod lyrics_cache;
 mod metadata;
+pub(crate) mod network;
+mod network_icy;
 mod playlist;
 pub(crate) mod playlist_cover;
 mod playlist_duration;
@@ -32,26 +34,29 @@ mod source_tests;
 pub use controller::AudioController;
 pub(crate) use cover_pixels::try_warm_track_thumbnail;
 pub use cover_pixels::{
-    begin_playlist_cover_window, load_cover_pixels, load_folder_thumbnail, load_playlist_cover_pixels,
-    load_track_thumbnail, shutdown_playlist_cover_cache, AudioBeginPlaylistCoverWindowInput,
-    AudioLoadCoverPixelsInput, AudioLoadFolderThumbnailInput, AudioLoadPlaylistCoverPixelsInput,
-    AudioLoadTrackThumbnailInput, CoverPixelsError,
+    begin_playlist_cover_window, load_cover_pixels, load_folder_thumbnail,
+    load_playlist_cover_pixels, load_track_thumbnail, shutdown_playlist_cover_cache,
+    AudioBeginPlaylistCoverWindowInput, AudioLoadCoverPixelsInput, AudioLoadFolderThumbnailInput,
+    AudioLoadPlaylistCoverPixelsInput, AudioLoadTrackThumbnailInput, CoverPixelsError,
 };
 pub(crate) use device::current_output_info;
 pub use error::AudioCommandError;
 pub(crate) use error::{audio_error, AudioErrorCode};
-pub(crate) use playlist::{import_m3u8_playlist, load_library_folder, restore_playlist_track};
+pub(crate) use playlist::{
+    default_filters, import_m3u8_playlist, load_library_folder, restore_playlist_track,
+    source_filters, stream_descriptor,
+};
 pub(crate) use playlist_cover::probe_playlist_cover;
 pub use playlist_duration::probe_playlist_durations;
 pub use playlist_summary::probe_playlist_track_summaries;
 pub(crate) use types::AudioPlaylistSourceKind;
 pub use types::{
-    AudioEmbedLyricsInput, AudioFolderPlaylist, AudioFolderPlaylistInput, AudioLoadAndPlayInput,
-    AudioLoadAndPlayResult, AudioLoadFileInput, AudioOpenFileInput, AudioOpenSourceResult,
-    AudioOutputInfo, AudioPlayInput, AudioPlaybackState, AudioPlaylistCoverSource,
-    AudioPlaylistDurationItem, AudioPlaylistTrackSummaryItem, AudioProbePlaylistDurationsInput,
-    AudioProbePlaylistTrackSummariesInput, AudioSeekInput, AudioSetVolumeInput, AudioTrackRef,
-    AudioTransitionPlaybackInput,
+    AudioEmbedLyricsInput, AudioFileFilter, AudioFolderPlaylist, AudioFolderPlaylistInput,
+    AudioLoadAndPlayInput, AudioLoadAndPlayResult, AudioLoadFileInput, AudioOpenFileInput,
+    AudioOpenSourceResult, AudioOutputInfo, AudioPlayInput, AudioPlaybackState,
+    AudioPlaylistCoverSource, AudioPlaylistDurationItem, AudioPlaylistTrackSummaryItem,
+    AudioProbePlaylistDurationsInput, AudioProbePlaylistTrackSummariesInput, AudioSeekInput,
+    AudioSetVolumeInput, AudioTrackRef, AudioTransitionPlaybackInput,
 };
 
 pub const AUDIO_STATE_CHANGED_EVENT: &str = "audio_state_changed";

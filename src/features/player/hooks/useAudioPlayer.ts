@@ -1,5 +1,6 @@
 import { readMostPlayed, writeMostPlayed, recordMostPlayed } from '../model/mostPlayed'
 import { RecentlyPlayedTracker, readRecentlyPlayed, writeRecentlyPlayed } from '../model/recentlyPlayed'
+import { isStreamSource, STREAMS_SCOPE, validStreamsPlaylist } from '../model/streams'
 import { isPlayerDragDiagnosticsRecording, playerDragDiagnosticId, recordPlayerDragDiagnostic, registerPlayerDragDiagnosticSnapshot } from '@/features/player/diagnostics/playerDragDiagnostics'
 import { folderSelectionPath, isRootSelectionActive, projectSelectedFolder } from '@/features/player/model/folderSelection'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
@@ -51,6 +52,9 @@ import {
   playlistSummaryProbePaths,
   playlistTrackRowEqual,
   playlistTrackRowFromSummary,
+  nonUrlStreamName,
+  streamTrackTitle,
+  nonEmptyText,
   type PlaylistSummaryStatus,
   type PlaylistTrackRow,
 } from '@/features/player/model/playlistTrackSummary'
@@ -95,6 +99,9 @@ import {
   type LibraryFolderSettings,
   type ReplaceLibraryFoldersInput,
   getLibraryPlaylists,
+  getLibraryStreams,
+  addLibraryStream,
+  removeLibraryStreams,
   getAudioState,
   getAudioOutputInfo,
   getCurrentAudioTrack,
@@ -131,6 +138,8 @@ import {
 
 type TransportIntentPhase = 'playing' | 'paused'
 type TransportRequest = { phase: TransportIntentPhase; restart: boolean }
+type StreamDetailsIdentity = { requestId: number; generation: number; trackId: string; sourcePath: string }
+type StreamAuthorSnapshot = { identity: StreamDetailsIdentity; artist: string | null; albumArtist: string | null }
 type PendingTrackSelection = {
   requestId: number
   targetTrackId: string | null
@@ -260,7 +269,20 @@ function trackSummaryFromTrack(track: Track): TrackSummary {
     artist: track.artist,
     album: track.album,
     category: track.category,
+    ...(track.stream ? { stream: track.stream } : {}),
   }
+}
+
+function mergePlaylistStationNames(source: AudioFolderPlaylist, names: ReadonlyMap<string, string>): AudioFolderPlaylist {
+  let changed = false
+  const tracks = source.tracks.map(track => {
+    if (!isStreamSource(track)) return track
+    const stationName = names.get(track.sourcePath) ?? nonEmptyText(track.stationName)
+    if (!stationName || stationName === track.stationName) return track
+    changed = true
+    return { ...track, stationName }
+  })
+  return changed ? { ...source, tracks } : source
 }
 
 // Rows before any tag is known. Missing songs are expressed through
@@ -268,13 +290,14 @@ function trackSummaryFromTrack(track: Track): TrackSummary {
 // (an empty string means "unknown", never the playlist name).
 function playlistTrackSummaries(playlist: AudioFolderPlaylist): TrackSummary[] {
   return playlist.tracks.map((track) => {
-    const { title } = pendingPlaylistTrackRow(track)
+    const { title, stream } = pendingPlaylistTrackRow(track)
     return {
       id: track.id,
       title,
       artist: '',
       album: '',
-      category: 'local-audio',
+      category: stream ? 'stream' : 'local-audio',
+      ...(stream ? { stream } : {}),
     }
   })
 }
@@ -311,6 +334,8 @@ function trackSummaryEqual(left: TrackSummary, right: TrackSummary): boolean {
     && left.artist === right.artist
     && left.album === right.album
     && left.category === right.category
+    && left.stream?.url === right.stream?.url
+    && left.stream?.stationName === right.stream?.stationName
   )
 }
 
@@ -476,6 +501,15 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
   // instead of waiting for the full scope activation.
   const [pendingDurationPlaylist, setPendingDurationPlaylist] = useState<AudioFolderPlaylist | null>(null)
   const [sessionPlaylists, setSessionPlaylists] = useState<readonly AudioFolderPlaylist[]>([])
+  const [streamPlaylist, setStreamPlaylist] = useState<AudioFolderPlaylist | null>(null)
+  const streamPlaylistRef = useRef<AudioFolderPlaylist | null>(null)
+  const [streamsLoading, setStreamsLoading] = useState(true)
+  const [streamsError, setStreamsError] = useState<string | null>(null)
+  const streamsRunRef = useRef(0)
+  const streamMutationPendingRef = useRef(false)
+  const observedStationNamesRef = useRef(new Map<string, string>())
+  const streamInfoRefreshQueuedRef = useRef(false)
+  const lastStationReadyRef = useRef<string | null>(null)
   const [libraryFolderPlaylists, setLibraryFolderPlaylists] = useState<readonly AudioFolderPlaylist[]>([])
   const libraryFolderPlaylistsRef = useRef(libraryFolderPlaylists)
   useLayoutEffect(() => { libraryFolderPlaylistsRef.current = libraryFolderPlaylists }, [libraryFolderPlaylists])
@@ -548,6 +582,8 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
   const selectionRequestIdRef = useRef(0)
   const selectionActivitySequenceRef = useRef(0)
   const pendingSelectionRef = useRef<PendingTrackSelection | null>(null)
+  const streamDetailsIdentityRef = useRef<StreamDetailsIdentity | null>(null)
+  const deferredStreamAuthorRef = useRef<StreamAuthorSnapshot | null>(null)
   const presentationTrackRef = useRef<Track | null>(null)
   const presentationArtworkRef = useRef<TrackArtwork | null>(null)
   const detailsPendingRef = useRef(false)
@@ -877,13 +913,26 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     return nextArtwork
   }, [])
 
+  const namedStreamTrack = useCallback((input: AudioTrackRef): AudioTrackRef => {
+    if (!isStreamSource(input)) return input
+    const root = streamPlaylistRef.current?.tracks.find(item => item.id === input.id && item.sourcePath === input.sourcePath)
+    const current = folderPlaylistRef.current?.tracks.find(item => item.id === input.id && item.sourcePath === input.sourcePath)
+    const session = [...sessionPlaylistDescriptorsRef.current.values()].flatMap(source => source.tracks)
+      .find(item => item.id === input.id && item.sourcePath === input.sourcePath)
+    const stationName = observedStationNamesRef.current.get(input.sourcePath) ?? nonEmptyText(input.stationName) ?? nonEmptyText(root?.stationName) ?? nonEmptyText(current?.stationName) ?? nonEmptyText(session?.stationName)
+    const title = nonUrlStreamName(root?.title) ?? nonUrlStreamName(current?.title) ?? nonUrlStreamName(session?.title)
+      ?? stationName ?? nonUrlStreamName(input.metadata.title) ?? nonUrlStreamName(root?.fileName)
+      ?? nonUrlStreamName(current?.fileName) ?? nonUrlStreamName(input.fileName) ?? input.sourcePath
+    return { ...input, sourceKind: 'stream', stationName, durationMs: null, metadata: { ...input.metadata, title } }
+  }, [])
+
   const commitPresentationTrack = useCallback((
     nextAudioTrack: AudioTrackRef,
     durationMs?: number | null,
     commitArtwork = true,
   ) => {
     const mappedTrack = audioTrackToTrack({
-      ...nextAudioTrack,
+      ...namedStreamTrack(nextAudioTrack),
       durationMs: durationMs ?? nextAudioTrack.durationMs,
     })
     const currentTrack = presentationTrackRef.current
@@ -896,7 +945,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     if (commitArtwork) commitPresentationArtwork(nextTrack)
     setContentState('track')
     return nextTrack
-  }, [commitPresentationArtwork, commitQueueTrackSummary])
+  }, [commitPresentationArtwork, commitQueueTrackSummary, namedStreamTrack])
 
   const patchPresentationDuration = useCallback((trackId: string, durationMs: number | null) => {
     const currentTrack = presentationTrackRef.current
@@ -929,7 +978,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
 
   const enqueueCoverWarmup = useCallback((playlist: AudioFolderPlaylist) => {
     const epoch = libraryEpochRef.current
-    const paths = [...new Set(playlist.tracks.filter((track) => track.available).map((track) => track.sourcePath))]
+    const paths = [...new Set(playlist.tracks.filter((track) => track.available && !isStreamSource(track)).map((track) => track.sourcePath))]
     for (let index = 0; index < paths.length; index += 256) {
       coverWarmupQueueRef.current.push({ epoch, paths: paths.slice(index, index + 256) })
     }
@@ -1201,7 +1250,8 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     const { paths, descriptorsByPath } = playlistSummaryProbePaths(descriptors)
     // Accumulate the entire pass and publish it once. A 1791-track list would
     // otherwise re-render (and re-measure the whole grid) once per batch.
-    const collected: Record<string, PlaylistTrackRow> = {}
+    const collected: Record<string, PlaylistTrackRow> = Object.fromEntries(descriptors.filter(isStreamSource)
+      .map(descriptor => [descriptor.id, playlistTrackRowFromSummary(descriptor, null)]))
     const harvest = (batch: readonly string[], items: readonly AudioPlaylistTrackSummaryItem[]) => {
       for (const [index, item] of items.entries()) {
         const sourcePath = batch[index]
@@ -1288,6 +1338,125 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     commitPlaylistSummaryStatus(scope, 'loading')
     void runPlaylistSummaryPass(scope, runId, fingerprint, playlist.tracks)
   }, [commitPlaylistSummaryStatus, findPlaylistForScope, runPlaylistSummaryPass])
+
+  const commitStreams = useCallback((input: AudioFolderPlaylist) => {
+    if (!validStreamsPlaylist(input)) throw new Error('流列表格式错误')
+    // Accepted Ready observations survive a cache-write failure or older disk
+    // snapshot; membership still comes exclusively from the returned registry.
+    const source = mergePlaylistStationNames(input, observedStationNamesRef.current)
+    const names = new Map(source.tracks.flatMap(track => {
+      const name = nonEmptyText(track.stationName)
+      return name ? [[track.sourcePath, name] as const] : []
+    }))
+    for (const [url, name] of observedStationNamesRef.current) names.set(url, name)
+    streamPlaylistRef.current = source
+    sessionPlaylistDescriptorsRef.current.set(STREAMS_SCOPE, source)
+    setStreamPlaylist(source)
+    setStreamsError(null)
+    ensurePlaylistSummaries(STREAMS_SCOPE, source, true)
+    for (const [scope, existing] of sessionPlaylistDescriptorsRef.current) {
+      if (scope === STREAMS_SCOPE) continue
+      const merged = mergePlaylistStationNames(existing, names)
+      if (merged === existing) continue
+      sessionPlaylistDescriptorsRef.current.set(scope, merged)
+      ensurePlaylistSummaries(scope, merged, true)
+    }
+    setSessionPlaylists(previous => {
+      const next = previous.map(existing => mergePlaylistStationNames(existing, names))
+      return next.every((item, index) => item === previous[index]) ? previous : next
+    })
+    if (folderPlaylistRef.current) {
+      const previous = folderPlaylistRef.current
+      const merged = mergePlaylistStationNames(previous, names)
+      if (merged !== previous) {
+        folderPlaylistRef.current = merged
+        setFolderPlaylist(merged)
+        ensurePlaylistSummaries(playlistScope(merged), merged, true)
+      }
+    }
+    setQueueTracks(previous => {
+      const descriptors = folderPlaylistRef.current?.tracks ?? []
+      let changed = false
+      const next = previous.map(row => {
+        const descriptor = descriptors.find(item => item.id === row.id)
+        if (!descriptor || !isStreamSource(descriptor)) return row
+        const root = source.tracks.find(item => item.id === row.id)
+        const title = nonUrlStreamName(root?.title) ?? streamTrackTitle(descriptor)
+        const stream = { url: descriptor.sourcePath, stationName: names.get(descriptor.sourcePath) }
+        if (row.title === title && row.stream?.url === stream.url && row.stream.stationName === stream.stationName) return row
+        changed = true
+        return { ...row, title, artist: '', album: '', category: 'stream', stream }
+      })
+      return changed ? next : previous
+    })
+  }, [ensurePlaylistSummaries])
+  const readStreams = useCallback(async (background: boolean) => {
+    const run = ++streamsRunRef.current
+    if (!background) setStreamsLoading(true)
+    try {
+      const source = await getLibraryStreams()
+      if (!playlistSummaryDisposedRef.current && run === streamsRunRef.current) commitStreams(source)
+    } catch (error) {
+      if (!playlistSummaryDisposedRef.current && run === streamsRunRef.current && !background) setStreamsError(commandError(error).message)
+    } finally {
+      if (!playlistSummaryDisposedRef.current && run === streamsRunRef.current && !background) setStreamsLoading(false)
+    }
+  }, [commitStreams])
+  const refreshStreams = useCallback(() => readStreams(false), [readStreams])
+  const refreshStationInformation = useCallback(() => {
+    if (playlistSummaryDisposedRef.current) return
+    if (streamMutationPendingRef.current || libraryImportPendingRef.current || deletePendingRef.current) {
+      streamInfoRefreshQueuedRef.current = true
+      return
+    }
+    streamInfoRefreshQueuedRef.current = false
+    void readStreams(true)
+  }, [readStreams])
+  useEffect(() => {
+    if (streamInfoRefreshQueuedRef.current) refreshStationInformation()
+  }, [libraryImportPending, deletePending, refreshStationInformation])
+  useEffect(() => { void refreshStreams(); return () => { streamsRunRef.current += 1 } }, [refreshStreams])
+  const addStream = useCallback(async (input: { url: string; title?: string }): Promise<boolean> => {
+    if (streamMutationPendingRef.current || deletePendingRef.current || libraryImportPendingRef.current) return false
+    streamMutationPendingRef.current = true
+    const run = ++streamsRunRef.current
+    try {
+      const source = await addLibraryStream(input)
+      if (playlistSummaryDisposedRef.current || run !== streamsRunRef.current) return false
+      commitStreams(source)
+      return true
+    } catch (error) {
+      if (!playlistSummaryDisposedRef.current && run === streamsRunRef.current) toast.error(commandError(error).message)
+      return false
+    } finally {
+      streamMutationPendingRef.current = false
+      if (!playlistSummaryDisposedRef.current && run === streamsRunRef.current) setStreamsLoading(false)
+      if (streamInfoRefreshQueuedRef.current) refreshStationInformation()
+    }
+  }, [commitStreams, refreshStationInformation])
+  const deleteStreams = useCallback<PlaylistDeleteAction>(async (snapshot, mode) => {
+    const keys = [...new Set(snapshot.songKeys)]
+    const failed = (errorMessage: string) => ({ succeededKeys: [], failedKeys: keys, errorMessage })
+    if (mode !== 'list' || snapshot.scope !== STREAMS_SCOPE) return failed('流地址只能从流列表中移除。')
+    if (streamMutationPendingRef.current || deletePendingRef.current || libraryImportPendingRef.current) return failed('正在处理其他列表操作，请稍后重试。')
+    const known = new Set(streamPlaylistRef.current?.tracks.map(item => item.id))
+    if (!keys.length || keys.some(key => !known.has(key))) return failed('流列表已改变，请重新选择。')
+    streamMutationPendingRef.current = true
+    const run = ++streamsRunRef.current
+    setDeletePending(true)
+    try {
+      const source = await removeLibraryStreams(keys)
+      if (playlistSummaryDisposedRef.current || run !== streamsRunRef.current) return failed('流列表已改变，请重试。')
+      commitStreams(source)
+      const remaining = new Set(source.tracks.map(item => item.id))
+      return { succeededKeys: keys.filter(key => !remaining.has(key)), failedKeys: keys.filter(key => remaining.has(key)) }
+    } catch (error) { return failed(commandError(error).message) }
+    finally {
+      streamMutationPendingRef.current = false
+      if (!playlistSummaryDisposedRef.current) setDeletePending(false)
+      if (streamInfoRefreshQueuedRef.current) refreshStationInformation()
+    }
+  }, [commitStreams, refreshStationInformation])
 
   useEffect(() => {
     if (libraryStatus !== 'error') return
@@ -1507,6 +1676,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
         : [...previous, playlist])
       ensurePlaylistSummaries(scope, playlist)
       enqueueCoverWarmup(playlist)
+      await refreshStreams()
     } catch (error) {
       if (!playlistSummaryDisposedRef.current && libraryEpochRef.current === epoch) toast.error(`无法导入播放列表：${commandError(error).message}`)
     } finally {
@@ -1515,7 +1685,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
         if (!playlistSummaryDisposedRef.current && libraryEpochRef.current === epoch) setLibraryImportPending(false)
       }
     }
-  }, [ensurePlaylistSummaries, enqueueCoverWarmup])
+  }, [ensurePlaylistSummaries, enqueueCoverWarmup, refreshStreams])
 
   const createPlaylistFromTracks = useCallback((name: string, tracks: readonly AudioFolderTrackRef[]): string | null => {
     if (deletePendingRef.current) return null
@@ -1695,6 +1865,8 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
   }, [applyFolderManualOrder, commitPlaylistSummaryStatus, ensurePlaylistCoverSession, ensurePlaylistSummaries, playlistArtworkGrace, publishPlaylistVisuals])
 
   const clearPresentationTrack = useCallback((nextContentState: Exclude<PlayerContentState, 'track'>) => {
+    streamDetailsIdentityRef.current = null
+    deferredStreamAuthorRef.current = null
     presentationTrackRef.current = null
     presentationArtworkRef.current = null
     setPresentationTrack(null)
@@ -1847,12 +2019,13 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     const descriptor = folderPlaylistRef.current?.tracks.find(item => item.id === hydratedTrack.id)
     if (!descriptor || normalizeAudioSourcePath(descriptor.sourcePath) !== normalizeAudioSourcePath(hydratedTrack.sourcePath)
       || playlistTrackMetadataRef.current[hydratedTrack.id]) return
-    const visual = audioTrackToPlaylistVisual(hydratedTrack)
+    const visual = audioTrackToPlaylistVisual(namedStreamTrack(hydratedTrack))
     const metadata: PlaylistTrackMetadata = {
       id: visual.id,
       title: visual.title,
       artist: visual.artist,
       album: visual.album,
+      ...(visual.stream ? { stream: visual.stream } : {}),
       durationSeconds: visual.durationSeconds,
       fileExtension: visual.fileExtension,
       coverTone: visual.coverTone,
@@ -1862,7 +2035,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     const nextMetadata = { ...playlistTrackMetadataRef.current, [hydratedTrack.id]: metadata }
     playlistTrackMetadataRef.current = nextMetadata
     setPlaylistTrackMetadata(nextMetadata)
-  }, [])
+  }, [namedStreamTrack])
 
   const requestHydratedAudioTrack = useCallback((
     sourcePath: string,
@@ -2507,6 +2680,37 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     )
   }, [folderPlaylist, setVisiblePlaylistTrackIds])
 
+  const applyCurrentStreamAuthor = useCallback((snapshot: StreamAuthorSnapshot) => {
+    const { identity, artist, albumArtist } = snapshot
+    const currentAudioTrack = audioTrackRef.current
+    const currentPresentation = presentationTrackRef.current
+    const state = latestAudioStateRef.current
+    if (
+      pendingSelectionRef.current !== null
+      || streamDetailsIdentityRef.current !== identity
+      || state?.generation !== identity.generation
+      || state.currentTrackId !== identity.trackId
+      || !currentAudioTrack
+      || !isStreamSource(currentAudioTrack)
+      || currentAudioTrack.id !== identity.trackId
+      || currentAudioTrack.sourcePath !== identity.sourcePath
+      || currentPresentation?.id !== identity.trackId
+      || currentPresentation.stream?.url !== identity.sourcePath
+      || currentPresentation.sourcePath !== identity.sourcePath
+    ) return
+    if (currentAudioTrack.metadata.artist === artist
+      && currentAudioTrack.metadata.albumArtist === albumArtist) return
+    const nextAudioTrack = {
+      ...currentAudioTrack,
+      metadata: { ...currentAudioTrack.metadata, artist, albumArtist },
+    }
+    audioTrackRef.current = nextAudioTrack
+    setAudioTrack(nextAudioTrack)
+    const nextPresentation = { ...currentPresentation, artist: audioTrackToTrack(nextAudioTrack).artist }
+    presentationTrackRef.current = nextPresentation
+    setPresentationTrack(nextPresentation)
+  }, [])
+
   const settleSelectionFailure = useCallback((requestId: number, error: AudioCommandError) => {
     if (!selectionIsCurrent(requestId)) return
     const pending = pendingSelectionRef.current
@@ -2535,6 +2739,11 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       setPresentationTrack(pending.previousPresentationTrack)
       setPresentationArtwork(pending.previousArtwork)
       setContentState('track')
+      const restoreStreamAuthor = () => {
+        const snapshot = deferredStreamAuthorRef.current
+        deferredStreamAuthorRef.current = null
+        if (snapshot) applyCurrentStreamAuthor(snapshot)
+      }
       if (pending.previousDetailsPending && pending.previousSourcePath) {
         const restoredTrackId = pending.previousPresentationTrack.id
         const restoredSourcePath = pending.previousSourcePath
@@ -2554,6 +2763,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
           }
           commitPresentationArtwork(fallbackTrack)
           commitDetailsPending(false)
+          restoreStreamAuthor()
         }
         const commitRestoredTrack = (restoredAudioTrack: AudioTrackRef) => {
           if (!restoreIsCurrent()) return
@@ -2567,6 +2777,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
           hydratedCacheSet(hydratedAudioTrackCacheRef.current, restoredSourcePath, restoredAudioTrack)
           commitPresentationTrack(restoredAudioTrack, restoredDuration)
           commitDetailsPending(false)
+          restoreStreamAuthor()
         }
 
         commitDetailsPending(true)
@@ -2579,6 +2790,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
         }
       } else {
         commitDetailsPending(false)
+        restoreStreamAuthor()
       }
     } else {
       logicalCursorTrackIdRef.current = latestAudioStateRef.current?.currentTrackId ?? null
@@ -2586,7 +2798,9 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       clearPresentationTrack(error.code === 'USER_CANCELLED' ? 'empty' : 'error')
     }
     if (error.code !== 'SUPERSEDED') commitAudioError(error)
+    if (error.code !== 'SUPERSEDED' && error.code !== 'USER_CANCELLED') toast.error(error.message)
   }, [
+    applyCurrentStreamAuthor,
     clearPresentationTrack,
     commitAudioError,
     commitDetailsPending,
@@ -2598,13 +2812,58 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
 
   const applyTrackDetails = useCallback((details: AudioTrackDetailsChanged) => {
     const trackId = details.kind === 'ready' ? details.track.id : details.trackId
+    const pendingSelection = pendingSelectionRef.current
+    if (!pendingSelection || pendingSelection.requestId !== details.requestId) {
+      // Live programme metadata can arrive after the initial selection has
+      // settled. During a replacement, retain only its last author snapshot so
+      // a failed selection can restore the still-playing session accurately.
+      const identity = streamDetailsIdentityRef.current
+      const state = latestAudioStateRef.current
+      if (
+        details.kind !== 'ready'
+        || !isStreamSource(details.track)
+        || !identity
+        || details.requestId !== identity.requestId
+        || details.generation !== identity.generation
+        || trackId !== identity.trackId
+        || details.track.sourcePath !== identity.sourcePath
+        || state?.generation !== identity.generation
+        || state.currentTrackId !== identity.trackId
+      ) return
+      const snapshot: StreamAuthorSnapshot = {
+        identity,
+        artist: nonEmptyText(details.track.metadata.artist) ?? null,
+        albumArtist: nonEmptyText(details.track.metadata.albumArtist) ?? null,
+      }
+      if (pendingSelection) {
+        const previousAudio = pendingSelection.previousAudioTrack
+        const previousPresentation = pendingSelection.previousPresentationTrack
+        if (
+          previousAudio && isStreamSource(previousAudio)
+          && previousAudio.id === identity.trackId
+          && previousAudio.sourcePath === identity.sourcePath
+          && previousPresentation?.id === identity.trackId
+          && previousPresentation.sourcePath === identity.sourcePath
+          && previousPresentation.stream?.url === identity.sourcePath
+        ) deferredStreamAuthorRef.current = snapshot
+      } else applyCurrentStreamAuthor(snapshot)
+      return
+    }
     if (!selectionTransactionIsCurrent(details.requestId, details.generation, trackId)) return
 
-    const pendingSelection = pendingSelectionRef.current
-    if (!pendingSelection) return
     pendingSelection.detailsSettled = true
     commitDetailsPending(false)
     if (details.kind === 'ready') {
+      const stationName = isStreamSource(details.track) ? nonEmptyText(details.track.stationName) : undefined
+      if (stationName) observedStationNamesRef.current.set(details.track.sourcePath, stationName)
+      details = { ...details, track: namedStreamTrack(details.track) }
+      deferredStreamAuthorRef.current = null
+      streamDetailsIdentityRef.current = isStreamSource(details.track) ? {
+        requestId: details.requestId,
+        generation: details.generation,
+        trackId: details.track.id,
+        sourcePath: details.track.sourcePath,
+      } : null
       const currentDuration = latestAudioStateRef.current?.currentTrackId === details.track.id
         ? latestAudioStateRef.current.durationMs
         : details.track.durationMs
@@ -2622,6 +2881,14 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
         }
       }
       commitPresentationTrack(details.track, currentDuration)
+      if (stationName) {
+        if (streamPlaylistRef.current) commitStreams(streamPlaylistRef.current)
+        const readyKey = `${details.requestId}:${details.generation}:${details.track.id}`
+        if (lastStationReadyRef.current !== readyKey) {
+          lastStationReadyRef.current = readyKey
+          refreshStationInformation()
+        }
+      }
     } else {
       const currentTrack = presentationTrackRef.current
       if (currentTrack) {
@@ -2632,10 +2899,14 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     }
     if (pendingSelection.commandConfirmed) pendingSelectionRef.current = null
   }, [
+    applyCurrentStreamAuthor,
     commitDetailsPending,
     commitPresentationArtwork,
     commitPresentationTrack,
     selectionTransactionIsCurrent,
+    namedStreamTrack,
+    commitStreams,
+    refreshStationInformation,
   ])
 
   const ensureTrackDetailsListener = useCallback(() => {
@@ -2700,7 +2971,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
         )
         if (!resolved || seenTrackIds.has(resolved.track.id)) break
         seenTrackIds.add(resolved.track.id)
-        descriptors.push({ direction, distance, resolved })
+        if (!isStreamSource(resolved.track)) descriptors.push({ direction, distance, resolved })
         cursorIndex = resolved.index
         cursorTrackId = resolved.track.id
       }
@@ -2871,7 +3142,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       && nextAudioState.phase !== transportIntent
     if (!settleTransportIntent && isConflictingTransportState && !matchingPlaybackTransition) return
 
-    if (recentTrackerRef.current.sample(nextAudioState, performance.now(), acceptSeekPosition || timelineInteractionRef.current === 'seeking' || Boolean(seekTargetGuardRef.current && seekTargetGuardRef.current.trackId === nextAudioState.currentTrackId && performance.now() < seekTargetGuardRef.current.expiresAt), audioTrackRef.current?.id === nextAudioState.currentTrackId)) {
+    if (recentTrackerRef.current.sample(nextAudioState, performance.now(), acceptSeekPosition || timelineInteractionRef.current === 'seeking' || Boolean(seekTargetGuardRef.current && seekTargetGuardRef.current.trackId === nextAudioState.currentTrackId && performance.now() < seekTargetGuardRef.current.expiresAt), audioTrackRef.current?.id === nextAudioState.currentTrackId, Boolean(audioTrackRef.current && isStreamSource(audioTrackRef.current)))) {
       const track = audioTrackRef.current
       if (track && track.id === nextAudioState.currentTrackId) {
         const sourcePath = normalizeAudioSourcePath(track.sourcePath)
@@ -3044,6 +3315,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     preparedPreview?: PreparedTrackCardPreview,
     initialPositionMs?: number,
   ) => {
+    if (isStreamSource(folderTrack)) initialPositionMs = 0
     if (
       transportOperationInProgress()
       || timelineInteractionRef.current === 'seeking'
@@ -3159,11 +3431,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       return true
     } catch (error) {
       const nextError = commandError(error)
-      const isCurrentSelection = selectionIsCurrent(selectionRequestId, folderTrack.id)
       settleSelectionFailure(selectionRequestId, nextError)
-      if (isCurrentSelection && nextError.code === 'FILE_NOT_FOUND') {
-        toast.error(missingPlaylistTrackError(folderTrack.fileName).message)
-      }
       return false
     } finally {
       if (selectionRequestIdRef.current === selectionRequestId) {
@@ -3700,7 +3968,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     // This effect owns one restore transaction. Settle its registry dependency
     // before issuing any native request, so a late registry result cannot run
     // cleanup halfway through restoring another source and abandon its queue.
-    if (playlistRestorePending) return
+    if (playlistRestorePending || streamsLoading) return
     sessionRestoreStartedRef.current = true
     if (selectionRequestIdRef.current !== 0) {
       sessionRestorePendingRef.current = false
@@ -3733,7 +4001,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
         }
         const playlist = saved.playlist.sourceKind === 'custom'
           ? saved.playlist.customPlaylist ?? null
-          : saved.playlist.sourceKind === 'm3u8'
+          : saved.playlist.sourceKind === 'm3u8' || saved.playlist.sourceKind === 'streams'
             ? sessionPlaylistDescriptorsRef.current.get(`${saved.playlist.sourceKind}\u0000${normalizeAudioSourcePath(saved.playlist.sourcePath)}`) ?? null
             : folderMode === 'file'
               ? await listAudioFolderTracks(saved.sourcePath)
@@ -3759,8 +4027,8 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
         if (!loaded || latestAudioStateRef.current?.currentTrackId !== target.id) {
           throw new Error('上次播放的歌曲未能加载')
         }
-        const positionMs = Math.min(saved.positionMs, latestAudioStateRef.current.durationMs ?? saved.positionMs)
-        const positioned = await seekAudio(positionMs)
+        const positionMs = isStreamSource(target) ? 0 : Math.min(saved.positionMs, latestAudioStateRef.current.durationMs ?? saved.positionMs)
+        const positioned = isStreamSource(target) ? latestAudioStateRef.current : await seekAudio(positionMs)
         if (cancelled() || selectionRequestIdRef.current !== restoreSelectionId
           || positioned.currentTrackId !== target.id) return
         applyAudioState(positioned, false, true)
@@ -3774,7 +4042,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
         const pausedState = await pauseAudio()
         if (cancelled() || selectionRequestIdRef.current !== restoreSelectionId
           || pausedState.currentTrackId !== target.id) return
-        if (pausedState.phase !== 'paused' || Math.abs(pausedState.positionMs - positionMs) > 1000) {
+        if (pausedState.phase !== 'paused' || !isStreamSource(target) && Math.abs(pausedState.positionMs - positionMs) > 1000) {
           throw new Error('上次播放的暂停状态或进度未能确认')
         }
         applyAudioState(pausedState)
@@ -3823,6 +4091,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     clearPresentationTrack,
     loadFolderAudioTrack,
     playlistRestorePending,
+    streamsLoading,
   ])
 
   useEffect(() => () => visualTimelineClock.dispose(), [visualTimelineClock])
@@ -3851,6 +4120,8 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
 
     return () => {
       trackDetailsListenerActiveRef.current = false
+      streamDetailsIdentityRef.current = null
+      deferredStreamAuthorRef.current = null
       trackDetailsListenerEpochRef.current += 1
       trackDetailsUnlistenRef.current?.()
       trackDetailsUnlistenRef.current = null
@@ -4240,7 +4511,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
   }, [folderPlaylist, loadPlaylistTrackOrSkip])
 
   const selectSessionPlaylistTrack = useCallback(async (scope: string, trackId: string) => {
-    if (audioSelectionInProgressRef.current || transportOperationInProgress()
+    if (transportOperationInProgress()
       || timelineInteractionRef.current === 'seeking') return false
     const playlist = findPlaylistForScope(scope)
     const index = playlist?.tracks.findIndex((item) => item.id === trackId) ?? -1
@@ -4256,7 +4527,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
 
   const selectPlaybackQueueTrack = useCallback(async (selection: PlaybackQueueSelection, trackId: string,
     options?: { shuffleMode: 'shuffle-all'; repeatMode: RepeatMode; shuffleOrder: readonly string[] }) => {
-    if (audioSelectionInProgressRef.current || transportOperationInProgress()
+    if (transportOperationInProgress()
       || timelineInteractionRef.current === 'seeking') return false
     const sources = new Map<string, Map<string, AudioFolderTrackRef>>()
     const tracks: AudioFolderTrackRef[] = []
@@ -4285,7 +4556,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     const source = selection.sourceScope ? findPlaylistForScope(selection.sourceScope) : undefined
     if (selection.kind === 'playlist' && !source) return false
     const id = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
-    const name = selection.kind === 'most-played' ? '最常播放' : selection.kind === 'long-tracks' ? '长' : selection.kind === 'recent-added' ? '最近添加' : selection.kind === 'recent-played' ? '最近播放' : selection.kind === 'all-songs' ? '所有歌曲' : playlistDisplayName(source!)
+    const name = selection.kind === 'streams' ? '流' : selection.kind === 'most-played' ? '最常播放' : selection.kind === 'long-tracks' ? '长' : selection.kind === 'recent-added' ? '最近添加' : selection.kind === 'recent-played' ? '最近播放' : selection.kind === 'all-songs' ? '所有歌曲' : playlistDisplayName(source!)
     const playlist: PlaybackQueuePlaylist = {
       sourceKind: 'custom', sourcePath: `queue:${selection.kind}:${id}`,
       sourceName: name, directoryPath: '', directoryName: name, selectedIndex: index, tracks,
@@ -4941,6 +5212,12 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     playlistRestorePending,
     selectFolders,
     importPlaylist,
+    streamPlaylist,
+    streamsLoading,
+    streamsError,
+    refreshStreams,
+    addStream,
+    deleteStreams,
     createPlaylist,
     preparePlaylistAdd,
     createAddPlaylist,

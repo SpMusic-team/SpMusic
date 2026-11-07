@@ -142,6 +142,7 @@ try {
     assert.deepEqual(pinsAfter.filter(id => id !== category), pinsBefore.filter(id => id !== category), 'pin action changes only current category')
     await allSongs().click(); await songs().first().waitFor()
     assert.deepEqual(await songIds(), expectedIds)
+    assert.equal(await page.getByRole('navigation', { name: '歌曲快速查找' }).count(), category === 'album-artist' ? 1 : 0, 'album artist songs have a quick index')
     await songs().first().click(); await ready()
     assert.deepEqual(await queueIds(), expectedIds, 'song playback retains exactly the contributor scope')
     await backFromPlayer(); await songs().first().waitFor()

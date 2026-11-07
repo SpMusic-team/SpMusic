@@ -43,7 +43,7 @@ const QueueTrackRow = memo(function QueueTrackRow({
 }: QueueTrackRowProps) {
   // An empty artist means "not known yet". Rendering an empty node would leave a
   // dangling spacer line and an aria label without content.
-  const artist = item.artist?.trim()
+  const artist = item.stream ? item.artist?.trim() || item.stream.url : item.artist?.trim()
   return (
     <li
       data-current={current}

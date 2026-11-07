@@ -110,7 +110,7 @@ const noPlayback = async () => {
 }
 const category = async id => {
  await page.evaluate(id=>window.viewModel.playlist.library.onSelectCategory(id),id)
- await page.getByRole('heading',{name:id==='songs'?'全部歌曲':'播放列表',exact:true}).waitFor()
+ await page.getByRole('heading',{name:id==='songs'?'所有歌曲':'播放列表',exact:true}).waitFor()
 }
 const visit=async()=>{
  await page.goto(origin+'/__imported_playlist_artwork_test?run='+Math.random())

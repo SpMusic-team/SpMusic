@@ -98,7 +98,7 @@ const visit = async () => {
   await page.goto(origin + '/__library_persistence_test?run=' + Math.random())
   await page.waitForFunction(() => Boolean(window.viewModel))
   await page.evaluate(() => window.viewModel.playlist.library.onSelectCategory('songs'))
-  await page.getByRole('heading', { name: '全部歌曲' }).waitFor()
+  await page.getByRole('heading', { name: '所有歌曲' }).waitFor()
 }
 const importChoice = async choice => {
   await page.evaluate(choice => {window.choice=choice;if(choice==='m3u8')window.viewModel.playlist.library.onImportPlaylist();else window.viewModel.playlist.library.onSelectFolders()}, choice)

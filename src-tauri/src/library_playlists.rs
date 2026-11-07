@@ -65,6 +65,8 @@ enum StoredSourceKind {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct StoredTrack {
     source_path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
 }
 
 // This registry owns only explicit M3U8 imports. It has no dependency on the
@@ -203,7 +205,7 @@ impl LibraryPlaylistRegistry {
         let mut added = Vec::new();
         let mut already = Vec::new();
         for path in paths {
-            if !valid_path(path) {
+            if !valid_track_path(path) {
                 return Err(LibraryError::invalid("歌曲路径必须是规范的绝对路径"));
             }
             let key = deletion_path_key(path);
@@ -220,6 +222,7 @@ impl LibraryPlaylistRegistry {
             .iter()
             .map(|path| StoredTrack {
                 source_path: path.clone(),
+                title: None,
             })
             .collect();
         let random = RandomState::new();
@@ -402,7 +405,7 @@ fn reorder_keys(paths: &[String]) -> Result<Vec<String>, LibraryError> {
     paths
         .iter()
         .map(|path| {
-            if !valid_path(path) {
+            if !valid_track_path(path) {
                 return Err(LibraryError::invalid("歌曲路径必须是规范的绝对路径"));
             }
             let key = deletion_path_key(path);
@@ -470,6 +473,7 @@ impl StoredPlaylist {
                 .filter(|track| seen.insert(path_key(&track.source_path)))
                 .map(|track| StoredTrack {
                     source_path: track.source_path.clone(),
+                    title: track.title.clone(),
                 })
                 .collect(),
         };
@@ -481,7 +485,9 @@ impl StoredPlaylist {
         if !valid_path(&self.source_path)
             || !Path::new(&self.source_path)
                 .extension()
-                .is_some_and(|extension| extension.eq_ignore_ascii_case("m3u8"))
+                .is_some_and(|extension| {
+                    extension.eq_ignore_ascii_case("m3u8") || extension.eq_ignore_ascii_case("m3u")
+                })
             || !valid_path(&self.directory_path)
             || self.source_name.trim().is_empty()
             || self.directory_name.trim().is_empty()
@@ -492,7 +498,13 @@ impl StoredPlaylist {
         }
         let mut seen = HashSet::new();
         for track in &self.tracks {
-            if !valid_path(&track.source_path) || !seen.insert(path_key(&track.source_path)) {
+            if !valid_track_path(&track.source_path)
+                || !seen.insert(path_key(&track.source_path))
+                || track
+                    .title
+                    .as_ref()
+                    .is_some_and(|title| title.len() > 8192 || title.chars().any(char::is_control))
+            {
                 return Err(LibraryError::storage(
                     "Saved playlist track paths are invalid or duplicated",
                 ));
@@ -515,7 +527,16 @@ impl StoredPlaylist {
             tracks: self
                 .tracks
                 .into_iter()
-                .map(|track| restore_playlist_track(&track.source_path))
+                .map(|track| {
+                    let mut restored = restore_playlist_track(&track.source_path);
+                    if crate::audio::network::is_stream(&track.source_path) {
+                        if let Some(title) = track.title {
+                            restored.file_name = title.clone();
+                            restored.title = Some(title);
+                        }
+                    }
+                    restored
+                })
                 .collect(),
         }
     }
@@ -531,6 +552,9 @@ fn valid_path(value: &str) -> bool {
 }
 
 fn path_key(value: &str) -> String {
+    if crate::audio::network::is_stream(value) {
+        return value.to_owned();
+    }
     #[cfg(target_os = "windows")]
     {
         value.to_lowercase()
@@ -538,6 +562,14 @@ fn path_key(value: &str) -> String {
     #[cfg(not(target_os = "windows"))]
     {
         value.to_string()
+    }
+}
+
+fn valid_track_path(value: &str) -> bool {
+    if crate::audio::network::is_stream(value) {
+        crate::audio::network::canonical_url(value).ok().as_deref() == Some(value)
+    } else {
+        valid_path(value)
     }
 }
 

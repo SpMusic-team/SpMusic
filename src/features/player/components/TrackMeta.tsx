@@ -19,6 +19,9 @@ export function TrackMeta({ layer, ownsPlayerViewTransition, interactive = false
   const appearanceMotion = useAppearanceMotion()
   const track = layer?.track
   const phase = layer?.phase
+  const artistText = track?.stream
+    ? track.artist.trim() || track.stream.url
+    : `${track?.artist ?? ''} - ${track?.album ?? ''}`
   const sharedLayoutId = ownsPlayerViewTransition
     ? playerViewTransitionLayoutId('copy', track?.id)
     : undefined
@@ -42,10 +45,10 @@ export function TrackMeta({ layer, ownsPlayerViewTransition, interactive = false
           onClick={event => { if (!titlePress.consumeClick(event) && event.detail === 0) onMore?.() }}>
           <PingPongText text={track.title} />
         </Button>
-        <Button variant="ghost" className="track-pill artist-pill" disabled={!interactive || !onArtistSongs} aria-label={`${track.artist} - ${track.album}，所有艺术家歌曲`}
+        <Button variant="ghost" className="track-pill artist-pill" disabled={!interactive || !onArtistSongs} aria-label={`${artistText}，所有艺术家歌曲`}
           onPointerDown={artistPress.onPointerDown} onContextMenu={artistPress.onContextMenu}
           onClick={event => { if (!artistPress.consumeClick(event) && event.detail === 0) onArtistSongs?.() }}>
-          <PingPongText text={`${track.artist} - ${track.album}`} />
+          <PingPongText text={artistText} />
         </Button>
       </> : null}
     </motion.div>

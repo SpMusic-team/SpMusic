@@ -8,6 +8,7 @@ mod library_folder_directories;
 mod library_folders;
 mod library_playlist_addition;
 mod library_playlists;
+mod library_streams;
 mod player_drag_diagnostics;
 mod webview_memory;
 mod window_state;
@@ -19,18 +20,17 @@ use audio::{
     audio_error, current_output_info, import_m3u8_playlist, load_library_folder, AudioErrorCode,
 };
 use audio::{
-    begin_playlist_cover_window, load_cover_pixels, load_folder_thumbnail, load_playlist_cover_pixels,
-    load_track_thumbnail, probe_playlist_cover, probe_playlist_durations,
-    probe_playlist_track_summaries, shutdown_playlist_cover_cache,
+    begin_playlist_cover_window, load_cover_pixels, load_folder_thumbnail,
+    load_playlist_cover_pixels, load_track_thumbnail, probe_playlist_cover,
+    probe_playlist_durations, probe_playlist_track_summaries, shutdown_playlist_cover_cache,
     AudioBeginPlaylistCoverWindowInput, AudioCommandError, AudioController, AudioEmbedLyricsInput,
     AudioFolderPlaylist, AudioFolderPlaylistInput, AudioLoadAndPlayInput, AudioLoadAndPlayResult,
     AudioLoadCoverPixelsInput, AudioLoadFileInput, AudioLoadFolderThumbnailInput,
     AudioLoadPlaylistCoverPixelsInput, AudioLoadTrackThumbnailInput, AudioOpenFileInput,
-    AudioOpenSourceResult, AudioOutputInfo,
-    AudioPlayInput, AudioPlaybackState, AudioPlaylistCoverSource, AudioPlaylistDurationItem,
-    AudioPlaylistTrackSummaryItem, AudioProbePlaylistDurationsInput,
-    AudioProbePlaylistTrackSummariesInput, AudioSeekInput, AudioSetVolumeInput, AudioTrackRef,
-    AudioTransitionPlaybackInput, CoverPixelsError,
+    AudioOpenSourceResult, AudioOutputInfo, AudioPlayInput, AudioPlaybackState,
+    AudioPlaylistCoverSource, AudioPlaylistDurationItem, AudioPlaylistTrackSummaryItem,
+    AudioProbePlaylistDurationsInput, AudioProbePlaylistTrackSummariesInput, AudioSeekInput,
+    AudioSetVolumeInput, AudioTrackRef, AudioTransitionPlaybackInput, CoverPixelsError,
 };
 use global_shortcuts::{
     global_shortcuts_get_settings, global_shortcuts_set_suspended, global_shortcuts_update_settings,
@@ -46,8 +46,8 @@ use tracing_subscriber::EnvFilter;
 use webview_memory::WebviewMemoryCoordinator;
 
 #[tauri::command]
-fn audio_open_file(
-    state: State<'_, AudioController>,
+async fn audio_open_file(
+    app: tauri::AppHandle,
     input: Option<AudioOpenFileInput>,
 ) -> Result<AudioTrackRef, AudioCommandError> {
     tracing::info!(
@@ -58,27 +58,60 @@ fn audio_open_file(
             .map(Vec::len),
         "Tauri command invoked",
     );
-    let result = state.open_file(input);
+    let filters = input
+        .and_then(|input| input.filters)
+        .unwrap_or_else(audio::default_filters);
+    let path = pick_audio_file(filters).await?;
+    let result = with_audio_controller(app, move |state| {
+        state.load_file(AudioLoadFileInput {
+            path: path.to_string_lossy().into_owned(),
+        })
+    })
+    .await?;
     log_track_command_result("audio_open_file", &result);
     result
 }
 
 #[tauri::command]
-fn audio_open_source(
-    state: State<'_, AudioController>,
+async fn audio_open_source(
+    app: tauri::AppHandle,
 ) -> Result<AudioOpenSourceResult, AudioCommandError> {
     tracing::info!(command = "audio_open_source", "Tauri command invoked");
-    state.open_source()
+    let path = pick_audio_file(audio::source_filters()).await?;
+    with_audio_controller(app, move |state| state.load_source_path(path)).await?
+}
+
+async fn pick_audio_file(
+    filters: Vec<audio::AudioFileFilter>,
+) -> Result<std::path::PathBuf, AudioCommandError> {
+    let mut dialog = rfd::AsyncFileDialog::new();
+    for filter in filters {
+        if !filter.extensions.is_empty() {
+            dialog = dialog.add_filter(filter.name, &filter.extensions);
+        }
+    }
+    dialog
+        .pick_file()
+        .await
+        .map(|file| file.path().to_owned())
+        .ok_or_else(|| {
+            audio_error(
+                AudioErrorCode::UserCancelled,
+                "User cancelled audio source selection",
+                true,
+            )
+        })
 }
 
 #[tauri::command]
 fn audio_import_playlist(
     registry: State<'_, LibraryPlaylistRegistry>,
+    streams: State<'_, library_streams::LibraryStreamRegistry>,
     audio: State<'_, AudioController>,
 ) -> Result<Option<AudioFolderPlaylist>, AudioCommandError> {
     let Some(path) = rfd::FileDialog::new()
-        .set_title("导入 M3U8 播放列表")
-        .add_filter("M3U8 播放列表", &["m3u8"])
+        .set_title("导入 M3U 播放列表")
+        .add_filter("M3U 播放列表", &["m3u", "m3u8"])
         .pick_file()
     else {
         return Ok(None);
@@ -92,12 +125,36 @@ fn audio_import_playlist(
             recoverable: true,
         })?;
     audio.remember_playlist(&playlist);
+    streams
+        .import(&playlist)
+        .map_err(|e| audio_error(AudioErrorCode::InternalError, e.message, true))?;
     Ok(Some(playlist))
 }
 
 #[tauri::command]
-fn audio_load_file(
-    state: State<'_, AudioController>,
+fn library_get_streams(
+    state: State<'_, library_streams::LibraryStreamRegistry>,
+) -> Result<AudioFolderPlaylist, LibraryError> {
+    state.get()
+}
+#[tauri::command]
+fn library_add_stream(
+    state: State<'_, library_streams::LibraryStreamRegistry>,
+    input: library_streams::AddStreamInput,
+) -> Result<AudioFolderPlaylist, LibraryError> {
+    state.add(input)
+}
+#[tauri::command]
+fn library_remove_streams(
+    state: State<'_, library_streams::LibraryStreamRegistry>,
+    input: library_streams::RemoveStreamsInput,
+) -> Result<AudioFolderPlaylist, LibraryError> {
+    state.remove(input)
+}
+
+#[tauri::command]
+async fn audio_load_file(
+    app: tauri::AppHandle,
     input: AudioLoadFileInput,
 ) -> Result<AudioTrackRef, AudioCommandError> {
     tracing::info!(
@@ -105,14 +162,14 @@ fn audio_load_file(
         path = %input.path,
         "Tauri command invoked",
     );
-    let result = state.load_file(input);
+    let result = with_audio_controller(app, move |state| state.load_file(input)).await?;
     log_track_command_result("audio_load_file", &result);
     result
 }
 
 #[tauri::command]
-fn audio_load_and_play(
-    state: State<'_, AudioController>,
+async fn audio_load_and_play(
+    app: tauri::AppHandle,
     input: AudioLoadAndPlayInput,
 ) -> Result<AudioLoadAndPlayResult, AudioCommandError> {
     tracing::info!(
@@ -121,7 +178,7 @@ fn audio_load_and_play(
         request_id = input.request_id,
         "Tauri command invoked",
     );
-    let result = state.load_and_play(input);
+    let result = with_audio_controller(app, move |state| state.load_and_play(input)).await?;
     match &result {
         Ok(result) => tracing::info!(
             command = "audio_load_and_play",
@@ -226,9 +283,7 @@ async fn library_list_folder_directories(
         library_folder_directories::list_folder_directories(input)
     })
     .await
-    .map_err(|error| {
-        LibraryError::directory(format!("Directory listing worker failed: {error}"))
-    })?
+    .map_err(|error| LibraryError::directory(format!("Directory listing worker failed: {error}")))?
 }
 
 #[tauri::command]
@@ -512,33 +567,36 @@ fn audio_embed_lyrics(
 }
 
 #[tauri::command]
-fn audio_play(
-    state: State<'_, AudioController>,
+async fn audio_play(
+    app: tauri::AppHandle,
     input: Option<AudioPlayInput>,
 ) -> Result<AudioPlaybackState, AudioCommandError> {
+    let epoch = audio::network::cancellation_epoch();
     tracing::info!(
         command = "audio_play",
         restart = input.as_ref().and_then(|input| input.restart),
         "Tauri command invoked",
     );
-    let result = state.play(input);
+    let result =
+        with_audio_controller(app, move |state| state.play_with_epoch(input, epoch)).await?;
     log_state_command_result("audio_play", &result);
     result
 }
 
 #[tauri::command]
-fn audio_pause(state: State<'_, AudioController>) -> Result<AudioPlaybackState, AudioCommandError> {
+async fn audio_pause(app: tauri::AppHandle) -> Result<AudioPlaybackState, AudioCommandError> {
     tracing::info!(command = "audio_pause", "Tauri command invoked");
-    let result = state.pause();
+    let result = with_audio_controller(app, |state| state.pause()).await?;
     log_state_command_result("audio_pause", &result);
     result
 }
 
 #[tauri::command]
-fn audio_transition_playback(
-    state: State<'_, AudioController>,
+async fn audio_transition_playback(
+    app: tauri::AppHandle,
     input: AudioTransitionPlaybackInput,
 ) -> Result<AudioPlaybackState, AudioCommandError> {
+    let epoch = audio::network::cancellation_epoch();
     tracing::info!(
         command = "audio_transition_playback",
         request_id = input.request_id,
@@ -547,22 +605,25 @@ fn audio_transition_playback(
         duration_ms = input.duration_ms,
         "Tauri command invoked",
     );
-    let result = state.transition_playback(input);
+    let result = with_audio_controller(app, move |state| {
+        state.transition_playback_with_epoch(input, epoch)
+    })
+    .await?;
     log_state_command_result("audio_transition_playback", &result);
     result
 }
 
 #[tauri::command]
-fn audio_stop(state: State<'_, AudioController>) -> Result<AudioPlaybackState, AudioCommandError> {
+async fn audio_stop(app: tauri::AppHandle) -> Result<AudioPlaybackState, AudioCommandError> {
     tracing::info!(command = "audio_stop", "Tauri command invoked");
-    let result = state.stop();
+    let result = with_audio_controller(app, |state| state.stop()).await?;
     log_state_command_result("audio_stop", &result);
     result
 }
 
 #[tauri::command]
-fn audio_seek(
-    state: State<'_, AudioController>,
+async fn audio_seek(
+    app: tauri::AppHandle,
     input: AudioSeekInput,
 ) -> Result<AudioPlaybackState, AudioCommandError> {
     tracing::info!(
@@ -570,14 +631,14 @@ fn audio_seek(
         requested_ms = input.position_ms,
         "Tauri command invoked",
     );
-    let result = state.seek(input);
+    let result = with_audio_controller(app, move |state| state.seek(input)).await?;
     log_state_command_result("audio_seek", &result);
     result
 }
 
 #[tauri::command]
-fn audio_set_volume(
-    state: State<'_, AudioController>,
+async fn audio_set_volume(
+    app: tauri::AppHandle,
     input: AudioSetVolumeInput,
 ) -> Result<AudioPlaybackState, AudioCommandError> {
     tracing::info!(
@@ -585,15 +646,15 @@ fn audio_set_volume(
         requested_volume = input.volume,
         "Tauri command invoked",
     );
-    let result = state.set_volume(input);
+    let result = with_audio_controller(app, move |state| state.set_volume(input)).await?;
     log_state_command_result("audio_set_volume", &result);
     result
 }
 
 #[tauri::command]
-fn audio_get_state(state: State<'_, AudioController>) -> AudioPlaybackState {
+async fn audio_get_state(app: tauri::AppHandle) -> Result<AudioPlaybackState, AudioCommandError> {
     tracing::debug!(command = "audio_get_state", "Tauri command invoked");
-    let state = state.get_state();
+    let state = with_audio_controller(app, |state| state.get_state()).await?;
     tracing::debug!(
         command = "audio_get_state",
         phase = ?state.phase,
@@ -602,15 +663,15 @@ fn audio_get_state(state: State<'_, AudioController>) -> AudioPlaybackState {
         volume = state.volume,
         "Tauri command completed",
     );
-    state
+    Ok(state)
 }
 
 #[tauri::command]
-fn audio_get_current_track(
-    state: State<'_, AudioController>,
+async fn audio_get_current_track(
+    app: tauri::AppHandle,
 ) -> Result<Option<AudioTrackRef>, AudioCommandError> {
     tracing::debug!(command = "audio_get_current_track", "Tauri command invoked");
-    let track = state.get_current_track();
+    let track = with_audio_controller(app, |state| state.get_current_track()).await?;
     tracing::debug!(
         command = "audio_get_current_track",
         track_id = track
@@ -622,6 +683,17 @@ fn audio_get_current_track(
         "Tauri command completed",
     );
     track
+}
+
+/// Runtime requests wait for a reply; keep every such wait off the webview IPC
+/// thread so polling cannot prevent Stop or a newer load from cancelling IO.
+async fn with_audio_controller<T: Send + 'static>(
+    app: tauri::AppHandle,
+    action: impl FnOnce(&AudioController) -> T + Send + 'static,
+) -> Result<T, AudioCommandError> {
+    tauri::async_runtime::spawn_blocking(move || action(&app.state::<AudioController>()))
+        .await
+        .map_err(|_| audio_error(AudioErrorCode::InternalError, "音频命令工作线程异常", true))
 }
 
 #[tauri::command]
@@ -766,6 +838,9 @@ pub fn run() {
             audio_open_file,
             audio_open_source,
             audio_import_playlist,
+            library_get_streams,
+            library_add_stream,
+            library_remove_streams,
             audio_load_file,
             audio_load_and_play,
             audio_hydrate_track,
@@ -815,6 +890,9 @@ pub fn run() {
             global_shortcuts::GlobalShortcuts::initialize(app.handle(), &app_paths.config_dir);
             app.manage(LibraryFolderRegistry::new(&app_paths.data_dir));
             app.manage(LibraryPlaylistRegistry::new(&app_paths.data_dir));
+            app.manage(library_streams::LibraryStreamRegistry::new(
+                &app_paths.data_dir,
+            ));
             let (window_state_tracker, main_window, restore_mode) =
                 if let Some(window) = app.get_webview_window("main") {
                     // The window is configured hidden, so its saved geometry is

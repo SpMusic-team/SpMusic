@@ -137,6 +137,10 @@ export function useCollectionLayout<Layout extends { label: string }>(options: O
       if (gestureBoundary === 'grid') return true
       const element = target instanceof Element ? target : target.parentElement
       if (!element || element.closest('input, textarea, select, [role="textbox"], [role="combobox"], [role="dialog"], [role="alertdialog"], .playlist-library-sidebar, .playlist-playback-dock, [inert]')) return false
+      // Card buttons still accept zoom; controls outside the collection keep
+      // their own gestures while the surrounding panel whitespace can zoom.
+      const control = element.closest('button, a[href], [role="button"]')
+      if (control && !gridRef.current?.contains(control)) return false
       return !(element instanceof HTMLElement && element.isContentEditable)
         && !element.closest<HTMLElement>('[contenteditable]')?.isContentEditable
     }

@@ -5,6 +5,7 @@ import type { AllSongsItem } from '@/features/player/model/playerUiViewModel'
 import { beginAudioPlaylistCoverWindow } from '@/features/player/services/audioCommands'
 import { scheduleFolderThumbnail, scheduleTrackThumbnail } from '@/features/player/services/playlistCoverScheduler'
 import { orderPlaylistArtworkRows, type PlaylistArtworkDirection } from '@/features/player/model/playlistArtworkOrder'
+import { isStreamSource } from '../model/streams'
 
 export type FolderCoverItem = Readonly<{ kind: 'folder'; key: string; rootPath: string; directoryPath: string; available: boolean }>
 type TrackCoverItem = Pick<AllSongsItem, 'key' | 'trackId' | 'sourcePath' | 'available' | 'artworkRevision'>
@@ -272,7 +273,7 @@ export function useAllSongsWindow(items: readonly AllSongsCoverItem[], panelRef:
               // Keep the existing scheduler and cancellation owner for every read.
               for (const candidate of item.candidates) {
                 if (!itemIsCurrent()) return
-                if (!candidate.available) continue
+                if (!candidate.available || isStreamSource(candidate)) continue
                 try {
                   pixels = await scheduleTrackThumbnail({ clientId, sourcePath: candidate.sourcePath, maxEdge: 256, windowGeneration: coverGeneration }, options)
                 } catch {
@@ -281,7 +282,7 @@ export function useAllSongsWindow(items: readonly AllSongsCoverItem[], panelRef:
                 if (!itemIsCurrent()) return
                 if (pixels) break
               }
-            } else {
+            } else if ('kind' in item || !isStreamSource(item)) {
               pixels = await ('kind' in item
                 ? scheduleFolderThumbnail({ clientId, rootPath: item.rootPath, directoryPath: item.directoryPath, maxEdge: 256, windowGeneration: coverGeneration }, options)
                 : scheduleTrackThumbnail({ clientId, sourcePath: item.sourcePath, maxEdge: 256, windowGeneration: coverGeneration }, options))

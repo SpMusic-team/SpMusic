@@ -106,7 +106,7 @@ const library = () => page.evaluate(() => ({
 const settled = () => page.waitForFunction(() => !window.viewModel.playlist.library.isImportPending && !window.viewModel.playback.isSelectionPending)
 const songPage = async () => {
   await page.evaluate(() => window.viewModel.playlist.library.onSelectCategory('songs'))
-  await page.getByRole('heading', {name:'全部歌曲'}).waitFor()
+  await page.getByRole('heading', {name:'所有歌曲'}).waitFor()
 }
 const selectFolders = async paths => {
   await page.evaluate(paths => { window.folderSelection=paths }, paths)

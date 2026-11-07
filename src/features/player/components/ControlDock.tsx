@@ -531,6 +531,7 @@ export function ControlDock({
   return (
     <motion.footer
       className="control-dock"
+      data-playback-stream={playback.track?.stream ? '' : undefined}
       data-playback-state={visualIsPlaying ? 'playing' : 'paused'}
       data-playback-transition-pending={playbackTransitionPending ? '' : undefined}
       data-playback-command-busy={playbackCommandBusy ? '' : undefined}

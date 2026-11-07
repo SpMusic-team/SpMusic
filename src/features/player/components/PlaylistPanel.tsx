@@ -1,4 +1,5 @@
 import { useLibrarySearch } from '../hooks/useLibrarySearch'
+import { playlistCardContentShape } from '../model/playlistTrackSummary'
 import { useCollectionDetailPresence } from '../hooks/useCollectionDetailPresence'
 import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type SyntheticEvent } from 'react'
 import { PLAYLIST_SONG_LAYOUTS, PLAYLIST_LAYOUT_STORAGE_KEY, defaultPlaylistSongLevel, type PlaylistSongLayoutDescriptor } from '@/features/player/model/playlistSongLayouts'
@@ -79,14 +80,6 @@ const DETAIL_LAYOUT_SELECTORS = {
 }
 
 // Intrinsic line-count shapes cover both tile and extended metadata layouts.
-function playlistCardContentShape(track: PlaylistTrackItemViewModel): number {
-  const clock = Number.isFinite(track.durationSeconds) && (track.durationSeconds ?? 0) > 0
-  const bitDepth = track.audioFormat?.bitDepth
-  const format = clock || Boolean(track.fileExtension) || (Number.isFinite(bitDepth) && (bitDepth ?? 0) >= 24)
-  return Number(Boolean(track.title)) | (Number(Boolean(track.artist)) << 1)
-    | (Number(Boolean(track.artist || track.album)) << 2) | (Number(format) << 3)
-}
-
 type PlaylistCardRow = {
   start: number
   end: number
@@ -381,7 +374,7 @@ export function PlaylistPanel({
   const contentShapes = useMemo(() => new Map(filteredTracks.map(track => [track.id, playlistCardContentShape(track)])), [filteredTracks])
   const { level: layoutLevel, layout, announcement: layoutAnnouncement } = useCollectionLayout({
     panelRef, gridRef, layouts: PLAYLIST_SONG_LAYOUTS, storageKey: PLAYLIST_LAYOUT_STORAGE_KEY,
-    defaultLevel: defaultPlaylistSongLevel, selectors: DETAIL_LAYOUT_SELECTORS, wheelGestureArea: 'panel',
+    defaultLevel: defaultPlaylistSongLevel, selectors: DETAIL_LAYOUT_SELECTORS, gestureArea: 'panel',
     announce: (nextLayout) => `歌曲视图已切换为${nextLayout.label}`,
     onBeforeTransition: (snapshot, grid) => {
       artworkHoldIdsRef.current = snapshot ? new Set(

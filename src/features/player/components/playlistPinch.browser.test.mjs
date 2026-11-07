@@ -11,7 +11,7 @@ const panelPath = '/src/features/player/components/PlaylistPanel.tsx'
 const panelSource = await (await fetch(origin + panelPath)).text()
 const entry = await (await fetch(origin + '/src/main.tsx')).text()
 const dependency = filename => {
-  const match = (panelSource + '\n' + entry).match(new RegExp('"(/node_modules/\\.vite/deps/' + filename.replaceAll('.', '\\.') + '[^"\\n]*)"'))
+  const match = (panelSource + '\n' + entry).match(new RegExp('"((?:/node_modules/\\.vite/deps/|/@fs/[^"\\n]+/deps/)' + filename.replaceAll('.', '\\.') + '[^"\\n]*)"'))
   assert(match, `resolve Vite dependency ${filename}`)
   return match[1]
 }
@@ -236,9 +236,14 @@ try {
     await move(points(40),points(500),12); await unchanged(page,3)
     await touch('touchEnd',[])
   })
-  await check('gesture beginning outside song grid leaves layout alone', async ({page,touch,move}) => {
+  await check('gesture beginning on an actual header button leaves layout alone', async ({page,touch,move}) => {
     await page.locator('.playlist-panel').evaluate(panel => { panel.scrollTop = 0 })
-    const from = [[0,580,160],[1,700,160]], to = [[0,545,160],[1,735,160]]
+    const button = page.locator('.playlist-panel button').first()
+    const box = await button.boundingBox()
+    assert(box, 'header button has a hit-testable box')
+    const x = box.x + box.width/2, y = box.y + box.height/2
+    assert(await page.evaluate(({x,y}) => Boolean(document.elementFromPoint(x,y)?.closest('button')), {x,y}), 'touch starts on actual header control')
+    const from = [[0,x-5,y],[1,x+5,y]], to = [[0,x-50,y],[1,x+50,y]]
     await touch('touchStart',from); await move(from,to); await touch('touchEnd',[])
     await unchanged(page,3)
   })

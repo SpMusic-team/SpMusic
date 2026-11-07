@@ -478,10 +478,13 @@ fn m3u8_import_is_descriptor_only_and_preserves_missing_entries() {
     assert_eq!(missing.tracks.len(), 1);
     assert!(!missing.tracks[0].available);
     std::fs::write(&path, b"#EXTM3U\nnotes.txt\nhttps://example.com/song.mp3\n").unwrap();
-    assert!(matches!(
-        import_m3u8_playlist(&path).unwrap_err().code,
-        AudioErrorCode::UnsupportedFormat
-    ));
+    let streams = import_m3u8_playlist(&path).unwrap();
+    assert_eq!(streams.tracks.len(), 1);
+    assert_eq!(
+        streams.tracks[0].source_path,
+        "https://example.com/song.mp3"
+    );
+    assert!(streams.tracks[0].available);
     assert!(matches!(
         import_m3u8_playlist(&invalid_audio).unwrap_err().code,
         AudioErrorCode::UnsupportedFormat
@@ -537,7 +540,15 @@ fn m3u8_file_selection_builds_playlist_from_file_contents() {
     );
     assert_eq!(playlist.source_name, "chosen");
     assert_eq!(playlist.selected_index, 0);
-    assert_eq!(file_names, vec!["external.flac", "beta.mp3", "alpha.wav"]);
+    assert_eq!(
+        file_names,
+        vec![
+            "external.flac",
+            "https://example.invalid/live.m3u8",
+            "beta.mp3",
+            "alpha.wav"
+        ]
+    );
     assert!(playlist.tracks.iter().all(|track| track.available));
 
     std::fs::remove_dir_all(test_dir).expect("test directory should be removed");

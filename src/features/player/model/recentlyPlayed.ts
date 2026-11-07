@@ -33,7 +33,7 @@ export class RecentlyPlayedTracker {
   private baseline: { position: number; time: number } | null = null
   breakBaseline() { this.baseline = null }
   restart() { this.elapsed = 0; this.counted = false; this.baseline = null }
-  sample(state: AudioPlaybackState, now: number, blocked = false, canCommit = true): boolean {
+  sample(state: AudioPlaybackState, now: number, blocked = false, canCommit = true, isStream = false): boolean {
     const identity = `${state.currentTrackId}\u0000${state.generation}`
     if (identity !== this.identity) {
       this.identity = identity; this.elapsed = 0; this.counted = false; this.baseline = null
@@ -52,7 +52,8 @@ export class RecentlyPlayedTracker {
       const elapsed = now - previous.time
       if (delta > 0 && elapsed >= 0 && delta <= elapsed + 250) this.elapsed += Math.min(delta, elapsed, 1500)
     }
-    if (canCommit && !this.counted && state.durationMs !== null && state.durationMs > 0 && this.elapsed >= state.durationMs * 0.5) {
+    const threshold = isStream ? 30000 : state.durationMs !== null && state.durationMs > 0 ? state.durationMs * 0.5 : Infinity
+    if (canCommit && !this.counted && this.elapsed >= threshold) {
       this.counted = true
       return true
     }

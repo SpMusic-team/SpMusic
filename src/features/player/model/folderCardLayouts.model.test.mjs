@@ -5,7 +5,12 @@ import ts from 'typescript'
 
 async function loadModel(name) {
   const source = await readFile(new URL(name, import.meta.url), 'utf8')
-  const compiled = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext } }).outputText
+  let compiled = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext } }).outputText
+  if (name === './folderCardLayouts.ts') {
+    const dependency = await readFile(new URL('./playlistSongLayouts.ts', import.meta.url), 'utf8')
+    const dependencyCode = ts.transpileModule(dependency, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext } }).outputText
+    compiled = compiled.replace("'./playlistSongLayouts'", JSON.stringify(`data:text/javascript;base64,${Buffer.from(dependencyCode).toString('base64')}`))
+  }
   return import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`)
 }
 const { FOLDER_CARD_LAYOUTS: folders } = await loadModel('./folderCardLayouts.ts')

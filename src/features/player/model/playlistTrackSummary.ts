@@ -1,5 +1,30 @@
 import type { CoverTone, Track } from '@/features/player/model/playerTypes'
 import type { AudioFolderTrackRef, PlaylistTrackTagSummary } from '@/features/player/services/audioCommands'
+export function isStreamSource(source: { sourceKind?: string; sourcePath?: string }): boolean {
+  return source.sourceKind === 'stream' || /^https?:\/\//i.test(source.sourcePath ?? '')
+}
+export function nonUrlStreamName(value: unknown): string | undefined {
+  const text = nonEmptyText(value)
+  return text && !/^https?:\/\//i.test(text) ? text : undefined
+}
+export function streamTrackTitle(item: Pick<AudioFolderTrackRef, 'fileName'> & Partial<Pick<AudioFolderTrackRef, 'title' | 'stationName' | 'sourcePath'>>): string {
+  return nonUrlStreamName(item.title) ?? nonEmptyText(item.stationName)
+    ?? nonUrlStreamName(item.fileName) ?? item.sourcePath ?? item.fileName
+}
+export function streamInformation(source: { sourceKind?: string; sourcePath?: string; stationName?: string }): Track['stream'] {
+  return isStreamSource(source) && source.sourcePath
+    ? { url: source.sourcePath, stationName: nonEmptyText(source.stationName) } : undefined
+}
+
+// Stream copy uses URL/source lines rather than artist/album/format lines.
+// Keep its representatives separate when a mixed list measures offscreen rows.
+export function playlistCardContentShape(track: { title: string; artist?: string; album?: string; durationSeconds?: number; fileExtension?: string; audioFormat?: Track['audioFormat']; stream?: Track['stream'] }): number {
+  if (track.stream) return 31
+  const bitDepth = track.audioFormat?.bitDepth
+  const format = Boolean((track.durationSeconds ?? 0) > 0 || track.fileExtension || (bitDepth != null && bitDepth >= 24))
+  return Number(Boolean(track.title)) | (Number(Boolean(track.artist)) << 1)
+    | (Number(Boolean(track.artist || track.album)) << 2) | (Number(format) << 3)
+}
 
 /** Summary cache status of one playlist scope. `ready` covers degraded passes. */
 export type PlaylistSummaryStatus = 'loading' | 'ready'
@@ -14,6 +39,7 @@ export type PlaylistTrackRow = {
   title: string
   artist: string
   album: string
+  stream?: Track['stream']
   libraryAlbumName?: string | null
   libraryArtistName?: string | null
   libraryComposerName?: string | null
@@ -36,10 +62,11 @@ export type PlaylistPendingTrackRow = {
   title: string
   artist: string
   album: string
+  stream?: Track['stream']
 }
 
-export function nonEmptyText(value: string | null | undefined): string | undefined {
-  const trimmed = value?.trim()
+export function nonEmptyText(value: unknown): string | undefined {
+  const trimmed = typeof value === 'string' ? value.trim() : ''
   return trimmed || undefined
 }
 
@@ -67,6 +94,7 @@ export function coverToneForTrackId(id: string): CoverTone {
 }
 
 export function normalizeAudioSourcePath(sourcePath: string): string {
+  if (/^https?:\/\//i.test(sourcePath)) return sourcePath
   // Rust canonicalizes DTO paths; the frontend only unifies separators and preserves case/UNC identity.
   return sourcePath.replaceAll('\\', '/')
 }
@@ -92,9 +120,13 @@ function summaryAudioFormat(summary: PlaylistTrackTagSummary | null): Track['aud
  * title → file name, artist → album artist → 本地音频, album → 本地音频.
  */
 export function playlistTrackRowFromSummary(
-  descriptor: Pick<AudioFolderTrackRef, 'id' | 'fileName'>,
+  descriptor: Pick<AudioFolderTrackRef, 'id' | 'fileName'> & Partial<Pick<AudioFolderTrackRef, 'sourceKind' | 'sourcePath' | 'title' | 'stationName'>>,
   summary: PlaylistTrackTagSummary | null,
 ): PlaylistTrackRow {
+  if (isStreamSource(descriptor)) return {
+    id: descriptor.id, title: streamTrackTitle(descriptor), artist: '', album: '', stream: streamInformation(descriptor),
+    durationSeconds: 0, coverTone: coverToneForTrackId(descriptor.id),
+  }
   return {
     id: descriptor.id,
     title: nonEmptyText(summary?.title) ?? fileNameTitle(descriptor.fileName),
@@ -117,13 +149,14 @@ export function playlistTrackRowFromSummary(
 }
 
 export function pendingPlaylistTrackRow(
-  descriptor: Pick<AudioFolderTrackRef, 'id' | 'fileName'>,
+  descriptor: Pick<AudioFolderTrackRef, 'id' | 'fileName'> & Partial<Pick<AudioFolderTrackRef, 'sourceKind' | 'sourcePath' | 'title' | 'stationName'>>,
 ): PlaylistPendingTrackRow {
   return {
     id: descriptor.id,
-    title: fileNameTitle(descriptor.fileName),
+    title: isStreamSource(descriptor) ? streamTrackTitle(descriptor) : fileNameTitle(descriptor.fileName),
     artist: '',
     album: '',
+    ...(isStreamSource(descriptor) ? { stream: streamInformation(descriptor) } : {}),
   }
 }
 
@@ -133,6 +166,8 @@ export function playlistTrackRowEqual(left: PlaylistTrackRow, right: PlaylistTra
     && left.title === right.title
     && left.artist === right.artist
     && left.album === right.album
+    && left.stream?.url === right.stream?.url
+    && left.stream?.stationName === right.stream?.stationName
     && left.libraryAlbumName === right.libraryAlbumName
     && left.libraryArtistName === right.libraryArtistName
     && left.libraryComposerName === right.libraryComposerName
@@ -162,10 +197,10 @@ function audioFormatEqual(left: Track['audioFormat'], right: Track['audioFormat'
  * their source paths makes in-flight tag results unusable.
  */
 export function playlistDescriptorFingerprint(
-  descriptors: readonly Pick<AudioFolderTrackRef, 'id' | 'sourcePath'>[],
+  descriptors: readonly (Pick<AudioFolderTrackRef, 'id' | 'sourcePath'> & Partial<Pick<AudioFolderTrackRef, 'sourceKind' | 'title' | 'stationName'>>)[],
 ): string {
   return `${descriptors.length}\u0002${descriptors
-    .map((descriptor) => `${descriptor.id}\u0001${normalizeAudioSourcePath(descriptor.sourcePath)}`)
+    .map((descriptor) => `${descriptor.id}\u0001${normalizeAudioSourcePath(descriptor.sourcePath)}${isStreamSource(descriptor) ? `\u0001${JSON.stringify([descriptor.title, descriptor.stationName])}` : ''}`)
     // Metadata belongs to id/path pairs, not their presentation order.
     // Reordering must keep the active pass and painted rows alive.
     .sort()
@@ -182,7 +217,7 @@ export function playlistSummaryProbePaths(
   const paths: string[] = []
   const descriptorsByPath = new Map<string, string[]>()
   for (const descriptor of descriptors) {
-    if (descriptor.available === false) continue
+    if (descriptor.available === false || isStreamSource(descriptor)) continue
     const existing = descriptorsByPath.get(descriptor.sourcePath)
     if (existing) {
       existing.push(descriptor.id)

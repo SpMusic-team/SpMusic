@@ -332,12 +332,15 @@
 }
 
 .playlist-playback-cover-mark svg { width: 14px; height: 14px; }
+.playlist-playback-stream-mark { display: block; width: 14px; height: 14px; background: currentColor; mask-repeat: no-repeat; mask-size: contain; mask-position: center; }
 
 .playlist-playback-copy { min-width: 0; color: var(--player-ink); }
 .playlist-playback-copy strong,
 .playlist-playback-copy span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .playlist-playback-copy strong { font-size: 24px; font-weight: 500; line-height: 32px; }
 .playlist-playback-copy span { font-size: 16px; font-weight: 500; line-height: 24px; }
+.playlist-playback-copy .playlist-playback-stream-details { display: flex; min-width: 0; gap: .65em; align-items: center; }
+.playlist-playback-copy .playlist-playback-stream-url { flex: 1; min-width: 0; }
 
 .playlist-playback-toggle,
 .playlist-playback-nav-button {
@@ -416,6 +419,13 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 0;
+}
+
+/* Live streams have no seek position. Keep the track and slider geometry
+   stable while hiding only the position marks for the current stream. */
+.playlist-playback-dock[data-playback-stream] .playlist-playback-progress [data-slot="slider-range"],
+.playlist-playback-dock[data-playback-stream] .playlist-playback-progress [data-slot="slider-thumb"] {
+  visibility: hidden;
 }
 
 .playlist-playback-nav {

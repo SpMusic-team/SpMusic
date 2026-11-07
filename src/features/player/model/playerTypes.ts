@@ -3,6 +3,7 @@ export type CoverTone = 'lagoon' | 'violet' | 'rose' | 'amber' | 'blue'
 export type Track = {
   id: string
   sourcePath?: string
+  stream?: Readonly<{ url: string; stationName?: string }>
   title: string
   artist: string
   album: string
@@ -22,7 +23,7 @@ export type Track = {
   }
 }
 
-export type TrackSummary = Pick<Track, 'id' | 'title' | 'artist' | 'album' | 'category'>
+export type TrackSummary = Pick<Track, 'id' | 'title' | 'artist' | 'album' | 'category' | 'stream'>
 
 export type TrackArtwork = Pick<Track, 'id' | 'coverTone' | 'coverFilePath' | 'coverImage' | 'coverImageFallback'> & {
   resourceKey: string

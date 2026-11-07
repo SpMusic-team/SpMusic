@@ -1,4 +1,5 @@
 import type { MostPlayedOptions } from './mostPlayed'
+import type { StreamSort } from './streams'
 import type { BookmarkEntry } from './bookmarks'
 import type { MediaLibraryCategoryId, MediaLibraryRoute } from '@/features/player/model/mediaLibraryCategories'
 import type { LibraryFolderSettings, DirectoryChildren, ReplaceLibraryFoldersInput, RootSelection } from '@/features/player/services/audioCommands'
@@ -147,7 +148,7 @@ export type PlaylistTrackItemViewModel = TrackSummary
 
 export type PlaylistTrackMetadata = Pick<
   Track,
-  'id' | 'title' | 'artist' | 'album' | 'durationSeconds' | 'fileExtension' | 'coverTone' | 'audioFormat'
+  'id' | 'title' | 'artist' | 'album' | 'stream' | 'durationSeconds' | 'fileExtension' | 'coverTone' | 'audioFormat'
 > & Readonly<{
   hasLocalArtwork: boolean
 }>
@@ -165,7 +166,7 @@ export type PlaylistLibraryItem = {
   coverTrack?: PlaylistTrackItemViewModel
   coverSourcePath?: string
   totalClock?: string | null
-  sourceKind?: 'folder' | 'm3u8' | 'custom'
+  sourceKind?: 'folder' | 'm3u8' | 'custom' | 'streams'
 }
 
 export type AllSongsItem = Readonly<{
@@ -183,6 +184,7 @@ export type PlaylistDeleteSnapshot = Readonly<{
   scope: string | null
   songKeys: readonly string[]
   canRemoveFromList: boolean
+  canDeleteFiles?: boolean
 }>
 
 export type PlaylistDeleteResult = Readonly<{
@@ -219,6 +221,14 @@ export type PlaylistAddCallbacks = {
 }
 
 export type PlaylistLibraryViewModel = PlaylistAddCallbacks & {
+  streamSongs?: readonly AllSongsItem[]
+  streamsLoading?: boolean
+  streamsError?: string | null
+  onRefreshStreams?: () => void
+  onAddStream?: (input: { url: string; title?: string }) => Promise<boolean>
+  onDeleteStreams?: PlaylistDeleteAction
+  streamSort?: StreamSort
+  onStreamSortChange?: (sort: StreamSort) => void
   bookmarks?: readonly BookmarkEntry[]
   onDeleteBookmarks?: (ids: readonly string[]) => boolean
   onRestoreBookmark?: (bookmark: BookmarkEntry, item: AllSongsItem) => Promise<boolean>

@@ -1,3 +1,5 @@
+import { STREAM_SORTS, validateStreamAddress } from '../model/streams'
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { DEFAULT_MOST_PLAYED_OPTIONS, isMostPlayedOptions } from '../model/mostPlayed'
 import { useId, useRef, useState, type CSSProperties } from 'react'
 import { flushSync } from 'react-dom'
@@ -79,8 +81,9 @@ function actionsFor(id: MediaLibraryCategoryId): Action[] {
   ]
   if (id === 'queue') return [rescan, sort, pin, settings,
     { label: '清空队列', icon: clearQueueIcon, kind: 'placeholder', description: '队列清空功能尚未接入，当前播放队列未改变。' }]
-  if (id === 'streams') return [select, rescan,
-    { label: '添加地址', icon: addIcon, kind: 'placeholder', description: '流地址的添加与播放尚未接入。' }, pin, settings]
+  if (id === 'streams') return [
+    { label: '添加地址', icon: addIcon, kind: 'placeholder' },
+    { label: '导入播放列表', icon: selectIcon, kind: 'placeholder' }, sort, pin, settings]
   if (id === 'bookmarks') return [select, rescan, sort, pin, settings]
   if (id === 'most-played' || id === 'recent-played' || id === 'recent-added') return [select, rescan, pin, settings,
     { label: '查看全部', icon: historyIcon, kind: 'placeholder', description: '此分类的完整记录尚未接入。' },
@@ -104,11 +107,23 @@ export function LibraryRootMenu({ categoryId, library, onSort, onListOptions, ro
   const [durationMinutes, setDurationMinutes] = useState('')
   const [durationError, setDurationError] = useState('')
   const durationId = useId()
+  const [streamAdd, setStreamAdd] = useState(false)
+  const [streamOptions, setStreamOptions] = useState(false)
+  const [streamUrl, setStreamUrl] = useState('')
+  const [streamError, setStreamError] = useState('')
+  const [streamPending, setStreamPending] = useState(false)
+  const streamPendingRef = useRef(false)
+  const streamId = useId()
   const trigger = useRef<HTMLButtonElement | null>(null)
   const category = mediaLibraryCategories.find(item => item.id === categoryId)!
   const pinned = library.pinnedCategoryIds?.includes(categoryId) ?? false
   const busy = library.isImportPending || library.isFolderRescanPending
   const run = (action: Action) => {
+    if (categoryId === 'streams') {
+      if (action.label === '添加地址') { setStreamUrl('http://'); setStreamError(''); setStreamAdd(true); return }
+      if (action.label === '导入播放列表') { setOpen(false); library.onImportPlaylist?.(); return }
+      if (action === sort || action === settings) { setStreamOptions(true); return }
+    }
     if (categoryId === 'most-played') {
       if (action === settings && library.onMostPlayedOptionsChange) {
         const options = library.mostPlayedOptions ?? DEFAULT_MOST_PLAYED_OPTIONS
@@ -143,9 +158,43 @@ export function LibraryRootMenu({ categoryId, library, onSort, onListOptions, ro
     if (action.kind === 'pin') library.onToggleCategoryPin?.(categoryId)
     if (action.kind === 'rescan') library.onRescanFolders?.()
   }
-  return <Dialog open={open} onOpenChange={value => { setTransferring(false); setNotice(null); setDurationOptions(false); setMostOptions(false); setClearMost(false); setOpen(value) }}>
+  return <Dialog open={open} onOpenChange={value => { if (streamPendingRef.current) return; setStreamAdd(false); setStreamOptions(false); setTransferring(false); setNotice(null); setDurationOptions(false); setMostOptions(false); setClearMost(false); setOpen(value) }}>
     <DialogTrigger render={<Button ref={trigger} className="playlist-hero-icon playlist-hero-more-button" variant="ghost" size="icon" aria-label="更多列表操作">{rootToolbar || categoryId === 'year' || categoryId === 'genre' ? <img src={yearMoreIcon} alt="" /> : <icons.more aria-hidden="true" />}</Button>} />
-    {!transferring && (clearMost ? <DialogContent finalFocus={trigger}>
+    {!transferring && (streamAdd ? <DialogContent className="stream-address-dialog" finalFocus={trigger} showCloseButton={false} aria-describedby={undefined}>
+      <form className="stream-address-form" onSubmit={async event => {
+        event.preventDefault()
+        if (streamPendingRef.current) return
+        const url = validateStreamAddress(streamUrl)
+        if (!url) { setStreamError('请输入有效的 HTTP(S) 地址，不支持带用户名或密码的地址。'); return }
+        streamPendingRef.current = true; setStreamPending(true); setStreamError('')
+        try { if (await library.onAddStream?.({ url })) { setStreamAdd(false); setOpen(false) }
+          else setStreamError('添加失败，请检查地址并重试。')
+        } catch { setStreamError('添加失败，请稍后重试。') }
+        finally { streamPendingRef.current = false; setStreamPending(false) }
+      }}>
+        <DialogTitle className="stream-address-title">添加地址</DialogTitle>
+        <div className="stream-address-content">
+          <FieldGroup className="stream-address-fields">
+            <Field data-invalid={Boolean(streamError)}>
+              <FieldLabel className="sr-only" htmlFor={streamId}>地址</FieldLabel>
+              <Input className="stream-address-input" id={streamId} autoFocus type="url" required value={streamUrl} maxLength={8192} disabled={streamPending} aria-invalid={Boolean(streamError)} aria-describedby={streamError ? streamId + '-error' : undefined} onChange={event => { setStreamUrl(event.target.value); setStreamError('') }} placeholder="http://" />
+              {streamError ? <FieldError id={streamId + '-error'}>{streamError}</FieldError> : null}
+            </Field>
+          </FieldGroup>
+          <div className="stream-address-actions">
+            <Button className="stream-address-button" type="button" variant="ghost" disabled={streamPending} onClick={() => setStreamAdd(false)}><span>取消</span></Button>
+            <Button className="stream-address-button" type="submit" variant="outline" disabled={streamPending || !streamUrl.trim() || !library.onAddStream}><span>{streamPending ? '保存中…' : '添加'}</span></Button>
+          </div>
+        </div>
+      </form>
+    </DialogContent> : streamOptions ? <DialogContent finalFocus={trigger}>
+      <DialogHeader><DialogTitle>流 · 列表选项</DialogTitle><DialogDescription>仅显示适用于网络流的排序。评分使用现有的喜欢、未标记和不喜欢状态。</DialogDescription></DialogHeader>
+      <FieldGroup><Field><FieldLabel htmlFor={streamId + '-sort'}>排序方式</FieldLabel><Select value={library.streamSort ?? 'name'} onValueChange={value => { const sort = STREAM_SORTS.find(([key]) => key === value)?.[0]; if (sort) library.onStreamSortChange?.(sort) }}>
+        <SelectTrigger id={streamId + '-sort'}><SelectValue>{STREAM_SORTS.find(([key]) => key === (library.streamSort ?? 'name'))?.[1]}</SelectValue></SelectTrigger>
+        <SelectContent><SelectGroup>{STREAM_SORTS.map(([key, label]) => <SelectItem key={key} value={key}>{label}</SelectItem>)}</SelectGroup></SelectContent>
+      </Select></Field></FieldGroup>
+      <DialogFooter><Button onClick={() => { setStreamOptions(false); setOpen(false) }}>完成</Button></DialogFooter>
+    </DialogContent> : clearMost ? <DialogContent finalFocus={trigger}>
       <DialogHeader><DialogTitle>清空最常播放？</DialogTitle><DialogDescription>清除累计播放次数。音乐文件、最近播放和当前播放队列会保留。</DialogDescription></DialogHeader>
       <DialogFooter><Button variant="outline" onClick={() => setClearMost(false)}>取消</Button><Button onClick={() => { library.onClearMostPlayed?.(); setOpen(false) }}>清空</Button></DialogFooter>
     </DialogContent> : mostOptions ? <DialogContent finalFocus={trigger}>
@@ -195,7 +244,7 @@ export function LibraryRootMenu({ categoryId, library, onSort, onListOptions, ro
       </header>
       <Separator className="folder-root-menu-divider" />
       <div className="folder-root-menu-actions">
-        {(categoryId === 'year' || categoryId === 'genre' ? [select, rescan, settings] : onSort ? [select, rescan, sort, pin, settings] : actionsFor(categoryId)).map(action => <Button key={action.label} className="folder-root-menu-action" variant="ghost"
+        {(categoryId === 'streams' ? actionsFor(categoryId) : categoryId === 'year' || categoryId === 'genre' ? [select, rescan, settings] : onSort ? [select, rescan, sort, pin, settings] : actionsFor(categoryId)).map(action => <Button key={action.label} className="folder-root-menu-action" variant="ghost"
           disabled={action.kind === 'select' ? busy || !library.onSelectFolders : action.kind === 'rescan' ? busy || !library.onRescanFolders : action.kind === 'pin' ? !library.onToggleCategoryPin : false}
           aria-pressed={action.kind === 'pin' ? pinned : undefined}
           onClick={() => run(action)}>

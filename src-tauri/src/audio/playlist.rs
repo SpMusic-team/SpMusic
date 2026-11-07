@@ -14,7 +14,7 @@ const SUPPORTED_AUDIO_EXTENSIONS: &[&str] = &[
     "mp3", "wav", "flac", "ogg", "oga", "opus", "aac", "m4a", "m4b", "mp4", "aif", "aiff", "caf",
     "mka", "mkv", "webm", "weba",
 ];
-const SUPPORTED_M3U8_EXTENSIONS: &[&str] = &["m3u8"];
+const SUPPORTED_M3U8_EXTENSIONS: &[&str] = &["m3u8", "m3u"];
 
 pub(crate) fn default_filters() -> Vec<AudioFileFilter> {
     vec![AudioFileFilter {
@@ -36,7 +36,7 @@ pub(crate) fn source_filters() -> Vec<AudioFileFilter> {
     extensions.sort();
 
     vec![AudioFileFilter {
-        name: "Audio or M3U8 playlist".to_string(),
+        name: "Audio or M3U playlist".to_string(),
         extensions,
     }]
 }
@@ -76,7 +76,7 @@ pub(crate) fn import_m3u8_playlist(path: &Path) -> Result<AudioFolderPlaylist, A
     if !has_supported_m3u8_extension(path) {
         return Err(audio_error(
             AudioErrorCode::UnsupportedFormat,
-            "Please select an M3U8 playlist",
+            "请选择 M3U 或 M3U8 播放列表",
             true,
         ));
     }
@@ -84,8 +84,34 @@ pub(crate) fn import_m3u8_playlist(path: &Path) -> Result<AudioFolderPlaylist, A
 }
 
 pub(crate) fn restore_playlist_track(source_path: &str) -> AudioFolderTrackRef {
+    if super::network::is_stream(source_path) {
+        return stream_descriptor(source_path, None, None);
+    }
     let path = Path::new(source_path);
     folder_track_ref(path, path.is_file())
+}
+
+pub(crate) fn stream_descriptor(
+    url: &str,
+    title: Option<String>,
+    created_at_ms: Option<u64>,
+) -> AudioFolderTrackRef {
+    let name = title
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(url)
+        .to_owned();
+    AudioFolderTrackRef {
+        station_name: None,
+        source_kind: Some(super::types::AudioTrackSourceKind::Stream),
+        title: Some(name.clone()),
+        created_at_ms,
+        id: super::network::stream_id(url),
+        source_path: url.to_owned(),
+        file_name: name,
+        available: true,
+        file_created_at_ms: None,
+    }
 }
 
 // Saved library folders are directories, not selected audio files. In
@@ -263,6 +289,10 @@ fn load_directory_audio_playlist(
                 .unwrap_or("audio")
                 .to_string();
             AudioFolderTrackRef {
+                station_name: None,
+                source_kind: None,
+                title: None,
+                created_at_ms: None,
                 id: track_id(&path),
                 source_path: path.to_string_lossy().into_owned(),
                 file_name,
@@ -421,9 +451,38 @@ fn load_m3u8_playlist(
     let mut seen = HashSet::new();
     let mut tracks = Vec::new();
 
+    let mut pending_title = None;
     for raw_line in contents.lines() {
         let line = raw_line.trim().trim_start_matches('\u{feff}').trim();
-        if line.is_empty() || line.starts_with('#') || is_remote_or_unsupported_uri(line) {
+        if let Some(info) = line.strip_prefix("#EXTINF:") {
+            pending_title = info
+                .split_once(',')
+                .map(|(_, title)| title.trim().to_owned())
+                .filter(|title| !title.is_empty());
+            continue;
+        }
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let title = pending_title.take();
+        if super::network::is_stream(line) {
+            let url = super::network::canonical_url(line)?;
+            if let Some(title) = &title {
+                if title.len() > 1024 || title.chars().any(char::is_control) {
+                    return Err(audio_error(
+                        AudioErrorCode::InvalidPath,
+                        "播放列表中的流名称无效",
+                        true,
+                    ));
+                }
+            }
+            let track = stream_descriptor(&url, title, None);
+            if seen.insert(track.id.clone()) {
+                tracks.push(track);
+            }
+            continue;
+        }
+        if is_remote_or_unsupported_uri(line) {
             continue;
         }
 
@@ -446,7 +505,7 @@ fn load_m3u8_playlist(
     if tracks.is_empty() {
         return Err(audio_error(
             AudioErrorCode::UnsupportedFormat,
-            "M3U8 playlist does not contain supported local audio files",
+            "播放列表中没有受支持的音频文件或 HTTP(S) 流地址",
             true,
         ));
     }
@@ -601,6 +660,10 @@ fn folder_track_ref_with_metadata(
     metadata: Option<&fs::Metadata>,
 ) -> AudioFolderTrackRef {
     AudioFolderTrackRef {
+        station_name: None,
+        source_kind: None,
+        title: None,
+        created_at_ms: None,
         id: track_id(path),
         source_path: path.to_string_lossy().into_owned(),
         file_name: file_name_string(path),

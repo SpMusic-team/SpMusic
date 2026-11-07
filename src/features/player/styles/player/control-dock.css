@@ -234,6 +234,8 @@ body[data-player-controls-density="comfortable"] .control-dock { --player-contro
 .control-progress-slider[data-seeking][data-disabled] > div[data-disabled] { opacity: 1; }
 .control-progress-slider [data-slot="slider-track"] { height: var(--player-progress-track-thickness); overflow: visible; background: var(--player-progress-unplayed); }
 .control-progress-slider [data-slot="slider-range"] { top: 50%; border-radius: 50px; background: var(--player-progress-played); transform: translateY(-50%) scaleY(1); transform-origin: center; }
+.control-dock[data-playback-stream] .control-progress-slider [data-slot="slider-range"],
+.control-dock[data-playback-stream] .control-progress-slider [data-slot="slider-thumb"] { visibility: hidden; }
 .control-progress-slider[data-thumb-pressed] [data-slot="slider-range"] { transform: translateY(-50%) scaleY(1.75); }
 .control-progress-slider [data-slot="slider-thumb"] {
   width: calc(var(--player-progress-thumb-size) - 4px);

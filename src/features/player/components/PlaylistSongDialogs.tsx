@@ -220,8 +220,8 @@ export function PlaylistAddDialog({ selection, request: initialRequest, containe
 }
 
 
-export function PlaylistDeleteDialog({ open, container, mode: deleteMode, canRemoveFromList: deleteCanRemoveFromList, busy: deleteBusy, error: deleteError, onCancel, onModeChange, onConfirm }: {
-  open: boolean; container?: RefObject<HTMLElement | null>; mode: 'list' | 'files'; canRemoveFromList: boolean; busy: boolean; error: string | null
+export function PlaylistDeleteDialog({ open, container, mode: deleteMode, canRemoveFromList: deleteCanRemoveFromList, canDeleteFiles = true, busy: deleteBusy, error: deleteError, onCancel, onModeChange, onConfirm }: {
+  open: boolean; container?: RefObject<HTMLElement | null>; mode: 'list' | 'files'; canRemoveFromList: boolean; canDeleteFiles?: boolean; busy: boolean; error: string | null
   onCancel: () => void; onModeChange: (mode: 'list' | 'files') => void; onConfirm: () => void
 }) {
   const Popup = container ? DialogPrimitive.Popup : StandalonePopup
@@ -231,10 +231,10 @@ export function PlaylistDeleteDialog({ open, container, mode: deleteMode, canRem
         <DialogTitle className="playlist-selection-delete-title">{deleteMode === 'files' ? '确定删除歌曲文件？' : '确定删除多个条目？'}</DialogTitle>
         <DialogDescription className="playlist-selection-delete-description">{deleteMode === 'files'
           ? '歌曲文件将移至回收站，并从所有列表中移除'
-          : deleteCanRemoveFromList ? '列表条目将被删除，歌曲文件将保留' : '文件夹扫描视图不支持仅移除列表条目，可选择删除文件'}</DialogDescription>
+          : deleteCanRemoveFromList ? canDeleteFiles ? '列表条目将被删除，歌曲文件将保留' : '只移除流列表中的地址，其他播放列表中的引用将保留' : '文件夹扫描视图不支持仅移除列表条目，可选择删除文件'}</DialogDescription>
         {deleteError ? <p className="playlist-selection-error" role="alert">{deleteError}</p> : null}
         <div className="playlist-selection-delete-actions">
-          <Button variant="ghost" disabled={deleteBusy} onClick={() => { onModeChange(deleteMode === 'list' ? 'files' : 'list') }}>{deleteMode === 'list' ? '删除文件' : '仅移除条目'}</Button>
+          <Button variant="ghost" disabled={deleteBusy || !canDeleteFiles} onClick={() => { onModeChange(deleteMode === 'list' ? 'files' : 'list') }}>{deleteMode === 'list' ? '删除文件' : '仅移除条目'}</Button>
           <div>
             <Button variant="ghost" disabled={deleteBusy} onClick={() => { onCancel() }}>取消</Button>
             <Button variant="outline" className="playlist-selection-delete-confirm" disabled={deleteBusy || deleteMode === 'list' && !deleteCanRemoveFromList} onClick={() => { onConfirm() }}>{deleteBusy ? '删除中…' : '删除'}</Button>

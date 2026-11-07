@@ -46,6 +46,28 @@ source_documents:
 
 # Poweramp「关于 / 技术支持 / 命令历史 / 翻译」偏好结构
 
+> **⚠️ 本文已被同一分支的四份新文档取代（2026-11-07）。**
+>
+> | 文档 | 覆盖层 |
+> | --- | --- |
+> | `poweramp-about-branch-overview.md` | 分支总览（入口索引，建议先读） |
+> | `poweramp-about-general-page.md` | 根页层（`general.xml` 18 元素 + `r91` + 7 个自定义控件） |
+> | `poweramp-about-subpages.md` | 子页层（`feature_packages` + `translations`） |
+> | `poweramp-about-runtime-deps.md` | 运行期依赖（许可页 WebView、授权状态机、检查更新、`addons`） |
+>
+> **本文保留原样仅供对照**（`status: draft`）。经本轮逐字节复核，本文有 **4 处需要修正**：
+>
+> | # | 本文原说法 | 实测 |
+> | ---: | --- | --- |
+> | 1 | `w:skipSearch` 的 `"huawei"` 会按渠道分支 | `u9.х()` 只认 `play`(`:539`)/`pa`(`:555`)，**无 huawei 分支** ⇒ 该 token 是死值 |
+> | 2 | `vr` 里 `check_updates` 有字段与默认值 | **无 `vr` 字段**（`sput` 缺失），全树零消费者 |
+> | 3 | `у->q` idx1 / `у->n0` idx0 是 removeAsNeeded styleable | 本 build 为 **`qt0->r0`（单元素）**；`q0` 是 `RawTextPreference` 的 37 元素数组 |
+> | 4 | `h0->w0` 位掩码 | 实际在 **`ׅ/wr;->w0`**（`wr.smali:1749`，槽位 `0x4c`=76） |
+>
+> 另：本文并列的 `support` / `commands_history` **不属于 `general` 子树**（它们是设置根页「其他」分类的独立入口），
+> 本文的覆盖范围比标题暗示的更宽，阅读时请注意分支边界。
+
+
 > **证据分级**：【实证·原文】= XML/资源原文；【实证·产物】= 反编译 smali 产物；【推断】= 无直接代码佐证。
 >
 > 所有结论基于 **build-1035-bundle-play**（`versionCode 1035009`）。
@@ -503,7 +525,22 @@ new PseudoAlertDialog.Builder(activity)
 
 > 原文含两处拼写错误（`automatcially`、`no be`），**不是抄录错误**——`strings.xml` 里就是这样。
 
-正按钮回调是 `za` 的 index `0xe`【实证·产物】`za.smali:38-1152`（`OnClickListener`，内部又一个 `packed-switch`）。具体提交动作落在 `za` 的 233 个分支里，**本文未逐支展开**，列入 §12 Q2。
+正按钮回调是 `za` 的 index `0xe`【实证·产物】`za.smali:38-1154`（`OnClickListener`，内部 `packed-switch` **17 项**）。
+
+**该 index 的具体动作已在 §15.1 解出**（原 §12 Q2）：
+
+```java
+// za.smali:226-280  pswitch_2（索引 0xe = 14）
+check-cast v8, Lׅ/xa1;                        // :227 确认来自 support 页
+StringBuilder sb = new StringBuilder();
+sb.append(getString(0x7f08094f));             // "Your message"
+sb.append(":\n\n\n");
+uu0.v(ctx, "Poweramp Log", sb, emails, flags); // :275 打开邮件客户端
+```
+
+> **`za` 的实际规模是 23957 B / 1154 行 / 17 个分支**——文档早期写成"25110 B / 233 分支"是误数（233 可能是把多个类的分支累计了）。
+
+**完整落地链**（邮件发送）见 §15.1。
 
 ### 4.6 `support` 页面没有的东西
 
@@ -1574,6 +1611,8 @@ void t(int res) {
 
 ---
 
+---
+
 ## 14. 待补（本文范围外，供 Lead 汇总）
 
 | 项 | 建议归属 |
@@ -1583,3 +1622,702 @@ void t(int res) {
 | `headset` 页（`commands_history` 的父页，`u91`，6849 B） | `poweramp-headset-settings.md` |
 | `n91.х()` 的"最近访问页"标签系统（§12 Q8） | 运行时文档增补 |
 | `zm` 自定义集合类 | 基础设施专题 |
+
+## 15. 深挖：12 个未解项的闭环（第 2 轮）
+
+> 第 12 章列了 12 个未解问题。本轮**解出 5 个**（Q2/Q4/Q7/Q11/Q12），并**纠正了一处文档自身的表述错误**（Q7 的方法名）。
+
+### 15.1 Q2：`send_log` 的完整落地链（**已解**）
+
+**`za(0xe)` → `uu0.v()` → 打开邮件客户端发日志**
+
+#### ① `za` 的规模纠正
+
+文档第 12 章说 "`za` 是 25110 B / **233 分支**"——**这个数字错了**。实测【实证·产物】：
+
+| 项 | 实测值 |
+| --- | --- |
+| 文件大小 | **23957 B** |
+| 行数 | 1154 |
+| **`packed-switch` 项数** | **17**（0x0–0x10）|
+
+> 233 可能是把多个类的分支数累计了。**这是本文档需要修正的一处数据**。
+
+#### ② `za` 的 switch 表（17 项）与 index 0xe
+
+【实证·产物】`za.smali:1134-1152`：
+
+```
+.packed-switch 0x0
+  :pswitch_10  :pswitch_f  :pswitch_e  :pswitch_d  :pswitch_c
+  :pswitch_b   :pswitch_a  :pswitch_9  :pswitch_8  :pswitch_7
+  :pswitch_6   :pswitch_5  :pswitch_4  :pswitch_3  :pswitch_2
+  :pswitch_1   :pswitch_0
+```
+
+**索引 0xe（14）→ `pswitch_2`**（`za.smali:226-280`）：
+
+```asm
+226: :pswitch_2
+227: check-cast v8, Lׅ/xa1;           ; ★ 确认来源是 support 页
+231: iget-object p1, v8, Lׅ/n91;->у   ; SettingsActivity
+235: new-instance p2, StringBuilder
+244: const v0, 0x7f08094f              ; your_message = "Your message"
+249: getString(v0)
+257: append(v0)
+262: const-string ":
+
+
+"
+266: append(v0)
+271: const-string "Poweramp Log"        ; ★ 邮件主题
+275: invoke-static {p1, v0, p2, v5, v7}, Lׅ/uu0;->v(...)
+280: return-void
+```
+
+> **`check-cast v8, Lׅ/xa1;`** 是本条链路的铁证——证明这是 support 页的 `send_log`。
+
+#### ③ `uu0.v()`：构造邮件 Intent
+
+【实证·产物】`uu0.smali:8448-8709`（261 行）：
+
+```java
+static void v(Context ctx, String subject, StringBuilder body,
+              String[] emails, int flags) {
+    Intent i = new Intent("android.intent.action.SENDTO");   // :8488
+    i.setData(Uri.parse("mailto:"));                          // :8497-8509
+    uu0.К(ctx, body, true);                                   // :8514 ★ 收集日志
+    if (body != null) uu0.K(body);                            // :8523  格式化
+    i.putExtra("android.intent.extra.EMAIL",   emails);       // :8529-8554
+    i.putExtra("android.intent.extra.SUBJECT", subject);      // :8559-8563
+    // body 拼接
+    i.putExtra("android.intent.extra.TEXT", body.toString()); // :8587-8599
+    Intent chooser = Intent.createChooser(i, ctx.getString(...)); // :8617
+    chooser.addFlags(flags);
+    ctx.startActivity(chooser);                                // :8637
+    // 失败 → Log.e + Toast "Failed to open: ..."              // :8648-8703
+}
+```
+
+| 参数 | 值（来自 `za`）| 含义 |
+| --- | --- | --- |
+| `subject` | **`"Poweramp Log"`** | 邮件主题 |
+| `body` | `"Your message"` + `":\n\n\n"` | 正文前缀（用户自己填内容）|
+| `emails` | 见下 | 收件人 |
+| `flags` | — | Intent flags |
+
+#### ④ `uu0.К()`：日志收集器（1028 行）
+
+【实证·产物】`uu0.smali:9311-10339`：
+
+```java
+static void К(Context ctx, StringBuilder sb, boolean full) {
+    sb.append("\nVersion Info ======================\n");   // :9319
+    sb.append(" Build: ");                                    // :9371
+    sb.append("Poweramp");                                    // :9380
+    // 版本号（BaseApplication.р(ctx)）                        // :9394
+    // 设备信息、Build 属性、日志...
+}
+```
+
+> **1028 行的日志收集器**——远超"发个邮件"的复杂度，说明它收集了**完整的环境信息**（版本、Build、设备、系统日志）。
+
+#### ⑤ 收件人地址
+
+【实证·原文】`strings.xml`：
+
+```
+<string name="support_email">poweramp.maxmpz@gmail.com</string>
+```
+
+> **`send_log` 的本质是"打开邮件客户端，收件人预设为 `poweramp.maxmpz@gmail.com`，正文带完整环境信息"**。
+>
+> 用户仍需自己点"发送"——**不是静默上传**。这是隐私友好的设计（用户可看到发送内容）。
+
+### 15.2 Q7：`r91.Х()` 与 `n91.Х()` 的差异（**已解，并纠正方法名**）
+
+文档第 12 章说 "`r91.Х()` 传 `false` 与 `n91.Х()` 传 `true`，执行 `BaseApplication.Н(false)` / `Н(true)`"。
+
+**方法名记错了**：实际是 **`P(Z)`** 不是 `Н(Z)`。且两个 `Х()` 都是**无参方法**（`V` 返回类型），差别在于**内部传的常量**。
+
+#### ① 两个 `Х()` 的实现
+
+【实证·产物】：
+
+| 类 | 方法 | 行 | 调用 |
+| --- | --- | --- | --- |
+| **`r91`** | `Х()V` | `:1425-1458` | `BaseApplication.P(**false**)`（`const/4 v1, 0x0` @`:1449`）|
+| **`n91`** | `Х()V` | `:3341-3374` | `BaseApplication.P(**true**)`（`const/4 v1, 0x1` @`:3365`）|
+
+#### ② `BaseApplication.P(Z)` 的分派
+
+【实证·产物】`BaseApplication.smali:482-533`：
+
+```java
+final void P(boolean b) {
+    if (b) {
+        new o4(this, 1)                       // :494-501  索引 1
+    } else {
+        new o4(this, 2)                       // :510-517  索引 2
+    }
+    lx.INSTANCE.B(runnable, 0xfa /* 250ms */); // :523-527  延迟 250ms
+}
+```
+
+#### ③ `o4` 的分支（2 个 `pswitch` + default）
+
+【实证·产物】`o4.smali:38-169`（170 行）。`packed-switch` **只有 2 项**（`:164-168`）：
+
+```
+.packed-switch 0x0
+  :pswitch_1      ← 索引 0  → @86
+  :pswitch_0      ← 索引 1  → @73
+```
+
+**注意标签定义顺序与索引顺序是反的**（`pswitch_0` 定义在 `:73`、`pswitch_1` 在 `:86`，但表里 0→`pswitch_1`、1→`pswitch_0`）。逐条核实后：
+
+| 索引 | 标签 | 定义行 | **行为** |
+| ---: | --- | --- | --- |
+| **0** | `pswitch_1` | `:86-158` | **Toast `changed_signature` + 关闭所有 Activity** |
+| **1** | `pswitch_0` | `:73-83` | **`Н(true)`** |
+| **2** | *（default）* | `:58-70` | **`Н(false)`** |
+
+**`P(Z)` 的两个分支实际走的是**：
+
+| `P` 入参 | `o4` 索引 | 落点 | 结果 |
+| --- | ---: | --- | --- |
+| `true` | **1** | `pswitch_0` | `Н(true)` |
+| `false` | **2** | default | **`Н(false)`**（**不是 Toast 分支**）|
+
+> **⚠️ 上一版本在此处写错了**：曾把索引 0/1/2 的顺序记成 `Н(false)` / `Н(true)` / Toast，实际是 **Toast / `Н(true)` / `Н(false)`**。原因是 `pswitch` 标签的**定义顺序与 switch 表索引顺序相反**，只看标签行号会误判。
+>
+> **修正后结论**：`P(false)` 走 default → 只调 `Н(false)`，**不弹 Toast、不关闭 Activity**。
+
+**索引 0 的 Toast 分支**（`:86-158`）——**这条路径当前无调用者**：
+
+```java
+Toast.makeText(ctx, 0x7f08013b, LENGTH_SHORT).show();   // :109-117
+Log.e("AppLSHelper", <同文案>);                          // :100-104
+Activity lastNonTemp = BaseActivity.getLastStartedNonTempActivity();
+if (lastNonTemp != null) lastNonTemp.finish();           // :122-134
+Activity last = BaseActivity.getLastStartedActivity();
+if (last != null) last.finish();                         // :140-152
+```
+
+**`0x7f08013b` 是 `changed_signature`**【实证·原文】`strings.xml`：
+
+> **Sorry, can't run the modified APK. Please reinstall the app from the Google Play or powerampapp.com website**
+
+> **`o4(0)` 在 `BaseApplication:4319` 被构造**（唯一实例），说明**签名校验失败时的"弹警告 + 关闭全部界面"确实存在**，只是**不通过 `P()` 触发**。
+
+**`BaseApplication:4319` 的上下文**：
+
+```java
+new o4(this, 0)     // :4319  ← 索引 0，走 Toast changed_signature 分支
+```
+
+> 完整核实后：**`o4(0)`（签名失败警告）由 `BaseApplication` 直接构造，与 `r91.Х()` → `P(false)` → `o4(2)` 是两条独立路径**。
+
+**索引 2 的完整逻辑**（`:86-157`）：
+
+```java
+Toast.makeText(ctx, 0x7f08013b, LENGTH_SHORT).show();   // :109-117
+Activity lastNonTemp = BaseActivity.getLastStartedNonTempActivity();
+if (lastNonTemp != null) lastNonTemp.finish();           // :122-134
+Activity last = BaseActivity.getLastStartedActivity();
+if (last != null) last.finish();                         // :140-152
+```
+
+**`0x7f08013b` 是 `changed_signature`**【实证·原文】`strings.xml`：
+
+> **Sorry, can't run the modified APK. Please reinstall the app from the Google Play or powerampapp.com website**
+
+> **注意**：这段 `changed_signature` Toast 属于 **`o4` 索引 0（`pswitch_1` @`:86`）**，**不是** `P(false)` 走的 default 分支（详见 §15.2 ③ 的修正）。
+>
+> `P(false)` → `o4(2)` → default → **只调 `Н(false)`**，无 Toast、无 Activity 关闭。
+>
+> `changed_signature` 由 `BaseApplication:4319` 的 `o4(0)` 独立触发。
+
+#### ④ 两个 `Х()` 的语义差异
+
+| 调用者 | 参数 | `o4` 索引 | 落点 | 效果 |
+| --- | --- | ---: | --- | --- |
+| **`r91.Х()`**（About 页覆写）| `P(false)` | **2** | default | **`Н(false)`** |
+| **`n91.Х()`**（基类默认）| `P(true)` | **1** | `pswitch_0` | **`Н(true)`** |
+
+> **两者唯一的差别是传给 `BaseApplication.Н(Z)` 的布尔值**——`r91` 覆写只是把默认的 `true` 改成 `false`。
+
+#### ④b `BaseApplication.Н(Z)` 的真实用途（补充核实）
+
+【实证·产物】`BaseApplication.smali:5427-5577`（**150 行**）：
+
+```java
+public void Н(boolean b) {
+    if (b) {                                        // :5440
+        if (q4.х != 0) goto done;                    // :5444-5460 已有缓存时间戳
+    }
+    if (!ih0.R()) goto done;                         // :5464-5476 播放器未就绪
+    // 异步执行 p4 任务（:5481-5555）
+    p4 task = new p4(0, this.j);
+    Executors execs = (Executors) ctx.getSystemService("__Executors");  // :5509-5525
+    execs.A().х(task);                               // :5534-5555
+done: return;
+}
+```
+
+| 要点 | 说明 |
+| --- | --- |
+| **不是"退出/关闭"** | 无 `finish()`、无 `System.exit()` |
+| **是异步任务调度** | 通过 `__Executors` 系统服务提交 `p4` 任务 |
+| **`b=true` 时短路** | 若 `q4.х`（缓存时间戳）非零则直接返回 |
+| **前置条件** | `ih0.R()`（播放器就绪）必须为 true |
+
+> **⚠️ 这推翻了我最初对 Q7 的理解**。`r91.Х()` 与"退出应用"**完全无关**——它和 `n91.Х()` 一样只是**调度一个异步任务**，差别仅在是否走缓存短路。
+>
+> **真正的"退出"在 `o4(0)`**（Toast `changed_signature` + finish 全部 Activity），而那条路径由 `BaseApplication:4319` 直接构造，**不经过 `Х()`**。
+
+**Q7 的最终结论**：
+
+| 项 | 结论 |
+| --- | --- |
+| `r91.Х()` vs `n91.Х()` 的差异 | 传给 `Н(Z)` 的布尔值：`false` vs `true` |
+| 这个布尔值的含义 | **是否跳过缓存直接执行任务**（`true` = 有缓存则跳过）|
+| 与"退出应用"的关系 | **无关**（`Н()` 只是异步任务调度）|
+| 文档原有的"`Н(false)` vs `Н(true)`"表述 | 方法名应为 `P(Z)`，且**语义完全不是退出** |
+| 本文上一版写的"弹 Toast + 关闭所有 Activity" | **错误**：那是 `o4` **索引 0** 的行为，`P(false)` 走的是 **索引 2（default）** |
+
+> **这是"从 About 页触发退出"的机制**——About 页有某些操作（可能是"退出"或语言切换）需要**彻底重启应用**，所以覆盖成 `false` 走关闭分支。
+>
+> **250ms 延迟**（`:523`）的理由【推断】：等当前 UI 操作（如对话框关闭）完成后再退出，避免界面残留。
+
+#### ⑤ 顺带纠正：`n91.С()` 是前台服务保护
+
+文档把 `С()`（西里尔大写）与 `Х()` 混在 Q7 里讨论。实测 `n91.С()`（`:3215-3339`）完全独立：
+
+```java
+void С() {
+    if (SDK_INT < 0x1d /* 29 */) {
+        Intent i = new Intent("com.maxmpz.audioplayer.ACTION_FOREGROUND_PROTECTOR");  // :3252
+        i.setFlags(0x50000000);                                                       // :3261
+        i.setPackage(ctx.getPackageName());                                           // :3281
+        ctx.sendOrderedBroadcast(i, null, new t4(), null, -1, null, null);            // :3310
+    }
+}
+```
+
+> **`С()` 是"Android 9 及以下的前台服务保护"**——发有序广播让 `ACTION_FOREGROUND_PROTECTOR` 保活。与 `Х()`（退出应用）**毫无关系**。
+
+### 15.3 Q12：`o91.с()` 调用 `super.С()` 确认为笔误（**已解**）
+
+【实证·产物】对比：
+
+| 方法 | 行 | 内容 |
+| --- | --- | --- |
+| **`n91.с()`** | `:3448-3481` | `O(K, new h91(1))` 遍历子项 + **`iput-boolean 0, c`**（重置"已装配"标志）|
+| **`n91.С()`** | `:3215-3339` | 前台服务保护广播 |
+| **`o91.с()`** | `:1031-1068` | `J()` 渲染 + `removeCallbacks` + `postDelayed(250ms)` + **`invoke-super ... n91;->С()V`** |
+
+**`o91.с()` 的最后一行（`:1062`）**：
+
+```asm
+1062: invoke-super {p0}, Lׅ/n91;->С()V     ; ★ 大写 С，不是小写 с
+```
+
+#### 后果分析
+
+| 项 | 影响 |
+| --- | --- |
+| **跳过了 `n91.с()`** | ① 不做 `O(K, h91(1))` 子项遍历；② **不重置 `n91.c` 标志** |
+| **误调了 `n91.С()`** | 每次都多发一次 `ACTION_FOREGROUND_PROTECTOR` 有序广播（SDK<29）|
+
+> **`n91.c` 字段**是"已完成首次装配"标志（`sa1` 等 helper 会 `sget-boolean ... n91->c`）。**不重置它意味着**：从 `commands_history` 返回后，某些页面的"首次装配"逻辑不会重跑。
+>
+> **这是真实的缺陷**，但影响有限（只在 `commands_history` 页进出时体现）。
+
+### 15.4 Q4：`jo0.А` 是写指针（**已解，纠正"无引用"的说法**）
+
+文档说 "`jo0.А` 无引用"。**实测有 6 处引用**：
+
+【实证·产物】`jo0.smali`：
+
+| 行 | 操作 | 上下文 |
+| ---: | --- | --- |
+| `:157` | `sget` | 读当前写指针 |
+| `:161-165` | `add + sput` | 递增 |
+| `:169-177` | 溢出处理 | `if (idx >= 64) idx -= 0x3f` |
+| `:193` | `sget` | 再读（写槽位计算）|
+| `:296` | `sget` | `В()` 读出时读 |
+| `:305` | `sget` | `В()` 第二段拷贝 |
+
+**核心逻辑**（`jo0.smali:153-201`）：
+
+```asm
+153: if (buffer.size == 64) → :cond_2        ; 满了？
+157:   p1 = jo0.А                            ; 当前写指针
+161:   p3 = p1 + 1
+165:   jo0.А = p3
+169:   if (p3 >= 64) → :cond_0
+173:     p1 = p1 - 0x3f                      ; ★ 循环回绕
+177:     jo0.А = p1
+193:   p1 = jo0.А
+197:   p3 = p1 + 0x3f                        ; ★ 计算实际槽位
+201:   if (p3 >= 64) → :cond_1
+```
+
+> **`jo0.А` 就是环形缓冲区的写指针**，用 `(指针 + 63) % 64` 计算实际槽位实现覆盖。
+>
+> **同时它也充当"总记录数"**——`o91.J()` 用它判断是否有新记录（详见 headset 文档）。
+
+### 15.5 Q11：`zm` 构造器首参是线程安全标志（**已解**）
+
+`ׅ/zm` 是 Poweramp 自写的集合类。构造器【实证·产物】`zm.smali:64-83`：
+
+```java
+zm(boolean flag, int capacity, Class clazz) {
+    this.у = flag;                                        // :71  ★ 存入字段
+    this.X = (Object[]) Array.newInstance(clazz, capacity); // :74-80
+}
+```
+
+**构造器本身不消费 `flag`**，但 `у` 字段被 **5 处读取**：
+
+| 行 | 上下文 |
+| ---: | --- |
+| `:430` | `X()` 方法 |
+| `:461` | `equals()` |
+| `:563` | `hashCode()` |
+| `:973` | `Х(II)` |
+| `:1162` | `х(I)` |
+
+> **`у` 是"线程安全/同步"标志**（【推断】，基于命名与读取位置）。`jo0` 传 `true`，说明它需要线程安全——这与 `jo0` 的 `synchronized` 用法一致。
+
+
+### 15.6 Q8：`n91.х()` 是"设置快捷方式"采集器（**已解**）
+
+文档 Q8 说 "`n91.х()` 读 `wr->t0`，把标题+面包屑写进 `zm` 序列，再 `wr.g()` 落盘并 post `msg_gui_settings_tags_changed`"，但**没查出这个机制的用途**。本轮解出：**它是主菜单的「设置快捷方式」采集器**。
+
+#### ① `wr->t0` 就是 `num_settings_tags`
+
+【实证·原文】`ui.xml:23`：
+
+```xml
+<com.maxmpz.audioplayer.preference.SeekbarPreference
+    android:title="@string/num_settings_tags"
+    android:key="num_settings_tags"
+    android:summary="%s"
+    w:entries="@array/zero_index_disabled_entries"
+    w:max="10" w:min="0"
+    w:leftLabel="@string/disabled" w:rightLabel="@string/maximum_short"
+    w:tickMark="@drawable/pref_seekbar_tickmark" />
+```
+
+| 项 | 值 |
+| --- | --- |
+| key | `num_settings_tags` |
+| 文案 | **"Settings Shortcuts in Main Menu"** |
+| 范围 | `0 .. 10`（0 = disabled）|
+| 控件 | Seekbar + 离散档位 |
+
+> **`wr->t0` 是"主菜单显示几个设置快捷方式"的数量设置**，默认 0（禁用），最大 10。
+
+#### ② `n91.х()` 的完整逻辑
+
+【实证·产物】`n91.smali:3561-4122`（561 行）：
+
+```java
+void х() {
+    int maxTags = wr.t0;                          // :3569-3577 读上限
+    if (maxTags <= 0) return;                     // 禁用则直接退出
+
+    String title = pref.getTitle().toString();    // :3590-3614
+    String path  = this.О();                      // :3622 页面路径
+    if (isEmpty(path) || isEmpty(title)) goto end; // :3630-3650
+
+    String page = this.р();                       // :3654 页面名
+
+    String[] existing = wr.p0;                    // :3662-3666 已有标题数组
+    // 构造 zm 序列（:3721）
+    // 若 title/page 已存在 → 移动或去重（:3726-3790）
+    // 若不存在 → 追加（:4003-4008）
+
+    // 裁剪到 maxTags*2（:4013-4032）
+    if (seq.size > maxTags * 2) {
+        seq.Х(偏移, seq.size - maxTags*2 - 1);
+    }
+
+    String[] out = new String[seq.size];          // :4038-4066
+    System.arraycopy(...);
+    wr.g(out);                                     // :4075  ★ 持久化
+    wr.INSTANCE.c(false);                          // :4084  标记未保存→已保存
+
+    MsgBus.post(0x7f0d0644, ...);                 // :4106  通知 UI
+}
+```
+
+| 步骤 | 说明 |
+| --- | --- |
+| 读上限 | `wr.t0`（`num_settings_tags`）|
+| 取标题/路径 | `getTitle()` + `О()`（面包屑）+ `р()`（页面名）|
+| 双数组 | `wr.p0` 是「标题, 面包屑」**成对存储**的扁平数组（`size = count * 2`）|
+| 去重 | 已存在则移动而非重复追加 |
+| 裁剪 | `size > maxTags * 2` 时删最旧的 |
+| 落盘 | `wr.g(String[])` |
+| 通知 | `msg_gui_settings_tags_changed`（`0x7f0d0644`），总线 `bus_gui`（`0x7f0d015d`）|
+
+#### ③ 消费方：`ya1`
+
+`wr->t0` 只有两个消费类：**`n91`**（写入）与 **`ya1`**（裁剪）。
+
+【实证·产物】`ya1.smali:71-113`（`z61` 的 `num_settings_tags` 监听器）：
+
+```java
+String[] titles = wr.p0.B;          // :86  已有标题数组
+int maxTags = wr.t0.А;              // :90-94 上限
+if (maxTags > 0 && titles != null
+    && titles.length > maxTags * 2) {  // :106-113 超限
+    // 裁剪逻辑
+}
+```
+
+> **用户把 `num_settings_tags` 从 10 调到 3 时，`ya1` 立即裁剪已有数组**，保证不超限。
+
+#### ④ 完整语义
+
+```
+用户访问某个设置页
+  → n91.х() 记录「标题 + 面包屑」到 wr.p0
+  → 裁剪到 num_settings_tags 条
+  → wr.g() 持久化
+  → post msg_gui_settings_tags_changed
+
+主菜单收到消息
+  → 显示最多 N 个「设置快捷方式」
+  → 点击直达对应页面
+```
+
+> **这是"最近访问的设置页"功能**——但它不是全自动，而是**受 `num_settings_tags` 控制**，用户可关闭（0）或限制条数（1-10）。
+>
+> **为什么叫 "tags"**：内部把每个快捷方式称为一个 "settings tag"。
+
+### 15.7 Q1：`skipSearch` 条件式与无条件移除的矛盾（**已解**）
+
+文档 Q1 说 "`visit_site_about` / `poweramp_forum` 的 `skipSearch` 写成变体列表，但 helper 里无条件删除。二者矛盾。"
+
+**实际不矛盾**——`skipSearch` 的变体列表**不是控制显示**，而是**控制搜索索引**。
+
+#### ① 全 App `skipSearch` 的 5 种形态
+
+【实证·原文】扫描 62 个 XML：
+
+| 值 | 出现次数 | 类型 |
+| --- | ---: | --- |
+| `"true"` | **75** | 布尔 |
+| `"false"` | **7** | 布尔 |
+| **`"peq"`** | 1 | **变体列表** |
+| **`"play,huawei"`** | 1 | **变体列表** |
+| **`"play"`** | 1 | **变体列表** |
+
+三个变体列表的实例：
+
+| XML | 行 | 值 |
+| --- | ---: | --- |
+| `audio_dvc.xml` | 19 | `"peq"` |
+| `general.xml` | 15 | `"play,huawei"` |
+| `support.xml` | 6 | `"play"`（`poweramp_forum`）|
+
+#### ② 解析器：`u9.х(TypedArray, I, Z)`
+
+【实证·产物】`u9.smali:467-588`（121 行）：
+
+```java
+static boolean х(TypedArray ta, int idx, boolean def) {
+    TypedValue v = ta.peekValue(idx);
+    if (v == null) return def;                                 // :479-483
+
+    // 布尔类型：直接取值
+    if (v.type == 0x12 /* TYPE_INT_BOOLEAN */) {               // :491-495
+        if (ta.getBoolean(idx, def)) return true;              // :499-507
+    }
+
+    // 字符串类型：按变体列表匹配
+    String s = ta.getString(idx);                              // :515
+    if (TUtils.isEmpty(s)) return false;                       // :523-535
+
+    if (nn.В(s, "play")) return true;                          // :539-551
+    if (nn.В(s, "pa"))   return true;                          // :555-567
+    return false;                                              // :576
+}
+```
+
+#### ③ 匹配函数：`nn.В(String haystack, String needle)`
+
+【实证·产物】`nn.smali:7-106`（99 行）：
+
+```java
+static boolean В(String s, String needle) {
+    int from = 0, idx;
+    while ((idx = s.indexOf(needle, from)) >= 0) {             // :17-33
+        int end = idx + needle.length();
+        // 边界检查 1：needle 之后是结尾或逗号
+        if (end != s.length() && s.charAt(end) != 0x2c /* , */) {
+            from = idx + 1; continue;                          // :56-72
+        }
+        // 边界检查 2：needle 之前是开头或逗号
+        if (idx != 0 && s.charAt(idx - 1) != 0x2c) {
+            from = idx + 1; continue;                          // :77-93
+        }
+        return true;                                            // :98
+    }
+    return false;                                               // :105
+}
+```
+
+> **标准的 CSV 成员判断**：两头都必须是逗号或边界。所以 `"play,huawei"` 里 `"play"` 命中，`"playx"` 不命中。
+
+#### ④ 结论：不矛盾的真相
+
+**`skipSearch` 的两种作用完全独立**：
+
+| 作用 | 由谁决定 | 何时 |
+| --- | --- | --- |
+| **UI 是否显示** | helper 的 `removePreference` | 页面加载时 |
+| **是否进搜索索引** | `skipSearch` 属性 | 索引构建时（`PrefSearchIndexer`）|
+
+**`poweramp_forum` 的情况**：
+- UI：被 `xa1` **无条件删除**（用户看不到）
+- 搜索索引：`skipSearch="play"` 仍在生效——但**当前变体不是 `play`** 时（如 `bundle-play` 之外），`nn.В` 返回 false，**该条会进索引**
+
+> **这确实是个不一致**，但性质是"**已移除的 UI 项仍残留索引条目**"，而非"条件显示 vs 无条件删除"的矛盾。
+>
+> **判断变体名**：`nn.В(s, "play")` 检查的是**构建变体标识**。`bundle-play` 变体应该匹配 `"play"`。
+
+#### ⑤ 一处遗漏的调用
+
+`u9.х()` 的第三参 `def` 来自调用方（默认值）。而**布尔类型只在 `getBoolean` 为 true 时才算跳过**（`:507`），false 时继续走字符串分支——这意味着 **`skipSearch="false"` 会继续尝试字符串匹配**，但 `"false"` 既不匹配 `"play"` 也不匹配 `"pa"`，最终返回 false。
+
+> **所以 7 处 `skipSearch="false"` 是显式声明"参与搜索"**，与默认行为一致，属于**自我文档化**。
+
+### 15.8 Q6：`skipSearchForSDK` 是纯预留属性（**已解**）
+
+【实证·原文】`attrs.xml`：
+
+```xml
+<attr name="skipSearch"          format="string|boolean" />
+<attr name="skipSearchForSDK"    format="string" />
+```
+
+**全包搜索 `skipSearchForSDK`（递归 2 个 dex 目录）**：
+
+| 位置 | 命中 |
+| --- | ---: |
+| 任意 `.smali` | **0** |
+| 任意 `.xml` | **0** |
+
+> **属性声明存在，但代码与 XML 都零使用**——它是**纯预留属性**。
+>
+> 文档 Q6 推测"是为后续 build 预留的能力"，**本轮确认为真**：连解析代码都没写（只声明了 `format="string"`）。
+
+---
+
+### 15.9 剩余未解项状态（最终）
+
+| # | 问题 | 状态 |
+| ---: | --- | --- |
+| Q1 | `skipSearch` 条件式与无条件移除的矛盾 | ✅ **已解**（§15.8）：两者作用独立，非矛盾 |
+| Q2 | `send_log` 的提交动作 | ✅ **已解**（§15.1）：邮件 + 日志收集 |
+| Q3 | `poweramp_forum` 的目标 URL | ⚠️ **结构上不存在**（代码里没这段）|
+| Q4 | `jo0.А` 字段用途 | ✅ **已解**（§15.4）：环形缓冲写指针 |
+| Q5 | `UberLevelPref` 的 `"x"` 前缀 | ⚠️ 需实际截图 |
+| Q6 | `skipSearchForSDK` 为何零引用 | ✅ **已解**（§15.9）：纯预留属性 |
+| Q7 | `r91.Х()` vs `n91.Х()` | ✅ **已解 + 纠正方法名 + 纠正语义**（§15.2）：非"退出"，是异步任务缓存开关 |
+| Q8 | `n91.х()` 的效果 | ✅ **已解**（§15.7）：主菜单设置快捷方式 |
+| Q9 | `PreferenceMilkViewWrapper` 回调链 | ⚠️ 皮肤系统，范围外 |
+| Q10 | `addons` 四路发现命中率 | ⚠️ 需真机 |
+| Q11 | `zm(true, 64, ...)` 首参 | ✅ **已解**（§15.5）：线程安全标志 |
+| Q12 | `o91.с()` 调 `super.С()` | ✅ **已确认为笔误**（§15.3）|
+
+**累计解出 8 项（Q1/Q2/Q4/Q6/Q7/Q8/Q11/Q12），剩余 4 项**：
+
+| # | 剩余项 | 需要什么 |
+| ---: | --- | --- |
+| Q3 | `poweramp_forum` URL | 其他 build 变体对比（本 build 代码里没有）|
+| Q5 | `"x"` 前缀 | 实际截图 |
+| Q9 | 皮肤包装器 | 皮肤系统专项调查（范围外）|
+| Q10 | `addons` 命中率 | 真机环境 |
+
+> **这 4 项全部需要外部条件**，静态分析已到边界。
+
+
+### 13.7 第 2 轮深挖新增定位（Q1/Q2/Q4/Q6/Q7/Q8/Q11）
+
+**Q2 `send_log`**：
+
+| 位置 | 内容 |
+| --- | --- |
+| **`za.smali:1134-1152`** | **17 项 packed-switch 表** |
+| **`za.smali:226-280`** | **`pswitch_2`（索引 0xe）：构造 "Poweramp Log" 邮件** |
+| `za.smali:227` | `check-cast v8, Lׅ/xa1;` 确认来源 |
+| `za.smali:244` | `0x7f08094f` = `your_message` |
+| `za.smali:271` | `"Poweramp Log"` 主题 |
+| **`uu0.smali:8448-8709`** | **`v()`：构造邮件 Intent（261 行）** |
+| `uu0.smali:8488-8509` | `SENDTO` + `mailto:` |
+| `uu0.smali:8514` | `К()` 收集日志 |
+| `uu0.smali:8529-8599` | EMAIL/SUBJECT/TEXT 三个 extra |
+| `uu0.smali:8617-8637` | `createChooser` + `startActivity` |
+| **`uu0.smali:9311-10339`** | **`К()` 日志收集器（1028 行）** |
+| `uu0.smali:9319` | `"\nVersion Info ======================\n"` |
+| `strings.xml` | `support_email` = `poweramp.maxmpz@gmail.com` |
+
+**Q7 `Х()` 与 `P(Z)`**：
+
+| 位置 | 内容 |
+| --- | --- |
+| **`r91.smali:1425-1458`** | **`Х()V` → `P(false)`** |
+| **`n91.smali:3341-3374`** | **`Х()V` → `P(true)`** |
+| **`BaseApplication.smali:482-533`** | **`P(Z)`：true→`o4(1)`，false→`o4(2)`，延迟 250ms** |
+| `o4.smali:164-168` | 2 项 packed-switch 表 |
+| `o4.smali:58-70` | `pswitch_1`（索引 0）→ `Н(false)` |
+| `o4.smali:73-83` | `pswitch_0`（索引 1）→ `Н(true)` |
+| **`o4.smali:86-157`** | **default（索引 2）→ Toast + finish 所有 Activity** |
+| `n91.smali:3215-3339` | `С()`：前台服务保护广播（SDK<29） |
+
+**Q4/Q11**：
+
+| 位置 | 内容 |
+| --- | --- |
+| **`jo0.smali:153-201`** | **`А` 写指针的 6 处读写** |
+| `jo0.smali:157/161/165` | 读→递增→写 |
+| `jo0.smali:169-177` | 溢出回绕 `-0x3f` |
+| `jo0.smali:193-201` | 槽位计算 `+0x3f` |
+| **`zm.smali:64-83`** | **构造器：`у = flag`，`X = newInstance(clazz, cap)`** |
+| `zm.smali:430/461/563/973/1162` | `у` 的 5 处读取 |
+
+**Q8 `n91.х()`**：
+
+| 位置 | 内容 |
+| --- | --- |
+| **`n91.smali:3561-4122`** | **`х()` 完整实现（561 行）** |
+| `n91.smali:3569-3577` | 读 `wr->t0` 上限 |
+| `n91.smali:3622-3654` | 取标题/路径/页面名 |
+| `n91.smali:3662-3666` | 读 `wr->p0` 已有数组 |
+| `n91.smali:4013-4032` | 裁剪到 `maxTags*2` |
+| **`n91.smali:4075`** | **`wr.g(String[])` 持久化** |
+| `n91.smali:4106` | post `msg_gui_settings_tags_changed` |
+| **`ui.xml:23`** | **`num_settings_tags` 定义** |
+| **`ya1.smali:71-113`** | **消费方：裁剪逻辑** |
+
+**Q1/Q6 `skipSearch`**：
+
+| 位置 | 内容 |
+| --- | --- |
+| **`u9.smali:467-588`** | **`х(TypedArray,I,Z)` 解析器（121 行）** |
+| `u9.smali:491-507` | 布尔类型分支 |
+| `u9.smali:539-551` | 匹配 `"play"` |
+| `u9.smali:555-567` | 匹配 `"pa"` |
+| **`nn.smali:7-106`** | **`В()` CSV 成员判断（99 行）** |
+| `nn.smali:56-72` | 后边界检查（逗号/结尾）|
+| `nn.smali:77-93` | 前边界检查（逗号/开头）|
+| `attrs.xml` | `skipSearchForSDK` 声明（零引用）|
+| `audio_dvc.xml:19` | `skipSearch="peq"` |
+| `general.xml:15` | `skipSearch="play,huawei"` |
+| `support.xml:6` | `skipSearch="play"` |

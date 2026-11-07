@@ -172,9 +172,9 @@ flowchart TD
 | `aa` | 专辑封面 | 25 | 4842 | 20 | **18** | 0 | `poweramp-album-art-settings.md` |
 | `library` | 媒体库 | 29 | 5394 | 25 | **21** | **6** | `poweramp-library-settings.md` |
 | `headset` | 耳机/蓝牙 | 26 | 4437 | 21 | **18** | **3** | `poweramp-headset-settings.md` |
-| `lockscreen` | 锁屏 | 21 | 3224 | 15 | 12 | 1 | `poweramp-lockscreen-settings.md` |
-| `misc` | 其他 | 38 | 6909 | 31 | **27** | 1 | `poweramp-misc-settings.md` |
-| `general` | 关于 | 25 | 2563 | 18 | 13 | 2 | `poweramp-about-and-support-settings.md` |
+| `lockscreen` | 锁屏 | 21 | 3224 | 15 | 12 | 1 | **`poweramp-lockscreen-branch-overview.md`**（5 份子文档，见 §7.2） |
+| `misc` | 其他 | 38 | 6909 | 31 | **27** | 1 | `poweramp-misc-settings.md`<br>`poweramp-misc-complete.md` |
+| `general` | 关于 | 25 | 2563 | 18 | 13 | 2 | **`poweramp-about-branch-overview.md`**（5 份子文档，见 §7.2） |
 | `support` | 技术支持 | 8 | 707 | 5 | 4 | 0 | `poweramp-about-and-support-settings.md` |
 
 > 合计 **263 行 / 43 970 字节 / 210 个元素（含根）/ 173 个 key / 19 个跳转点**【实证·原文】逐文件正则统计。
@@ -317,9 +317,15 @@ flowchart TD
 | 专辑封面 `aa` | `poweramp-album-art-settings.md` | ✅ |
 | 媒体库 `library` | `poweramp-library-settings.md`（根页）<br/>**`poweramp-library-full-implementation.md`（根页 + 6 子页完整实现）** | ✅✅ |
 | 耳机/蓝牙 `headset` | `poweramp-headset-settings.md` | ✅ |
-| 锁屏 `lockscreen` | `poweramp-lockscreen-settings.md` | ✅ |
+| 锁屏 `lockscreen` | **`poweramp-lockscreen-branch-overview.md`（分支总览）**<br/>`poweramp-lockscreen-preference-tree.md`（偏好结构层）<br/>`poweramp-lockscreen-runtime.md`（运行时层）<br/>`poweramp-lockscreen-mediaactions-subpage.md`（子页 `ui_mediaactions`）<br/>`poweramp-lockscreen-settings.md`（build-1025 首轮枚举，已被上面四份修订） | ✅✅✅✅ |
 | 其他 `misc` | `poweramp-misc-settings.md` | ✅ |
-| 关于 `general` + 技术支持 `support` + 命令历史 `commands_history` + 翻译 `translations` | `poweramp-about-and-support-settings.md` | ✅ |
+| 关于 `general` | **`poweramp-about-branch-overview.md`**（分支总览）<br/>`poweramp-about-general-page.md`（根页层）<br/>`poweramp-about-subpages.md`（子页层）<br/>`poweramp-about-runtime-deps.md`（运行期依赖）<br/>`poweramp-about-license-state-machine.md`（授权状态机）<br/>`poweramp-about-and-support-settings.md`（build-1025 首轮枚举，含 support/commands_history 两页，已被上面五份修订） | ✅✅✅✅✅ |
+
+> **锁屏分支已完整闭环（2026-11-07）**：4 份文档覆盖"分支骨架 → 偏好结构 → 运行时 → 子页面"四层，共 4637 行。
+> 原 `poweramp-lockscreen-settings.md` §9 的三个未解问题（Q5 消费代码 / Q6 自绘锁屏本体 / Q7 恢复默认补丁）
+> **已全部解出**——结论是**自绘锁屏根本不是绘制出来的**，而是 `MainActivity` 的窗口标志
+> （`FLAG_SHOW_WHEN_LOCKED` / SDK≥27 的 `setShowWhenLocked`）+ `Window.Callback` 包装器 + `Handler` 超时。
+> 详见 `poweramp-lockscreen-runtime.md` §0 与 §12 勘误表。
 
 > **11 个一级目标已全覆盖**（`general`/`support` 两页 + 2 个子页合并为一份）。
 
@@ -337,7 +343,7 @@ flowchart TD
 > **媒体库子树已完整闭环**：7 个页面（根 + 6 子页）的 92 个 key、`ba1`/`ga1`/`z61`(idx 8–12) 三套 helper、5 套监听器工厂的索引语义、`w:searchBreadcrumb1` 面包屑机制，全部记录在 `poweramp-library-full-implementation.md`（807 行）。
 
 
-## 8. 文档地图（全部 23 份 Poweramp 文档）
+## 8. 文档地图（全部 Poweramp 文档）
 
 > 本仓库的 Poweramp 逆向文档分**两条线索**：**A. 设置树**（本文所属）与 **B. 媒体库视图与运行时**（另一条）。
 > 下表是完整索引，便于按需查阅。
@@ -348,6 +354,7 @@ flowchart TD
 | --- | --- | --- |
 | **根** | **本文** | `singlepane` 根页 24 key、11 个一级目标规模、深链/搜索/自删三机制 |
 | **共享层** | `poweramp-settings-page-runtime.md` | 三层骨架、45 分支分发表、`n91` 契约、六大通用机制、`C`=父页 id |
+| **共享层·存储** | **`poweramp-faststaticprefs.md`** | **偏好存储引擎**：`ls`(mmap `FastStaticPrefs`) / `a30`(值对象) / `er`(脏位) / `ms`(工厂+槽位表)；双魔数校验、顺序读协议 |
 | 分支 | `poweramp-look-and-feel-settings.md` | 外观 `ui` + 6 个二级页 |
 | 分支 | `poweramp-audio-settings-structure.md` | 音频 `audio` + 9 个二级页 |
 | 分支 | `poweramp-visualization-settings.md` | 可视化 `vis`（MilkDrop 引擎） |
@@ -358,9 +365,23 @@ flowchart TD
 | 分支 | `poweramp-headset-settings.md` | 耳机/蓝牙 `headset`（偏好结构视角）|
 | 分支·深 | `poweramp-headset-full-implementation.md` | 耳机/蓝牙**完整实现**（`u91`/`s91`/`rk0`/消息链）|
 | 分支·深 | `poweramp-headset-subtree.md` | 耳机/蓝牙**子树全貌**（`commands_history`/`audio_focus`/`long_volume_controls`）|
-| 分支 | `poweramp-lockscreen-settings.md` | 锁屏 `lockscreen` |
+| 分支·总览 | **`poweramp-lockscreen-branch-overview.md`** | 锁屏分支骨架：2 页 + 1 运行时、12 key 按消费层重分类、跨分支耦合 |
+| 分支·结构 | **`poweramp-lockscreen-preference-tree.md`** | 锁屏偏好结构：15 元素 / 12 key 逐条、`vr` 7 字段双源、`la1` 逐段 |
+| 分支·运行时 | **`poweramp-lockscreen-runtime.md`** | 锁屏运行时：`LockScreenHelper`(h80)/`g80`/`t4`、窗口锁屏态、7 个状态消费者 |
+| 分支·子页 | **`poweramp-lockscreen-mediaactions-subpage.md`** | `ui_mediaactions` 子页：6 个下拉框、`TagListPreference`、`y61` 三用途 |
+| 分支·闭合 | **`poweramp-lockscreen-residual-closure.md`** | 残留未知 R1–R8 的攻关：**6 条闭合**（偏好注册表机制、`WRITE_SETTINGS` 漏检、死字段），3 条降级为设计判断 |
+| 分支（旧） | `poweramp-lockscreen-settings.md` | 锁屏 build-1025 首轮枚举；**已由上面四份修订**，仅供对照 |
 | 分支 | `poweramp-misc-settings.md` | 其他 `misc`（27 key，最长页） |
-| 分支 | `poweramp-about-and-support-settings.md` | 关于/支持/命令历史/翻译 4 页合并 |
+| 分支·深 | `poweramp-misc-complete.md` | 其他**完整实现**（条件移除 / 运行时消费者 / Shizuku 链）|
+| 分支·总览 | **`poweramp-about-branch-overview.md`** | 关于分支骨架：3 页拓扑、18 元素按性质重分类、版本串组装、授权状态机 |
+| 分支·根页 | **`poweramp-about-general-page.md`** | `general.xml` 18 元素逐条、`r91` 逐段、7 个自定义控件、`skipSearch` 判定 |
+| 分支·子页 | **`poweramp-about-subpages.md`** | `feature_packages` + `translations`、`p91`/`b71`/`z61` 分发（21 条 index） |
+| 分支·依赖 | **`poweramp-about-runtime-deps.md`** | 许可页 WebView、授权状态机 `0xe5`/`0x110`、检查更新死代码、`addons` 四路 |
+| 分支·授权 | **`poweramp-about-license-state-machine.md`** | `q4`(AppLSHelper) 授权状态落地：`Bundle` 4 字段 → `y40` 4 字段、`store` 枚举 {2,7,8}、3 条 scene 总线 |
+| 分支（旧） | `poweramp-about-and-support-settings.md` | 关于/支持/命令历史/翻译 4 页合并（build-1025） |
+| **根·功能** | **`poweramp-settings-export-import.md`** | **导出/导入设置/数据**：四层链路、`.poweramp-backup` 格式逆向（**实测验证**）、`dS`/`eS` 双密钥、13 个可导入数据类别、`prefs` 表 7 种 type、**3 处真实缺陷** |
+| **根·搜索** | **`poweramp-settings-search.md`** | **设置页顶部搜索**：SQLite FTS4(unicode61) 全文索引、`pref_search`+`pref_search_fts` 双表、前缀匹配、`skipSearch` 三态、`SettingsSearchLayout` UI |
+| **根·付费** | **`poweramp-purchase-restore-settings.md`** | **已购买/购买方式**：7 个 `Restore*Pref`（6 渠道）、6 个 `Buy*Pref`、**商品 ID 地区分叉**（`ru2`）、`com.android.vending` 图标复用 |
 
 ### 8.2 B 线：媒体库视图与运行时（非本文域，交叉引用）
 

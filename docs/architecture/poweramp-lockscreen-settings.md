@@ -32,6 +32,20 @@ source_documents:
 
 # Poweramp「设置 → 锁屏」偏好结构
 
+> **⚠️ 本文已被同一分支的四份新文档取代（2026-11-07）。**
+>
+> | 文档 | 覆盖层 |
+> | --- | --- |
+> | `poweramp-lockscreen-branch-overview.md` | 分支总览（入口索引，建议先读） |
+> | `poweramp-lockscreen-preference-tree.md` | 偏好结构层（本文 12 个 key 的逐条复核 + 10 条纠正 + 12 条新发现） |
+> | `poweramp-lockscreen-runtime.md` | 运行时层（**解出了本文 §9 的 Q5/Q6/Q7**） |
+> | `poweramp-lockscreen-mediaactions-subpage.md` | 子页 `ui_mediaactions`（本文 §7 只用一句话带过的那个目标） |
+>
+> **本文保留原样仅供对照**（`status: draft`，build-1025 口径）。
+> 最重要的修订是：**自绘锁屏不是"自绘覆盖层"**，而是 `MainActivity` 的窗口标志 +
+> `Window.Callback` 包装 + `Handler` 超时——本文 §3.1/§8.1 的"覆盖层 + `canDrawOverlays`"定性
+> **不成立**，据此推出的"不可移植（无 `SYSTEM_ALERT_WINDOW` 权限模型）"论证基础也需改写。
+
 > **证据分级**：【实证·原文】= XML/资源原文；【实证·产物】= 反编译 smali 产物；【推断】= 无直接代码佐证。所有结论基于 **build-1035-bundle-play**（`versionCode 1035009`）。
 
 ## 0. 一句话结论

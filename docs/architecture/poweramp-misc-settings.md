@@ -49,6 +49,12 @@ source_documents:
 
 # Poweramp「设置 → 其他」偏好结构
 
+> **⚠️ 本文已被 `poweramp-misc-complete.md` 取代。**
+>
+> 该文合并了本文全部内容（含 39 条 smali 定位，已 100% 并入），并补充了 4 轮深挖的成果：`w:scale` 陷阱机制、Experiment 徽标渲染、Shizuku 四态渲染、监听器分发链、索引全部确认。
+>
+> **本文保留原样仅供对照**，请以 `poweramp-misc-complete.md` 为准。
+
 > **证据分级**：【实证·原文】= XML/资源原文；【实证·产物】= 反编译 smali 产物；【推断】= 无直接代码佐证。
 >
 > 所有结论基于 **build-1035-bundle-play**（`versionCode 1035009`）。

@@ -29,6 +29,12 @@ source_documents:
 
 # Poweramp「设置 → 耳机/蓝牙」偏好结构
 
+> **⚠️ 本文已被 `poweramp-headset-complete.md` 取代。**
+>
+> 该文合并了 `poweramp-headset-settings.md`、`poweramp-headset-full-implementation.md`、`poweramp-headset-subtree.md` 三份文档的全部内容（含 167 条 smali 定位），并做了去重与重组。
+>
+> **本文保留原样仅供对照**，请以 `poweramp-headset-complete.md` 为准。
+
 > **证据分级**：【实证·原文】= XML/资源原文；【实证·产物】= 反编译 smali 产物；【推断】= 无直接代码佐证。所有结论基于 **build-1035-bundle-play**（`versionCode 1035009`）。
 
 > **配套文档**：本文只描述**偏好结构**（每项是什么、文案、依赖图）。若需了解运行时实现（`u91`/`s91`/`rk0` 的按键处理、三条 `cmd_player_*` 消息链），见 `poweramp-headset-full-implementation.md`（根页运行时）与 `poweramp-headset-subtree.md`（子树全貌）。

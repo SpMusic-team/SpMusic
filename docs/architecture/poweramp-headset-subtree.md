@@ -30,6 +30,12 @@ source_documents:
 
 # Poweramp「耳机/蓝牙」子树完整实现
 
+> **⚠️ 本文已被 `poweramp-headset-complete.md` 取代。**
+>
+> 该文合并了 `poweramp-headset-settings.md`、`poweramp-headset-full-implementation.md`、`poweramp-headset-subtree.md` 三份文档的全部内容（含 167 条 smali 定位），并做了去重与重组。
+>
+> **本文保留原样仅供对照**，请以 `poweramp-headset-complete.md` 为准。
+
 > **证据分级**：【实证·原文】= XML/资源原文；【实证·产物】= 反编译 smali；【推断】= 无直接代码佐证。
 >
 > 全部基于 **build-1035-bundle-play**（`versionCode 1035009`）。
@@ -419,7 +425,7 @@ headset 根页第 9 行是**无 key 的 RedirectPreference**：
 ```java
 // ① 找两个 Preference
 Preference lvc  = findPreference("long_volume_controls");
-Preference grant = findPreference("_long_volume_shizuku_grant");   // ← 动态行！
+Preference grant = findPreference("_long_volume_shizuku_grant");   // ← 见下方纠正
 
 // ② 检查权限
 if (checkSelfPermission(
@@ -440,7 +446,7 @@ if (checkSelfPermission(
 
 ### 4.4 两个关键点
 
-**① `_long_volume_shizuku_grant` 是动态行**
+**① `_long_volume_shizuku_grant` 不是动态行（**纠正**：见 `poweramp-misc-complete.md` §9.2）**
 
 这个 key **不在 `misc.xml` 中**——它由 `sa1` 在运行时通过 `findPreference` 查找，说明它由代码动态创建（或来自其他 XML 片段）。
 

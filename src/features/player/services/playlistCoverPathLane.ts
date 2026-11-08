@@ -66,6 +66,36 @@ let consecutiveFailures = 0
 let disabled = false
 
 /**
+ * Diagnostics counters.
+ *
+ * Kept separate from the breaker on purpose: the breaker answers "may the lane be
+ * attempted", these answer "what did it actually do". Reporting `pathFailures`
+ * for a row that later recovered would be wrong, so the direct-failure count is
+ * only incremented where an attempt is classified as `fallback`.
+ */
+export type PathLaneStats = Readonly<{
+  /** Real failures charged to this lane (one per distinct attempt). */
+  directFailures: number
+  /** Attempts that reported `ready` after a real predecode. */
+  prepared: number
+  /** Times a caller had to enter the pixel lane because of this lane. */
+  fallbacks: number
+  /** Times a caller had to enter the pixel lane because the breaker was open. */
+  fallbacksFromBreaker: number
+  /** Presentation failures escalated once per attempt. */
+  presentationFailures: number
+}>
+
+const stats: { -readonly [K in keyof PathLaneStats]: number } = {
+  directFailures: 0, prepared: 0, fallbacks: 0, fallbacksFromBreaker: 0, presentationFailures: 0,
+}
+
+/** Read-only snapshot of the lane's diagnostics counters. */
+export function pathLaneStats(): PathLaneStats {
+  return { ...stats }
+}
+
+/**
  * Errors already charged to the breaker.
  *
  * Two consumers can share one native request: `playlistCoverScheduler` dedupes
@@ -73,8 +103,43 @@ let disabled = false
  * *same* error value. Counting every consumer would let one broken channel close
  * the lane in four jobs instead of eight, so a failure is charged once per error
  * object. Distinct failures are distinct objects and are never collapsed.
+ *
+ * `let`, not `const`, only so the test seam can restore a clean ledger: `WeakSet`
+ * has no `clear`, and a module-level const would leak one test's errors into the
+ * next.
  */
-const countedFailures = new WeakSet<object>()
+let countedFailures: WeakSet<object> = new WeakSet()
+
+/**
+ * Attempts whose presentation failure was already charged.
+ *
+ * A path attempt can succeed here and still fail in the DOM afterwards. That is a
+ * genuine failure of this lane, but it belongs to *one* attempt: several `<img>`
+ * elements displaying the same prepared URL, a re-render, or a retried error event
+ * must not each charge a strike. The set is bounded because attempts are
+ * short-lived and an unbounded id set would be a leak, not a record.
+ */
+const countedAttempts = new Set<string>()
+const COUNTED_ATTEMPT_LIMIT = 512
+
+/**
+ * Record a charge for one attempt, returning `false` when it was already charged.
+ *
+ * Bounded FIFO eviction: an attempt id evicted long after its row settled can be
+ * charged once more, but only if 512 newer attempts have been published since,
+ * which cannot happen while that presentation is still current.
+ */
+function chargeAttempt(attemptId: string): boolean {
+  if (countedAttempts.has(attemptId)) return false
+  countedAttempts.add(attemptId)
+  if (countedAttempts.size > COUNTED_ATTEMPT_LIMIT) {
+    const oldest = countedAttempts.values().next().value
+    if (oldest !== undefined) countedAttempts.delete(oldest)
+  }
+  return true
+}
+
+let attemptSequence = 0
 
 /** Whether the path lane may still be attempted in this session. */
 export function pathLaneAvailable(): boolean {
@@ -83,6 +148,7 @@ export function pathLaneAvailable(): boolean {
 
 /** Clear the streak. Only a predecoded, still-current attempt counts as success. */
 export function notePathLaneSuccess(): void {
+  stats.prepared += 1
   // A late success cannot reopen a lane the breaker already closed; the rollback
   // is session-scoped and must not flap.
   if (disabled) return
@@ -96,6 +162,23 @@ export function notePathLaneFailure(error?: unknown): void {
     if (countedFailures.has(error)) return
     countedFailures.add(error)
   }
+  consecutiveFailures += 1
+  stats.directFailures += 1
+  if (consecutiveFailures >= PATH_LANE_FAILURE_THRESHOLD) disabled = true
+}
+
+/**
+ * Charge a presentation (post-publish DOM) failure to one attempt, at most once.
+ *
+ * The caller passes the `attemptId` of the attempt whose URL the element failed
+ * to display. Repeat reports for the same attempt — a second `<img>`, a re-render,
+ * a retried event — are not new strikes, and a lane the breaker already closed is
+ * never reopened by them either.
+ */
+export function notePathLanePresentationFailure(attemptId: string): void {
+  if (disabled) return
+  if (!chargeAttempt(attemptId)) return
+  stats.presentationFailures += 1
   consecutiveFailures += 1
   if (consecutiveFailures >= PATH_LANE_FAILURE_THRESHOLD) disabled = true
 }
@@ -121,13 +204,15 @@ export type PathLaneFallbackReason = 'disabled' | 'command' | 'prepare' | 'decod
  * The result of one complete path attempt.
  *
  * - `ready`   → the image is URL-converted, predecoded and still current. This is
- *               *not* a claim that the store or the DOM has been updated.
+ *               *not* a claim that the store or the DOM has been updated. The
+ *               returned `attemptId` identifies this attempt for exactly one
+ *               later presentation-failure charge.
  * - `missing` → the backend confirmed there is no artwork. Nothing to fall back to.
  * - `dropped` → superseded, cancelled or stale. Settle silently, never fall back.
  * - `fallback`→ a real failure, already counted; run the pixel lane once.
  */
 export type PreparedPathOutcome =
-  | { status: 'ready'; image: PlaylistCoverImage }
+  | { status: 'ready'; image: PlaylistCoverImage; attemptId: string }
   | { status: 'missing' }
   | { status: 'dropped' }
   | { status: 'fallback'; reason: PathLaneFallbackReason }
@@ -267,7 +352,8 @@ export async function runPreparedPathAttempt(
   markPlaylistCoverDecoded(image)
   // Success is recorded only now, on a decoded payload of a still-current job.
   notePathLaneSuccess()
-  return { status: 'ready', image }
+  attemptSequence += 1
+  return { status: 'ready', image, attemptId: `attempt-${attemptSequence}` }
 }
 
 /**
@@ -319,8 +405,9 @@ export function attemptTrackThumbnailPath(
   input: AudioLoadTrackThumbnailPathInput,
   options: AttemptOptions,
 ): Promise<PreparedPathOutcome> {
-  if (!pathLaneAvailable()) return Promise.resolve(PATH_LANE_DISABLED)
-  return runPreparedPathAttempt(() => scheduleTrackThumbnailPath(input, options), options)
+  return enterPixelLaneOnFailure(
+    () => pathLaneAvailable() ? runPreparedPathAttempt(() => scheduleTrackThumbnailPath(input, options), options) : Promise.resolve(PATH_LANE_DISABLED),
+  )
 }
 
 /** One complete folder-thumbnail attempt through the asset path lane. */
@@ -328,8 +415,9 @@ export function attemptFolderThumbnailPath(
   input: AudioLoadFolderThumbnailPathInput,
   options: AttemptOptions,
 ): Promise<PreparedPathOutcome> {
-  if (!pathLaneAvailable()) return Promise.resolve(PATH_LANE_DISABLED)
-  return runPreparedPathAttempt(() => scheduleFolderThumbnailPath(input, options), options)
+  return enterPixelLaneOnFailure(
+    () => pathLaneAvailable() ? runPreparedPathAttempt(() => scheduleFolderThumbnailPath(input, options), options) : Promise.resolve(PATH_LANE_DISABLED),
+  )
 }
 
 /** One complete playlist-cover attempt through the asset path lane. */
@@ -337,12 +425,34 @@ export function attemptPlaylistCoverThumbnailPath(
   input: AudioLoadPlaylistCoverThumbnailPathInput,
   options: AttemptOptions,
 ): Promise<PreparedPathOutcome> {
-  if (!pathLaneAvailable()) return Promise.resolve(PATH_LANE_DISABLED)
-  return runPreparedPathAttempt(() => schedulePlaylistCoverThumbnailPath(input, options), options)
+  return enterPixelLaneOnFailure(
+    () => pathLaneAvailable() ? runPreparedPathAttempt(() => schedulePlaylistCoverThumbnailPath(input, options), options) : Promise.resolve(PATH_LANE_DISABLED),
+  )
+}
+
+/**
+ * Count the *decision* to use the pixel lane, not the failure that caused it.
+ *
+ * The distinction matters for diagnostics: a tripped breaker produces one entry
+ * per cover without paying for a request, so counting it as a request failure
+ * would report channel defects that were never observed.
+ */
+function enterPixelLaneOnFailure(run: () => Promise<PreparedPathOutcome>): Promise<PreparedPathOutcome> {
+  return run().then((outcome) => {
+    if (outcome.status !== 'fallback') return outcome
+    if (outcome.reason === 'disabled') stats.fallbacksFromBreaker += 1
+    else stats.fallbacks += 1
+    return outcome
+  })
 }
 
 /** Test seam: restore the initial session state. */
 export function resetPathLaneForTest(): void {
   consecutiveFailures = 0
   disabled = false
+  attemptSequence = 0
+  countedAttempts.clear()
+  countedFailures = new WeakSet()
+  for (const key of Object.keys(stats) as Array<keyof PathLaneStats>) stats[key] = 0
 }
+

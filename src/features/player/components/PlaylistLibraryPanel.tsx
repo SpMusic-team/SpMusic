@@ -26,7 +26,7 @@ import { useAllSongsTileNavigation } from '@/features/player/hooks/useAllSongsTi
 import { usePlaylistSongReorder } from '@/features/player/hooks/usePlaylistSongReorder'
 import { mergeFilteredSongOrder } from '@/features/player/model/manualSongOrderStorage'
 import { useCollectionLayout } from '@/features/player/hooks/useCollectionLayout'
-import { useAllSongsCoverUrl, useAllSongsWindow, type AllSongsCoverStore } from '@/features/player/hooks/useAllSongsWindow'
+import { useAllSongsCoverPresentation, useAllSongsWindow, type AllSongsCoverStore } from '@/features/player/hooks/useAllSongsWindow'
 import { compareByQuickIndex } from '@/features/player/model/quickIndex'
 import { PlaylistCard } from '@/features/player/components/PlaylistCard'
 import { PlaylistMetadataLoading } from '@/features/player/components/PlaylistPanel'
@@ -101,10 +101,10 @@ type AllSongsCardProps = {
 const AllSongsCard = memo(function AllSongsCard({ hideRating, rating, ratingMode, playCount, item, index, store, artworkSource, fallbackArtworkSource, current,
   canActivate, selectMode, showReorderHandle, selected, artworkVisible, showExtendedMetadata, coverFailed, onCoverFailed, onActivate,
   onToggleSelect, onEnterSelectMode }: AllSongsCardProps) {
-  const coverUrl = useAllSongsCoverUrl(store, item.key, item.trackId, item.sourcePath)
+  const cover = useAllSongsCoverPresentation(store, item.key, item.trackId, item.sourcePath)
   const track = item.track
   const contentShape = playlistCardContentShape(track)
-  return <PlaylistCard hideRating={hideRating} rating={rating} ratingMode={ratingMode} playCount={playCount} songKey={item.key} track={track} index={index} coverUrl={coverUrl}
+  return <PlaylistCard hideRating={hideRating} rating={rating} ratingMode={ratingMode} playCount={playCount} songKey={item.key} track={track} index={index} coverUrl={cover?.src} coverPresentation={cover}
     artworkSource={artworkSource} fallbackArtworkSource={fallbackArtworkSource}
     current={current} unavailable={!item.available} canSelectUnavailable canActivate={canActivate}
     selectMode={selectMode} showReorderHandle={showReorderHandle} selected={selected} artworkVisible={artworkVisible}

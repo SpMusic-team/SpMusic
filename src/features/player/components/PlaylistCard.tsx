@@ -10,6 +10,7 @@ import { usePlaylistCardLongPress } from '@/features/player/hooks/usePlaylistCar
 import { appCopy } from '@/features/player/model/playerCopy'
 import type { PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
 import type { PlaylistArtworkSource } from '@/features/player/model/playlistArtworkStore'
+import type { CoverPresentation } from '@/features/player/model/playlistCoverReadiness'
 import checkbox from '@/assets/song-card/checkbox-unchecked.svg'
 import arrowMove from '@/assets/song-card/arrow-move.svg'
 import streamGlyph from '@/assets/media-library/streams-root.svg'
@@ -25,6 +26,15 @@ type PlaylistCardProps = {
   positionMs?: number
   songKey?: string
   coverUrl?: string
+  /**
+   * The owner's published snapshot for `coverUrl`.
+   *
+   * Without it a card renders the URL but its load/error reports carry no token,
+   * which means the owner cannot verify that the report describes the presentation
+   * it committed. The store-backed callers therefore pass the presentation, not
+   * just its URL.
+   */
+  coverPresentation?: CoverPresentation
   index?: number
   current: boolean
   unavailable: boolean
@@ -90,6 +100,7 @@ export const PlaylistCard = memo(function PlaylistCard({
   songKey,
   positionMs,
   coverUrl,
+  coverPresentation,
   index = 0,
   current,
   unavailable,
@@ -187,14 +198,14 @@ export const PlaylistCard = memo(function PlaylistCard({
       onPointerDown={longPress.onPointerDown}
       onContextMenu={longPress.onContextMenu}
     >
-      {contentVisible ? <PlaylistCardContent rating={rating} ratingMode={ratingMode} playCount={playCount} track={track} positionMs={positionMs} songKey={songKey} coverUrl={coverUrl} artworkVisible={artworkVisible}
+      {contentVisible ? <PlaylistCardContent rating={rating} ratingMode={ratingMode} playCount={playCount} track={track} positionMs={positionMs} songKey={songKey} coverUrl={coverUrl} coverPresentation={coverPresentation} artworkVisible={artworkVisible}
         selectMode={selectMode} showReorderHandle={showReorderHandle} unavailable={unavailable} showExtendedMetadata={showExtendedMetadata}
         coverState={coverState} coverFailed={coverFailed} onCoverFailed={onCoverFailed} /> : null}
     </button>
   )
 })
 
-function PlaylistCardContent({ rating, ratingMode, playCount, track, positionMs, songKey, coverUrl, artworkVisible, selectMode, showReorderHandle, unavailable, showExtendedMetadata, coverState, coverFailed, onCoverFailed }: Pick<PlaylistCardProps, 'rating' | 'ratingMode' | 'playCount' | 'track' | 'positionMs' | 'songKey' | 'coverUrl' | 'artworkVisible' | 'selectMode' | 'showReorderHandle' | 'unavailable' | 'showExtendedMetadata' | 'coverFailed' | 'onCoverFailed'> & { coverState: PlaylistCardCoverState }) {
+function PlaylistCardContent({ rating, ratingMode, playCount, track, positionMs, songKey, coverUrl, coverPresentation, artworkVisible, selectMode, showReorderHandle, unavailable, showExtendedMetadata, coverState, coverFailed, onCoverFailed }: Pick<PlaylistCardProps, 'rating' | 'ratingMode' | 'playCount' | 'track' | 'positionMs' | 'songKey' | 'coverUrl' | 'coverPresentation' | 'artworkVisible' | 'selectMode' | 'showReorderHandle' | 'unavailable' | 'showExtendedMetadata' | 'coverFailed' | 'onCoverFailed'> & { coverState: PlaylistCardCoverState }) {
   const systemIcons = useSystemIcons()
   const badge = rating !== undefined ? <SongRatingBadge rating={rating} mode={ratingMode ?? 'thumbs'} /> : playCount
   const coverSource = coverUrl ?? track.coverImage ?? track.coverImageFallback
@@ -224,7 +235,7 @@ function PlaylistCardContent({ rating, ratingMode, playCount, track, positionMs,
   return <>
       <span className="playlist-card-cover" aria-hidden="true">
         {coverUrl ? (
-          <PlaylistCoverImage className="playlist-card-cover-image" src={coverUrl} reveal onError={handleCoverError} />
+          <PlaylistCoverImage className="playlist-card-cover-image" src={coverUrl} reveal presentation={coverPresentation} onError={handleCoverError} />
         ) : track.coverThumbnail ? (
           <PlaylistCoverImage className="playlist-card-cover-image" image={track.coverThumbnail} reveal />
         ) : !coverFailed && artworkVisible && track.hasLocalArtwork === false && coverSource ? (

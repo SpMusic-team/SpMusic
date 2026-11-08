@@ -7,7 +7,8 @@ import { Separator } from '@/components/ui/separator'
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
-import { useAllSongsCoverUrl, useCollectionCoverUrl, useAllSongsWindow, type AllSongsCoverStore, type AllSongsCoverItem } from '../hooks/useAllSongsWindow'
+import { useAllSongsCoverPresentation, useCollectionCoverPresentation, useAllSongsWindow, type AllSongsCoverStore, type AllSongsCoverItem } from '../hooks/useAllSongsWindow'
+import { reportCoverPresentation } from '../model/playlistCoverReadiness'
 import { useCollectionLayout } from '../hooks/useCollectionLayout'
 import { useAllSongsRenderWindow } from '../hooks/useAllSongsRenderWindow'
 import { useAlbumRenderWindow } from '../hooks/useAlbumRenderWindow'
@@ -36,27 +37,30 @@ function collectionCover(item: SearchCollection, category: string): AllSongsCove
 }
 
 function SearchSong({ song, store, viewModel, selected, selectMode, artwork, onSelect, onPlay }: { song: AllSongsItem; store: AllSongsCoverStore; viewModel: PlayerUiViewModel; selected: boolean; selectMode: boolean; artwork: boolean; onSelect: () => void; onPlay: () => void }) {
-  const cover = useAllSongsCoverUrl(store, song.key, song.trackId, song.sourcePath)
+  const cover = useAllSongsCoverPresentation(store, song.key, song.trackId, song.sourcePath)
   const [failed, setFailed] = useState<string>()
+  const coverUrl = cover?.src
   return <div data-search-key={`songs:${song.key}`} data-song-key={song.key}>
-    <PlaylistCard track={song.track} songKey={song.key} coverUrl={cover} current={viewModel.playlist.currentTrackId === song.trackId}
+    <PlaylistCard track={song.track} songKey={song.key} coverUrl={coverUrl} coverPresentation={cover} current={viewModel.playlist.currentTrackId === song.trackId}
       unavailable={!song.available} canSelectUnavailable canActivate={!viewModel.playlist.isOpenAudioDisabled}
       selectMode={selectMode} selected={selected} artworkVisible={artwork} showExtendedMetadata
-      contentVisible contentRepresentative={false} contentShape={15} coverFailed={Boolean(cover && failed === cover)} onCoverFailed={() => setFailed(cover)}
+      contentVisible contentRepresentative={false} contentShape={15} coverFailed={Boolean(coverUrl && failed === coverUrl)} onCoverFailed={() => setFailed(coverUrl)}
       onActivate={onPlay} onToggleSelect={onSelect} />
   </div>
 }
 
 function SearchCollectionRow({ item, category, level, store, selected, selectMode, onClick }: { item: SearchCollection; category: string; level: number; store: AllSongsCoverStore; selected: boolean; selectMode: boolean; onClick: () => void }) {
   const coverItem = useMemo(() => collectionCover(item, category), [item, category])
-  const cover = useCollectionCoverUrl(store, coverItem)
+  const cover = useCollectionCoverPresentation(store, coverItem)
   const layout = FOLDER_CARD_LAYOUTS[level]
   const seconds = item.songs.reduce((sum, song) => sum + (song.available ? song.track.durationSeconds ?? 0 : 0), 0)
   const clock = item.songs.some(song => song.available && !song.track.durationSeconds) ? null : formatDurationClock(seconds)
   return <Button variant="ghost" className="folder-row search-collection-row" data-search-key={`${category}:${item.key}`} data-cover-key={coverItem.key}
     data-folder-variant={layout.variant} data-folder-size={layout.size} style={layout.style} aria-label={`${selectMode ? '选择' : '打开'}${SEARCH_CATEGORIES.find(([id]) => id === category)?.[1]} ${item.name}`}
     aria-pressed={selectMode ? selected : undefined} onClick={onClick}>
-    {layout.coverWidth ? <span className="folder-cover">{cover ? <img className="folder-cover-image" src={cover} alt="" /> : <img className="search-cover-placeholder" src={albumIcon} alt="" />}</span> : null}
+    {layout.coverWidth ? <span className="folder-cover">{cover ? <img className="folder-cover-image" src={cover.src} alt=""
+      onLoad={event => reportCoverPresentation(cover.token, event.currentTarget, 'loaded')}
+      onError={event => reportCoverPresentation(cover.token, event.currentTarget, 'failed')} /> : <img className="search-cover-placeholder" src={albumIcon} alt="" />}</span> : null}
     <span className="folder-copy"><span className="folder-name">{item.name}</span>{item.subtitle && layout.showParent ? <span className="folder-parent-name">{item.subtitle}</span> : null}
       <span className="folder-meta"><span className="folder-music-icon" style={{ maskImage: `url("${musicIcon}")` }} aria-hidden="true" /><span>{item.songs.length}{clock ? ` | ${clock}` : ''}</span></span>
     </span>

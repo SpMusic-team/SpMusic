@@ -471,3 +471,92 @@ test('a null backend payload through the helper is confirmed absence', async () 
   assert.equal(outcome.status, 'missing')
   assert.equal(h.module.pathLaneAvailable(), true)
 })
+
+// ---------------------------------------------------------------------------
+// 6. Presentation failures belong to one attempt, not to one element.
+// ---------------------------------------------------------------------------
+
+test('a ready outcome carries an attempt id so a DOM failure is chargeable', async () => {
+  const h = await harness()
+  const outcome = h.module.runPreparedPathAttempt(h.call(h.reference), h.options())
+  await h.driveDecode((image) => image.decode())
+  const result = await outcome
+  assert.equal(result.status, 'ready')
+  assert.equal(typeof result.attemptId, 'string')
+  assert(result.attemptId.length > 0)
+})
+
+test('two ready attempts get distinct ids, so one row cannot absorb another row failure', async () => {
+  const h = await harness()
+  const first = h.module.runPreparedPathAttempt(h.call(h.reference), h.options())
+  await h.driveDecode((image) => image.decode())
+  const second = h.module.runPreparedPathAttempt(h.call(h.reference), h.options())
+  await h.driveDecode((image) => image.decode())
+  const a = await first, b = await second
+  assert.notEqual(a.attemptId, b.attemptId)
+})
+
+test('one presentation failure is charged once even when several elements report it', async () => {
+  const h = await harness()
+  // A successful attempt first: `notePathLaneSuccess` clears the streak, so the
+  // accounting below starts from a known zero.
+  const success = h.module.runPreparedPathAttempt(h.call(h.reference), h.options())
+  await h.driveDecode((image) => image.decode())
+  const { attemptId } = await success
+  // Charge one below the threshold with real failures.
+  for (let index = 0; index < h.module.PATH_LANE_FAILURE_THRESHOLD - 2; index += 1) {
+    await h.module.runPreparedPathAttempt(h.callFail(new Error(`failure ${index}`)), h.options())
+  }
+  // Three mounted elements of the same publication all report an error.
+  h.module.notePathLanePresentationFailure(attemptId)
+  h.module.notePathLanePresentationFailure(attemptId)
+  h.module.notePathLanePresentationFailure(attemptId)
+  assert.equal(h.module.pathLaneAvailable(), true,
+    'three reports of one attempt cost one strike, not three')
+  // Exactly one more real failure reaches the threshold.
+  await h.module.runPreparedPathAttempt(h.callFail(new Error('final')), h.options())
+  assert.equal(h.module.pathLaneAvailable(), false,
+    'the repeated reports were collapsed, so a single additional failure closed the lane')
+})
+
+test('a presentation failure cannot reopen a session the breaker already closed', async () => {
+  const h = await harness()
+  for (let index = 0; index < h.module.PATH_LANE_FAILURE_THRESHOLD; index += 1) {
+    await h.module.runPreparedPathAttempt(h.callFail(new Error(`failure ${index}`)), h.options())
+  }
+  assert.equal(h.module.pathLaneAvailable(), false)
+  h.module.notePathLanePresentationFailure('attempt-after-close')
+  assert.equal(h.module.pathLaneAvailable(), false, 'the rollback stays session-scoped')
+})
+
+test('the lane counts direct failures and fallbacks separately from presentation failures', async () => {
+  const h = await harness()
+  h.failBackend(new Error('native failure'))
+  await h.module.attemptTrackThumbnailPath(
+    { clientId: 'c', sourcePath: '/music/a.flac', maxEdge: 256, windowGeneration: 1 }, h.options())
+  h.respond(h.reference)
+  const ready = h.module.attemptTrackThumbnailPath(
+    { clientId: 'c', sourcePath: '/music/b.flac', maxEdge: 256, windowGeneration: 1 }, h.options())
+  await h.driveDecode((image) => image.decode())
+  const { attemptId } = await ready
+  h.module.notePathLanePresentationFailure(attemptId)
+  const stats = h.module.pathLaneStats()
+  assert.equal(stats.directFailures, 1, 'the command failure is a direct failure')
+  assert.equal(stats.fallbacks, 1, 'the caller had to enter the pixel lane once')
+  assert.equal(stats.prepared, 1, 'the successful attempt is counted as prepared')
+  assert.equal(stats.presentationFailures, 1, 'the DOM failure is reported separately')
+  assert.equal(stats.fallbacksFromBreaker, 0)
+})
+
+test('a disabled lane accounts a fallback without pretending a request failed', async () => {
+  const h = await harness()
+  for (let index = 0; index < h.module.PATH_LANE_FAILURE_THRESHOLD; index += 1) {
+    h.module.notePathLaneFailure(new Error(`failure ${index}`))
+  }
+  await h.module.attemptTrackThumbnailPath(
+    { clientId: 'c', sourcePath: '/music/a.flac', maxEdge: 256, windowGeneration: 1 }, h.options())
+  const stats = h.module.pathLaneStats()
+  assert.equal(stats.fallbacksFromBreaker, 1)
+  assert.equal(stats.directFailures, h.module.PATH_LANE_FAILURE_THRESHOLD,
+    'a request that was never made is not a request failure')
+})

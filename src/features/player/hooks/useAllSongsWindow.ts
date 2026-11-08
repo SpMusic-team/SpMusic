@@ -1,10 +1,28 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSyncExternalStore, type RefObject } from 'react'
 import { playlistCoverImageFromPixels } from '@/features/player/model/playlistCoverPixels'
-import { decodePlaylistCover, releasePlaylistCoverUrl } from '@/features/player/model/playlistCoverReadiness'
+import {
+  COVER_IMAGE_ERROR_EVENT,
+  COVER_IMAGE_LOAD_EVENT,
+  coverImageEventDetail,
+  decodePlaylistCover,
+  decodePlaylistCoverWithin,
+  isSameCoverUrl,
+  nextCoverSessionGeneration,
+  releasePlaylistCoverUrl,
+  type CoverPresentation,
+  type CoverPresentationFailureStage,
+  type CoverPresentationReport,
+} from '@/features/player/model/playlistCoverReadiness'
+import type { PlaylistCoverImage } from '@/features/player/model/playerUiViewModel'
 import type { AllSongsItem } from '@/features/player/model/playerUiViewModel'
 import { beginAudioPlaylistCoverWindow } from '@/features/player/services/audioCommands'
 import { scheduleFolderThumbnail, scheduleTrackThumbnail } from '@/features/player/services/playlistCoverScheduler'
-import { attemptFolderThumbnailPath, attemptTrackThumbnailPath, type AttemptOptions } from '@/features/player/services/playlistCoverPathLane'
+import {
+  attemptFolderThumbnailPath,
+  attemptTrackThumbnailPath,
+  notePathLanePresentationFailure,
+  type AttemptOptions,
+} from '@/features/player/services/playlistCoverPathLane'
 import { orderPlaylistArtworkRows, type PlaylistArtworkDirection } from '@/features/player/model/playlistArtworkOrder'
 import { isStreamSource } from '../model/streams'
 
@@ -12,7 +30,36 @@ export type FolderCoverItem = Readonly<{ kind: 'folder'; key: string; rootPath: 
 type TrackCoverItem = Pick<AllSongsItem, 'key' | 'trackId' | 'sourcePath' | 'available' | 'artworkRevision'>
 export type TrackCandidatesCoverItem = Readonly<{ kind: 'track-candidates'; key: string; candidates: readonly TrackCoverItem[]; available: boolean }>
 export type AllSongsCoverItem = TrackCoverItem | FolderCoverItem | TrackCandidatesCoverItem
-type WindowRow = (Readonly<{ trackId: string; sourcePath: string; artworkRevision?: number }> | Readonly<{ kind: 'folder'; rootPath: string; directoryPath: string }> | Pick<TrackCandidatesCoverItem, 'kind' | 'candidates'>) & Readonly<{ coverUrl?: string; transientFailure?: boolean }>
+
+/** Which channel produced a row's current URL. Recovery semantics depend on it. */
+export type CoverSourceLane = 'path' | 'pixels'
+
+/**
+ * Lifecycle of one published presentation.
+ *
+ * - `pending`    committed, waiting for the DOM to confirm or reject it.
+ * - `presented`  the DOM reported the *current* snapshot loaded.
+ * - `recovering` the current snapshot failed in the DOM; one forced pixel job is
+ *                the only thing that will run for this row until it settles.
+ * - `failed`     settled without a usable image; shows a previous known-good
+ *                image or the normal placeholder, never a broken element.
+ */
+export type PresentationState = 'pending' | 'presented' | 'recovering' | 'failed'
+
+type WindowRow = (Readonly<{ trackId: string; sourcePath: string; artworkRevision?: number }> | Readonly<{ kind: 'folder'; rootPath: string; directoryPath: string }> | Pick<TrackCandidatesCoverItem, 'kind' | 'candidates'>) & Readonly<{
+  coverUrl?: string
+  transientFailure?: boolean
+  /** What the DOM should render for this row. Absent means "render the placeholder". */
+  presentation?: CoverPresentation
+  presentationState?: PresentationState
+  sourceLane?: CoverSourceLane
+  /** Path-lane attempt id, so one DOM failure is charged at most once. */
+  pathAttemptId?: string
+  /** Candidate index that produced `coverUrl`, so recovery can start there. */
+  candidateIndex?: number
+  /** Pixel resource behind a blob URL. */
+  image?: PlaylistCoverImage
+}>
 
 function coverIdentity(item: AllSongsCoverItem | WindowRow, revision = true): string {
   if ('kind' in item && item.kind === 'track-candidates') return JSON.stringify(['track-candidates', item.candidates.map(candidate => [candidate.trackId, candidate.sourcePath, candidate.available, ...(revision ? [candidate.artworkRevision ?? 0] : [])])])
@@ -26,9 +73,20 @@ function cacheDescriptor(item: AllSongsCoverItem): WindowRow {
   return 'kind' in item ? { kind: 'folder', rootPath: item.rootPath, directoryPath: item.directoryPath }
     : { trackId: item.trackId, sourcePath: item.sourcePath, ...(item.artworkRevision === undefined ? {} : { artworkRevision: item.artworkRevision }) }
 }
+
+/**
+ * Owner-side handler for one presentation report.
+ *
+ * Registered per owner instance and addressed by `token.sessionGeneration`, so a
+ * report can only ever reach the owner that published the snapshot it names.
+ */
+export type CoverPresentationOwner = Readonly<{ report: (report: CoverPresentationReport) => void }>
+
 export type AllSongsCoverStore = {
   cache: Map<string, WindowRow>
   listeners: Map<string, Set<() => void>>
+  /** Owners by session generation. A report is routed by its token, never by key. */
+  owners: Map<number, CoverPresentationOwner>
   folderRevisions?: Map<string, { token?: readonly string[]; status: string; revision: number }>
   folderScanRevisions?: WeakMap<readonly string[], number>
   nextFolderRevision?: number
@@ -37,10 +95,13 @@ export type AllSongsCoverStore = {
   retire: (key: string, url: string) => void
   retain: (key: string) => () => void
   sweep: () => void
+  /** Route a DOM report to the owner named by its token. */
+  reportPresentation: (report: CoverPresentationReport) => void
 }
 type WindowRuntime = {
   mounted: boolean
   controller: AbortController
+  sessionGeneration: number
   desired: Set<string>
   // Demand that is actually inside the panel bounds, as opposed to the observer
   // overscan that `desired` also admits. Only dispatch priority reads this.
@@ -48,15 +109,50 @@ type WindowRuntime = {
   cache: AllSongsCoverStore['cache']
   coverQueued: Set<string>
   coverActive: number
+  /** Per-key publish sequence; a new token on every actual commit. */
+  publishSequences: Map<string, number>
+  /** Recovery bookkeeping, bounded and cleared with the owner. */
+  recovery: Map<string, RecoveryRecord>
+  /** Keys currently inside (or last inside) the demanded set. */
+  demandSeen: Set<string>
+  /** Last presentation the DOM confirmed for a key, used as the failure fallback. */
+  lastPresented: Map<string, CoverPresentation>
   pump: () => void
+}
+
+/** One bounded recovery opportunity for a row, per retry epoch. */
+type RecoveryRecord = {
+  key: string
+  identity: string
+  epoch: number
+  attempted: boolean
+  state: 'idle' | 'queued' | 'running' | 'settled'
+  stage?: CoverPresentationFailureStage
+  startIndex: number
+  /** The presentation URL that failed in the DOM. Never reused as a fallback. */
+  failingUrl: string
+  /** Generation of the placeholder/fallback commit made while recovering. */
+  recoveryGeneration?: number
 }
 
 const WINDOW_CONCURRENCY = 2
 const CACHE_LIMIT = 60
+/** Bound on recovery/publish bookkeeping; the owner's lifetime caps them all. */
+const RECOVERY_RECORD_LIMIT = 128
+/**
+ * Deadline for the recovery job's own decode.
+ *
+ * Scoped to the recovery, not to every cover decode: raising the shared 3 s
+ * predecode or the unbounded `decodePlaylistCover` would change unrelated
+ * callers. A recovery that cannot decode in this window settles as failed and
+ * restores the previous image instead of holding its admission slot.
+ */
+const RECOVERY_DECODE_TIMEOUT_MS = 4000
 
 export function createAllSongsCoverStore(): AllSongsCoverStore {
   const listeners = new Map<string, Set<() => void>>()
   const leases = new Map<string, number>()
+  const owners = new Map<number, CoverPresentationOwner>()
   const retired = new Map<string, Set<string>>()
   // Releases the URLs a row no longer displays. `retire` receives URLs from both
   // lanes: blob object URLs from the pixel fallback, and asset-protocol URLs from
@@ -95,8 +191,13 @@ export function createAllSongsCoverStore(): AllSongsCoverStore {
       sweep()
     }
   }
-  return { cache: new Map(), listeners, leases, retain, retire, sweep, notify: (key) => {
+  return { cache: new Map(), listeners, owners, leases, retain, retire, sweep, notify: (key) => {
     for (const listener of listeners.get(key) ?? []) listener()
+  }, reportPresentation: (report) => {
+    // Routed by the owner that published the snapshot. A report that names an
+    // owner which has since unmounted is dropped: no surviving owner may inherit
+    // it, which is the whole point of a non-reused session generation.
+    owners.get(report.token.sessionGeneration)?.report(report)
   } }
 }
 
@@ -104,6 +205,7 @@ export function disposeAllSongsCoverStore(store: AllSongsCoverStore): void {
   for (const [key, row] of store.cache) if (row.coverUrl) store.retire(key, row.coverUrl)
   const keys = [...store.cache.keys()]
   store.cache.clear()
+  store.owners.clear()
   store.folderRevisions?.clear()
   store.folderScanRevisions = undefined
   for (const key of keys) store.notify(key)
@@ -141,7 +243,41 @@ export function useFolderCoverUrl(store: AllSongsCoverStore, item?: FolderCoverI
 export function useCollectionCoverUrl(store: AllSongsCoverStore, item?: AllSongsCoverItem): string | undefined {
  return useCoverUrl(store, item?.key ?? '', item ? coverIdentity(item) : '')
 }
+
+/**
+ * Published presentation for one all-songs-style row.
+ *
+ * Its identity deliberately ignores `artworkRevision`, exactly like
+ * `useAllSongsCoverUrl`: a rescanned descriptor keeps painting the previous cover
+ * until its replacement decodes. The *token* still carries the full identity, so a
+ * report from that stale snapshot is rejected by the owner even though the card
+ * keeps displaying it.
+ */
+export function useAllSongsCoverPresentation(store: AllSongsCoverStore, key: string, trackId: string, sourcePath: string): CoverPresentation | undefined {
+  return useCoverPresentation(store, key, JSON.stringify(['track', trackId, sourcePath]), false)
+}
+
+/** Published presentation for a collection/folder cover row. */
+export function useCollectionCoverPresentation(store: AllSongsCoverStore, item?: AllSongsCoverItem): CoverPresentation | undefined {
+  return useCoverPresentation(store, item?.key ?? '', item ? coverIdentity(item) : '')
+}
+
 function useCoverUrl(store: AllSongsCoverStore, key: string, identity: string, revision = true): string | undefined {
+  return useCoverSnapshot(store, key, identity, revision)?.src
+}
+
+function useCoverPresentation(store: AllSongsCoverStore, key: string, identity: string, revision = true): CoverPresentation | undefined {
+  return useCoverSnapshot(store, key, identity, revision)
+}
+
+/**
+ * The one subscription both readers use.
+ *
+ * Returning the row's `presentation` object itself (not a fresh wrapper) keeps the
+ * snapshot reference stable, which `useSyncExternalStore` requires: a new object
+ * per read would re-render forever.
+ */
+function useCoverSnapshot(store: AllSongsCoverStore, key: string, identity: string, revision: boolean): CoverPresentation | undefined {
   const subscribe = useCallback((listener: () => void) => {
     const listeners = store.listeners.get(key) ?? new Set<() => void>()
     listeners.add(listener)
@@ -153,7 +289,7 @@ function useCoverUrl(store: AllSongsCoverStore, key: string, identity: string, r
   }, [store, key])
   const getSnapshot = useCallback(() => {
     const row = store.cache.get(key)
-    return row && coverIdentity(row, revision) === identity ? row.coverUrl : undefined
+    return row && coverIdentity(row, revision) === identity ? row.presentation : undefined
   }, [store, key, identity, revision])
   return useSyncExternalStore(subscribe, getSnapshot, () => undefined)
 }
@@ -182,7 +318,8 @@ export function useAllSongsWindow(items: readonly AllSongsCoverItem[], panelRef:
   useEffect(() => {
     if (!enabled) return
     // Retry failed reads on the next visit, while genuine missing artwork and
-    // prepared covers remain warm across visits.
+    // prepared covers remain warm across visits. A settled recovery failure is
+    // written as `transientFailure` precisely so this is the retry path.
     for (const [key, row] of store.cache) {
       if (row.transientFailure) {
         if (row.coverUrl) store.retire(key, row.coverUrl)
@@ -190,8 +327,11 @@ export function useAllSongsWindow(items: readonly AllSongsCoverItem[], panelRef:
       }
     }
     const runtime: WindowRuntime = {
-      mounted: true, controller: new AbortController(), desired: new Set(), visible: new Set(), cache: store.cache,
-      coverQueued: new Set(), coverActive: 0, pump: () => {},
+      mounted: true, controller: new AbortController(), sessionGeneration: nextCoverSessionGeneration(),
+      desired: new Set(), visible: new Set(), cache: store.cache,
+      coverQueued: new Set(), coverActive: 0,
+      publishSequences: new Map(), recovery: new Map(), demandSeen: new Set(), lastPresented: new Map(),
+      pump: () => {},
     }
     runtimeRef.current = runtime
     directionRef.current = null
@@ -221,14 +361,48 @@ export function useAllSongsWindow(items: readonly AllSongsCoverItem[], panelRef:
         runtime.cache.delete(key)
         store.notify(key)
       }
+      // Owner bookkeeping is bounded the same way the cache is: an entry that
+      // outlives its row would be a leak, not a record.
+      for (const key of runtime.publishSequences.keys()) if (!runtime.cache.has(key)) runtime.publishSequences.delete(key)
+      for (const key of runtime.lastPresented.keys()) if (!runtime.cache.has(key)) runtime.lastPresented.delete(key)
+      for (const key of runtime.recovery.keys()) if (!runtime.cache.has(key) && !runtime.desired.has(key)) runtime.recovery.delete(key)
     }
 
-    const publish = (key: string, row: WindowRow) => {
+    /**
+     * Commit one row and stamp its presentation token.
+     *
+     * A commit always replaces `publishGeneration`, which is what makes a late
+     * report for the previous snapshot recognizable and ignorable. The full
+     * descriptor identity — including `artworkRevision` — goes into the token, so a
+     * card still painting a pre-rescan cover cannot report as if it were current.
+     */
+    const publish = (key: string, row: WindowRow, options: { lane?: CoverSourceLane; attemptId?: string; candidateIndex?: number; state?: PresentationState } = {}) => {
       if (!runtime.mounted || !runtime.desired.has(key)) return false
       const previous = runtime.cache.get(key)
       if (previous?.coverUrl && previous.coverUrl !== row.coverUrl) store.retire(key, previous.coverUrl)
+      let next: WindowRow = { ...row, sourceLane: options.lane, pathAttemptId: options.attemptId, candidateIndex: options.candidateIndex }
+      if (row.coverUrl) {
+        const publishGeneration = (runtime.publishSequences.get(key) ?? 0) + 1
+        runtime.publishSequences.set(key, publishGeneration)
+        next = { ...next, presentationState: options.state ?? 'pending', presentation: {
+          ...(row.image ? { image: row.image } : {}),
+          src: row.coverUrl,
+          token: {
+            key,
+            identity: coverIdentity(row),
+            sessionGeneration: runtime.sessionGeneration,
+            publishGeneration,
+            url: row.coverUrl,
+          },
+        } }
+      } else {
+        // No usable URL: the row must render the placeholder, never a broken
+        // element. Keeping the descriptor (and therefore the cache identity)
+        // means the pump will not loop on it.
+        next = { ...next, presentation: undefined, presentationState: options.state ?? 'failed' }
+      }
       runtime.cache.delete(key)
-      runtime.cache.set(key, row)
+      runtime.cache.set(key, next)
       trimCache()
       store.notify(key)
       return true
@@ -240,13 +414,235 @@ export function useAllSongsWindow(items: readonly AllSongsCoverItem[], panelRef:
     const coverPriority = (key: string): 0 | 1 | 2 =>
       runtime.visible.has(key) ? 0 : renderedKeysRef.current.has(key) ? 1 : 2
 
+    const dropRecovery = (key: string) => {
+      const record = runtime.recovery.get(key)
+      if (record?.state === 'running' || record?.state === 'queued') return
+      runtime.recovery.delete(key)
+    }
+
+    /**
+     * Open a new retry epoch when a key re-enters demand.
+     *
+     * Called from every pump, which is exactly "after any demand change". A key
+     * that stays demanded is not re-queued: the recovery opportunity is per epoch,
+     * not per render or per pump.
+     *
+     * Re-entering demand is the documented retry trigger, so the single recovery of
+     * the previous epoch is re-armed here. Without this the row would stay failed
+     * for the owner's whole lifetime, because the pump's normal admission skips a
+     * key whose cached identity still matches.
+     */
+    const reconcileRecovery = () => {
+      for (const key of runtime.desired) {
+        if (runtime.demandSeen.has(key)) continue
+        runtime.demandSeen.add(key)
+        const record = runtime.recovery.get(key)
+        if (!record) continue
+        if (record.state === 'running' || record.state === 'queued') continue
+        const current = itemsByKeyRef.current.get(key)
+        if (!current || coverIdentity(current) !== record.identity) { runtime.recovery.delete(key); continue }
+        record.epoch += 1
+        record.attempted = false
+        record.stage = undefined
+        // A fresh epoch is a fresh opportunity, including one already spent.
+        record.state = 'queued'
+      }
+      for (const key of [...runtime.demandSeen]) if (!runtime.desired.has(key)) runtime.demandSeen.delete(key)
+      if (runtime.recovery.size > RECOVERY_RECORD_LIMIT) {
+        for (const [key, record] of runtime.recovery) {
+          if (runtime.recovery.size <= RECOVERY_RECORD_LIMIT) break
+          if (record.state === 'running' || record.state === 'queued') continue
+          runtime.recovery.delete(key)
+        }
+      }
+    }
+
+    /**
+     * Take the next queued recovery that is still valid.
+     *
+     * This is the bypass the design requires: `pump()`'s normal admission skips a
+     * key whose cached identity already matches, which is correct for a healthy
+     * cache hit and wrong for a row whose published URL just failed in the DOM.
+     * Recovery demand therefore has its own table and is admitted ahead of normal
+     * work, but through the same `coverActive` ledger and the same scheduler, so
+     * the concurrency and priority bounds are unchanged.
+     */
+    const takeRecoveryJob = (): { record: RecoveryRecord; item: AllSongsCoverItem } | undefined => {
+      let best: { record: RecoveryRecord; item: AllSongsCoverItem; priority: 0 | 1 | 2 } | undefined
+      for (const record of runtime.recovery.values()) {
+        if (record.state !== 'queued' || record.attempted) continue
+        const item = itemsByKeyRef.current.get(record.key)
+        if (!item?.available || !runtime.desired.has(record.key)) { record.state = 'idle'; continue }
+        if (coverIdentity(item) !== record.identity) { runtime.recovery.delete(record.key); continue }
+        const priority = coverPriority(record.key)
+        if (!best || priority < best.priority) best = { record, item, priority }
+      }
+      if (!best) return undefined
+      best.record.state = 'running'
+      best.record.attempted = true
+      return { record: best.record, item: best.item }
+    }
+
+    /**
+     * The forced pixel read for one recovery.
+     *
+     * Never touches the path lane and never waits on a path timeout: the path
+     * attempt for this row already succeeded, which is why the row is here. The
+     * command selection keeps the source semantics — 256 track/folder pixels for
+     * list rows and candidate groups, matching what the normal lane would have
+     * used — and the candidate order is preserved, starting at the candidate that
+     * produced the failed image.
+     */
+    const readRecoveryPixels = async (
+      item: AllSongsCoverItem,
+      generation: number,
+      priority: 0 | 1 | 2,
+      isCurrent: () => boolean,
+      startIndex: number,
+    ): Promise<{ image: PlaylistCoverImage; candidateIndex?: number } | undefined> => {
+      const options = { priority, signal: runtime.controller.signal, isCurrent }
+      if ('kind' in item && item.kind === 'track-candidates') {
+        for (let index = Math.max(0, Math.min(startIndex, item.candidates.length)); index < item.candidates.length; index += 1) {
+          const candidate = item.candidates[index]!
+          if (!candidate.available || isStreamSource(candidate)) continue
+          if (!isCurrent()) return undefined
+          const pixels = await scheduleTrackThumbnail(
+            { clientId, sourcePath: candidate.sourcePath, maxEdge: 256, windowGeneration: generation },
+            options,
+          )
+          if (!isCurrent()) return undefined
+          if (!pixels) continue
+          return { image: playlistCoverImageFromPixels(pixels), candidateIndex: index }
+        }
+        return undefined
+      }
+      if ('kind' in item || !isStreamSource(item)) {
+        const pixels = 'kind' in item
+          ? await scheduleFolderThumbnail({ clientId, rootPath: item.rootPath, directoryPath: item.directoryPath, maxEdge: 256, windowGeneration: generation }, options)
+          : await scheduleTrackThumbnail({ clientId, sourcePath: item.sourcePath, maxEdge: 256, windowGeneration: generation }, options)
+        if (!isCurrent() || !pixels) return undefined
+        return { image: playlistCoverImageFromPixels(pixels) }
+      }
+      return undefined
+    }
+
+    /** Settle one recovery: commit a replacement, or a bounded, non-broken failure. */
+    const runRecovery = (record: RecoveryRecord, item: AllSongsCoverItem) => {
+      runtime.coverActive += 1
+      /**
+       * Terminal settlement for this recovery.
+       *
+       * `present` decides whether the row may still be written: a row that left
+       * demand is cleaned up silently instead of publishing into a new epoch.
+       */
+      const settle = (present: () => boolean) => {
+        record.state = 'settled'
+        if (!present()) return
+        const fallback = usableFallback(record)
+        publish(item.key, { ...cacheDescriptor(item), coverUrl: fallback?.src, transientFailure: true },
+          { lane: fallback ? 'pixels' : undefined, state: 'failed' })
+      }
+      void (async () => {
+        // Snapshot the presentation this recovery was started for. The replacement
+        // must not be committed over a presentation that changed in the meantime.
+        // Compared by object identity, not by generation number: a row recovering
+        // without a usable previous image has no presentation at all, and a numeric
+        // comparison against `undefined` would either always fail or always pass.
+        const startedPresentation = runtime.cache.get(item.key)?.presentation
+        const itemIsCurrent = () => {
+          const current = itemsByKeyRef.current.get(item.key)
+          return runtime.mounted && runtime.desired.has(item.key)
+            && current !== undefined && coverIdentity(current) === record.identity
+        }
+        let stagedUrl: string | undefined
+        try {
+          const coverGeneration = await coverReady
+          if (!itemIsCurrent()) return
+          if (coverGeneration == null) {
+            record.stage = 'recovery-command'
+            settle(itemIsCurrent)
+            return
+          }
+          const priority = coverPriority(item.key)
+          const read = await readRecoveryPixels(item, coverGeneration, priority, itemIsCurrent, record.startIndex)
+          if (!itemIsCurrent()) {
+            // Nobody to publish to: clean up the blob this attempt created.
+            if (read?.image.src) releasePlaylistCoverUrl(read.image.src)
+            return
+          }
+          if (!read) {
+            record.stage = 'recovery-command'
+            settle(itemIsCurrent)
+            return
+          }
+          stagedUrl = read.image.src
+          const decoded = await decodePlaylistCoverWithin(read.image, RECOVERY_DECODE_TIMEOUT_MS, runtime.controller.signal)
+          if (!itemIsCurrent()) return
+          if (decoded !== 'decoded') {
+            record.stage = decoded === 'cancelled' ? 'recovery-command' : 'recovery-decode'
+            settle(itemIsCurrent)
+            return
+          }
+          // A commit that happened during the read wins; this result is dropped
+          // rather than published over it.
+          if (runtime.cache.get(item.key)?.presentation !== startedPresentation) {
+            record.state = 'settled'
+            return
+          }
+          // The row identity is unchanged, so `publish` stamps a new generation and
+          // the path-lane URL stops being the current cache hit for this row.
+          const committed = publish(item.key, { ...cacheDescriptor(item), coverUrl: read.image.src, image: read.image },
+            { lane: 'pixels', candidateIndex: read.candidateIndex, state: 'pending' })
+          if (committed) {
+            stagedUrl = undefined
+            record.state = 'idle'
+            return
+          }
+          record.stage = 'recovery-command'
+          settle(itemIsCurrent)
+        } catch {
+          record.stage = 'recovery-command'
+          settle(itemIsCurrent)
+        } finally {
+          // Exactly one release for a blob that was never committed.
+          if (stagedUrl) releasePlaylistCoverUrl(stagedUrl)
+          // A cancelled or superseded job still ends its epoch: leaving the record
+          // in `running` would block `takeRecoveryJob` and `reconcileRecovery` for
+          // the rest of the owner's lifetime.
+          if (record.state === 'running') record.state = 'settled'
+          runtime.coverActive -= 1
+          runtime.pump()
+        }
+      })()
+    }
+
+    /**
+     * The previous presentation to restore when recovery fails.
+     *
+     * Only a snapshot the DOM actually confirmed *and* that is not the URL which
+     * just failed counts as a fallback: restoring a broken URL would recreate the
+     * broken element this path exists to avoid.
+     */
+    const usableFallback = (record: RecoveryRecord) => {
+      const previous = runtime.lastPresented.get(record.key)
+      if (!previous) return undefined
+      if (isSameCoverUrl(previous.token.url, record.failingUrl)) return undefined
+      return previous
+    }
+
     const pump = () => {
       if (!runtime.mounted) return
       // Demand can shrink without a publication (all remaining rows cached).
       trimCache()
+      // Re-entering demand opens a new retry epoch; staying in demand does not.
+      reconcileRecovery()
       // Cover work is independent of the whole-library summary/duration pass.
       // Keep a small first-screen demand alive while that pass hides the list.
       while (runtime.coverActive < WINDOW_CONCURRENCY) {
+        // Forced pixel recovery has its own admission table and runs ahead of
+        // normal work, through the same concurrency slot.
+        const recovery = takeRecoveryJob()
+        if (recovery) { runRecovery(recovery.record, recovery.item); continue }
         let item: AllSongsCoverItem | undefined
         for (const key of runtime.desired) {
           const candidate = itemsByKeyRef.current.get(key)
@@ -271,6 +667,10 @@ export function useAllSongsWindow(items: readonly AllSongsCoverItem[], panelRef:
           //   not convert that into a reference count.
           let bitmapUrl: string | undefined
           let preparedUrl: string | undefined
+          let preparedImage: PlaylistCoverImage | undefined
+          let lane: CoverSourceLane | undefined
+          let attemptId: string | undefined
+          let candidateIndex: number | undefined
           const itemIsCurrent = () => {
             const current = itemsByKeyRef.current.get(item.key)
             return runtime.mounted && runtime.desired.has(item.key)
@@ -299,7 +699,8 @@ export function useAllSongsWindow(items: readonly AllSongsCoverItem[], panelRef:
             if ('kind' in item && item.kind === 'track-candidates') {
               // A missing cover does not represent the whole directory: only an
               // exhausted candidate list confirms that the group has no artwork.
-              for (const candidate of item.candidates) {
+              for (let index = 0; index < item.candidates.length; index += 1) {
+                const candidate = item.candidates[index]!
                 if (!itemIsCurrent()) return
                 if (!candidate.available || isStreamSource(candidate)) continue
                 const attempt = await attemptTrackThumbnailPath(
@@ -312,6 +713,10 @@ export function useAllSongsWindow(items: readonly AllSongsCoverItem[], panelRef:
                 if (!itemIsCurrent()) return
                 if (attempt.status === 'ready') {
                   preparedUrl = attempt.image.src
+                  preparedImage = attempt.image
+                  lane = 'path'
+                  attemptId = attempt.attemptId
+                  candidateIndex = index
                   hasArtwork = true
                   break
                 }
@@ -336,6 +741,9 @@ export function useAllSongsWindow(items: readonly AllSongsCoverItem[], panelRef:
                   await decodePlaylistCover(image)
                   if (!itemIsCurrent()) return
                   preparedUrl = image.src
+                  preparedImage = image
+                  lane = 'pixels'
+                  candidateIndex = index
                   hasArtwork = true
                   break
                 }
@@ -354,6 +762,9 @@ export function useAllSongsWindow(items: readonly AllSongsCoverItem[], panelRef:
               if (!itemIsCurrent()) return
               if (attempt.status === 'ready') {
                 preparedUrl = attempt.image.src
+                preparedImage = attempt.image
+                lane = 'path'
+                attemptId = attempt.attemptId
                 hasArtwork = true
               } else if (attempt.status === 'fallback') {
                 // A real path failure, already counted once. The pixel lane below is
@@ -369,12 +780,16 @@ export function useAllSongsWindow(items: readonly AllSongsCoverItem[], panelRef:
                   await decodePlaylistCover(image)
                   if (!itemIsCurrent()) return
                   preparedUrl = image.src
+                  preparedImage = image
+                  lane = 'pixels'
                   hasArtwork = true
                 }
               }
             }
             if (!itemIsCurrent()) return
-            if (itemIsCurrent() && publish(item.key, { ...cacheDescriptor(item), coverUrl: preparedUrl, ...(!hasArtwork && candidateFailure ? { transientFailure: true } : {}) })) {
+            if (publish(item.key,
+              { ...cacheDescriptor(item), coverUrl: preparedUrl, image: preparedImage, ...(!hasArtwork && candidateFailure ? { transientFailure: true } : {}) },
+              { lane, attemptId, candidateIndex })) {
               // The store now owns the published URL, so the finally block must not
               // release it. Only an object URL needs that handoff.
               bitmapUrl = undefined
@@ -394,6 +809,143 @@ export function useAllSongsWindow(items: readonly AllSongsCoverItem[], panelRef:
       }
     }
     runtime.pump = pump
+
+    /**
+     * Accept one DOM report for the exact snapshot this owner published.
+     *
+     * Every clause is a rejection reason that must not degrade into "treat it as
+     * current": an unmounted owner, a superseded generation, a replaced URL, or a
+     * descriptor whose identity (revision included) moved. Accepting any of those
+     * would evict a good replacement and charge the cache a failure it did not
+     * earn — the defect this contract exists to prevent.
+     */
+    const report: CoverPresentationOwner['report'] = (incoming) => {
+      if (!runtime.mounted) return
+      const { token } = incoming
+      // Redundant with store routing, but stated here so the invariant survives a
+      // future store that dispatches more loosely.
+      if (token.sessionGeneration !== runtime.sessionGeneration) return
+      const row = runtime.cache.get(token.key)
+      const presentation = row?.presentation
+      if (!presentation) return
+      if (presentation.token.publishGeneration !== token.publishGeneration) return
+      if (presentation.token.identity !== token.identity) return
+      if (presentation.token.url !== token.url) return
+      const current = itemsByKeyRef.current.get(token.key)
+      if (!current || coverIdentity(current) !== token.identity) return
+      if (!runtime.desired.has(token.key)) return
+      // Compare browser-resolved URLs: the element reports its own resolved form,
+      // which is not required to be string-identical to the published one.
+      if (!isSameCoverUrl(incoming.actualUrl, presentation.token.url)) return
+      if (incoming.outcome === 'loaded') {
+        // A row already settled as failed has no current presentation left to
+        // confirm, and a recovering row's old fallback is not a recovery success.
+        if (row.presentationState === 'failed') return
+        runtime.lastPresented.set(token.key, presentation)
+        dropRecovery(token.key)
+        if (row.presentationState !== 'presented') {
+          runtime.cache.set(token.key, { ...row, presentationState: 'presented', transientFailure: undefined })
+          store.notify(token.key)
+        }
+        return
+      }
+      // Failed, and current. Only the first report for this presentation acts.
+      if (row.presentationState !== 'pending') return
+      if (row.transientFailure) return
+      const existing = runtime.recovery.get(token.key)
+      const sameEpoch = existing?.identity === token.identity
+      if (row.sourceLane === 'path' && row.pathAttemptId) {
+        // A path attempt that predecoded and then failed in the DOM is a real
+        // failure of that one attempt: charged once, never once per `<img>`.
+        notePathLanePresentationFailure(row.pathAttemptId)
+      }
+      if (sameEpoch && existing.attempted) {
+        // This epoch's single recovery is already spent — either it ran and the
+        // replacement failed too, or the pixel lane was already the source. Settle
+        // as a bounded failure instead of queueing another job.
+        existing.state = 'settled'
+        const spentFallback = usableFallback(existing)
+        publish(token.key, { ...cacheDescriptor(current), coverUrl: spentFallback?.src, transientFailure: true },
+          { lane: spentFallback ? 'pixels' : undefined, state: 'failed' })
+        return
+      }
+      if (row.sourceLane !== 'path') {
+        // Already the pixel lane: it is the last resort, so there is nothing left to
+        // force. Record that the epoch is spent so a later report cannot reopen it.
+        const record: RecoveryRecord = {
+          key: token.key, identity: token.identity,
+          epoch: sameEpoch ? existing.epoch : 0,
+          attempted: true, state: 'settled', stage: 'dom',
+          startIndex: row.candidateIndex ?? 0, failingUrl: token.url,
+        }
+        runtime.recovery.set(token.key, record)
+        const pixelFallback = usableFallback(record)
+        publish(token.key, { ...cacheDescriptor(current), coverUrl: pixelFallback?.src, transientFailure: true },
+          { lane: pixelFallback ? 'pixels' : undefined, state: 'failed' })
+        return
+      }
+      const record: RecoveryRecord = {
+        key: token.key,
+        identity: token.identity,
+        epoch: sameEpoch ? existing.epoch : 0,
+        // `takeRecoveryJob` flips this when the job is actually admitted, so a
+        // recovery dropped before admission can be re-queued by the same epoch.
+        attempted: false,
+        state: 'queued',
+        startIndex: row.candidateIndex ?? 0,
+        failingUrl: token.url,
+      }
+      runtime.recovery.set(token.key, record)
+      // Replace the failed URL on screen immediately: a broken element must not
+      // stay mounted while the recovery runs. A DOM-confirmed previous image is
+      // restored instead; a row without one falls back to the normal placeholder.
+      // The committed fallback gets its own generation so the failed snapshot's
+      // late reports can never be mistaken for this one.
+      const fallback = usableFallback(record)
+      if (fallback) {
+        const publishGeneration = (runtime.publishSequences.get(token.key) ?? 0) + 1
+        runtime.publishSequences.set(token.key, publishGeneration)
+        record.recoveryGeneration = publishGeneration
+        runtime.cache.set(token.key, {
+          ...row,
+          coverUrl: fallback.src,
+          image: fallback.image,
+          presentation: {
+            ...(fallback.image ? { image: fallback.image } : {}),
+            src: fallback.src,
+            token: { ...fallback.token, key: token.key, identity: token.identity, publishGeneration },
+          },
+          presentationState: 'recovering',
+          sourceLane: 'pixels',
+          pathAttemptId: undefined,
+        })
+      } else {
+        // No usable previous image: render the placeholder, but keep the cached
+        // descriptor so the pump treats this as a settled row rather than a new one.
+        record.recoveryGeneration = undefined
+        runtime.cache.set(token.key, {
+          ...row,
+          coverUrl: undefined,
+          image: undefined,
+          presentation: undefined,
+          presentationState: 'recovering',
+          sourceLane: undefined,
+          pathAttemptId: undefined,
+        })
+      }
+      store.notify(token.key)
+      pump()
+    }
+    store.owners.set(runtime.sessionGeneration, { report })
+
+    const onReport = (event: Event) => {
+      const detail = coverImageEventDetail(event)
+      if (!detail?.token) return
+      store.reportPresentation({ token: detail.token, actualUrl: detail.actualUrl, outcome: event.type === COVER_IMAGE_LOAD_EVENT ? 'loaded' : 'failed' })
+    }
+    window.addEventListener(COVER_IMAGE_LOAD_EVENT, onReport)
+    window.addEventListener(COVER_IMAGE_ERROR_EVENT, onReport)
+
     pump()
     return () => {
       runtime.mounted = false
@@ -401,6 +953,13 @@ export function useAllSongsWindow(items: readonly AllSongsCoverItem[], panelRef:
       runtime.desired.clear()
       runtime.visible.clear()
       replacements.disconnect()
+      window.removeEventListener(COVER_IMAGE_LOAD_EVENT, onReport)
+      window.removeEventListener(COVER_IMAGE_ERROR_EVENT, onReport)
+      if (store.owners.get(runtime.sessionGeneration)?.report === report) store.owners.delete(runtime.sessionGeneration)
+      runtime.recovery.clear()
+      runtime.demandSeen.clear()
+      runtime.lastPresented.clear()
+      runtime.publishSequences.clear()
       if (sweepFrame !== null) { cancelAnimationFrame(sweepFrame); sweepFrame = null }
       store.sweep()
       if (runtimeRef.current === runtime) runtimeRef.current = null
@@ -420,6 +979,10 @@ export function useAllSongsWindow(items: readonly AllSongsCoverItem[], panelRef:
       if (coverIdentity(cached, false) === coverIdentity(item, false)) continue
       if (cached.coverUrl) store.retire(item.key, cached.coverUrl)
       store.cache.delete(item.key)
+      // identity/revision changed: the old failure record describes a different
+      // resource and must not gate the new one.
+      runtimeRef.current?.recovery.delete(item.key)
+      runtimeRef.current?.lastPresented.delete(item.key)
       store.notify(item.key)
     }
     runtimeRef.current?.pump()

@@ -1,19 +1,47 @@
 import { useCallback, useLayoutEffect, useRef, useState, type SyntheticEvent } from 'react'
 import type { PlaylistCoverImage as PlaylistCoverImageResource } from '@/features/player/model/playerUiViewModel'
-import { forgetPlaylistCoverDecoded, isPlaylistCoverDecoded, isPlaylistCoverPresented, markPlaylistCoverDecoded, markPlaylistCoverPresented } from '@/features/player/model/playlistCoverReadiness'
+import {
+  COVER_IMAGE_ERROR_EVENT,
+  COVER_IMAGE_LOAD_EVENT,
+  forgetPlaylistCoverDecoded,
+  isPlaylistCoverDecoded,
+  isPlaylistCoverPresented,
+  markPlaylistCoverDecoded,
+  markPlaylistCoverPresented,
+  reportCoverPresentation,
+  type CoverPresentation,
+} from '@/features/player/model/playlistCoverReadiness'
 
 type PlaylistCoverImageProps = ({ image: PlaylistCoverImageResource; src?: never } | { image?: never; src: string }) & {
   className?: string
   reveal?: boolean
+  /**
+   * The owner's published snapshot for this element.
+   *
+   * When present, the load/error events carry its token so the owner can verify
+   * that the report describes the presentation it actually committed. Without it
+   * the events still fire with their URL, which keeps the URL-based listeners
+   * working, but a report that cannot be verified is never accepted as current.
+   */
+  presentation?: CoverPresentation
   onError?: (event: SyntheticEvent<HTMLImageElement>) => void
 }
 
-export function PlaylistCoverImage({ image, src, className, reveal = false, onError }: PlaylistCoverImageProps) {
+export function PlaylistCoverImage({ image, src, className, reveal = false, presentation, onError }: PlaylistCoverImageProps) {
   const source = image ? image.src : src!
   const imageRef = useRef<HTMLImageElement>(null)
   const presentedInThisElement = useRef(false)
   const [loaded, setLoaded] = useState(() => image ? isPlaylistCoverDecoded(image) : isPlaylistCoverPresented(source))
   const [revealOnLoad, setRevealOnLoad] = useState(() => reveal && !isPlaylistCoverPresented(image ?? source))
+  const report = useCallback((element: HTMLImageElement, outcome: 'loaded' | 'failed') => {
+    if (presentation) reportCoverPresentation(presentation.token, element, outcome)
+    else {
+      // Legacy URL-only report for consumers that did not opt into the token
+      // protocol. It stays URL-shaped so their existing listeners keep working.
+      const url = element.currentSrc || element.src
+      if (url) window.dispatchEvent(new CustomEvent(outcome === 'loaded' ? COVER_IMAGE_LOAD_EVENT : COVER_IMAGE_ERROR_EVENT, { detail: url }))
+    }
+  }, [presentation])
   const acceptLoadedImage = useCallback((element: HTMLImageElement) => {
     if (!element.complete || element.naturalWidth === 0) return
     const actualSource = element.currentSrc || element.src
@@ -56,11 +84,23 @@ export function PlaylistCoverImage({ image, src, className, reveal = false, onEr
     element.addEventListener('animationend', finishReveal)
     element.addEventListener('animationcancel', finishReveal)
     acceptLoadedImage(element)
+    // A cached resource can already be complete before React attaches `onLoad`, so
+    // both outcomes must be decided here rather than waiting for an event that is
+    // not coming. `complete && naturalWidth > 0` is a success that needs to reach
+    // the owner; `complete && naturalWidth === 0` is a failed resource whose bytes
+    // are gone (deleted or corrupted managed file) and has no `error` event.
+    if (element.complete && element.src) {
+      if (element.naturalWidth > 0) report(element, 'loaded')
+      else {
+        setLoaded(false)
+        report(element, 'failed')
+      }
+    }
     return () => {
       element.removeEventListener('animationend', finishReveal)
       element.removeEventListener('animationcancel', finishReveal)
     }
-  }, [acceptLoadedImage])
+  }, [acceptLoadedImage, report])
 
   return (
     <img
@@ -76,13 +116,14 @@ export function PlaylistCoverImage({ image, src, className, reveal = false, onEr
       data-reveal={revealOnLoad ? 'new' : undefined}
       onLoad={(event) => {
         acceptLoadedImage(event.currentTarget)
-        if (image) window.dispatchEvent(new CustomEvent('spmusic:playlist-cover-image-load', { detail: image.src }))
+        report(event.currentTarget, 'loaded')
       }}
       onError={(event) => {
-        if (image) {
-          forgetPlaylistCoverDecoded(image)
-          window.dispatchEvent(new CustomEvent('spmusic:playlist-cover-image-error', { detail: image.src }))
-        }
+        if (image) forgetPlaylistCoverDecoded(image)
+        // `data-loaded` must not keep claiming readiness for a resource that has
+        // just failed; the placeholder/fallback chain owns the visible state.
+        setLoaded(false)
+        report(event.currentTarget, 'failed')
         onError?.(event)
       }}
     />

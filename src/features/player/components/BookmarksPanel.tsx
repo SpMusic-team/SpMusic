@@ -11,7 +11,7 @@ import { PlaylistCard } from './PlaylistCard'
 import { PlaylistLibrarySidebar } from './PlaylistLibrarySidebar'
 import { useCollectionManagementChrome } from '../hooks/useCollectionManagementChrome'
 import { useLibraryDockBinding } from '../hooks/useLibraryDockBinding'
-import { useAllSongsCoverUrl, useAllSongsWindow, type AllSongsCoverStore } from '../hooks/useAllSongsWindow'
+import { useAllSongsCoverPresentation, useAllSongsWindow, type AllSongsCoverStore } from '../hooks/useAllSongsWindow'
 import { useCollectionLayout } from '../hooks/useCollectionLayout'
 import { PLAYLIST_SONG_LAYOUTS, ALL_SONGS_LAYOUT_STORAGE_KEY, defaultAllSongsLevel } from '../model/playlistSongLayouts'
 import { projectBookmarks, type BookmarkEntry } from '../model/bookmarks'
@@ -29,10 +29,10 @@ function BookmarkCard({ bookmark, item, playlist, store, selected, selecting, bu
   artworkVisible: boolean; showExtendedMetadata: boolean
   selected: boolean; selecting: boolean; busy: boolean; active: boolean; onPlay: () => void; onSelect: () => void
 }) {
-  const coverUrl = useAllSongsCoverUrl(store, bookmark.id, item?.trackId ?? '', bookmark.sourcePath)
+  const cover = useAllSongsCoverPresentation(store, bookmark.id, item?.trackId ?? '', bookmark.sourcePath)
   const track = item?.track ?? { id: bookmark.id, title: bookmark.sourcePath.split(/[\\/]/).at(-1) ?? bookmark.sourcePath,
     artist: '歌曲不在当前媒体库中', album: '', hasLocalArtwork: false }
-  return <PlaylistCard track={track} songKey={bookmark.id} positionMs={showExtendedMetadata ? bookmark.positionMs : undefined} coverUrl={coverUrl}
+  return <PlaylistCard track={track} songKey={bookmark.id} positionMs={showExtendedMetadata ? bookmark.positionMs : undefined} coverUrl={cover?.src} coverPresentation={cover}
     artworkSource={playlist.artworkSource} fallbackArtworkSource={playlist.fallbackArtworkSource}
     current={active} unavailable={!item?.available} canSelectUnavailable canActivate={!busy}
     selectMode={selecting} showReorderHandle={false} selected={selected} artworkVisible={artworkVisible} showExtendedMetadata={showExtendedMetadata}

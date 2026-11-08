@@ -1,6 +1,7 @@
 import { motion, type Transition } from 'motion/react'
 import { Button } from '@/components/ui/button'
-import { useCollectionCoverUrl, type AllSongsCoverStore, type AllSongsCoverItem } from '../hooks/useAllSongsWindow'
+import { useCollectionCoverPresentation, type AllSongsCoverStore, type AllSongsCoverItem } from '../hooks/useAllSongsWindow'
+import { reportCoverPresentation } from '../model/playlistCoverReadiness'
 import type { FolderHierarchyEntry } from '../model/folderHierarchy'
 import type { FolderCardLayout } from '../model/folderCardLayouts'
 import { formatDurationClock } from '../model/playlistDuration'
@@ -43,7 +44,7 @@ function summary(directory: FolderHierarchyEntry) {
 }
 
 export function FolderHierarchyCard({ flat = false, navigationKey, sharedProjection, projectionKey, transition, directory, layout, coverItem, store, selectMode, selected, onActivate, onEnterSelectMode }: Props) {
-  const cover = useCollectionCoverUrl(store, coverItem)
+  const cover = useCollectionCoverPresentation(store, coverItem)
   const longPress = usePlaylistCardLongPress({ identity: `folder:${directory.path}`, disabled: false, selectMode, onEnterSelectMode })
   const folder = layout.folderGlyph === 48 ? folder48 : layout.folderGlyph === 32 ? folder32 : folder16
   const badge = layout.folderGlyph === 28 ? badge28 : layout.folderGlyph === 24 ? badge24 : badge16
@@ -61,7 +62,9 @@ export function FolderHierarchyCard({ flat = false, navigationKey, sharedProject
     aria-pressed={selectMode ? selected : undefined} onClick={event => { if (!longPress.consumeClick(event)) onActivate() }}
     onPointerDown={longPress.onPointerDown} onContextMenu={longPress.onContextMenu} style={layout.style}>
     {layout.coverWidth ? <motion.span key={`cover:${projectionKey}`} className="folder-cover" layoutId={sharedProjection ? `folder-cover:${navigationKey}` : undefined} layoutCrossfade={false} transition={{ layout: transition }}>
-      {cover ? <img className="folder-cover-image" src={cover} alt="" decoding="async" /> : <img className="folder-cover-placeholder" src={folder48} alt="" />}
+      {cover ? <img className="folder-cover-image" src={cover.src} alt="" decoding="async"
+        onLoad={event => reportCoverPresentation(cover.token, event.currentTarget, 'loaded')}
+        onError={event => reportCoverPresentation(cover.token, event.currentTarget, 'failed')} /> : <img className="folder-cover-placeholder" src={folder48} alt="" />}
       {tile && !flat ? <span className="folder-badge"><img className="folder-row-icon" src={badge} alt="" /></span> : null}
       {selectMode ? <SongCardCheckbox /> : null}
     </motion.span> : null}

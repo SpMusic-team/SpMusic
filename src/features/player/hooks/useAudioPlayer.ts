@@ -43,7 +43,7 @@ import {
 } from '@/features/player/model/playbackSessionStorage'
 import { createPlaylistArtworkGrace } from '@/features/player/model/playlistArtworkGrace'
 import { playlistCoverImageFromPixels } from '@/features/player/model/playlistCoverPixels'
-import { decodePlaylistCover, isPlaylistCoverDecoded, releasePlaylistCoverUrl } from '@/features/player/model/playlistCoverReadiness'
+import { coverImageEventDetail, decodePlaylistCover, isPlaylistCoverDecoded, releasePlaylistCoverUrl } from '@/features/player/model/playlistCoverReadiness'
 import { createPlaylistArtworkStore, playlistArtworkKey } from '@/features/player/model/playlistArtworkStore'
 import { MAX_CONCURRENT, schedulePlaylistCoverPixels, scheduleTrackThumbnail } from '@/features/player/services/playlistCoverScheduler'
 import {
@@ -2637,7 +2637,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       }
     }
     const onImageLoad = (event: Event) => {
-      const src = (event as CustomEvent<unknown>).detail
+      const src = coverImageEventDetail(event)?.url
       if (typeof src === 'string') retireLoadedReplacement(src)
     }
     const observer = new MutationObserver(() => {
@@ -2645,7 +2645,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     })
     observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['src'] })
     const onImageError = (event: Event) => {
-      const src = (event as CustomEvent<unknown>).detail
+      const src = coverImageEventDetail(event)?.url
       if (typeof src !== 'string') return
       const match = Object.entries(playlistTrackVisualsRef.current).find(([, visual]) => visual.coverThumbnail?.src === src)
       if (!match) return
@@ -2669,6 +2669,10 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
         releasePlaylistCoverUrl(src)
         return
       }
+      // Not an upgrade: this was the row's only published image. Restoring a
+      // previous visual is impossible, so the demand pass below is the recovery —
+      // but the failing URL has to stop being the current visual first, and the
+      // track must not stay marked failed from an earlier, unrelated attempt.
       const failures = (playlistImageErrorCountsRef.current.get(trackId) ?? 0) + 1
       playlistImageErrorCountsRef.current.set(trackId, failures)
       const next = { ...playlistTrackVisualsRef.current }
@@ -2676,8 +2680,14 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       playlistTrackVisualsRef.current = next
       playlistVisualEdgeRef.current.delete(trackId)
       playlistVisualSourceRef.current.delete(trackId)
+      // A first-publish DOM failure is a real failure of the current attempt, so a
+      // previous session-failure verdict for this row must not suppress the single
+      // recovery this hook allows.
+      playlistVisualFailedRef.current.delete(trackId)
       publishPlaylistVisuals(next)
       releasePlaylistCoverUrl(src)
+      // Bounded: after three first-publish failures for the same track the row is
+      // settled as failed and the placeholder is the correct final state.
       if (failures > 2) {
         const sourcePath = folderPlaylistRef.current?.tracks.find((track) => track.id === trackId)?.sourcePath
         if (sourcePath) playlistVisualFailedRef.current.set(trackId, normalizeAudioSourcePath(sourcePath))

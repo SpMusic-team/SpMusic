@@ -32,7 +32,8 @@ import { useCollectionHeroMotion, useCollectionHeroVisibility } from '../hooks/u
 import { useCollectionLayout } from '../hooks/useCollectionLayout'
 import { useAlbumRenderWindow } from '../hooks/useAlbumRenderWindow'
 import { useAllSongsRenderWindow } from '../hooks/useAllSongsRenderWindow'
-import { useCollectionCoverUrl, useAllSongsCoverUrl, useAllSongsCoverLease, useAllSongsWindow, type AllSongsCoverStore, type AllSongsCoverItem, type TrackCandidatesCoverItem } from '../hooks/useAllSongsWindow'
+import { useCollectionCoverPresentation, useAllSongsCoverPresentation, useAllSongsCoverLease, useAllSongsWindow, type AllSongsCoverStore, type AllSongsCoverItem, type TrackCandidatesCoverItem } from '../hooks/useAllSongsWindow'
+import { COVER_IMAGE_ERROR_EVENT, COVER_IMAGE_LOAD_EVENT, coverAbsoluteUrl, type CoverPresentationOutcome } from '../model/playlistCoverReadiness'
 import { albumEntries, type AlbumEntry } from '../model/albumLibrary'
 import { formatDurationClock } from '../model/playlistDuration'
 import { artistEntries, artistAlbums, artistRoute, uniqueArtistSongs, CONTRIBUTOR_LABELS, type ContributorCategoryId } from '../model/artistLibrary'
@@ -84,9 +85,45 @@ function uniqueCovers(items: readonly AllSongsCoverItem[]): AllSongsCoverItem[] 
   return [...new Map(items.map(item => [item.key, item])).values()]
 }
 
+/**
+ * Native cover element for collection rows, the hero and menu artwork.
+ *
+ * This is deliberately not `PlaylistCoverImage`: these surfaces render a plain
+ * `<img>`/placeholder pair with no reveal, dimensions or readiness bookkeeping, and
+ * routing them through the playlist card would change their layout. What they must
+ * share is the *reporting* contract, so a failed element reaches the same owner that
+ * published its snapshot.
+ *
+ * Two states must be reported explicitly because no event delivers them:
+ * a resource that is already `complete` at mount (cached) never fires `load`, and
+ * one that is `complete` with `naturalWidth === 0` (the managed file was deleted or
+ * corrupted) never fires `error` either.
+ */
 function AlbumCover({ song, store, hero = false, artist = false }: { song?: AllSongsCoverItem; store: AllSongsCoverStore; hero?: boolean; artist?: boolean }) {
-  const cover = useCollectionCoverUrl(store, song)
-  return cover ? <img className={hero ? 'playlist-hero-image' : 'folder-cover-image'} src={cover} alt="" decoding="async" />
+  const presentation = useCollectionCoverPresentation(store, song)
+  const elementRef = useRef<HTMLImageElement>(null)
+  const report = useCallback((element: HTMLImageElement, outcome: CoverPresentationOutcome) => {
+    if (!presentation) return
+    const actualUrl = coverAbsoluteUrl(element.currentSrc || element.src)
+    if (!actualUrl) return
+    window.dispatchEvent(new CustomEvent(outcome === 'loaded' ? COVER_IMAGE_LOAD_EVENT : COVER_IMAGE_ERROR_EVENT, {
+      detail: { url: element.currentSrc || element.src, actualUrl, token: presentation.token },
+    }))
+  }, [presentation])
+  // A cached image can already be complete when React commits the element, so the
+  // success check cannot rely on a `load` event that has already been missed. The
+  // same applies in reverse: `complete && naturalWidth === 0` is a failed resource
+  // whose `error` event is not coming.
+  useLayoutEffect(() => {
+    const element = elementRef.current
+    if (!element || !element.currentSrc && !element.getAttribute('src')) return
+    if (!element.complete) return
+    report(element, element.naturalWidth > 0 ? 'loaded' : 'failed')
+  }, [report])
+  return presentation
+    ? <img ref={elementRef} className={hero ? 'playlist-hero-image' : 'folder-cover-image'} src={presentation.src} alt="" decoding="async"
+      onLoad={event => report(event.currentTarget, 'loaded')}
+      onError={event => report(event.currentTarget, 'failed')} />
     : hero ? null : <span className="album-cover-placeholder" style={{ maskImage: `url("${artist ? artistIcon : albumIcon}")` }} aria-hidden="true" />
 }
 
@@ -125,13 +162,14 @@ function AlbumCard({ album, store, level, selected, selectMode, sharedProjection
 }
 
 function AlbumSong({ item, store, playlist, selected, selectMode, artworkVisible, onSelect, onPlay, onEnterSelectMode }: { item: AllSongsItem; store: AllSongsCoverStore; playlist: PlayerPlaylistViewModel; selected: boolean; selectMode: boolean; artworkVisible: boolean; onSelect: (key: string) => void; onPlay: (key: string) => void; onEnterSelectMode?: (key: string) => void }) {
-  const cover = useAllSongsCoverUrl(store, item.key, item.trackId, item.sourcePath)
+  const cover = useAllSongsCoverPresentation(store, item.key, item.trackId, item.sourcePath)
   const [failedSource, setFailedSource] = useState<string | undefined>()
-  return <PlaylistCard songKey={item.key} track={item.track} coverUrl={cover} current={playlist.currentTrackId === item.trackId}
+  const coverUrl = cover?.src
+  return <PlaylistCard songKey={item.key} track={item.track} coverUrl={coverUrl} coverPresentation={cover} current={playlist.currentTrackId === item.trackId}
     unavailable={!item.available} canSelectUnavailable canActivate={!playlist.isOpenAudioDisabled}
     selectMode={selectMode} showReorderHandle={!onEnterSelectMode} selected={selected} artworkVisible={artworkVisible} showExtendedMetadata
-    contentVisible contentRepresentative={false} contentShape={15} coverFailed={Boolean(cover && failedSource === cover)}
-    onCoverFailed={() => setFailedSource(cover)} onActivate={onPlay} onToggleSelect={onSelect} onEnterSelectMode={onEnterSelectMode} />
+    contentVisible contentRepresentative={false} contentShape={15} coverFailed={Boolean(coverUrl && failedSource === coverUrl)}
+    onCoverFailed={() => setFailedSource(coverUrl)} onActivate={onPlay} onToggleSelect={onSelect} onEnterSelectMode={onEnterSelectMode} />
 }
 
 export function AlbumLibraryPanel(props: Props) {

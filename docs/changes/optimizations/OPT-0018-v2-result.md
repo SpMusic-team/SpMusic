@@ -3,7 +3,7 @@ doc_id: "OPT-0018-V2-RESULT"
 title: "OPT-0018 v2 列表封面路径通道：实施、真机实测与保留/回滚判定依据"
 doc_type: "test-report"
 owner_agent: "Test Agent"
-status: "已实施 + 真机 A/B 已验证，等待产品决策"
+status: "历史实施报告；独立验收不通过"
 module: "列表封面加载链路"
 version_scope: "project"
 created: "2026-11-08"
@@ -20,6 +20,8 @@ source_documents:
 ---
 
 # OPT-0018 v2 列表封面路径通道：实施、真机实测与判定依据
+
+> **历史实施记录（2026-11-08）**：本文保留功能分支实施者的原始数据与判断；最新独立测试、反证和验收结论见 [独立验证报告](../../test/opt-0018-independent-verification-2026-11-08.md)。当前**功能验收不通过**。本次 develop 仅归档相关文档，未合入路径通道功能代码；下文“已实施”等表述不代表 develop 已具备该能力。
 
 ## 0. 一页结论（给决策者）
 

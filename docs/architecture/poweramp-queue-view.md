@@ -6,12 +6,13 @@ status: "active"
 owner_agent: "Architecture Agent"
 version_scope: "project"
 created: "2026-11-03"
-updated: "2026-11-03"
+updated: "2026-11-08"
 source_documents:
   - "user request: 逆向 Poweramp 媒体库下「队列」页的实现与组织"
   - "shared task: task-19"
   - ".rea-analysis/Poweramp-v3.apk :: com.maxmpz.audioplayer build-1025-uni (1025009) :: SHA-256 4467fdac3e89b98485866e454bc3b7dc2d73d788d7a1aa9c73ea1028d36b82e0"
-  - ".rea-analysis/findings-queue-view.md（本轮方法体原文）"
+  - ".rea-analysis/findings-queue-view.md（本轮方法体原文；§16 为 2026-11-08 语义复核补取）"
+  - ".rea-analysis/v1035/decoded/（build-1035 跨版本比对，§3.4）"
   - ".rea-analysis/decoded/res/values/strings.xml（UI 文案）"
   - ".rea-analysis/decoded/res/values/public.xml（R.attr / R.string ID）"
   - "docs/architecture/poweramp-queue-runtime-reference.md（运行时状态机，本文边界见 §15）"
@@ -21,6 +22,10 @@ source_documents:
 ---
 
 # Poweramp 队列参考（独立表 + 入队时间戳驱动）
+
+> **勘误（2026-11-08）**：本文此前把 `folder_files.played_at >= queue.created_at` 误标为「待播」。经 smali 重新取证，该谓词的语义是**已播**（`<` 才是未播）。本次修正了全部语义标签与 §4.2 / §4.3 / §11.2 / §11.3 / N1 三处实质结论。§3.2 / §14.2 / §14.3 / §14.5 / §14.6 / §15.3 的方向本就正确、结论未改动（§3.2 仅补充 DDL 前提与「UI 灰显」推断标记）。取证依据见 §3.4。
+>
+> **术语**：「待播」与「未播」是同一状态的两种叫法（都指 `played_at < queue.created_at`）。本文新增/重写的段落统一用「**已播 / 未播**」这一对；§14.5、§15.3 的既有表格保留原「待播」措辞，语义一致，不必改动。
 
 ## 0. 定位与证据分级
 
@@ -51,13 +56,13 @@ source_documents:
             → 不做查重（同曲目可多条）
 
 【状态侧】 见 §3
-            folder_files.played_at >= queue.created_at  → 已播/待播
+            folder_files.played_at >= queue.created_at  → 已播（否则未播）
             无常驻布尔列，状态随播放自动重算
 
 【消费侧】 见 §2 §4
-            d4→m3.X0()：列表（投影 3 表达式）
-            v1()：找第一个待播位置（含 created_at=0 兜底）
-            w1()：待播数 + 总数
+            d4→m3.X0()：列表（投影 3 表达式，第 1 列 = 已播标志）
+            v1()：取第一个已播条目的 sort（= 入队插入锚点，非续播位置）
+            w1()：已播数 + 总数
             shs 参数 → V0() 覆写为含 shuffle_order 的顺序
 ```
 
@@ -263,14 +268,16 @@ strArr = C0742.f1.f3789
 
 ### 3.2 第 1 列的含义
 
-**`folder_files.played_at >= queue.created_at` = 「这条队列项入队之后被播放过」**
+**`folder_files.played_at >= queue.created_at` = 「这条队列项入队之后被播放过」= 已播；取反 `<` = 未播。**
 
 | 状态 | `played_at` vs `created_at` | 表达式 |
 | --- | --- | --- |
-| 入队后未播放 | `played_at` < `created_at`（或 NULL） | `0` |
-| 入队后已播放 | `played_at` >= `created_at` | `1` |
+| 入队后未播放 | `played_at` < `created_at` | `0` → 未播 |
+| 入队后已播放 | `played_at` >= `created_at` | `1` → 已播 |
 
-⇒ **这一列就是「已播放 / 未播放」标志**，用于 UI 区分（灰显已播、高亮待播）。
+> `played_at` 是 `INTEGER NOT NULL DEFAULT 0`（`data/migrations/B.smali:4456`；旧库 `:5470-5482` 走 ALTER，同样带默认值），所以实际数据里不会出现 NULL。SQL 三值逻辑下 NULL 比较结果为 NULL、被当作 `0`（未播），这只会发生在数据损坏时。
+
+⇒ **这一列就是「已播放 / 未播放」标志**，供 UI 区分行状态。【推断】按 Poweramp 的列表习惯推测是「已播灰显、待播高亮」，但本轮的静态取证只追到「该列被列表游标消费」（`b0.smali:3897` 读第 1 列），**灰显/高亮的实际视觉处理未观察到**，仍属推断。
 
 **没有额外的 `played` 布尔列** —— 状态由两个时间戳的比较动态推导。这是队列数据模型的核心设计。
 
@@ -286,9 +293,24 @@ strArr = C0742.f1.f3789
 
 ⇒ **队列是唯一投影里含计算表达式的页面。**
 
+### 3.4 语义方向是如何确定的（防止再次反转）
+
+`>=` 是已播这一点有四条互相独立的决定性证据，任何一条都足以排除反向解读：
+
+| # | 证据 | 推论 |
+| --- | --- | --- |
+| **E1** | `player/b0.smali:2834` 把 `... WHERE folder_files.played_at < queue.created_at` 这条语句存进字段 **`mQueueUnplayedCountSt`**（未播计数语句） | 字段名直接绑定 `<` ⇒ **`<` = 未播** ⇒ 取反 `>=` = 已播 |
+| **E2** | `player/b0.smali:3897` `moveToFirstNotPlayedQueueEntryOrLast()` 遍历 `mFilesCursor`，取 **第 1 列**（`getLong(1)`，`:3924`），命中条件为值 **`== 0`**（`:3930-3936`） | 队列投影第 1 列（`m3.<clinit>` `rest/library/m3.smali:29`）就是 `played_at >= created_at`；「值为 0 即 NotPlayed」⇒ **`>=` 为真 = 已播** |
+| **E3** | `player/b0.smali:7440-7483` `postCreate()`：`v2 = out[0]`、`v0 = out[1]`（`:7446`/`:7450`），随后 `if (v0 > 0 && v2 < v0) mHasPendingQueue = true`（`:7465-7472`） | 只有 `out[0]` 是**已播数**时，「已播数 < 总数 ⟺ 仍有待播」才成立；若 `out[0]` 是未播数该条件会反向 ⇒ `w1()[0]` = **已播数** |
+| **E4** | 全量一致性普查：4 处 `<`（`data/А.smali:3843` 清空判定、`b0.smali:2834`、`list/q0.smali:449` 过滤列、`b0.smali:3924` 游标判定）全部承担「未播」语义；4 处 `>=`（`m3.smali:29` 投影、`:129` `v1`、`:165` `w1`、`data/А.smali:3942` 临时表）全部承担「已播」语义 | 无例外，不存在反向使用的孤例 |
+
+跨版本复核：`.rea-analysis/v1035/decoded`（build-1035）中 `smali/ׅ/p01.smali:31,202,268,727,749`、`ׅ/dj.smali:7032,7219`、`ׅ/k01.smali:3879`、`ׅ/mt0.smali:804` 的谓词与全部消费点**逐字节一致**，语义方向不随版本变化。
+
+> 补充：Poweramp 同时维护**两个互补计数器** —— `m3.w1()[0]` = 已播数，`b0.mQueueUnplayedCountSt`（`getQueueUnplayedSongs()`，`b0.smali:2607-2627`）= 未播数。两者口径互补而非矛盾，详见 §4.3。
+
 ---
 
-## 4. 三个核心静态方法
+## 4. 核心静态方法（§4.4 为续播定位补充）
 
 ### 4.1 `u1(provider, keepId)` —— 清空队列保留一条
 
@@ -306,7 +328,9 @@ public static boolean u1(RestProvider provider, long keepId) {
 
 注意：`executeUpdateDelete()` 返回受影响行数，`> 0` 才算成功。**若队列原本只有这一条，返回 `false`**（没有删除任何行），这是返回值语义的一个陷阱。
 
-### 4.2 `v1(db, useShuffle)` —— 找第一个待播位置
+### 4.2 `v1(db, useShuffle)` —— 第一个已播条目的 `sort`（入队插入锚点）
+
+> **本次修正**：本节此前被描述为「找第一个待播位置 / 续播位置」，那是错的。`v1()` 返回的是**第一个已播条目的 `sort`**，唯一用途是给入队 INSERT 当**插入锚点**；它与「播放起点 / 续播 / 播放位置」无关。真正的续播定位在 `b0.moveToFirstNotPlayedQueueEntryOrLast()`（见 §4.4）。
 
 ```java
 public static long v1(SQLiteDatabase db, boolean useShuffle) {
@@ -325,27 +349,45 @@ public static long v1(SQLiteDatabase db, boolean useShuffle) {
 SELECT sort
 FROM queue
   INNER JOIN folder_files ON folder_files._id = queue.folder_file_id
-WHERE folder_files.played_at >= queue.created_at
-   OR queue.created_at = 0
+WHERE folder_files.played_at >= queue.created_at   -- 已播区
+   OR queue.created_at = 0                         -- 冗余兜底，见下
 ORDER BY [queue.shuffle_order,] sort
 LIMIT 1
 ```
 
-**这是投影里的布尔表达式第一次被用于 WHERE**。
+**这是投影里的布尔表达式第一次被用于 WHERE**【实证·smali】`m3.smali:129`。
 
-#### 关键细节：`OR queue.created_at = 0`
+#### 语义：已播区的下界 `sort`
 
-`created_at = 0` 的条目**无条件视为待播**。
+`WHERE played_at >= created_at` 筛出**已播区**，`ORDER BY [shuffle_order,] sort LIMIT 1` 取其**最小 `sort`**——即已播区在排序轴上占据的起点。入队时拿它做减法，就能算出「已播区之后还有多少行需要后移腾位」。
 
-含义【推断】：`created_at = 0` 是「没有入队时间戳」的条目（可能来自旧版本数据或特殊路径插入），无法用时间比较判定，因此显式纳入待播集合。
+#### 唯一的两个调用点都在入队消息处理器里，且只用作插入锚点【实证·smali】
 
-这是一个**兜底条款**，避免这些条目永远不被播放。
+| 调用点 | 上下文 | 结果如何被消费 |
+| --- | --- | --- |
+| `data/А.smali:4130` | `as_next` 分支（`:4092` 判 `if-eqz v28` 后走 `:cond_13`） | `:4137` `sub-long v6, v37, v12`，其中 `v37 = MAX(sort)`（`:4118` 从 `:4066` 的 `IFNULL(MAX(sort),-1)` 传来），`v12` = 锚点 ⇒ 得**需后移的行数**；`:4185` 执行 `UPDATE queue SET sort=sort+? WHERE sort > ?`（`:4086` 编译好的语句） |
+| `data/А.smali:4306` | 同一处理器的另一分支 | `:4318` `sub-long v12, v37, v3` 同上；`:4333` `add-long v12, v12, v29` 得新行的起始 `sort` |
+
+⇒ **`v1()` 的返回值只参与 `sort` 的算术，从不被当作播放位置使用。** 它求解的是「从哪个 `sort` 处开始把后续行整体后移」，与 `queue_start / queue_end` 等播放行为偏好没有任何调用关系。
+
+#### 关于 `OR queue.created_at = 0`：冗余兜底，不是「视为待播」
+
+> **本次修正**：本节此前写作「`created_at = 0` 的条目无条件视为待播」「兜底避免这些条目永远不被播放」，这两句都是错的。
+
+`folder_files.played_at` 的定义是 `INTEGER NOT NULL DEFAULT 0`（`data/migrations/B.smali:4456`；旧库从 `:5470-5482` 的 `ALTER TABLE folder_files ADD COLUMN ...` 补列，同样带 `DEFAULT 0`），因此 `played_at` 恒为非空整数，`played_at >= 0` **恒为真**。
+
+⇒ `created_at = 0` 的行在 `played_at >= created_at` 这一个条件上**本来就成立**，已经落在已播侧。`OR queue.created_at = 0` 不改变任何行的归属。
+
+那它还有意义吗？只有一种情形：若 `played_at` 允许为 NULL，`NULL >= 0` 求值为 NULL、被当作假，该行会被排除；此时 `OR created_at = 0` 能把它拉回来【推断】。在当前 DDL 下这是**不可达分支**，属防御性冗余。
+
+⇒ 因此**不存在**「计数器少算待播项」「UI 徽标数字与真实值不符」这类问题（§4.3 已按此重写）。
 
 #### 返回 `Long.MIN_VALUE`
 
-`n.x(tag, db, sql, Long.MIN_VALUE)` 的最后一个参数是默认值——查询无结果（`LIMIT 1` 空）时返回 `Long.MIN_VALUE`，即「没有待播项」。
+`n.x(tag, db, sql, Long.MIN_VALUE)` 的最后一个参数是默认值——查询无结果（`LIMIT 1` 空）时返回 `Long.MIN_VALUE`，即「队列里没有已播条目」（全新队列 / 全部未播）。
+调用点用 `cmp-long` 与 `Long.MIN_VALUE` 比较后再 `Math.max(0, MAX(sort) − anchor)` 兜底（`data/А.smali:4149-4151`、`:4326`），所以该哨兵值不会污染 `sort` 计算。
 
-### 4.3 `w1(provider, int[] out)` —— 队列计数器
+### 4.3 `w1(provider, int[] out)` —— 队列计数器（已播数 + 总数）
 
 ```java
 public static void w1(RestProvider provider, int[] out) {
@@ -353,7 +395,7 @@ public static void w1(RestProvider provider, int[] out) {
     out[0] = 0;
     out[1] = 0;
 
-    // 计数器 0：待播数量
+    // 计数器 0：已播数量
     SQLiteStatement st = db.compileStatement(
         "SELECT COUNT(*) FROM queue INNER JOIN folder_files "
       + "ON folder_files._id=queue.folder_file_id "
@@ -372,20 +414,70 @@ public static void w1(RestProvider provider, int[] out) {
 
 | 索引 | 查询 | 含义 |
 | --- | --- | --- |
-| `out[0]` | `COUNT(*) ... WHERE played_at >= created_at` | **待播数量** |
+| `out[0]` | `COUNT(*) ... WHERE played_at >= created_at` | **已播数量** |
 | `out[1]` | `COUNT(*) FROM queue` | **队列总长度** |
 
-#### 与 `v1()` 的语义差异（重要）
+【实证·smali】`w1()[0]` = 已播数由 `b0.smali:7440-7483` 反证：`postCreate()` 取 `v2 = out[0]`、`v0 = out[1]`，随后 `if (v0 > 0 && v2 < v0) mHasPendingQueue = true`。只有 `out[0]` 是已播数时，「已播数 < 总数 ⟺ 仍有待播」才成立；若它是未播数，这个条件会完全反向。同时 `:7483` 把 `(v2, v0)` 作为 `msg_player_queue_changed` 的两个 int 参数发出，即 UI 徽标拿到的是 `(已播, 总数)`。
 
-| 方法 | WHERE | 是否含 `created_at=0` 兜底 |
-| --- | --- | --- |
-| `w1()` 计数器 | 仅 `played_at >= created_at` | **否** |
-| `v1()` 找待播 | `played_at >= created_at` **OR `created_at=0`** | **是** |
+#### 与 `v1()` 的关系：不是「同一口径的两种写法」
 
-⇒ **计数器可能比实际待播项少**（漏掉 `created_at = 0` 的条目）。
-这是一个**潜在不一致**：UI 徽标显示的数字与真实待播数可能不符。
+> **本次修正**：本节此前有一张「`w1()` vs `v1()` 口径差异（重要）」的表，并据此推出「计数器可能比实际待播项少、`v1()` 与 `w1()` 口径不一致是瑕疵」。该结论**不成立**，已删除。
 
-> 【推断】影响有限：`created_at=0` 应属罕见数据，但它确实构成两处实现的口径差异。
+| 方法 | 度量对象 | 返回 | 是否含 `OR created_at=0` |
+| --- | --- | --- | --- |
+| `w1()[0]` | **行数** | `long` 计数 | 否 |
+| `w1()[1]` | **行数** | `long` 计数 | 否 |
+| `v1()` | **一个已播行的 `sort` 值** | 锚点 | 是（冗余，§4.2） |
+
+⇒ **`w1()` 数的是行，`v1()` 取的是锚点值。两者度量对象根本不同，不存在「同一指标两处实现不一致」。**
+
+剩余的唯一差异只是**文本层面的**：`v1()` 多写了一个 `OR created_at=0`，`w1()` 没写。按 §4.2 的论证，该分支在当前 DDL 下不可达，因此**无可观察行为差异**，纯属两位作者写法不同。
+
+#### Poweramp 的两套互补计数器
+
+真正值得注意的是：Poweramp 在同一件事上用了**两套独立实现**，二者口径互补而非冲突【实证·smali】：
+
+| 计数器 | 位置 | 语义 | 实现 |
+| --- | --- | --- | --- |
+| **已播数** `w1()[0]` | `m3.smali:148-206` | `played_at >= created_at` 的行数 | `m3.w1()`，经 `b0.getQueueStats()`（`b0.smali:2585-2605`）调用 |
+| **未播数** `b0.mQueueUnplayedCountSt` | `b0.smali:2834`（`initSql()` 内编译），`b0.smali:2607-2627` `getQueueUnplayedSongs()` 执行 | `played_at < created_at` 的行数 | 播放器侧预编译语句 |
+
+⇒ `已播数 + 未播数 = 总数`（在 `played_at` 无 NULL 的前提下）。**二者是同一设计的两个方向，不是一个指标的两份不一致实现。**
+
+> 【推断】维护两处独立 SQL 而非在调用侧做减法，属可优化的冗余——但这只是工程整洁度问题，不构成语义缺陷。本文此前把它误记成「口径不一致的瑕疵」（旧 N1），是本次修正的实质错误之一。
+
+### 4.4 真正的「第一个未播 / 续播位置」：`b0.moveToFirstNotPlayedQueueEntryOrLast()`
+
+`m3` 里**没有**「找第一个未播项」的方法。该职责在播放器类 `b0` 里【实证·smali】：
+
+```smali
+.method private moveToFirstNotPlayedQueueEntryOrLast()I        # b0.smali:3897
+    iget-object v0, p0, ...->mFilesCursor:Landroid/database/Cursor;   # :3900
+    invoke-interface {v0, v2}, Landroid/database/Cursor;->moveToPosition(I)Z   # :3910 移到 -1
+  :cond_0
+    invoke-interface {v0}, Landroid/database/Cursor;->moveToNext()Z           # :3913
+    ...
+    invoke-interface {v0, v4}, Landroid/database/Cursor;->getLong(I)J         # :3924 ★ 第 1 列（v4=0x1）
+    const-wide/16 v5, 0x0                                                    # :3930
+    cmp-long v7, v2, v5                                                      # :3932
+    if-nez v7, :cond_0                                                       # :3934 ★ == 0 即命中
+    return v4                                                                # :3936 → 1
+  :cond_1
+    invoke-interface {v0}, Landroid/database/Cursor;->moveToLast()Z           # :3950 全扫无果 → 退到最后一条
+```
+
+关键点：
+
+| 要点 | 说明 |
+| --- | --- |
+| 读的是**第 1 列** `getLong(1)` | 正是 §3.1 中 `folder_files.played_at >= queue.created_at` 那一列 |
+| 命中条件是 **`== 0`** | 0 = 谓词为假 = **未播** ⇒ 方法名的「NotPlayed」与判定一致 |
+| 全扫无未播项时 `moveToLast()` | 退化为「最后一条」，与 `OrLast` 后缀吻合 |
+| 异常返回 `-5`（`:3917` `const/4 v3, -0x5`） | 游标状态异常时的哨兵值 |
+
+调用点仅两处：`b0.smali:4712`（`startQueueImpl` 内，即开始播放队列时定位起点）与 `b0.smali:6088`。
+
+⇒ **「从哪里开始播 / 续播」由该方法决定，与 §4.2 的 `v1()` 完全无关。** 本文旧版把两者混为一谈，是本次修正的核心实质错误。
 
 ---
 
@@ -671,19 +763,27 @@ public final long x(SQLiteDatabase db, long a, long trackId) {
 ### 11.2 状态推导规则
 
 ```
-条目状态 = (folder_files.played_at >= queue.created_at) ? "已播" : "待播"
-特例：queue.created_at = 0 → 恒视为 "待播"
+条目状态 = (folder_files.played_at >= queue.created_at) ? "已播" : "未播"
+补充：played_at 为 INTEGER NOT NULL DEFAULT 0，故 >= 恒有确定结果
+     queue.created_at = 0 的行落在 0 >= 0，直接判为 "已播"（不是特例）
 ```
 
-### 11.3 三个使用点（口径不一致）
+> **本次修正**：旧版此处写「`created_at = 0` → 恒视为待播」，方向错误。`played_at NOT NULL DEFAULT 0`（`data/migrations/B.smali:4456`）使 `played_at >= 0` 恒真，这些行**一直是已播**；`v1()` 里的 `OR created_at=0` 是冗余兜底，不构成特例（§4.2）。
 
-| 使用点 | SQL 条件 | 含 `created_at=0` 兜底 |
-| --- | --- | --- |
-| 列表投影 `Р[1]` | `played_at >= created_at` | 否（纯比较） |
-| 找待播 `v1()` | `played_at >= created_at OR created_at=0` | **是** |
-| 计数器 `w1()[0]` | `played_at >= created_at` | **否** |
+### 11.3 各使用点的谓词与语义
 
-⇒ **`v1()` 与 `w1()` 口径不一致**（详见 §4.3）。这是实现瑕疵。
+| 使用点 | SQL 条件 | 谓词语义 | 含 `created_at=0` |
+| --- | --- | --- | --- |
+| 列表投影 `Р[1]` | `played_at >= created_at` | **已播标志** | 否（纯比较） |
+| `v1()` 取锚点 | `played_at >= created_at OR created_at=0` | **已播区**，取最小 `sort` | **是**（冗余，当前 DDL 下不可达） |
+| 计数器 `w1()[0]` | `played_at >= created_at` | **已播数** | **否** |
+| 清空判定（§14.2） | `played_at < created_at` | **未播数** | 否 |
+| 洗牌临时表（§14.3） | `played_at >= created_at OR created_at=0` | **已播区 + 保留项** | 是（同上，冗余） |
+| 未播计数 `b0.mQueueUnplayedCountSt` | `played_at < created_at` | **未播数** | 否 |
+
+⇒ 全部使用点方向一致：`>=` 一律是已播侧，`<` 一律是未播侧，**不存在口径冲突**。
+`v1()` / 洗牌临时表多出的 `OR created_at=0` 是唯一文本差异，且按 §4.2 论证无可观察影响。
+`v1()` 与 `w1()[0]` 度量对象不同（锚点 `sort` vs 行数），不可相互比较（§4.3）。
 
 ---
 
@@ -708,7 +808,7 @@ public final long x(SQLiteDatabase db, long a, long trackId) {
 派生列表（最近/最多/评分/长）    →  行是「曲目」，按行为筛选
 书签                            →  行是「曲目 + 位置快照」
 流                              →  行是「曲目」，按数据来源分区
-队列                            →  行是「曲目 + 待播/已播状态」
+队列                            →  行是「曲目 + 已播/未播状态」
 ```
 
 **队列是唯一有「播放进度状态」概念的列表** —— 用时间戳比较而非布尔列实现。
@@ -723,11 +823,11 @@ public final long x(SQLiteDatabase db, long a, long trackId) {
 | --- | --- | --- |
 | A1 | **用 `played_at >= created_at` 推导播放状态**（§3.2） | 不加冗余布尔列，状态随播放自动更新，无需额外写入 |
 | A2 | **`k()` 统一入口自动写入 `created_at`**（§6.1） | 保证时间戳准确，调用方无法遗漏或篡改 |
-| A3 | **`created_at = 0` 兜底纳入待播**（§4.2） | 旧数据/特殊路径条目不会永远卡在非待播状态 |
+| A3 | **`created_at = 0` 冗余兜底**（§4.2） | `played_at NOT NULL DEFAULT 0` 使 `>=` 恒真，该分支实际不可达；保留它只是对 `played_at` 可能为 NULL 的防御性防御，**并不改变任何行的状态判定** |
 | A4 | **`u1()` 一条 SQL 完成「清空保留 N」** | `DELETE WHERE _id!=?` 比先查后删高效 |
 | A5 | **投影含计算列**（§3） | 把状态推导下推到 SQL，UI 层零计算 |
 | A6 | **`shuffle_order` 与 `sort` 双列**（§8.3） | 原始顺序与随机顺序互不覆盖，切回顺序播放不丢排序 |
-| A7 | **`w1()` 一次调用填两个计数器** | 待播数 + 总数同批查询，减少往返 |
+| A7 | **`w1()` 一次调用填两个计数器** | 已播数 + 总数同批查询，减少往返 |
 | A8 | **`f0()` 动态列拼接**（§5.1） | 复用基类列清单，避免为详情查询写重复 SQL |
 | **A9** | **`notPlayed == 0` 才允许清空**（§14.2） | 队列还有未听内容时，新入队不会冲掉它。保护用户未消费的内容 |
 | **A10** | **`temp_queue_shuffle_order` 固化已播顺序**（§14.3） | 新入队项随机排在已播区之后，不会插进中间打乱已听顺序 |
@@ -739,7 +839,7 @@ public final long x(SQLiteDatabase db, long a, long trackId) {
 
 | # | 做法 | 理由 |
 | --- | --- | --- |
-| **N1** | **`v1()` 与 `w1()` 的 WHERE 口径不一致**（§4.3 / §11.3） | 一个含 `created_at=0`、一个不含，导致计数器可能少于实际待播数 |
+| **N1** | **两套独立计数器各写一份 SQL**（§4.3） | 已播数由 `m3.w1()[0]` 算、未播数由 `b0.mQueueUnplayedCountSt` 算，二者口径互补（`>=` / `<`）而非冲突，`已播 + 未播 = 总数`；但同一件事维护两处实现，改谓词时需同步两处，是可收敛的工程冗余，非语义缺陷 |
 | **N2** | **`u1()` 返回值语义陷阱**（§4.1） | 队列原本只有指定一条时返回 `false`（无行被删），调用方易误判为失败 |
 | **N3** | **`x()` 无 `LIMIT`** | 同曲目多次入队时返回值不确定 |
 | **N4** | **同族方法日志 tag 不一致**（`RestLibraryUtils` / `RestQueue`） | 排障易漏 |
@@ -750,7 +850,7 @@ public final long x(SQLiteDatabase db, long a, long trackId) {
 | **N9** | **入队完全不查重**（§14.5） | 同曲目可重复入队产生多条行；配合 N10 会让状态判定出错 |
 | **N10** | **状态用跨表全局时间比较**（§14.5 / §15.3） | `folder_files.played_at` 被同曲目的所有队列项共享，同批重复入队时一次播放会让多条同时变已播 |
 | **N11** | **`clear_on_add` 与 `never_clear_on_add` 同时为 true 时前者静默胜出**（§14.2） | 两个互斥语义的偏好未做互斥校验，配置矛盾时行为不可预期。应改为单一枚举 |
-| **N12** | **清空判定用 `played_at < created_at` 而列表投影用 `>=`**（§14.2 vs §3.2） | 两处对称但独立撰写，且清空判定**不含** `created_at=0` 兜底——与 N1 同源的第三处口径差异 |
+| **N12** | **清空判定用 `played_at < created_at` 而列表投影用 `>=`**（§14.2 vs §3.2） | 两处是同一谓词的互补两半，语义方向正确；但它们**独立撰写**、互为镜像，改一处易漏另一处。清空判定也不含 `created_at=0` 冗余兜底——同样不影响结果（`played_at NOT NULL`，`<` 与 `>=` 恒互补），仅增加维护成本 |
 
 ---
 
@@ -1039,7 +1139,7 @@ const-string v21, "SELECT sort FROM queue WHERE _id=?"               # L4097（�
 | 1 | 队列存储 | **DB 表 `queue`** | 内存 / 前端状态 |
 | 2 | 顺序 | `sort` + `shuffle_order` 双列 | 单数组顺序 |
 | 3 | 播放状态 | **`played_at >= created_at` 推导** | 无此概念 |
-| 4 | 计数器 | 待播数 + 总数 | 单一长度 |
+| 4 | 计数器 | 已播数 + 总数（`w1()`），另有独立的未播计数（`b0.mQueueUnplayedCountSt`） | 单一长度 |
 | 5 | 插入时间戳 | 自动写入 | 无 |
 | 6 | 「Play Next」 | `queue_as_next` | — |
 | 7 | 队列结束行为 | `queue_end`（退出/停留） | — |
@@ -1047,15 +1147,15 @@ const-string v21, "SELECT sort FROM queue WHERE _id=?"               # L4097（�
 
 ### 15.3 可借鉴的最小实现
 
-SpMusic 队列如果要加「待播/已播」区分：
+SpMusic 队列如果要加「已播/未播」区分：
 
 | 组件 | 建议 |
 | --- | --- |
 | 状态 | **不要加 `played` 布尔**，用 `playedAt >= enqueuedAt` 推导（A1） |
 | 入队时间 | 入队时自动写 `enqueuedAt`，调用方不可指定（A2） |
 | 顺序 | `order` + `shuffleOrder` 双字段（A6） |
-| 计数器 | **一处实现**，避免 Poweramp 的 N1 不一致 |
-| 兜底 | 无时间戳的条目显式视为待播（A3） |
+| 计数器 | **一处实现**（如只存未播数，已播数用总数相减），避免 Poweramp 那种两套 SQL 各写一遍（N1） |
+| 兜底 | 无需 `created_at=0` 类兜底：把 `enqueuedAt` 定为 NOT NULL DEFAULT 0 即可，`playedAt >= 0` 恒真、天然落在已播侧（A3） |
 | **重复入队** | **要么显式查重，要么在队列项上存自己的 `playedAt`**（见下） |
 
 #### 必须修正的一处：不要跨表比全局时间
@@ -1123,7 +1223,7 @@ Poweramp 用 `folder_files.played_at`（曲目**全局**播放时间）与 `queu
 | Q8 | `r()` 返回的实例字段 `H` 何时被赋值 | 低 |
 
 > Q2 / Q9 闭环后，队列的**完整生命周期**已全链实证：
-> 入队（§14.2–14.4）→ 状态推导（§3.2）→ 列表（§2）→ 待播查找（§4.2）→ 清空（§14.2）。
+> 入队（§14.2–14.4）→ 状态推导（§3.2）→ 列表（§2）→ 入队锚点 `v1()`（§4.2）/ 续播定位（§4.4）→ 清空（§14.2）。
 >
 > 剩余项均属外围：`n3` 差异（Q3）、偏好别名（Q4）、UI 语义（Q5–Q8）。
 
@@ -1144,7 +1244,7 @@ Poweramp 用 `folder_files.played_at`（曲目**全局**播放时间）与 `queu
 | --- | --- |
 | 3 表达式投影 `Р` | `rest/library/m3.smali:26-42`（`<clinit>`） |
 | `u1()` 清空保留 | `m3.smali:62-114` |
-| `v1()` 找待播位置 | `m3.smali:116-146` |
+| `v1()` 取已播区锚点 `sort` | `m3.smali:116-146` |
 | `w1()` 双计数器 | `m3.smali:148-206` |
 | `X0()` 列表查询 | `m3.smali:530-600` |
 | `f0()` 详情查询（`aa_status`） | `m3.smali:632-690` |
@@ -1154,6 +1254,20 @@ Poweramp 用 `folder_files.played_at`（曲目**全局**播放时间）与 `queu
 | `M0()` / `x()` 双向反查 | `m3.smali:299-311` / `1069-1081` |
 | 元数据方法全表 | `m3.smali:210-1097` |
 | 队列偏好键 | `rest/library/у.smali:335-357`、`:989`、`:1141` |
+
+**2026-11-08 语义复核新增取证**（均为 file:line 形式，未产生新的 `ev_*` Evidence ID）：
+
+| 主题 | 来源文件与位置 |
+| --- | --- |
+| 未播计数语句字段绑定 `<` | `player/b0.smali:2834`、`:2840`（`mQueueUnplayedCountSt`） |
+| `getQueueStats()` → `m3.w1()` | `player/b0.smali:2585-2605` |
+| `getQueueUnplayedSongs()` | `player/b0.smali:2607-2627` |
+| 续播定位 `moveToFirstNotPlayedQueueEntryOrLast()` | `player/b0.smali:3897-3960`；调用点 `:4712`、`:6088` |
+| `mHasPendingQueue` 判定 | `player/b0.smali:7440-7483`（`:7446`/`:7450`/`:7465-7472`/`:7483`） |
+| `v1()` 调用点与锚点算术 | `data/А.smali:4130`、`:4137`、`:4306`、`:4318`；腾位 UPDATE `:4086`、`:4185` |
+| `played_at` DDL（NOT NULL DEFAULT 0） | `data/migrations/B.smali:4456`；旧库 ALTER `:5470-5482` |
+| 过滤列中的 `<` | `list/q0.smali:449` |
+| 跨版本一致（build-1035） | `.rea-analysis/v1035/decoded/smali/ׅ/p01.smali:31,202,268,727,749`；`dj.smali:7032,7219`；`k01.smali:3879`；`mt0.smali:804` |
 
 资源来源：`.rea-analysis/decoded/res/values/strings.xml`、`.rea-analysis/decoded/res/values/public.xml`（apktool 3.0.3，已入库）。
 

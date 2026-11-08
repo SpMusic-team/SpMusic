@@ -271,8 +271,9 @@ F1 修复的专项测试 `publish_wait_does_not_hold_the_decode_permit` 用 `Dec
 
 ### 既有问题（非本次引入，已复现确认）
 
-- `npm run lint`：3 个 error，全部位于 gitignored 的 `.codex-tmp-folder-ui-dist/drag-diagnostics-20261101/selection-baseline-surface.js`（11/02 的临时产物）。对本次改动的 6 个文件单独跑 eslint 为 0 问题。
-- `useAllSongsWindow.test.mjs`：全部失败，原因是断言硬编码 import 条数（期望 6），**在基线 `HEAD` 上就是红的**。本次新增 import 使数字从 7 变 8，但该断言本来就失败。
+- **Rust 测试偶发失败（未定位到具体用例）**：本轮某次全量 `cargo test --lib` 出现 `397 passed; 1 failed`，随后连续 4 次均为 `398 passed; 0 failed`。失败用例名未能捕获（后续运行的输出里已无失败）。`src-tauri/src/audio/network_tests.rs:45` 的注释记录了 Windows 上 EOF 相关测试的偶发性（"…complete response on Windows and make EOF tests flaky"），因此**很可能**属于网络计时类的既有偶发，但**我没有证据确认是哪一个**，故如实记录为未定位，不宣称「与本次改动无关」。
+- `npm run lint`：3 个 error，全部位于 gitignored 的 `.codex-tmp-folder-ui-dist/drag-diagnostics-20261101/selection-baseline-surface.js`（11/02 的临时产物）。
+- `useAllSongsWindow.test.mjs`：全部失败，原因是断言硬编码 import 条数（期望 6），**在基线 `HEAD` 上就是红的**。且复核者验证过：把 import 条数改对后仍然 19/23 失败——这是**长期失效的陈旧 harness**（缺 `useLayoutEffect`、`isStreamSource` 绑定），既不能证明也不能否证本次改动。修复它是独立任务。
 
 ## 6. 回滚方式
 

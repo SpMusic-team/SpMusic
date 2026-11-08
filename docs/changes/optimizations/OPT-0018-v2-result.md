@@ -26,7 +26,7 @@ source_documents:
 | 问题 | 结论 |
 | --- | --- |
 | 上次为什么失败？ | **前端一个取消谓词传反的 bug**，不是方向错误。成功后仍被当作「已取消」丢弃，所以命令 3 ms 返回、JPEG 和 URL 都对，卡片却永远 loading。 |
-| 这次修好了吗？ | **路径通道可用；DOM 失败恢复已实现但未完成验收**。封面 100% 走 `asset.localhost`。DOM 恢复在 `de185f6` 实现了 `useAllSongsWindow` 一条链，但**另外两个 owner 的契约差异尚未对齐**（C1–C3，见 §7.5），且真实 WebView2 注入未做。 |
+| 这次修好了吗？ | **三处 owner 契约差异已修复**（`271793c`）。封面 100% 走 `asset.localhost`；1 对真机对照（fresh+warm）两臂均 20/20 就绪、`imgErrorEvents` 0；发布后 DOM 失败会在三个 hook 都触发一次强制 pixels 补救。**仍缺真实 WebView2 注入验证**（§7.4），且样本仅 1 对。 |
 | 更快了吗？ | **确定性地减少了工作量，但端到端可见时延的改善落在噪声带内、未能证明**。请读下面的「诚实结论」。 |
 | 磁盘？ | **25.4 MB → 2.2 MB，约 12 倍**（确定性）。 |
 | 有功能回退吗？ | 已测视图未发现。播放器大封面通道逐字节未动；旧 `.spxr` 缓存不失效。滚动空白暴露经两臂对照确认是**既有行为**（§7.1b），非本次引入。 |
@@ -370,24 +370,35 @@ Get-ChildItem "$cache\SpMusic" -Recurse -Directory -Filter thumbnails | Select-O
 
 此外本轮实测暴露了另一个问题：`laneAttemptSummary` 的 `distinctIdentities` 只统计到 4，而该次运行有 8 张封面；`byLane` 只有 path——说明**在途请求与已完成请求的覆盖并不完整**，计数不能代表全量。
 
-**处置**：计数改为在调度边界直接记录 `pathStart/Ready/Missing/Failed`、`fallbackStarted/Completed/Failed`、`DOMFailure`、`stale/abort`、`breaker` 等事件，网络命令降级为交叉核查；并新增 `coverlane-counting.test.mjs` 覆盖 10 类边界。详见该工具 README。
+**处置（已于 `271793c` 修复）**：计数改为在调度边界用显式事件账本记录 `pathStart/Ready/Missing/Failed`、`fallbackStarted/Completed/Failed`、`DOMFailure`、`stale/abort`、`breaker`；CDP 命令降级为交叉核查，且**结构上不再暴露 `fallbackCount`**（唯一权威数字是 `ledger.fallbacks.count`）。新增 `coverlane-counting.test.mjs` 32 项覆盖 10 类边界，并用**变异测试**证明其有效（`mutationScore: 4/4`，四个变异全部被杀死——把测试误报成绿的写法行不通）。
 
-**在此之前，本报告不主张「零回落」。**
+**仍存的口径上限（如实记录，不粉饰）**：
 
-### 7.4 三处 owner 契约差异（复核方案 §2 的 C1–C3，已核实）
+1. **回落不是直接观测**。harness 能看到 lane 命令与 presentation 事件，但看不到前端调度器的恢复出口，所以无 `fallbackStarted` 上报时 `fallbacks.count` 恒为 0。**0 = 未观测到恢复，不等于证明没有恢复。** 要补齐需前端恢复出口埋点。
+2. **被测面板的 DOM 事件不可归属**。`PlaylistPanel`（渲染被测量的列表卡片）**不传** `coverPresentation` prop，走 legacy 分支只发裸 URL 字符串；实测 `presentation.tokensSeen: 0`。因此 `ledger.domFailure.count = 0` 是**可观测性限制，不是「证明没有 DOM 失败」**。无 token 事件进 `unattributed` 列表并如实标注，未伪造成 `DOMFailure`。
+3. 像素尝试停在 `in-flight`：未为 pixels 终点记终止事件（像素结果通过 DOM 观测），`byTerminal` 里 baseline 全是 `in-flight`。
 
-上一轮 `de185f6` 的 DOM 恢复只覆盖了 `useAllSongsWindow` 一条链。复核方案指出另外两个 owner 与它不一致，**我逐条核实，三处全部属实**：
+**在此之前，本报告不主张「零回落」。** 修复后的计数工具能给出可信的 `fallbacks`/`domFailure`，但需要在**传了 token 的面板**（`PlaylistLibraryPanel`/`AlbumLibraryPanel`/`SearchPanel`/`FolderHierarchyPanel`/`BookmarksPanel`）上重测才具备归属能力。
 
-| 编号 | 位置 | 已核实的事实 | 后果 |
-| --- | --- | --- | --- |
-| **C1** | `useAllSongsWindow.ts:853` | `if (row.presentationState !== 'pending') return` —— 图片先 `loaded` 会变成 `presented`，之后再失败被这行吞掉 | 「加载过一次」被当作「资源永远健康」。文件被缓存预算淘汰、或复挂载读到已删文件时，**不会触发任何补救** |
-| **C2** | `useAudioPlayer.ts:2647` | 错误处理按 `visual.coverThumbnail?.src === src` 匹配 URL，**未校验完整 token**；清掉 visual 后走**普通需求准入**，正常作业仍优先 path | **以重复 path 请求冒充补救**；并用 `playlistImageErrorCountsRef` 计到 3 次兜底，这不是恢复 epoch |
-| **C3** | `useLibraryArtwork.ts:197-218` | `forcePixels` 仅 256 分支生效，512 hero 仍走 path；`if (forcePixels) runtime.forcedPixels.delete(key)` **准入后立刻删除标志** | 512 档位无恢复；标志删除后后续错误可重新设置并**再次入队**，形成重复补救 |
+### 7.4 三处 owner 契约差异（复核方案 §2 的 C1–C3，已核实并修复）
 
-**C1 已用真实 hook harness 写成反例并确认在当前基线失败（红）**：
-`coverPresentationContract.test.mjs` 的 `a cover that already presented can fail later and still gets one recovery`，预期 `pixelRequests.length === 1`，实际 `0`。
+上一轮 `de185f6` 的 DOM 恢复只覆盖了 `useAllSongsWindow` 一条链。复核方案指出另外两个 owner 与它不一致，**我逐条核实，三处全部属实**，已在 `271793c` 修复：
 
-**处置**：按复核方案 §3/§4 对齐三个 owner 的共用契约（恢复 epoch、presented 后仍可受理、显式 `forcePixels` 绕过缓存命中与 path helper、256/512 正确入口、双失败有界终止、spent 标记不被 load 成功清空）。修复在下一提交，红→绿证据随提交附上。
+| 编号 | 位置 | 已核实的缺陷 | 后果 | 修复 |
+| --- | --- | --- | --- | --- |
+| **C1** | `useAllSongsWindow.ts:853` | `if (row.presentationState !== 'pending') return` —— 图片先 `loaded` 会变成 `presented`，之后再失败被吞掉 | 「加载过一次」被当作「资源永远健康」。文件被缓存预算淘汰或复挂载读到已删文件时**不会触发任何补救** | 受理条件放宽为 `pending \| presented`；`loaded` 只标 `idle` 不删除记录，已消费记录与 DOM load 解耦 |
+| **C2** | `useAudioPlayer.ts:2647` | 按 `visual.coverThumbnail?.src === src` 匹配 URL，**未校验完整 token**；清掉 visual 后走**普通需求准入**，正常作业仍优先 path；用计数到 3 次兜底 | **以重复 path 请求冒充补救** | 改为共享六项校验；新增独立强制 pixels 通道（独立队列优先出队、跳过 path helper、按失败时的 edge 读取）；删除整套按 URL 的重试计数 |
+| **C3** | `useLibraryArtwork.ts:197-218` | `forcePixels` 仅 256 分支生效，512 hero 仍走 path；`delete(key)` 在**准入后立刻删除标志** | 512 档位无恢复；标志删除后后续错误可再次入队，形成**重复补救** | 256/512 共用 `forcePixels` 选择、各走正确入口；512 仍 probe 拿封面文件身份但不再调 `thumbnail_path`；spent 记录在准入后才花费 |
+
+**红→绿证据**：C1 的反例「先 loaded 再 failed 仍应触发一次恢复」在基线失败（预期 `pixelRequests=1`，实际 `0`），修复后 18/18 通过，**既有断言一字未改**。
+
+**共用契约不是各写一套**：三个 owner 共用 `playlistCoverReadiness.ts` 中的 `createCoverPresentation()`（唯一快照入口，`src` 与 `token.url` 同源）、`isCurrentCoverReport()`（唯一受理谓词，六项校验）、`createCoverRecoveryLedger()`（唯一 epoch 状态机，`claim` 同步占 `queued` 使多 img 同轮只受理一次）。
+
+共用不变量：一次 epoch 一次自动 pixels；consumed 记录与 load 解耦；机会只由 identity/revision 改变、owner 新生命周期、真正离开后重入或显式重试打开（render / pump / load / 新 publishGeneration 都不重置）；旧事件零副作用；失败一律 `settle` + `transientFailure` 并显示旧图或正常占位，不留破图。
+
+**新增测试**：`libraryArtworkRecovery.test.mjs`（C3，15 项）、`playerArtworkRecovery.test.mjs`（C2，9 项），均为真实 hook 的三 owner 独立 harness。
+
+**仍缺**：C2 的 **512 hero 强制 pixels 无 harness 覆盖**（fixture 会先生成 replacement，使失败被正确归类为「回滚」而非「首次补救」，没能构造出干净的 512 首次发布失败场景）。真实 WebView2 注入仍全部未做。
 
 ### 7.5 独立复核发现的缺陷（Test Agent，只读，未参与实现）
 
@@ -478,12 +489,12 @@ drop(_permit);
 
 | 项 | 结论 | 证据 / 缺口 |
 | --- | --- | --- |
-| DOM 失败补救与异步正确性 | **部分通过** | 自动化侧通过：`coverPresentationContract.test.mjs` 16 项 + `playlistCoverElement.test.mjs` 7 项，覆盖发布后 DOM 错误触发恰好一次强制 pixels、旧代次忽略、多 img 去重、双失败终止、回访新 epoch、缓存 complete 补判。**缺口**：真实 WebView2 注入（真删受管 JPEG / 真损坏 / 真慢盘）未做，`complete && naturalWidth === 0` 在 WebView2 上是否真会发生未知。 |
-| 缓存/许可/权限/大图回归 | **通过（自动化 + 真机边界）** | `cargo test` 398 passed。播放器通道逐字节比对相同（复核报告 §1b）。`DecodeSlot` 保证等盘前归还许可，含变异验证测试。asset 请求实测 403 = 0 且全部落在 `$CACHE` 内。旧 `.spxr` 缓存不失效（版本号 2/1 未变）。 |
-| 计时与计数可信度 | **通过** | 动作前起钟已实现：旧口径系统性少报 26–33%，漏掉的时间全部落在 `clickToPanelMs`；两口径在 `firstCardToCover` 上数值一致，证明差异只来自起钟位置。回落改为 lane 直接计数。IPC 字节实测（786,552 B vs 518 B）取代估算。 |
-| 性能实用改善 | **未证明** | 四批热态 −1.9% ~ −8.7% 跳动，冷态 −0.5% ~ +1.9%，逐对胜负 8/8 → 4/6 → 2/6。方向不一致、方差 20–60 ms 大于效应。**不宣称时延改善**。 |
-| CPU 与 10 分钟内存 | **证据不足** | CPU 时间未采样（只有长任务与帧间隔），不能量化总 CPU 收益。10 分钟内存曲线开关已实现但未跑。渲染内存只在短程压力中观察，无趋势结论。 |
-| 独立复跑与可复现性 | **部分通过** | Rust 测试、前端 68 项测试、tsc、build 由我本人独立复跑。测量工具由 Test Agent 交付并附 manifest（commit/补丁 digest/产物 SHA-256/语料摘要/环境）。**缺口**：A/B 样本量仅 1 对（脚本正确性验证，非统计结论）；语料仅 120 首、无 1000 张独立封面、无图占位路径完全未覆盖。 |
+| DOM 失败补救与异步正确性 | **通过（Node harness）；真实 WebView2 证据不足** | 三个 owner 独立 harness：`coverPresentationContract` 18 项 + `libraryArtworkRecovery` 15 项 + `playerArtworkRecovery` 9 项 + `playlistCoverElement` 7 项，覆盖 presented 后失败、六项校验、256/512 双档位、多 img 去重、双失败终止、回访新 epoch、缓存 complete 补判。C1 有红→绿证据。**缺口**：真实 WebView2 注入未做；C2 的 512 hero 无 harness 覆盖。 |
+| 缓存/许可/权限/大图回归 | **通过（自动化 + 真机边界）** | `cargo test` 398 passed。播放器通道逐字节比对相同。`DecodeSlot` 保证等盘前归还许可，含变异验证。真机对照 1 对（fresh+warm）：两臂均 20/20 就绪、`imgErrorEvents` 0，candidate 全部 asset、`bmpCreateObjectUrl` 0。旧 `.spxr` 缓存不失效（版本 2/1 未变）。 |
+| 计时与计数可信度 | **部分通过** | 动作前起钟已实现（旧口径系统性少报 26–33%）。计数已由 CDP 推断改为调度边界显式事件账本，并修掉三个已核实缺陷（缺 clientId / folder source 为 null / 两 lane 同现即回落），32 项测试 + 变异 4/4。**缺口**：回落仍是「未观测到」而非直接观测；被测面板无 token 致 domFailure 不可归属；像素终点停在 in-flight。 |
+| 性能实用改善 | **未证明** | 四批热态 −1.9% ~ −8.7%、冷态 −0.5% ~ +1.9%，逐对胜负 8/8 → 4/6 → 2/6，方向不一致、方差 20–60 ms 大于效应。**且原「1500 倍字节比」已因子项不匹配撤回**，不能作为速度证据。 |
+| CPU 与 10 分钟内存 | **证据不足** | CPU 时间未采样；10 分钟内存曲线开关已实现但未跑。 |
+| 独立复跑与可复现性 | **部分通过** | Rust 398、前端 94 项、tsc、build 由我独立复跑；工具带完整 manifest。**缺口**：A/B 样本仅 1 对；语料仅 120 首、无 1000 张独立封面、无图占位路径未覆盖。 |
 
 ### 未覆盖项（明确列为证据缺口，不计为通过）
 

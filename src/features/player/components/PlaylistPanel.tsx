@@ -792,6 +792,21 @@ export function PlaylistPanel({
   const shufflePresentation = getShuffleModePresentation('shuffle-all', systemIcons)
 
   const firstTrack = tracks[0]
+  // The hero and menu covers are the only surfaces that render `firstTrack`'s
+  // snapshot directly instead of reading a card's artwork store, so they have to
+  // hand the element the owner's published token themselves.
+  //
+  // A token is only ever paired with the image it actually names. The publishing
+  // lanes write the token beside the thumbnail they produced (`PlaylistTrackVisual`
+  // exposes `presentation`, and the read-only library layer re-exposes the same
+  // token under the same key), while `Track` documents that same snapshot as
+  // `coverPresentation`. A token whose `src` is not this thumbnail's `src`
+  // describes a different publication, so it is withheld rather than passed: the
+  // element then sends its legacy URL report, which the owner refuses to
+  // attribute, instead of letting this sheet report against another snapshot.
+  //
+  // Written inline at both callsites on purpose: each expression must stand alone
+  // as `(firstTrack) => <img/>`, so neither may depend on enclosing scope.
   const firstTrackCoverSource = firstTrack?.coverImage ?? firstTrack?.coverImageFallback
   const handleHeroCoverError = useCallback((event: SyntheticEvent<HTMLImageElement>) => {
     const image = event.currentTarget
@@ -878,7 +893,10 @@ export function PlaylistPanel({
           searchOpen={searchOpen} onSearch={handleSearchToggle}
           selectMode={selectMode} onSelect={handleSelectModeToggle}
           more={<PlaylistHeroMoreMenu title={playlistName ?? appCopy.playlistPage.title} count={tracks.length} totalClock={totalClock} durationDetail={totalDurationDetail}
-            artwork={firstTrack?.coverThumbnail ? <PlaylistCoverImage image={firstTrack.coverThumbnail} />
+            artwork={firstTrack?.coverThumbnail ? <PlaylistCoverImage image={firstTrack.coverThumbnail}
+              presentation={firstTrack.presentation?.src === firstTrack.coverThumbnail.src ? firstTrack.presentation
+                : firstTrack.coverPresentation?.src === firstTrack.coverThumbnail.src ? firstTrack.coverPresentation
+                  : undefined} />
               : firstTrackCoverSource ? <img src={firstTrackCoverSource} alt="" decoding="async" onError={handleHeroCoverError} /> : null} />}
         />
       </motion.div>
@@ -941,7 +959,10 @@ export function PlaylistPanel({
         artworkLayoutId={sharedScope ? `playlist-library-cover:${sharedScope}` : undefined}
         titleLayoutId={sharedScope ? `playlist-library-name:${sharedScope}` : undefined}
         transition={returnTransition}
-        artwork={firstTrack?.coverThumbnail ? <PlaylistCoverImage className="playlist-hero-image" image={firstTrack.coverThumbnail} />
+        artwork={firstTrack?.coverThumbnail ? <PlaylistCoverImage className="playlist-hero-image" image={firstTrack.coverThumbnail}
+          presentation={firstTrack.presentation?.src === firstTrack.coverThumbnail.src ? firstTrack.presentation
+            : firstTrack.coverPresentation?.src === firstTrack.coverThumbnail.src ? firstTrack.coverPresentation
+              : undefined} />
           : firstTrackCoverSource ? <img className="playlist-hero-image" src={firstTrackCoverSource} alt="" aria-hidden="true" decoding="async" onError={handleHeroCoverError} /> : null}
         category={<Button type="button" className="playlist-hero-category" size="sm" variant="ghost" aria-current="page"
           aria-label={library ? "返回播放列表管理" : undefined} onClick={library?.onOpen ?? (() => panelRef.current?.focus({ preventScroll: true }))}>

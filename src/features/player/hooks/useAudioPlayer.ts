@@ -2316,25 +2316,41 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
                 const priority = job.trackId === currentTrackId ? 0
                   : libraryVisibleRef.current && playlistVisualRequiredIdsRef.current.has(job.trackId) ? 1 : 2
                 const attemptOptions: AttemptOptions = { priority, isCurrent }
-                // The 512 hero shares the path lane with the list rows. `missing` is
-                // definitive and settles the visual as absent, exactly as a `null`
-                // pixel response did before this lane existed.
-                const attempt = await attemptPlaylistCoverThumbnailPath({
-                  clientId: job.clientId, filePath: coverFilePath, maxEdge: edge,
-                  windowGeneration: job.backendGeneration,
-                }, attemptOptions)
-                if (attempt.status === 'dropped') return
-                if (jobIsStale()) return
-                if (attempt.status === 'missing') return
-                if (attempt.status === 'ready') {
-                  coverThumbnail = attempt.image
-                } else {
+                if (job.forcePixels) {
+                  // Forced recovery for a hero whose first publish failed in the DOM.
+                  // The path lane produced exactly the URL the element could not
+                  // display, so it is not requested again: the pixel command is the
+                  // only channel left, and it reads at the same edge. A bounded
+                  // failure (null, or a rejection) ends the epoch in `.finally`,
+                  // which settles the row as a placeholder instead of a broken image.
                   const pixels = await schedulePlaylistCoverPixels({
                     clientId: job.clientId, filePath: coverFilePath, maxEdge: edge,
                     windowGeneration: job.backendGeneration,
                   }, attemptOptions)
                   if (!pixels || jobIsStale()) return
                   coverThumbnail = playlistCoverImageFromPixels(pixels)
+                  hasLocalArtwork = true
+                } else {
+                  // The 512 hero shares the path lane with the list rows. `missing` is
+                  // definitive and settles the visual as absent, exactly as a `null`
+                  // pixel response did before this lane existed.
+                  const attempt = await attemptPlaylistCoverThumbnailPath({
+                    clientId: job.clientId, filePath: coverFilePath, maxEdge: edge,
+                    windowGeneration: job.backendGeneration,
+                  }, attemptOptions)
+                  if (attempt.status === 'dropped') return
+                  if (jobIsStale()) return
+                  if (attempt.status === 'missing') return
+                  if (attempt.status === 'ready') {
+                    coverThumbnail = attempt.image
+                  } else {
+                    const pixels = await schedulePlaylistCoverPixels({
+                      clientId: job.clientId, filePath: coverFilePath, maxEdge: edge,
+                      windowGeneration: job.backendGeneration,
+                    }, attemptOptions)
+                    if (!pixels || jobIsStale()) return
+                    coverThumbnail = playlistCoverImageFromPixels(pixels)
+                  }
                 }
               }
             }

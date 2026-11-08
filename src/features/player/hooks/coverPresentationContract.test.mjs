@@ -413,6 +413,50 @@ test('a recovery success commits a new generation and notifies subscribers', asy
 })
 
 // ---------------------------------------------------------------------------
+// C1: a cover that loaded once can still fail later (remount, file evicted)
+// ---------------------------------------------------------------------------
+
+test('a cover that already presented can fail later and still gets one recovery', async () => {
+  // A loaded report means "this image was readable at that moment", not "this
+  // resource is permanently healthy". The file can be evicted by the shared
+  // cache budget, or a remount can read it again and find it gone. Treating
+  // `presented` as terminal would make that row show a broken image forever.
+  const h = await harness()
+  try {
+    await h.demand([0])
+    const key = h.items[0].key
+    const failedUrl = h.presentationFor(key).src
+    await h.report(key, 'loaded')
+    assert.equal(h.row(key)?.presentationState, 'presented', 'the first load is recorded')
+    assert.equal(h.pixelRequests.length, 0, 'a healthy load starts no recovery')
+
+    await h.report(key, 'failed')
+    assert.equal(h.pixelRequests.length, 1, 'a later failure of the same presentation runs one forced pixel job')
+    assert.equal(h.pathRequests.length, 1, 'recovery never re-enters the path lane')
+    const replacement = h.presentationFor(key)
+    assert(replacement, 'a replacement is published')
+    assert.notEqual(replacement.src, failedUrl, 'the failing URL stops being the current hit')
+    assert.equal(h.row(key)?.sourceLane, 'pixels')
+  } finally { h.unmount() }
+})
+
+test('repeated failures after a presented cover never exceed one recovery per epoch', async () => {
+  const h = await harness()
+  try {
+    await h.demand([0])
+    const key = h.items[0].key
+    await h.report(key, 'loaded')
+    await h.report(key, 'failed')
+    const afterFirst = h.pixelRequests.length
+    // The replacement published by the recovery may itself never confirm; extra
+    // error reports must be absorbed by the spent epoch rather than looping.
+    await h.report(key, 'failed')
+    await h.report(key, 'failed')
+    assert.equal(h.pixelRequests.length, afterFirst, 'the epoch stays spent')
+  } finally { h.unmount() }
+})
+
+// ---------------------------------------------------------------------------
 // Rejections: stale reports must never be accepted as current
 // ---------------------------------------------------------------------------
 

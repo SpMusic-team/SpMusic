@@ -26,7 +26,7 @@ source_documents:
 | 问题 | 结论 |
 | --- | --- |
 | 上次为什么失败？ | **前端一个取消谓词传反的 bug**，不是方向错误。成功后仍被当作「已取消」丢弃，所以命令 3 ms 返回、JPEG 和 URL 都对，卡片却永远 loading。 |
-| 这次修好了吗？ | **路径通道可用且 DOM 失败恢复已补齐**（`de185f6`）。封面 100% 走 `asset.localhost`，全部就绪零失败；发布后 DOM 失败会触发一次强制 pixels 补救。仍缺真实 WebView2 注入验证（§7.1）。 |
+| 这次修好了吗？ | **路径通道可用；DOM 失败恢复已实现但未完成验收**。封面 100% 走 `asset.localhost`。DOM 恢复在 `de185f6` 实现了 `useAllSongsWindow` 一条链，但**另外两个 owner 的契约差异尚未对齐**（C1–C3，见 §7.5），且真实 WebView2 注入未做。 |
 | 更快了吗？ | **确定性地减少了工作量，但端到端可见时延的改善落在噪声带内、未能证明**。请读下面的「诚实结论」。 |
 | 磁盘？ | **25.4 MB → 2.2 MB，约 12 倍**（确定性）。 |
 | 有功能回退吗？ | 已测视图未发现。播放器大封面通道逐字节未动；旧 `.spxr` 缓存不失效。滚动空白暴露经两臂对照确认是**既有行为**（§7.1b），非本次引入。 |
@@ -57,20 +57,36 @@ source_documents:
 
 **实测数据（`tools/thumbnail-benchmark/coverlane-ab.mjs`，2026-11-08）**
 
-重建后的测量工具用 CDP `Network` 事实直接测量，取代此前的估算：
+重建后的测量工具用 CDP `Network` 事实直接测量，取代此前的估算。**以下是修正后的诚实口径**：
 
-| 指标 | baseline | 路径版 | 差值 |
-| --- | --- | --- | --- |
-| `audio_load_track_thumbnail` IPC 载荷 | 786,552 B | — | — |
-| `audio_load_track_thumbnail_path` IPC 载荷 | — | **518 B** | **约 1500 倍** |
-| JS `createObjectURL`（BMP）调用次数 | 3–4 次 | **0 次** | 消除 |
-| BMP 字节 | 786 KB–590 KB | **0** | 消除 |
-| asset 协议请求 | — | 7–10 次，全部 200 / `image/jpeg`，**403 = 0** | — |
-| 回落次数（按 lane 直接判定） | 0 | **0** | — |
-| DOM 错误事件 | 0 | **0** | — |
+| 命令 | 臂 | 请求数 | 完成 | 在途 | decodedBytes | encodedBytes | 请求体 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `audio_load_track_thumbnail` | baseline / fresh | 3 | 3 | 0 | 786,552 | 786,996 | 550 |
+| `audio_load_track_thumbnail_path` | 路径版 / fresh | 4 | **2** | **2** | **518** | 798 | 744 |
+| `audio_load_track_thumbnail` | baseline / warm | 3 | 2 | 1 | 524,368 | 524,664 | 550 |
+| `audio_load_track_thumbnail_path` | 路径版 / warm | 3 | 3 | 0 | **774** | 1,194 | 550 |
 
-> 注意：1500 倍是**本次样本内实测**的 IPC 载荷比，与之前推算的 2600 倍不同（那 2600 是「262,184 B ÷ 100 B 估算」）。**以实测 1500 倍为准**，此前的估算不再作为结论。
-> 「回落 0 次」这次是**直接计数**（同一 `(kind,generation,source,maxEdge)` 同时出现在 path 与 pixels 两条 lane），不再是「磁盘上 0 个 `.spxr`」的旁证。
+> **重要修正：此前写的「单张约 1500 倍（786,552 B vs 518 B）」不成立，已撤回。**
+>
+> 理由：两边的**请求数不同**（3 vs 4），路径版还有 **2 个请求在途**，而 518 B 只覆盖已完成的 2 个。这不是同资源、同 maxEdge、同缓存态、同阶段的匹配比较，**不能相除得出倍数**。
+>
+> 正确的表述是：**路径版每个已完成请求返回的载荷是几百字节量级（518–774 B），baseline 每个像素请求是约 262 KB 量级；量级差异明确存在，但精确倍数需要同口径匹配样本才能给出。**
+
+其他实测事实（可信）：
+
+| 指标 | baseline | 路径版 |
+| --- | --- | --- |
+| JS `createObjectURL`（BMP）调用次数 | 3–4 次 | **0 次** |
+| BMP 字节 | 590–786 KB | **0** |
+| asset 协议请求 | — | 7–10 次，全部 200 / `image/jpeg`，**403 = 0** |
+| asset 读取字节 | — | 255,780 / 303,032（**不走 IPC，但必须如实列出**） |
+| DOM 错误事件 | 0 | **0** |
+
+> 另外两点必须说明：
+> 1. **`decodedBytes` 只是观测到的响应载荷**，不等于完整 wire 开销（不含请求体、帧头、协议包装）。`requestBytes` 已另列。
+> 2. 路径版的**总字节并不只减少就是赢**——asset 读取另有 255–303 KB 从磁盘读进 WebView。真正的收益是「不经 IPC、不在主线程转码」，而不是「总 I/O 变小」。
+>
+> 「回落 0 次」的原判定也有缺陷，见下方 §7.3。
 
 **结论**：收益在「载荷、主线程 CPU、磁盘」上是确定且可量化的；在「端到端可见时延」上本次测量**未能证明**。后者取决于列表规模、滚动强度、机器负载——120 首单屏场景不足以放大差异。若要验证时延收益，需要更贴近真实的场景（见 §7）。
 
@@ -302,7 +318,7 @@ Get-ChildItem "$cache\SpMusic" -Recurse -Directory -Filter thumbnails | Select-O
 
 ## 7. 已知缺陷与处置
 
-### 7.1 DOM 失败恢复缺口（已于 `de185f6` 补齐）
+### 7.1 DOM 失败恢复：`useAllSongsWindow` 已实现，另两个 owner 未对齐
 
 **状态：已实现并通过自动化验证；真实 WebView2 注入仍未做。**
 
@@ -327,7 +343,7 @@ Get-ChildItem "$cache\SpMusic" -Recurse -Directory -Filter thumbnails | Select-O
 
 **仍缺**：真实 WebView2 下的第三类注入（真删受管 JPEG、真损坏文件、真慢盘）。当前验证只到「单元替身 + 浏览器生命周期注入」层。两个具体未知：`complete && naturalWidth === 0` 在 WebView2 上是否真会发生，以及 asset URL 失败时 `currentSrc` 的取值形态。
 
-### 7.1b 滚动空白暴露：**是既有行为，不是本次引入**
+### 7.2 滚动空白暴露：**是既有行为，不是本次引入**
 
 用重建后的测量工具（`tools/thumbnail-benchmark/coverlane-stress.mjs`）做**两臂同条件对照**（同 fixture、语料、视口、滚动脚本）：
 
@@ -342,7 +358,38 @@ Get-ChildItem "$cache\SpMusic" -Recurse -Directory -Filter thumbnails | Select-O
 
 > 注意 `censored` 的语义：未就绪就滚出视口记为空缺样本，**不计为成功**。这是方案文档明确要求的，不能被读成「40 张成功」。
 
-### 7.2 独立复核发现的缺陷（Test Agent，只读，未参与实现）
+### 7.3 测量计数缺陷（复核方案 §6 指出，已核实）
+
+上一轮我声称「回落 0 次」是**直接计数**，但实现有缺陷，**该结论不成立**。已核实的三处：
+
+| 缺陷 | 代码 | 后果 |
+| --- | --- | --- |
+| `sourceKey` 不含 `clientId` | `[kind, generation, source, maxEdge].join('|')` | **不同 client 各自走 path 与 pixels 会被误判为 1 次回落**（假阳性） |
+| folder 命令 source 恒为 null | `input.sourcePath ?? input.filePath ?? null`，而 folder 用 `rootPath`/`directoryPath` | **folder 的 path→pixels 回落被计 0**（假阴性） |
+| 把「同 key 两 lane 都出现」当回落真值 | `row.lanes.path > 0 && row.lanes.pixels > 0` | 两条通道都被用过 ≠ 发生过回落（首次即回落、恢复作业都会造成该形态） |
+
+此外本轮实测暴露了另一个问题：`laneAttemptSummary` 的 `distinctIdentities` 只统计到 4，而该次运行有 8 张封面；`byLane` 只有 path——说明**在途请求与已完成请求的覆盖并不完整**，计数不能代表全量。
+
+**处置**：计数改为在调度边界直接记录 `pathStart/Ready/Missing/Failed`、`fallbackStarted/Completed/Failed`、`DOMFailure`、`stale/abort`、`breaker` 等事件，网络命令降级为交叉核查；并新增 `coverlane-counting.test.mjs` 覆盖 10 类边界。详见该工具 README。
+
+**在此之前，本报告不主张「零回落」。**
+
+### 7.4 三处 owner 契约差异（复核方案 §2 的 C1–C3，已核实）
+
+上一轮 `de185f6` 的 DOM 恢复只覆盖了 `useAllSongsWindow` 一条链。复核方案指出另外两个 owner 与它不一致，**我逐条核实，三处全部属实**：
+
+| 编号 | 位置 | 已核实的事实 | 后果 |
+| --- | --- | --- | --- |
+| **C1** | `useAllSongsWindow.ts:853` | `if (row.presentationState !== 'pending') return` —— 图片先 `loaded` 会变成 `presented`，之后再失败被这行吞掉 | 「加载过一次」被当作「资源永远健康」。文件被缓存预算淘汰、或复挂载读到已删文件时，**不会触发任何补救** |
+| **C2** | `useAudioPlayer.ts:2647` | 错误处理按 `visual.coverThumbnail?.src === src` 匹配 URL，**未校验完整 token**；清掉 visual 后走**普通需求准入**，正常作业仍优先 path | **以重复 path 请求冒充补救**；并用 `playlistImageErrorCountsRef` 计到 3 次兜底，这不是恢复 epoch |
+| **C3** | `useLibraryArtwork.ts:197-218` | `forcePixels` 仅 256 分支生效，512 hero 仍走 path；`if (forcePixels) runtime.forcedPixels.delete(key)` **准入后立刻删除标志** | 512 档位无恢复；标志删除后后续错误可重新设置并**再次入队**，形成重复补救 |
+
+**C1 已用真实 hook harness 写成反例并确认在当前基线失败（红）**：
+`coverPresentationContract.test.mjs` 的 `a cover that already presented can fail later and still gets one recovery`，预期 `pixelRequests.length === 1`，实际 `0`。
+
+**处置**：按复核方案 §3/§4 对齐三个 owner 的共用契约（恢复 epoch、presented 后仍可受理、显式 `forcePixels` 绕过缓存命中与 path helper、256/512 正确入口、双失败有界终止、spent 标记不被 load 成功清空）。修复在下一提交，红→绿证据随提交附上。
+
+### 7.5 独立复核发现的缺陷（Test Agent，只读，未参与实现）
 
 Test Agent 独立发现 4 个缺陷，其中 **F1 是真实的高优先级缺陷，我已亲自核实并修复**。
 
@@ -392,7 +439,7 @@ drop(_permit);
 1. **端到端时延收益未被证明**（见 §0）。确定性收益在载荷、主线程 CPU 与磁盘；单屏 8 张封面的可见耗时差异在本机落于噪声带内（±10–48 ms 波动 vs 10–30 ms 效应）。
 2. 语料 120 首、单机实测。未覆盖 >1000 专辑、损坏封面、慢盘（**慢盘恰恰是 F1 曾会自毁的场景**）、大 DPI 等。
 3. OS 页缓存不可控，热态测量并非严格「冷启动」。
-4. 未实现架构方案 §6.4 的 DOM 层失败失效入口（发布后文件被淘汰导致 `<img>` 加载失败时，缺少一次补救回落）。当前依赖预解码 + 下次访问重试。
+4. **DOM 失败恢复只在 `useAllSongsWindow` 一条链完成**（`de185f6`）；`useAudioPlayer`、`useLibraryArtwork` 仍存在契约差异 C2/C3，见 §7.5。真实 WebView2 的删图/损坏注入未做。
 5. 列表是虚拟化的，只有视口附近的卡片会请求封面。这使「整列表填充耗时」在 120 首规模下无法作为稳定指标；要放大差异需要长列表 + 快速滚动 + 更大的封面尺寸。
 
 ### 我试过但未采用的方案

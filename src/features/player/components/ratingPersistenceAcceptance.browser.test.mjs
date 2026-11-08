@@ -59,6 +59,7 @@ const toastHost=document.createElement('div');document.body.append(toastHost);Re
   // The existing feedback action is the same action used by player thumbs.
   await page.evaluate(()=>window.vm.feedback.onToggle('liked'))
   await page.waitForFunction(()=>(window.vm.feedback.ratingsByTrackId.other??0)===0)
+  await page.waitForFunction(()=>window.vm.playback.track?.id==='a'&&!window.vm.playback.isSelectionPending)
   await reload();assert.equal((await scores()).other??0,0,'cancelled like stays cancelled after reload')
   await category('songs');await songs().filter({hasText:'Song other'}).first().click();await page.waitForFunction(()=>window.vm.playback.track?.id==='other'&&!window.vm.playback.isSelectionPending)
   await page.evaluate(()=>window.vm.feedback.onToggle('disliked'));await page.waitForFunction(()=>window.vm.feedback.ratingsByTrackId.other===1)

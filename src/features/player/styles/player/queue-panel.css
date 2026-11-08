@@ -33,3 +33,6 @@
 .debug-queue-panel strong, .debug-queue-panel small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .debug-queue-panel strong { font-size: calc(20 * var(--prototype-unit)); font-weight: 600; }
 .debug-queue-panel small { font-size: calc(16 * var(--prototype-unit)); }
+
+.debug-queue-panel li button[data-has-rating] { grid-template-columns: calc(40 * var(--prototype-unit)) minmax(0, 1fr) auto auto; }
+.debug-queue-panel .playlist-card-rating { grid-column: 4; color: var(--player-inverse-primary, var(--player-blue)); }

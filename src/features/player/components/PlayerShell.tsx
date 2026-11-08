@@ -1,3 +1,8 @@
+import type { TrackRating, TrackFeedback } from '../model/playerTypes'
+import type { RatingMode } from '../model/trackRating'
+import { updateTrackRating } from '../model/trackRatingStorage'
+import { flatFolderEntries } from '../model/folderHierarchy'
+import { compareByQuickIndex } from '../model/quickIndex'
 import { highestRatedSongs, lowestRatedSongs } from '../model/highestRated'
 import { mostPlayedSongs, readMostPlayedOptions, writeMostPlayedOptions, isMostPlayedOptions, type MostPlayedOptions } from '../model/mostPlayed'
 import { isStreamSource, sortStreamSongs, STREAM_SORTS, STREAMS_SCOPE, type StreamSort } from '../model/streams'
@@ -470,10 +475,37 @@ export function PlayerShell() {
     return player.playlistSummaryStatusByScope[scope] === 'ready'
       && durationData.settledByScope.get(scope) === true
   })
-  const toggleTrackFeedback = player.toggleTrackFeedback
-  const handleFeedbackToggle = useCallback((feedback: Parameters<typeof toggleTrackFeedback>[1]) => {
-    if (currentTrackId) toggleTrackFeedback(currentTrackId, feedback)
-  }, [currentTrackId, toggleTrackFeedback])
+  const handleRatingChange = useCallback((trackId: string, rating: TrackRating, mode: RatingMode = 'thumbs') => {
+    const previous = player.ratingsByTrackId
+    const state = player.audioState
+    const kind = player.playbackQueueKind
+    const cancellation = rating === 0 && (previous[trackId] ?? 0) !== 0
+      && trackId === currentTrackId && state?.currentTrackId === trackId
+      && (kind === 'highest-rated' || kind === 'lowest-rated')
+    const oldSongs = cancellation ? (kind === 'highest-rated' ? highestRatedSongs(allSongs, previous, mode) : lowestRatedSongs(allSongs, previous)).filter(item => item.available) : []
+    player.setTrackRating(trackId, rating)
+    if (!cancellation || !state) return
+    const nextRatings = updateTrackRating(previous, trackId, rating)
+    const remaining = (kind === 'highest-rated' ? highestRatedSongs(allSongs, nextRatings, mode) : lowestRatedSongs(allSongs, nextRatings)).filter(item => item.available)
+    const oldIndex = oldSongs.findIndex(item => item.trackId === trackId)
+    const following = [...oldSongs.slice(oldIndex + 1), ...oldSongs.slice(0, Math.max(0, oldIndex))]
+    let target = following.find(item => remaining.some(candidate => candidate.key === item.key)) ?? remaining[0]
+    let entries = remaining
+    if (!target) {
+      const folders = flatFolderEntries(allSongs).sort((a, b) => compareByQuickIndex(a.name, b.name))
+      const fallback = folders.map(folder => folder.songs.filter(item => item.available).sort((a, b) => a.track.title.localeCompare(b.track.title, 'zh-CN', { numeric: true }))).find(songs => songs.length)
+      entries = fallback ?? []
+      target = entries[0]
+    }
+    if (!target) return
+    void player.selectPlaybackQueueTrack({ kind: remaining.length ? kind : 'all-songs', entries: entries.map(item => ({ scope: item.scope, trackId: item.trackId })) }, target.trackId,
+      { autoplay: state.phase === 'playing', suppressCardFlip: true, expected: { trackId, generation: state.generation, sequence: player.selectionActivitySequence, kind } })
+  }, [player, currentTrackId, allSongs])
+  const handleFeedbackToggle = useCallback((feedback: TrackFeedback, mode?: RatingMode) => {
+    if (!currentTrackId) return
+    const rating = feedback === 'liked' ? 5 : 1
+    handleRatingChange(currentTrackId, player.ratingsByTrackId[currentTrackId] === rating ? 0 : rating, mode)
+  }, [currentTrackId, handleRatingChange, player.ratingsByTrackId])
   const handleDevAudioToolsClose = useCallback(() => setIsDevAudioToolsOpen(false), [])
 
   const recentAddedSongs = useMemo(() => recentlyAddedSongs(allSongs), [allSongs])
@@ -806,7 +838,7 @@ export function PlayerShell() {
     },
     feedback: {
       ratingsByTrackId: player.ratingsByTrackId,
-      onRatingChange: player.setTrackRating,
+      onRatingChange: handleRatingChange,
       value: player.currentFeedback,
       valuesByTrackId: player.feedbackByTrackId,
       onToggle: handleFeedbackToggle,

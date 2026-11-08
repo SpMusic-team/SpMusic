@@ -170,9 +170,10 @@ try {
   await page.getByRole('button',{name:'随机播放最低评级',exact:true}).click();await ready();assert.deepEqual((await page.evaluate(()=>window.vm.queue.tracks.map(t=>t.id))).sort(),['duet','missing'],'lowest shuffle uses only disliked songs')
   await page.evaluate(()=>window.vm.playlist.onOpenChange(false));await page.evaluate(()=>window.vm.playlist.onOpenChange(true));await category('lowest-rated')
   await page.screenshot({path:path.join(evidence,'lowest-thumbs-filtered.png')})
-  await rate('duet',0);await rate('missing',0);assert.equal(await songs().count(),0)
+  await rate('duet',0);await ready();await rate('missing',0);await ready();assert.equal(await songs().count(),0)
   assert(await page.getByRole('button',{name:'播放最低评级',exact:true}).isDisabled())
-  assert.deepEqual(await page.evaluate(()=>window.vm.queue.tracks.map(t=>t.id)).then(ids=>ids.sort()),['duet','missing'],'rating removal preserves lowest playback snapshot')
+  await page.waitForFunction(()=>window.vm.playback.track?.id==='a'&&!window.vm.playback.isSelectionPending)
+  assert((await page.evaluate(()=>window.vm.queue.tracks.map(t=>t.id))).includes('band'),'explicit current zero in empty lowest switches to default library source')
   assert.deepEqual(errors,[]);console.log(JSON.stringify({passed:true,evidence,tiers,thumbTiers}))
  } catch(e){await page.screenshot({path:path.join(evidence,'failure.png')});console.error(await active().innerText().catch(()=>''));throw e}
 } finally {if(browser)await browser.close();await server.close()}

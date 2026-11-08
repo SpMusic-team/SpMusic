@@ -4535,7 +4535,12 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
   }, [findPlaylistForScope, loadPlaylistTrackOrSkip, activatePlaylistScope, prefetchAdjacentPlaylistTracks])
 
   const selectPlaybackQueueTrack = useCallback(async (selection: PlaybackQueueSelection, trackId: string,
-    options?: { shuffleMode: 'shuffle-all'; repeatMode: RepeatMode; shuffleOrder: readonly string[] }) => {
+    options?: { shuffleMode?: 'shuffle-all'; repeatMode?: RepeatMode; shuffleOrder?: readonly string[]; autoplay?: boolean; suppressCardFlip?: boolean; expected?: { trackId: string; generation: number | null; sequence: number; kind: 'highest-rated' | 'lowest-rated' } }) => {
+    const expected = options?.expected
+    if (expected && (latestAudioStateRef.current?.currentTrackId !== expected.trackId
+      || latestAudioStateRef.current?.generation !== expected.generation
+      || selectionActivitySequenceRef.current !== expected.sequence
+      || playbackQueueOrigin(folderPlaylistRef.current)?.kind !== expected.kind)) return false
     if (transportOperationInProgress()
       || timelineInteractionRef.current === 'seeking') return false
     const sources = new Map<string, Map<string, AudioFolderTrackRef>>()
@@ -4574,12 +4579,19 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
           ...(source?.sourceKind === 'custom' && !playbackQueueOrigin(source)
             ? { sourcePlaylist: { ...source, tracks: source.tracks.map((item) => ({ ...item })) } } : {}) },
     }
+    if (options?.suppressCardFlip) {
+      trackCardPreviewIdRef.current += 1
+      preparedTrackCardPreviewRef.current = null
+      artworkPrefetchGenerationRef.current += 1
+      setArtworkPrefetchCandidates([])
+      setSelectionVisualIntent(null)
+    }
     const expectedRequestId = selectionRequestIdRef.current + 1
-    const loaded = await loadPlaylistTrackOrSkip(playlist, index, true, 1, false, false, false, 'queue')
+    const loaded = await loadPlaylistTrackOrSkip(playlist, index, options?.autoplay ?? true, 1, false, false, false, options?.suppressCardFlip ? undefined : 'queue')
     if (!loaded || selectionRequestIdRef.current !== expectedRequestId
       || latestAudioStateRef.current?.currentTrackId !== trackId) return false
     activatePlaylistScope(playlist, summaries)
-    if (options) {
+    if (options?.shuffleMode && options.repeatMode && options.shuffleOrder) {
       trackCardPreviewIdRef.current += 1
       preparedTrackCardPreviewRef.current = null
       artworkPrefetchGenerationRef.current += 1

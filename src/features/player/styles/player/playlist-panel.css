@@ -1062,3 +1062,8 @@
 .playlist-grid .playlist-card-play-count:has(.playlist-card-rating-thumb) {
   padding-inline: calc(var(--playlist-rating-thumb-size, 14.076px) * 5 / 23);
 }
+
+/* Stream rows keep their URL/source labels and align rating in the source line. */
+.playlist-card[data-source-kind='stream'][data-has-play-count] .playlist-card-stream-source { width: 100%; }
+.playlist-card-stream-source .playlist-card-stream-rating { margin-left: auto; flex: 0 0 auto; }
+.playlist-grid:is([data-layout-level='5'], [data-layout-level='6']) .playlist-card-stream-source .playlist-card-stream-rating { display: none; }

@@ -1,7 +1,7 @@
 import type { TrackRating } from '../model/playerTypes'
 import type { RatingMode } from '../model/trackRating'
-import ratingLiked from '@/assets/song-card/rating-liked.svg'
-import { Star48Filled } from '@fluentui/react-icons'
+import { SongRatingBadge } from './SongRating'
+import { useSongRating, visibleSongRating } from '../hooks/useSongRating'
 import { memo, useCallback, useLayoutEffect, useSyncExternalStore, type CSSProperties, type SyntheticEvent } from 'react'
 import { EqualIcon } from 'lucide-react'
 import { useSystemIcons } from '@/features/appearance/hooks/useAppearance'
@@ -15,6 +15,7 @@ import arrowMove from '@/assets/song-card/arrow-move.svg'
 import streamGlyph from '@/assets/media-library/streams-root.svg'
 
 type PlaylistCardProps = {
+  hideRating?: boolean
   rating?: TrackRating
   ratingMode?: RatingMode
   playCount?: number
@@ -82,7 +83,7 @@ function useCardArtwork(source: PlaylistArtworkSource | undefined, trackId: stri
 }
 
 export const PlaylistCard = memo(function PlaylistCard({
-  rating, ratingMode, playCount,
+  hideRating = false, rating: suppliedRating, ratingMode: suppliedRatingMode, playCount,
   track: baseTrack,
   artworkSource,
   fallbackArtworkSource,
@@ -108,6 +109,9 @@ export const PlaylistCard = memo(function PlaylistCard({
   onToggleSelect,
   onEnterSelectMode,
 }: PlaylistCardProps) {
+  const inheritedRating = useSongRating(baseTrack.id)
+  const ratingMode = suppliedRatingMode ?? inheritedRating.mode
+  const rating = hideRating || playCount !== undefined ? undefined : visibleSongRating(suppliedRating ?? inheritedRating.rating, ratingMode)
   const visual = useCardArtwork(artworkSource, baseTrack.id)
   const fallback = useCardArtwork(fallbackArtworkSource, baseTrack.id)
   const fallbackKey = fallbackArtworkSource?.keyByTrackId.get(baseTrack.id)
@@ -192,7 +196,7 @@ export const PlaylistCard = memo(function PlaylistCard({
 
 function PlaylistCardContent({ rating, ratingMode, playCount, track, positionMs, songKey, coverUrl, artworkVisible, selectMode, showReorderHandle, unavailable, showExtendedMetadata, coverState, coverFailed, onCoverFailed }: Pick<PlaylistCardProps, 'rating' | 'ratingMode' | 'playCount' | 'track' | 'positionMs' | 'songKey' | 'coverUrl' | 'artworkVisible' | 'selectMode' | 'showReorderHandle' | 'unavailable' | 'showExtendedMetadata' | 'coverFailed' | 'onCoverFailed'> & { coverState: PlaylistCardCoverState }) {
   const systemIcons = useSystemIcons()
-  const badge = rating === undefined ? playCount : ratingMode === 'stars' ? <span className="playlist-card-rating" data-rating={rating}>{Array.from({ length: rating }, (_, index) => <Star48Filled key={index} className="playlist-card-rating-star" aria-hidden="true" />)}</span> : rating === 5 || rating === 1 ? <span className="playlist-card-rating" data-rating={rating}><SongCardGlyph className={rating === 1 ? 'playlist-card-rating-thumb is-disliked' : 'playlist-card-rating-thumb'} src={ratingLiked} /></span> : null
+  const badge = rating !== undefined ? <SongRatingBadge rating={rating} mode={ratingMode ?? 'thumbs'} /> : playCount
   const coverSource = coverUrl ?? track.coverImage ?? track.coverImageFallback
   const coverMarkVisible = Boolean(track.stream && coverState !== 'ready') || coverState === 'empty' || coverState === 'error'
   // Empty text means "unknown", so a missing artist/album must not leave an
@@ -250,7 +254,7 @@ function PlaylistCardContent({ rating, ratingMode, playCount, track, positionMs,
         {badge != null ? <span className="playlist-card-play-count playlist-card-compact-play-count" aria-hidden="true">{badge}</span> : null}
         {track.stream ? <>
           <span className="playlist-card-stream-url" title={artistText || track.stream.url}>{artistText || track.stream.url}</span>
-          <span className="playlist-card-stream-source"><systemIcons.music aria-hidden="true" /><span>流</span></span>
+          <span className="playlist-card-stream-source"><systemIcons.music aria-hidden="true" /><span>流</span>{badge != null ? <span className="playlist-card-play-count playlist-card-stream-rating">{badge}</span> : null}</span>
         </> : artistAlbum ? <span className="playlist-card-artist">{artistAlbum}</span> : null}
         {!track.stream && (formatParts.length || showExtendedMetadata && badge != null) ? (
           <span className="playlist-card-format">

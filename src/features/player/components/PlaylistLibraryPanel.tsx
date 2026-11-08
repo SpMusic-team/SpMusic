@@ -72,6 +72,7 @@ type Props = {
 }
 
 type AllSongsCardProps = {
+  hideRating?: boolean
   rating?: TrackRating
   ratingMode?: RatingMode
   playCount?: number
@@ -97,13 +98,13 @@ type AllSongsCardProps = {
 // Covers are layered in the card from the artwork stores instead of being merged
 // into the aggregated rows. The rows therefore keep their identity while covers
 // arrive, and only the card whose own store entry changed re-renders.
-const AllSongsCard = memo(function AllSongsCard({ rating, ratingMode, playCount, item, index, store, artworkSource, fallbackArtworkSource, current,
+const AllSongsCard = memo(function AllSongsCard({ hideRating, rating, ratingMode, playCount, item, index, store, artworkSource, fallbackArtworkSource, current,
   canActivate, selectMode, showReorderHandle, selected, artworkVisible, showExtendedMetadata, coverFailed, onCoverFailed, onActivate,
   onToggleSelect, onEnterSelectMode }: AllSongsCardProps) {
   const coverUrl = useAllSongsCoverUrl(store, item.key, item.trackId, item.sourcePath)
   const track = item.track
   const contentShape = playlistCardContentShape(track)
-  return <PlaylistCard rating={rating} ratingMode={ratingMode} playCount={playCount} songKey={item.key} track={track} index={index} coverUrl={coverUrl}
+  return <PlaylistCard hideRating={hideRating} rating={rating} ratingMode={ratingMode} playCount={playCount} songKey={item.key} track={track} index={index} coverUrl={coverUrl}
     artworkSource={artworkSource} fallbackArtworkSource={fallbackArtworkSource}
     current={current} unavailable={!item.available} canSelectUnavailable canActivate={canActivate}
     selectMode={selectMode} showReorderHandle={showReorderHandle} selected={selected} artworkVisible={artworkVisible}
@@ -589,7 +590,7 @@ export function PlaylistLibraryPanel({ ratingMode = 'thumbs', ratingsByTrackId, 
           panel.scrollTop += space.getBoundingClientRect().top - panel.getBoundingClientRect().top + Math.floor(next / songsLayout.columns) * songsWindow.stride
         }}
         style={{ ...songsLayout.style, touchAction: 'pan-y', transformOrigin: 'left top', ...songsWindow.gridStyle }}>
-        {renderedSongs.map((item, index) => <AllSongsCard key={item.key} item={item} rating={isHighest || isLowest ? ratingsByTrackId?.[item.trackId] ?? 0 : undefined} ratingMode={ratingMode} playCount={isMost ? library.mostPlayedCounts?.get(normalizeAudioSourcePath(item.sourcePath)) : undefined} index={songsWindow.first + index} store={coverStore}
+        {renderedSongs.map((item, index) => <AllSongsCard key={item.key} item={item} hideRating={isMost} rating={isHighest || isLowest ? ratingsByTrackId?.[item.trackId] ?? 0 : undefined} ratingMode={ratingMode} playCount={isMost ? library.mostPlayedCounts?.get(normalizeAudioSourcePath(item.sourcePath)) : undefined} index={songsWindow.first + index} store={coverStore}
             artworkSource={playlist.artworkSource} fallbackArtworkSource={playlist.fallbackArtworkSource}
             current={item.trackId === playlist.currentTrackId}
             canActivate={!songActivationLocked}

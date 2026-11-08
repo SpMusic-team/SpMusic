@@ -1,3 +1,4 @@
+import { SongRatingContext } from '../hooks/useSongRating'
 import { BookmarksPanel } from './BookmarksPanel'
 import type { PlayerMoreActions } from '@/features/player/model/playerUiViewModel'
 import { SearchPanel } from './SearchPanel'
@@ -1097,6 +1098,11 @@ export function PlayerSurface({
   const [compactPlaylist, setCompactPlaylist] = useState(() => window.matchMedia('(width <= 1024px)').matches)
   const [searchRequestId, setSearchRequestId] = useState(0)
   const [ratingMode, setRatingMode] = useState(readRatingMode)
+  const songRatingContext = useMemo(() => ({ mode: ratingMode, ratings: feedback.ratingsByTrackId ?? {} }), [ratingMode, feedback.ratingsByTrackId])
+  const ratingChangeCallback = feedback.onRatingChange
+  const feedbackToggleCallback = feedback.onToggle
+  const dispatchRatingChange = useCallback((id: string, rating: TrackRating) => ratingChangeCallback?.(id, rating, ratingMode), [ratingChangeCallback, ratingMode])
+  const dispatchFeedbackToggle = useCallback((value: TrackFeedback) => feedbackToggleCallback(value, ratingMode), [feedbackToggleCallback, ratingMode])
   const handleRatingModeChange = useCallback((mode: RatingMode) => { setRatingMode(mode); persistRatingMode(mode) }, [])
   const [controllerMode, setControllerMode] = useState(readPlaylistControllerMode)
   const handleControllerModeChange = useCallback((mode: PlaylistControllerMode) => {
@@ -2953,7 +2959,7 @@ export function PlayerSurface({
   )
 
   return (
-    <TooltipProvider>
+    <SongRatingContext.Provider value={songRatingContext}><TooltipProvider>
       <PlayerDragDiagnosticsPanel />
       {viewModel.folderSelection ? <FolderSelectionDialog folderSelection={viewModel.folderSelection} /> : null}
       <main
@@ -3089,9 +3095,9 @@ export function PlayerSurface({
                         onCollapse={collapsePlayer}
                         ratingMode={ratingMode}
                         rating={feedback.ratingsByTrackId?.[layer.track.id] ?? (feedback.valuesByTrackId?.[layer.track.id] === 'liked' ? 5 : feedback.valuesByTrackId?.[layer.track.id] === 'disliked' ? 1 : 0)}
-                        onRatingChange={feedback.onRatingChange}
+                        onRatingChange={feedback.onRatingChange ? dispatchRatingChange : undefined}
                         feedbackValue={feedback.ratingsByTrackId ? feedbackFromRating(feedback.ratingsByTrackId[layer.track.id] ?? 0) : feedback.valuesByTrackId?.[layer.track.id]}
-                        onFeedbackToggle={feedback.onToggle}
+                        onFeedbackToggle={dispatchFeedbackToggle}
                         onReady={markArtworkReady}
                         onLoadError={markArtworkLoadError}
                         role={role}
@@ -3231,7 +3237,7 @@ export function PlayerSurface({
             {playlist.isOpen && playlist.library?.route?.view === 'category' && (playlist.library.route.categoryId === 'artist' || playlist.library.route.categoryId === 'album-artist' || playlist.library.route.categoryId === 'composer' || playlist.library.route.categoryId === 'year' || playlist.library.route.categoryId === 'genre') ? <AlbumLibraryPanel key={playlist.library.route.categoryId} categoryId={playlist.library.route.categoryId} controllerMode={controllerMode} timelineInteraction={timeline.interaction} playlist={playlist} allSongsCoverStore={allSongsCoverStore} librarySidebarOpen={librarySidebarOpen} onLibrarySidebarOpenChange={setCompactSidebarOpen} searchRequestId={searchRequestId} /> : null}
             {playlist.isOpen && playlist.library?.route?.view === 'category' && ['folders', 'folder'].includes(playlist.library.route.categoryId) ? <FolderHierarchyPanel key={playlist.library.route.categoryId} categoryId={playlist.library.route.categoryId === 'folder' ? 'folder' : 'folders'} controllerMode={controllerMode} timelineInteraction={timeline.interaction} playlist={playlist} allSongsCoverStore={allSongsCoverStore} librarySidebarOpen={librarySidebarOpen} onLibrarySidebarOpenChange={setCompactSidebarOpen} searchRequestId={searchRequestId} /> : null}
             {playlist.isOpen && playlist.library?.isOpen && playlist.library.route?.view !== 'overview' && !(playlist.library.route?.view === 'category' && ['bookmarks', 'folders', 'folder', 'album', 'artist', 'album-artist', 'composer', 'year', 'genre'].includes(playlist.library.route.categoryId)) ? (
-              <PlaylistLibraryPanel
+              <PlaylistLibraryPanel ratingMode={ratingMode} ratingsByTrackId={feedback.ratingsByTrackId}
                 controllerMode={controllerMode}
                 entryPosition={playlist.entryPosition}
                 allSongsCoverStore={allSongsCoverStore}
@@ -3354,6 +3360,6 @@ export function PlayerSurface({
           ) : null}
         </AnimatePresence>
       </main>
-    </TooltipProvider>
+    </TooltipProvider></SongRatingContext.Provider>
   )
 }

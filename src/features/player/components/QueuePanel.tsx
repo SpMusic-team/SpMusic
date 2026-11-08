@@ -1,3 +1,5 @@
+import { SongRatingBadge } from './SongRating'
+import { useSongRating } from '../hooks/useSongRating'
 import {
   memo,
   useCallback,
@@ -43,6 +45,7 @@ const QueueTrackRow = memo(function QueueTrackRow({
 }: QueueTrackRowProps) {
   // An empty artist means "not known yet". Rendering an empty node would leave a
   // dangling spacer line and an aria label without content.
+  const { mode, rating } = useSongRating(item.id)
   const artist = item.stream ? item.artist?.trim() || item.stream.url : item.artist?.trim()
   return (
     <li
@@ -54,6 +57,8 @@ const QueueTrackRow = memo(function QueueTrackRow({
       <Button
         variant="ghost"
         type="button"
+        data-has-rating={rating !== undefined || undefined}
+        aria-label={rating !== undefined ? `${item.title} · ${rating} 星` : undefined}
         aria-current={current ? 'true' : undefined}
         disabled={disabled}
         onClick={() => onTrackSelect?.(item.id)}
@@ -61,6 +66,7 @@ const QueueTrackRow = memo(function QueueTrackRow({
         <span>{index + 1}</span>
         <strong>{item.title}</strong>
         {artist ? <small>{artist}</small> : null}
+        {rating !== undefined ? <SongRatingBadge rating={rating} mode={mode} /> : null}
       </Button>
     </li>
   )

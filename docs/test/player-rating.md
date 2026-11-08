@@ -109,3 +109,27 @@ node src/features/player/components/playerRatingHitTargets.browser.test.mjs
 测试通过真实坐标mouse和CDP touch，而非VM写值代替手势。VM仅用于准备1分状态。覆盖实星短点清0、封面空第三槽点击3且不返回、更多空第三槽点击3、更多可见第一颗mouse/touch拖4，以及420宽封面和更多第三空槽可信触摸。弹窗打开只等待几何稳定，不使用键盘先展开；打开动画中的旧坐标不能用于判断最终命中。
 
 实现将固定五槽root作为命中区，视觉track和::before背景独立收缩；按坐标选分；同分未拖/未长按短点在up清零。旧完整手势套件已改采样visual track而非固定root，重新通过开合中间帧、长按、取消、键盘、disabled/unmount、模式和曲目隔离。完整证据保留在 `%TEMP%/spmusic-rating-hits-evidence/findings.json` 与 `regression-log.txt`。
+
+## 2026-11-07：封面操作统一缩放与边距验证
+
+用户要求封面更多和赞踩按钮随封面宽度统一缩放，并要求评分和更多底边距等于评分左边距。新增正式比例测试：
+
+```powershell
+node src/features/player/components/playerCoverActionsScale.browser.test.mjs
+```
+
+真实Shell独立执行20组：2560×1440 DPR1、1920×1080 DPR1、1440×960 DPR2（对应2880×1920/200%）、640×1024 DPR1、420×900 DPR1；每组五星/赞踩、播放/暂停。按封面宽度归一化比较按钮、图标、左右/底边距和赞踩间距，不写死各屏CSS像素；每次播放状态变化后等待实际cover/按钮/icon几何连续5帧稳定，再采样，以免把已有封面播放动画中的瞬态投影作为最终比例。
+
+20组全部通过，更多宽高/封面约72/990，图标约48/990，左/右/底约12/990；赞踩宽约106/990、间距约24/990。两模式、播放/暂停和DPR2比例一致，420/640无操作重叠或封面边界裁切。更多弹窗仍是inverse-primary，根及::before透明、无阴影，独立的更多层缩放未受封面规则影响。
+
+播放态代表几何（CSS px）：
+
+| CSS视口与DPR | 封面宽 | 更多宽高 | 图标宽高 | 左=底 |
+| --- | ---: | ---: | ---: | ---: |
+| 2560×1440 / 1 | 1062 | 77.23 | 51.48 | 12.86 |
+| 1920×1080 / 1 | 796.5 | 57.92 | 38.61 | 9.64 |
+| 1440×960 / 2 | 602 | 43.78 | 29.19 | 7.30 |
+
+测试发现首版遗漏container-type导致cqw回退viewport，独立测出more越出封面；已退回前端补inline-size容器并重新通过。五星完整交互测试也在最终CSS下重跑通过（`playerRating.browser.test.mjs`退出0）。
+
+证据位于 `%TEMP%/spmusic-cover-actions-scale-evidence/geometry.json`、`result.log`、`1920-1-stars.png`、`1440-2-thumbs.png`、`420-1-stars.png`、`more-popup.png`。Test Agent已实际看图确认。无真实跨显示器拖窗/操作系统DPI切换验证；DPR通过浏览器设备指标模拟。

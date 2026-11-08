@@ -1,3 +1,4 @@
+import { readTrackRatings, writeTrackRatings, updateTrackRating } from '../model/trackRatingStorage'
 import { readMostPlayed, writeMostPlayed, recordMostPlayed } from '../model/mostPlayed'
 import { RecentlyPlayedTracker, readRecentlyPlayed, writeRecentlyPlayed } from '../model/recentlyPlayed'
 import { isStreamSource, STREAMS_SCOPE, validStreamsPlaylist } from '../model/streams'
@@ -448,7 +449,8 @@ function audioStatusText(
 
 export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed = true, playerVisible = false) {
   const [queueTracks, setQueueTracks] = useState<TrackSummary[]>([])
-  const [ratingsByTrackId, setRatingsByTrackId] = useState<Record<string, TrackRating>>({})
+  const [ratingsByTrackId, setRatingsByTrackId] = useState<Record<string, TrackRating>>(readTrackRatings)
+  const ratingsRef = useRef(ratingsByTrackId)
   const feedbackByTrackId = useMemo(() => Object.fromEntries(Object.entries(ratingsByTrackId).flatMap<[string, TrackFeedback]>(([id, rating]) => rating === 5 ? [[id, 'liked' as const]] : rating === 1 ? [[id, 'disliked' as const]] : [])), [ratingsByTrackId])
   const [shuffleMode, setShuffleMode] = useState<ShuffleMode>(readShuffleMode)
   const [repeatMode, setRepeatMode] = useState<RepeatMode>(readRepeatMode)
@@ -4487,13 +4489,18 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
   }
 
   const setTrackRating = useCallback((trackId: string, rating: TrackRating) => {
-    if (!Number.isInteger(rating) || rating < 0 || rating > 5) return
-    setRatingsByTrackId(previous => ({ ...previous, [trackId]: rating }))
+    if (!trackId.trim() || !Number.isInteger(rating) || rating < 0 || rating > 5) return
+    const next = updateTrackRating(ratingsRef.current, trackId, rating)
+    ratingsRef.current = next
+    setRatingsByTrackId(next)
+    try { writeTrackRatings(next) }
+    catch { toast.error('评分保存失败，当前评分仅在本次会话中保留。请检查本地存储后重试。', { id: 'track-rating-save-failed' }) }
   }, [])
   const toggleTrackFeedback = useCallback((trackId: string, feedback: TrackFeedback) => {
     const rating = feedback === 'liked' ? 5 : 1
-    setRatingsByTrackId(previous => ({ ...previous, [trackId]: previous[trackId] === rating ? 0 : rating }))
-  }, [])
+    const current = Object.hasOwn(ratingsRef.current, trackId) ? ratingsRef.current[trackId] : 0
+    setTrackRating(trackId, current === rating ? 0 : rating)
+  }, [setTrackRating])
 
   function changeVolume(nextVolume: number) {
     if (
@@ -4568,7 +4575,12 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
   }, [findPlaylistForScope, loadPlaylistTrackOrSkip, activatePlaylistScope, prefetchAdjacentPlaylistTracks])
 
   const selectPlaybackQueueTrack = useCallback(async (selection: PlaybackQueueSelection, trackId: string,
-    options?: { shuffleMode: 'shuffle-all'; repeatMode: RepeatMode; shuffleOrder: readonly string[] }) => {
+    options?: { shuffleMode?: 'shuffle-all'; repeatMode?: RepeatMode; shuffleOrder?: readonly string[]; autoplay?: boolean; suppressCardFlip?: boolean; expected?: { trackId: string; generation: number | null; sequence: number; kind: 'highest-rated' | 'lowest-rated' } }) => {
+    const expected = options?.expected
+    if (expected && (latestAudioStateRef.current?.currentTrackId !== expected.trackId
+      || latestAudioStateRef.current?.generation !== expected.generation
+      || selectionActivitySequenceRef.current !== expected.sequence
+      || playbackQueueOrigin(folderPlaylistRef.current)?.kind !== expected.kind)) return false
     if (transportOperationInProgress()
       || timelineInteractionRef.current === 'seeking') return false
     const sources = new Map<string, Map<string, AudioFolderTrackRef>>()
@@ -4598,7 +4610,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     const source = selection.sourceScope ? findPlaylistForScope(selection.sourceScope) : undefined
     if (selection.kind === 'playlist' && !source) return false
     const id = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
-    const name = selection.kind === 'streams' ? '流' : selection.kind === 'most-played' ? '最常播放' : selection.kind === 'long-tracks' ? '长' : selection.kind === 'recent-added' ? '最近添加' : selection.kind === 'recent-played' ? '最近播放' : selection.kind === 'all-songs' ? '所有歌曲' : playlistDisplayName(source!)
+    const name = selection.kind === 'streams' ? '流' : selection.kind === 'lowest-rated' ? '最低评级' : selection.kind === 'highest-rated' ? '最高评级' : selection.kind === 'most-played' ? '最常播放' : selection.kind === 'long-tracks' ? '长' : selection.kind === 'recent-added' ? '最近添加' : selection.kind === 'recent-played' ? '最近播放' : selection.kind === 'all-songs' ? '所有歌曲' : playlistDisplayName(source!)
     const playlist: PlaybackQueuePlaylist = {
       sourceKind: 'custom', sourcePath: `queue:${selection.kind}:${id}`,
       sourceName: name, directoryPath: '', directoryName: name, selectedIndex: index, tracks,
@@ -4607,12 +4619,19 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
           ...(source?.sourceKind === 'custom' && !playbackQueueOrigin(source)
             ? { sourcePlaylist: { ...source, tracks: source.tracks.map((item) => ({ ...item })) } } : {}) },
     }
+    if (options?.suppressCardFlip) {
+      trackCardPreviewIdRef.current += 1
+      preparedTrackCardPreviewRef.current = null
+      artworkPrefetchGenerationRef.current += 1
+      setArtworkPrefetchCandidates([])
+      setSelectionVisualIntent(null)
+    }
     const expectedRequestId = selectionRequestIdRef.current + 1
-    const loaded = await loadPlaylistTrackOrSkip(playlist, index, true, 1, false, false, false, 'queue')
+    const loaded = await loadPlaylistTrackOrSkip(playlist, index, options?.autoplay ?? true, 1, false, false, false, options?.suppressCardFlip ? undefined : 'queue')
     if (!loaded || selectionRequestIdRef.current !== expectedRequestId
       || latestAudioStateRef.current?.currentTrackId !== trackId) return false
     activatePlaylistScope(playlist, summaries)
-    if (options) {
+    if (options?.shuffleMode && options.repeatMode && options.shuffleOrder) {
       trackCardPreviewIdRef.current += 1
       preparedTrackCardPreviewRef.current = null
       artworkPrefetchGenerationRef.current += 1

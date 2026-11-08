@@ -1032,3 +1032,38 @@
 /* Count typography steps down with the compact song layouts. */
 .playlist-grid:is([data-layout-level="5"], [data-layout-level="6"] ) { --playlist-play-count-size: 12px; }
 .playlist-grid:is([data-layout-level="7"], [data-layout-level="8"], [data-layout-level="9"] ) { --playlist-play-count-size: 10px; }
+
+.playlist-card-rating { display: inline-flex; align-items: center; gap: 2px; vertical-align: middle; }
+.playlist-card-rating .playlist-card-glyph { background: currentColor; mask-size: contain; }
+.playlist-card-rating-thumb.is-disliked { transform: rotate(180deg); }
+
+/* Stars and thumbs have independent three-tier sizes; play counts are unchanged. */
+.playlist-grid { --playlist-rating-star-size: 5.336px; --playlist-rating-thumb-size: 14.076px; }
+.playlist-grid:is([data-layout-level="0"], [data-layout-level="1"], [data-layout-level="2"], [data-layout-level="3"], [data-layout-level="4"]) { --playlist-rating-star-size: 8.832px; --playlist-rating-thumb-size: 17.572px; }
+.playlist-grid:is([data-layout-level="5"], [data-layout-level="6"]) { --playlist-rating-star-size: 7.084px; --playlist-rating-thumb-size: 15.824px; }
+.playlist-card-rating { gap: 0; }
+.playlist-card-rating-star {
+  width: var(--playlist-rating-star-size, 5.336px);
+  height: var(--playlist-rating-star-size, 5.336px);
+  flex: 0 0 var(--playlist-rating-star-size, 5.336px);
+}
+.playlist-grid .playlist-card-play-count:has(.playlist-card-rating) {
+  padding-inline: calc(var(--playlist-rating-star-size, 5.336px) * 5 / 23);
+  min-width: 0;
+  height: auto;
+  line-height: 1;
+}
+
+.playlist-card-rating .playlist-card-rating-thumb {
+  width: var(--playlist-rating-thumb-size, 14.076px);
+  height: var(--playlist-rating-thumb-size, 14.076px);
+  flex: 0 0 var(--playlist-rating-thumb-size, 14.076px);
+}
+.playlist-grid .playlist-card-play-count:has(.playlist-card-rating-thumb) {
+  padding-inline: calc(var(--playlist-rating-thumb-size, 14.076px) * 5 / 23);
+}
+
+/* Stream rows keep their URL/source labels and align rating in the source line. */
+.playlist-card[data-source-kind='stream'][data-has-play-count] .playlist-card-stream-source { width: 100%; }
+.playlist-card-stream-source .playlist-card-stream-rating { margin-left: auto; flex: 0 0 auto; }
+.playlist-grid:is([data-layout-level='5'], [data-layout-level='6']) .playlist-card-stream-source .playlist-card-stream-rating { display: none; }

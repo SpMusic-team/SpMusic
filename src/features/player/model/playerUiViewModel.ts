@@ -1,3 +1,4 @@
+import type { RatingMode } from './trackRating'
 import type { MostPlayedOptions } from './mostPlayed'
 import type { StreamSort } from './streams'
 import type { BookmarkEntry } from './bookmarks'
@@ -257,6 +258,8 @@ export type PlaylistLibraryViewModel = PlaylistAddCallbacks & {
   onSelectCategory?: (categoryId: MediaLibraryCategoryId) => void
   isOpen: boolean
   items: readonly PlaylistLibraryItem[]
+  lowestRatedSongs?: readonly AllSongsItem[]
+  highestRatedSongs?: readonly AllSongsItem[]
   mostPlayedSongs?: readonly AllSongsItem[]
   mostPlayedCounts?: ReadonlyMap<string, number>
   mostPlayedOptions?: MostPlayedOptions
@@ -339,10 +342,10 @@ export type PlaylistArtworkDemand = {
 
 export type PlayerFeedbackViewModel = {
   ratingsByTrackId?: Readonly<Record<string, TrackRating>>
-  onRatingChange?: (trackId: string, rating: TrackRating) => void
+  onRatingChange?: (trackId: string, rating: TrackRating, mode?: RatingMode) => void
   value?: TrackFeedback
   valuesByTrackId?: Readonly<Record<string, TrackFeedback>>
-  onToggle: (feedback: TrackFeedback) => void
+  onToggle: (feedback: TrackFeedback, mode?: RatingMode) => void
 }
 
 export type FolderSelectionViewModel = {

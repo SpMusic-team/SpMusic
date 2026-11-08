@@ -29,6 +29,9 @@ import {
   runtimeServingFacts,
 } from './coverlane-common.mjs'
 import {
+  CoverAttemptLedger, assessByteComparability,
+} from './coverlane-counting.mjs'
+import {
   pageInstallScript, pageActionScript, ACTION_OPEN_LIST, ACTION_LEAVE_LIST, ACTION_SCROLL,
   PAGE_FINAL_STATE, captureScreenshot,
 } from './coverlane-page.mjs'
@@ -127,6 +130,50 @@ function parseArgs(argv) {
   return options
 }
 
+/**
+ * Feed the authoritative ledger from one recorded action.
+ *
+ * `records` are the raw CDP request records and `presentation` is the in-page
+ * report from the application's own presentation protocol. Both must be passed
+ * explicitly: an earlier version read them off the finished `network` snapshot,
+ * which does not exist yet at that point, so the ledger came out empty and looked
+ * like "no fallbacks" rather than "not measured".
+ *
+ * Lane starts/outcomes are marked `observed` (they are real protocol events).
+ * This harness cannot see the frontend scheduler's recovery出口, so it never
+ * invents a `fallbackStarted`; recovery therefore stays 0 unless a future
+ * instrumentation seam reports it, which is stated in the summary.
+ */
+function buildLedger({ records = [], presentation = null, ownerSession }) {
+  const ledger = new CoverAttemptLedger({ ownerSession })
+  for (const request of records) {
+    const lane = request.command && /_path$/.test(request.command) ? 'path'
+      : request.command && /cover_pixels|_thumbnail$/.test(request.command) ? 'pixels' : null
+    if (!lane) continue
+    const attemptId = `cdp:${request.order}`
+    if (lane === 'path') {
+      ledger.record({
+        type: 'pathStart', attemptId, requestId: `native:${request.order}`,
+        at: request.durationMs ?? null, authority: 'observed',
+      })
+      if (request.status === 200) {
+        const type = request.decodedBytes > 0 && request.decodedBytes <= 8 ? 'pathMissing' : 'pathReady'
+        ledger.record({ type, attemptId, at: request.durationMs ?? null, authority: 'observed' })
+      } else if (request.failed) {
+        ledger.record({ type: 'pathFailed', attemptId, reason: request.failed, at: request.durationMs ?? null, authority: 'observed' })
+      }
+    } else {
+      ledger.record({
+        type: 'pixelsStart', attemptId, requestId: `native:${request.order}`,
+        at: request.durationMs ?? null, authority: 'observed',
+      })
+    }
+  }
+  // DOM outcomes, from the application's presentation protocol.
+  for (const event of presentation?.ledgerEvents ?? []) ledger.record(event)
+  return ledger
+}
+
 async function runArm({ arm, pair, mode, options, fixture, outDir }) {
   const cacheRoot = join(outDir, 'cache', `${pair}-${arm.name}-${mode}`)
   assertCacheScope(cacheRoot, `${arm.name}/${mode} cache root`)
@@ -214,8 +261,15 @@ async function runArm({ arm, pair, mode, options, fixture, outDir }) {
           requiredFrames: fixture.requiredFrames,
         }
         const result = await cdp.evaluate(`(${pageActionScript(ACTION_OPEN_LIST)})(${JSON.stringify(spec)})`)
-        const network = recorder.snapshot()
-        const entry = { ...result, network }
+        const entry = { ...result }
+        entry.network = recorder.snapshot({
+          ledger: buildLedger({
+            records: recorder.records(),
+            presentation: result.presentation,
+            ownerSession: `${pair}-${arm.name}-${mode}-open`,
+          }),
+          cacheMode: mode,
+        })
         if (options.screenshots) {
           mkdir(join(outDir, 'screenshots'))
           entry.screenshot = await captureScreenshot(
@@ -235,7 +289,16 @@ async function runArm({ arm, pair, mode, options, fixture, outDir }) {
           requiredFrames: fixture.requiredFrames,
         }
         const result = await cdp.evaluate(`(${pageActionScript(ACTION_LEAVE_LIST)})(${JSON.stringify(spec)})`)
-        record.actions.push({ ...result, network: recorder.snapshot() })
+        const leaveEntry = { ...result }
+        leaveEntry.network = recorder.snapshot({
+          ledger: buildLedger({
+            records: recorder.records(),
+            presentation: result.presentation,
+            ownerSession: `${pair}-${arm.name}-${mode}-leave`,
+          }),
+          cacheMode: mode,
+        })
+        record.actions.push(leaveEntry)
         // Re-open so a following action still has a list. Not measured.
         const reopened = await ensureListPanel(cdp, { settleMs: 1500 })
         record.prerequisites = [...(record.prerequisites || []), { action: actionName, listPanel: reopened }]
@@ -263,7 +326,15 @@ async function runArm({ arm, pair, mode, options, fixture, outDir }) {
           program,
         }
         const result = await cdp.evaluate(`(${pageActionScript(ACTION_SCROLL)})(${JSON.stringify(spec)})`)
-        const entry = { ...result, network: recorder.snapshot() }
+        const entry = { ...result }
+        entry.network = recorder.snapshot({
+          ledger: buildLedger({
+            records: recorder.records(),
+            presentation: result.presentation,
+            ownerSession: `${pair}-${arm.name}-${mode}-scroll-${programName}`,
+          }),
+          cacheMode: mode,
+        })
         if (options.screenshots) {
           mkdir(join(outDir, 'screenshots'))
           entry.screenshot = await captureScreenshot(
@@ -431,6 +502,14 @@ async function main() {
       'The readiness predicate is a visible proxy; GPU compositing and screen present are not observed.',
       'No-cover placeholder parity is only covered when the fixture contains labelled no-cover entries.',
       'One process cannot provide two independent cold starts; fresh/warm are separate modes with separate roots.',
+      'Fallback is counted from scheduling-boundary events. This harness observes the lane commands and the ' +
+        'application presentation events; it does NOT see the frontend recovery出口, so fallback stays 0 unless ' +
+        'a future instrumentation seam reports recoveryStarted. Zero therefore means "no recovery observed", ' +
+        'not "recovery proven impossible".',
+      'The measured list panel (PlaylistPanel) does not pass a coverPresentation token, so DOM cover events are ' +
+        'counted but not attributable to a publication. See presentation.tokensSeen: 0 means unattributable.',
+      'Byte figures are observed response payloads, not wire cost. No cross-lane multiplier is claimed; see ' +
+        'summary.byteComparability for the generated verdict.',
     ],
   }
   writeJson(join(outDir, 'manifest.json'), manifest)
@@ -464,20 +543,28 @@ async function main() {
                 decodedBytes: b.decodedBytes, encodedBytes: b.encodedBytes, requestBytes: b.requestBytes,
                 durationP50Ms: b.durationP50Ms, durationP95Ms: b.durationP95Ms,
               })),
-              laneAttempts: {
-                distinctIdentities: action.network.laneAttempts.distinctIdentities,
-                distinctSources: action.network.laneAttempts.distinctSources,
-                byLane: action.network.laneAttempts.byLane,
-                byKind: action.network.laneAttempts.byKind,
-                fallbackCount: action.network.laneAttempts.fallbackCount,
-                fallbackDetails: action.network.laneAttempts.fallbackDetails,
-                pixelOnlySources: action.network.laneAttempts.pixelOnlySources,
-                pathOnlySources: action.network.laneAttempts.pathOnlySources,
-                missingVerdicts: action.network.laneAttempts.missingVerdicts,
+              /**
+               * Cross-check only. `workloads.bothLaneWorkloads` is a shape, not a
+               * fallback count; the authoritative number is `ledger.fallbacks.count`.
+               */
+              crossCheck: {
+                notAuthoritative: action.network.laneAttempts.notAuthoritative,
+                distinctAttempts: action.network.laneAttempts.laneAttempts.distinctAttempts,
+                byLane: action.network.laneAttempts.laneAttempts.byLane,
+                byKind: action.network.laneAttempts.laneAttempts.byKind,
+                byClient: action.network.laneAttempts.laneAttempts.byClient,
+                bothLaneWorkloads: action.network.laneAttempts.workloads.bothLaneWorkloads,
+                bothLaneAcrossClientsOnly: action.network.laneAttempts.workloads.bothLaneAcrossClientsOnly,
+                unmatched: action.network.laneAttempts.unmatched,
               },
+              /** Authoritative fallback / DOM-failure accounting. */
+              ledger: action.network.ledger,
+              /** Per-command and per-request byte detail; no ratio is implied. */
+              commandBytes: action.network.commandBytes,
             },
             decomposition: decomposeAction(action),
             serving: record.serving,
+            presentation: action.presentation ?? null,
             finalState: {
               cardCount: record.finalState?.cardCount ?? null,
               schemes: record.finalState?.schemes ?? null,
@@ -503,7 +590,8 @@ async function main() {
             ipcBytes: a.network.ipcTotals.decodedBytes,
             assetRequests: a.network.asset.nativeRequests,
             assetBytes: a.network.asset.encodedBytes,
-            fallbacks: a.network.laneAttempts.fallbackCount,
+            fallbacks: a.network.ledger?.fallbacks?.count ?? null,
+            domFailures: a.network.ledger?.domFailure?.count ?? null,
             bmpCalls: a.counters?.bmpCreateObjectUrl ?? null,
             domErrors: a.summary?.domErrors ?? null,
           })),
@@ -579,10 +667,22 @@ function buildSummary(rows) {
     domErrors: row.summary?.domErrors ?? null,
     identityMismatches: row.summary?.identityMismatches ?? null,
     blankAreaMsTotal: Math.round(row.summary?.blankAreaMsTotal ?? 0),
-    pathAttempts: row.network.laneAttempts.byLane?.path ?? 0,
-    pixelAttempts: row.network.laneAttempts.byLane?.pixels ?? 0,
-    fallbackCount: row.network.laneAttempts.fallbackCount,
-    missingVerdicts: row.network.laneAttempts.missingVerdicts,
+    pathAttempts: row.network.crossCheck.byLane?.path ?? 0,
+    pixelAttempts: row.network.crossCheck.byLane?.pixels ?? 0,
+    /** Authoritative, from the scheduling-boundary ledger. */
+    fallbackCount: row.network.ledger?.fallbacks?.count ?? null,
+    fallbackCompleted: row.network.ledger?.fallbacks?.completed ?? null,
+    fallbackFailed: row.network.ledger?.fallbacks?.failed ?? null,
+    fallbackInFlight: row.network.ledger?.fallbacks?.inFlight ?? null,
+    domFailureCount: row.network.ledger?.domFailure?.count ?? null,
+    domUnattributed: row.presentation?.unattributed?.length ?? null,
+    staleAbortCount: row.network.ledger?.cancel?.count ?? null,
+    breakerCount: row.network.ledger?.breaker?.count ?? null,
+    /** Cross-check diagnostic only: both lanes appeared for one workload. */
+    bothLaneWorkloads: row.network.crossCheck.bothLaneWorkloads,
+    bothLaneAcrossClientsOnly: row.network.crossCheck.bothLaneAcrossClientsOnly,
+    unmatchedRequests: row.network.crossCheck.unmatched?.count ?? null,
+    missingVerdicts: (row.network.ledger?.eventCounts?.pathMissing ?? null),
     assetRequests: row.network.asset.nativeRequests,
     assetForbidden: row.network.asset.forbiddenOrProtocolError,
     assetAllInScope: row.network.asset.allUrlsInsideCacheRoot,
@@ -598,7 +698,33 @@ function buildSummary(rows) {
     schemes: row.finalState?.schemes ?? null,
     errors: row.errors?.length ?? 0,
   }))
-  return { generatedAt: new Date().toISOString(), byAction, correctness }
+
+  /**
+   * Byte comparability verdict per action and cache mode.
+   *
+   * The plan forbids quoting a multiplier when the two arms read through
+   * different lanes or with different request counts. This block is generated
+   * from the recorded data rather than written by hand, so a report cannot quietly
+   * restate the old "about 1500x per cover" claim.
+   */
+  const byteComparability = []
+  for (const [key, group] of groups) {
+    const [action, mode] = key.split('|')
+    const baselineRow = group.find(row => row.arm === 'baseline')
+    const candidateRow = group.find(row => row.arm === 'candidate')
+    if (!baselineRow || !candidateRow) continue
+    byteComparability.push({
+      action,
+      mode,
+      ...assessByteComparability({
+        baseline: baselineRow.network.commandBytes,
+        candidate: candidateRow.network.commandBytes,
+        cacheMode: mode,
+      }),
+    })
+  }
+
+  return { generatedAt: new Date().toISOString(), byAction, correctness, byteComparability }
 }
 
 await main()

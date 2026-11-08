@@ -52,6 +52,7 @@ const PAGE_INSTALL_BODY = String.raw`
     frames: [],
     longTasks: [],
     domEvents: [],
+    presentation: [],
     action: null,
     frameLoopStopped: false,
   }
@@ -140,13 +141,55 @@ const PAGE_INSTALL_BODY = String.raw`
     state.counters.imgErrorEvents += 1
     if (state.action) state.action.events.push({ kind: 'img-error', at: performance.now(), src: sourceOf(target) })
   }, true)
-  window.addEventListener('spmusic:playlist-cover-image-load', () => {
+  // The application's own presentation protocol. reportCoverPresentation in
+  // src/features/player/model/playlistCoverReadiness.ts emits these with a
+  // detail.token carrying key / identity / sessionGeneration /
+  // publishGeneration (and, for the dock, a failure stage). That token is the
+  // measurement's observation seam for DOM outcomes: it lets the harness attribute
+  // a failure to one publication instead of guessing from an img element, and it
+  // is emitted by production code, not injected by this harness.
+  window.addEventListener('spmusic:playlist-cover-image-load', event => {
     state.counters.coverImageLoadCustom += 1
+    const detail = readCoverEventDetail(event)
+    state.presentation.push({ kind: 'loaded', at: performance.now(), ...detail })
+    if (state.action) state.action.events.push({ kind: 'cover-image-load-event', at: performance.now(), ...detail })
   }, true)
-  window.addEventListener('spmusic:playlist-cover-image-error', () => {
+  window.addEventListener('spmusic:playlist-cover-image-error', event => {
     state.counters.coverImageErrorCustom += 1
-    if (state.action) state.action.events.push({ kind: 'cover-image-error-event', at: performance.now(), src: null })
+    const detail = readCoverEventDetail(event)
+    state.presentation.push({ kind: 'failed', at: performance.now(), ...detail })
+    if (state.action) state.action.events.push({ kind: 'cover-image-error-event', at: performance.now(), ...detail })
   }, true)
+
+  /**
+   * Read the presentation token without assuming it is present.
+   *
+   * A component that was not converted still emits the legacy bare-URL shape, and
+   * a missing token must stay null here rather than be invented: the ledger treats
+   * an untokened DOM failure as unattributable.
+   */
+  function readCoverEventDetail(event) {
+    const detail = event && event.detail
+    if (typeof detail === 'string') return { url: detail, token: null, attributed: false }
+    if (!detail || typeof detail !== 'object') return { url: null, token: null, attributed: false }
+    const token = detail.token && typeof detail.token === 'object'
+      ? {
+        key: typeof detail.token.key === 'string' ? detail.token.key : null,
+        identity: typeof detail.token.identity === 'string' ? detail.token.identity : null,
+        sessionGeneration: Number.isInteger(detail.token.sessionGeneration) ? detail.token.sessionGeneration : null,
+        publishGeneration: Number.isInteger(detail.token.publishGeneration) ? detail.token.publishGeneration : null,
+      }
+      : null
+    return {
+      url: typeof detail.url === 'string' ? detail.url : null,
+      actualUrl: typeof detail.actualUrl === 'string' ? detail.actualUrl : null,
+      token,
+      // attributed is true only when a real token arrived, so downstream code
+      // cannot mistake an untokened legacy event for a verified publication.
+      attributed: token !== null && token.publishGeneration !== null,
+      stage: typeof detail.stage === 'string' ? detail.stage : null,
+    }
+  }
 
   function sourceOf(image) {
     try { return image.currentSrc || image.src || null } catch { return null }
@@ -325,6 +368,7 @@ export function pageActionScript(actionScript) {
     const countersBefore = { ...api.state.counters }
     const longTasksBefore = api.state.longTasks.length
     const framesBefore = api.state.frames.length
+    const presentationBefore = api.state.presentation.length
     const eventsBefore = api.state.domEvents.length
 
     const action = {
@@ -527,6 +571,50 @@ export function pageActionScript(actionScript) {
     const actionLongTasks = api.state.longTasks.slice(longTasksBefore)
     const actionFrames = api.state.frames.slice(framesBefore)
 
+    /**
+     * Hand the ledger its DOM facts, taken from the application's own
+     * presentation protocol.
+     *
+     * IMPORTANT LIMITATION, measured rather than assumed: the panel that renders
+     * the list cards this harness measures (PlaylistPanel) does not pass a
+     * coverPresentation prop, so PlaylistCoverImage takes its legacy branch and
+     * emits a bare URL string with no detail.token. On the shipped build every
+     * observed cover event is therefore unattributable. Those events are counted in
+     * the unattributed list and MUST NOT be converted into DOMFailure events,
+     * because an untokened report cannot be tied to one publication and could
+     * belong to a stale element. The tokensSeen count states which case a run hit,
+     * so a report can never imply token-verified DOM failures when none were
+     * verifiable.
+     */
+    const presentationEvents = api.state.presentation.slice(presentationBefore)
+    const ledgerEvents = []
+    const unattributed = []
+    const seenPublications = new Set()
+    for (const event of presentationEvents) {
+      if (event.kind !== 'failed') continue
+      if (!event.attributed) {
+        unattributed.push({ at: event.at - (action.t0 ?? event.at), url: event.url, reason: 'no publish token' })
+        continue
+      }
+      const publicationKey = [
+        event.token.sessionGeneration ?? '-',
+        event.token.publishGeneration ?? '-',
+        event.token.identity ?? event.url ?? '-',
+      ].join('\u0001')
+      if (seenPublications.has(publicationKey)) continue
+      seenPublications.add(publicationKey)
+      ledgerEvents.push({
+        type: 'DOMFailure',
+        attemptId: 'publish:' + publicationKey,
+        publishGeneration: event.token.publishGeneration,
+        recoveryEpoch: event.token.sessionGeneration,
+        at: event.at - (action.t0 ?? event.at),
+        reason: event.stage ?? 'dom',
+        authority: 'observed',
+      })
+    }
+    const tokensSeen = presentationEvents.filter(event => event.attributed).length
+
     const targets = [...action.targets.values()].map(target => ({
       ...target,
       // "exposed" for exposure mode means the card became visible at some point.
@@ -628,6 +716,26 @@ export function pageActionScript(actionScript) {
       },
       events: action.events.slice(0, 5000),
       eventCount: action.events.length,
+      /**
+       * Ledger-ready DOM facts from the application's presentation protocol.
+       * The unattributed list holds failures that arrived without a publish token;
+       * they are reported rather than guessed into a publication.
+       */
+      presentation: {
+        total: presentationEvents.length,
+        loaded: presentationEvents.filter(event => event.kind === 'loaded').length,
+        failed: presentationEvents.filter(event => event.kind === 'failed').length,
+        attributedFailures: ledgerEvents.length,
+        /**
+         * How many events carried a publish token. Zero means the observed panel
+         * does not opt into the token protocol, so DOM outcomes can be COUNTED but
+         * not attributed to a publication. A report must not claim more.
+         */
+        tokensSeen,
+        attributable: tokensSeen > 0,
+        unattributed,
+        ledgerEvents,
+      },
       errors: action.errors,
     }
   })`

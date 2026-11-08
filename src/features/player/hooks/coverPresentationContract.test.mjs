@@ -255,8 +255,12 @@ async function harness(options = {}) {
     const isStreamSource = () => false
     const orderPlaylistArtworkRows = (entries) => [...entries]
   `
+  // The readiness module is bound by name, so every runtime symbol the hook takes
+  // from it must be listed here. Assertions are untouched: this is the substituted
+  // boundary, not the contract.
   const readinessImport = `import { COVER_IMAGE_LOAD_EVENT, COVER_IMAGE_ERROR_EVENT, ` +
-    `coverImageEventDetail, decodePlaylistCoverWithin, isSameCoverUrl, ` +
+    `coverImageEventDetail, createCoverPresentation, createCoverRecoveryLedger, ` +
+    `decodePlaylistCoverWithin, isCurrentCoverReport, isSameCoverUrl, ` +
     `nextCoverSessionGeneration, releasePlaylistCoverUrl } from ${JSON.stringify(readinessUrl)};\n`
   const module = await asModule(readinessImport + prelude + stripped, 'hook')
   const store = module.createAllSongsCoverStore()

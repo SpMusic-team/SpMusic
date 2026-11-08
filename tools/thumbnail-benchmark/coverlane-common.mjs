@@ -104,7 +104,7 @@ export function assertCacheScope(cacheRoot, label) {
 
 function walkVersions(root) {
   if (!existsSync(root)) return { root, exists: false, versions: [] }
-  let entries = []
+  let entries
   try { entries = readdirSync(root, { withFileTypes: true }) } catch { return { root, exists: true, versions: [] } }
   const versions = entries
     .filter(e => e.isDirectory() && /^\d+\.\d+\.\d+\.\d+$/.test(e.name))
@@ -319,7 +319,7 @@ export function cacheSnapshot(cacheRoot) {
     distinctCoverHashes: 0,
   }
   if (out.exists) {
-    let names = []
+    let names
     try { names = readdirSync(thumbnails) } catch { names = [] }
     for (const name of names) {
       let info
@@ -334,7 +334,7 @@ export function cacheSnapshot(cacheRoot) {
     }
   }
   if (existsSync(covers)) {
-    let names = []
+    let names
     try { names = readdirSync(covers) } catch { names = [] }
     const hashes = new Set()
     for (const name of names) {
@@ -514,7 +514,38 @@ export class LaneRecorder {
     this.order = 0
   }
 
-  snapshot() {
+  /**
+   * Snapshot of the raw request records in the current window.
+   *
+   * Exposed so a caller can build the event ledger BEFORE calling `snapshot()`:
+   * `snapshot()` needs the ledger to summarise it, and the ledger needs the
+   * requests, so passing `entry.network` into the builder would read a value that
+   * does not exist yet and silently produce an empty ledger.
+   */
+  records() {
+    return [...this.requests.values()].map(record => ({
+      order: record.order,
+      command: record.command,
+      kind: record.kind,
+      status: record.status,
+      decodedBytes: record.decodedBytes,
+      encodedBytes: record.encodedBytes,
+      requestBytes: record.postData ? Buffer.byteLength(record.postData) : 0,
+      failed: record.failedText,
+      canceled: record.canceled,
+      durationMs: record.finishedAtMs !== null ? record.finishedAtMs - record.startedAtMs : null,
+    }))
+  }
+
+  /**
+   * Freeze the current window into countable facts.
+   *
+   * `ledger` is the authoritative fallback/DOM-failure source: it is fed by
+   * explicit scheduling-boundary events, not by CDP commands. The CDP-derived
+   * block is kept but labelled `crossCheckOnly` and must not be quoted as the
+   * fallback truth (correction plan §6).
+   */
+  snapshot({ ledger = null, cacheMode = null } = {}) {
     const all = [...this.requests.values()]
     const ipc = all.filter(r => r.kind === 'ipc')
     const asset = all.filter(r => r.kind === 'asset')
@@ -525,6 +556,7 @@ export class LaneRecorder {
         command: key, lane: laneOfCommand(key), kind: kindOfCommand(key),
         nativeRequests: 0, ok: 0, nonOkStatus: 0, failed: 0, canceled: 0, inFlightAtSnapshot: 0,
         decodedBytes: 0, encodedBytes: 0, requestBytes: 0, mime: new Set(), durationsMs: [],
+        perRequestDecodedBytes: [],
       }
       bucket.nativeRequests += 1
       if (record.status === 200) bucket.ok += 1
@@ -535,6 +567,7 @@ export class LaneRecorder {
       bucket.decodedBytes += record.decodedBytes
       bucket.encodedBytes += record.encodedBytes
       bucket.requestBytes += record.postData ? Buffer.byteLength(record.postData) : 0
+      bucket.perRequestDecodedBytes.push(record.decodedBytes)
       if (record.mime) bucket.mime.add(record.mime)
       if (record.finishedAtMs !== null) bucket.durationsMs.push(record.finishedAtMs - record.startedAtMs)
       byCommand.set(key, bucket)
@@ -542,11 +575,16 @@ export class LaneRecorder {
     return {
       basis: {
         nativeRequestCount: 'distinct CDP requestId; deduped/shared work is counted once',
-        attemptIdentity: 'IPC body tuple (clientId, windowGeneration, sourcePath|filePath, maxEdge) = scheduler dedupe key',
-        decodedBytes: 'sum of Network.dataReceived.dataLength',
-        encodedBytes: 'sum of Network.loadingFinished.encodedDataLength',
+        attemptIdentity:
+          'per artifact kind: folder = rootPath+directoryPath, track = sourcePath, cover = filePath; ' +
+          'plus clientId, windowGeneration and maxEdge',
+        decodedBytes:
+          'sum of Network.dataReceived.dataLength = OBSERVED RESPONSE PAYLOAD, not full wire cost',
+        encodedBytes: 'sum of Network.loadingFinished.encodedDataLength, listed separately',
         requestBytes: 'UTF-8 byte length of the serialized JSON request body',
         estimatedSizesUsed: false,
+        fallbackTruth:
+          'see ledger.fallbacks.count; this CDP block is cross-check only and cannot establish a fallback',
       },
       ipc: [...byCommand.values()].map(bucket => ({
         ...bucket,
@@ -584,6 +622,21 @@ export class LaneRecorder {
         outsideCacheRootUrls: asset.filter(r => !isAssetUrlInsideCacheRoot(r.url)).map(r => r.url).slice(0, 5),
         durationsMs: undefined,
       },
+      /**
+       * Authoritative fallback / DOM-failure accounting.
+       *
+       * Present only when a ledger was supplied; absent (null) is honest — it means
+       * this window had no scheduling-boundary instrumentation, so fallback must be
+       * reported as unknown rather than inferred from the CDP block below.
+       */
+      ledger: ledger ? ledger.summarize() : null,
+      /** Per-command and per-request byte detail; no cross-lane ratio is implied. */
+      commandBytes: summarizeCommandBytes([...byCommand.values()].map(bucket => ({
+        ...bucket,
+        perRequestDecodedBytes: bucket.perRequestDecodedBytes,
+      }))),
+      cacheMode,
+      /** Cross-check only. Never quote `laneAttempts` as the fallback truth. */
       laneAttempts: laneAttemptSummary(ipc),
       requests: ipc.map(compactRequest),
       assetRequests: asset.map(compactRequest),
@@ -635,106 +688,54 @@ function isAssetUrlInsideCacheRoot(url) {
   return decoded.toLowerCase().startsWith(local.toLowerCase())
 }
 
-/** `audio_load_track_thumbnail_path` -> path; `audio_load_track_thumbnail` -> pixels. */
-export function laneOfCommand(command) {
-  if (!command) return 'unknown'
-  if (/_path$/.test(command)) return 'path'
-  if (/cover_pixels|_thumbnail$/.test(command)) return 'pixels'
-  return 'other'
-}
+// ---------------------------------------------------------------------------
+// Counting: corrected model (see coverlane-counting.mjs for the full rationale)
+// ---------------------------------------------------------------------------
+//
+// The functions below used to live here and had three defects that the correction
+// plan §6 names. They are now thin re-exports of `coverlane-counting.mjs`, so
+// there is exactly one implementation and the `--test` file can drive it without
+// a browser:
+//
+//   A. the source bucket key ignored `clientId`, so two owners that each used one
+//      lane were reported as a single fallback that never happened;
+//   B. folder commands were keyed off `sourcePath`/`filePath`, so they produced
+//      `null` and were silently skipped -- a folder path->pixels fallback counted 0;
+//   C. fallback was inferred from "both lanes appeared for one key", which is not
+//      the same fact as a recovery having happened.
 
-/** `..._playlist_cover_...` -> cover; `..._folder_...` -> folder; else track. */
-export function kindOfCommand(command) {
-  if (!command) return null
-  if (/playlist_cover/.test(command)) return 'cover'
-  if (/_folder_thumbnail/.test(command)) return 'folder'
-  if (/_track_thumbnail/.test(command) || /load_cover_pixels/.test(command)) return 'track'
-  return null
-}
+export {
+  normalizeSource,
+  laneOfCommand,
+  kindOfCommand,
+  sourceIdentity,
+  attemptIdentity,
+  workloadKey,
+  summarizeLaneAttempts,
+  summarizeCommandBytes,
+  assessByteComparability,
+  CoverAttemptLedger,
+  EVENT_TYPES,
+  TERMINAL_STATES,
+  NON_FAILURE_REASONS,
+  fingerprint,
+} from './coverlane-counting.mjs'
 
-export function normalizeSource(source) {
-  if (typeof source !== 'string' || !source) return null
-  return source.replace(/^\\\\\?\\/, '').replace(/\//g, '\\').toLowerCase()
-}
+import {
+  summarizeLaneAttempts,
+  summarizeCommandBytes,
+  laneOfCommand,
+  kindOfCommand,
+} from './coverlane-counting.mjs'
 
 /**
- * Attempt-level counts plus the directly counted fallback verdict.
+ * Backwards-compatible name for the CDP-derived cross-check.
  *
- * One identity is `lane|kind|clientId|generation|source|maxEdge`. A fallback is
- * counted when the *same* (kind, generation, source, maxEdge) appears through
- * both lanes. That is a request-level fact and it is what answers "did the path
- * lane fall back" -- not the presence or absence of `.spxr` files.
+ * Kept so existing call sites keep working, but the returned object now says in
+ * its own fields that it is cross-check-only and not the fallback truth.
  */
 export function laneAttemptSummary(ipcRequests) {
-  const identities = new Map()
-  const sources = new Map()
-  for (const record of ipcRequests) {
-    const lane = laneOfCommand(record.command)
-    const kind = kindOfCommand(record.command)
-    if (!kind || (lane !== 'path' && lane !== 'pixels')) continue
-    let body = null
-    try { body = record.postData ? JSON.parse(record.postData) : null } catch { body = null }
-    const input = body && body.input ? body.input : {}
-    const source = normalizeSource(input.sourcePath ?? input.filePath ?? null)
-    if (!source) continue
-    const clientId = typeof input.clientId === 'string' ? input.clientId : null
-    const generation = Number.isInteger(input.windowGeneration) ? input.windowGeneration : null
-    const maxEdge = Number.isInteger(input.maxEdge) ? input.maxEdge : null
-    const identityKey = [lane, kind, clientId, generation, source, maxEdge].join('|')
-    const identity = identities.get(identityKey) || {
-      lane, kind, clientId, generation, source, maxEdge,
-      nativeRequests: 0, ok: 0, missingResponses: 0, errorStatuses: 0, decodedBytes: 0, durationsMs: [],
-    }
-    identity.nativeRequests += 1
-    if (record.status === 200) identity.ok += 1
-    else if (record.status !== null) identity.errorStatuses += 1
-    // A confirmed-absence verdict serializes to `null` (a few bytes); a published
-    // reference is a ~200-400 B object. Used only to split absence from failure.
-    if (record.status === 200 && record.decodedBytes > 0 && record.decodedBytes <= 8) identity.missingResponses += 1
-    identity.decodedBytes += record.decodedBytes
-    if (record.finishedAtMs !== null) identity.durationsMs.push(record.finishedAtMs - record.startedAtMs)
-    identities.set(identityKey, identity)
-
-    const sourceKey = [kind, generation, source, maxEdge].join('|')
-    const bucket = sources.get(sourceKey) || {
-      kind, generation, source, maxEdge, lanes: { path: 0, pixels: 0 },
-      pathOk: 0, pathMissing: 0, pathFailures: 0, pixelsOk: 0, pixelsFailures: 0,
-    }
-    bucket.lanes[lane] += 1
-    if (lane === 'path') {
-      if (record.status === 200 && record.decodedBytes > 0 && record.decodedBytes <= 8) bucket.pathMissing += 1
-      else if (record.status === 200) bucket.pathOk += 1
-      else bucket.pathFailures += 1
-    } else if (record.status === 200) bucket.pixelsOk += 1
-    else bucket.pixelsFailures += 1
-    sources.set(sourceKey, bucket)
-  }
-  const sourceRows = [...sources.values()]
-  const fallbackRows = sourceRows.filter(row => row.lanes.path > 0 && row.lanes.pixels > 0)
-  return {
-    distinctIdentities: identities.size,
-    distinctSources: sourceRows.length,
-    byLane: countBy([...identities.values()].map(row => row.lane)),
-    byKind: countBy([...identities.values()].map(row => row.kind)),
-    /** Directly counted fallbacks: one workload answered through both lanes. */
-    fallbackCount: fallbackRows.length,
-    fallbackDetails: fallbackRows.map(row => ({
-      kind: row.kind, generation: row.generation, maxEdge: row.maxEdge,
-      pathAttempts: row.lanes.path, pixelAttempts: row.lanes.pixels,
-      pathOk: row.pathOk, pathMissing: row.pathMissing, pathFailures: row.pathFailures,
-      sourceAnonymous: sha256(row.source).slice(0, 32),
-    })),
-    pixelOnlySources: sourceRows.filter(row => row.lanes.pixels > 0 && row.lanes.path === 0).length,
-    pathOnlySources: sourceRows.filter(row => row.lanes.path > 0 && row.lanes.pixels === 0).length,
-    missingVerdicts: sourceRows.reduce((a, row) => a + row.pathMissing, 0),
-    identities: [...identities.values()].map(row => ({
-      lane: row.lane, kind: row.kind, clientId: row.clientId, generation: row.generation,
-      maxEdge: row.maxEdge, nativeRequests: row.nativeRequests, ok: row.ok,
-      missingResponses: row.missingResponses, errorStatuses: row.errorStatuses,
-      decodedBytes: row.decodedBytes, durationP50Ms: percentile(row.durationsMs, 0.5),
-      sourceAnonymous: sha256(row.source).slice(0, 32),
-    })),
-  }
+  return summarizeLaneAttempts(ipcRequests)
 }
 
 // ---------------------------------------------------------------------------

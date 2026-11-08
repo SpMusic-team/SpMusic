@@ -1,10 +1,20 @@
 import type { CoverTone } from './playerTypes'
 import type { PlaylistCoverImage } from './playerUiViewModel'
+import type { CoverPresentation } from './playlistCoverReadiness'
 
 export type PlaylistArtworkSnapshot = Readonly<{
   coverTone?: CoverTone
   hasLocalArtwork?: boolean
   coverThumbnail?: PlaylistCoverImage
+  /**
+   * The owner's published snapshot for `coverThumbnail`.
+   *
+   * A consumer must render the URL and report back the token of the *same*
+   * snapshot. Without it the report carries only a URL, which the owner cannot
+   * attribute to a publication — and an unattributable report must never be
+   * allowed to evict a replacement or open a recovery.
+   */
+  presentation?: CoverPresentation
 }>
 
 export type PlaylistArtworkStore = ReturnType<typeof createPlaylistArtworkStore>

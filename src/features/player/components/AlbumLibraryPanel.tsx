@@ -103,6 +103,10 @@ function AlbumCover({ song, store, hero = false, artist = false }: { song?: AllS
   const presentation = useCollectionCoverPresentation(store, song)
   const elementRef = useRef<HTMLImageElement>(null)
   const report = useCallback((element: HTMLImageElement, outcome: CoverPresentationOutcome) => {
+    // A report without a token cannot be attributed to a publication, so it must
+    // not be emitted from a surface that also has no owner. The all-songs store
+    // rejects tokenless reports anyway; not sending them keeps a URL-only event
+    // from ever reaching a listener that would treat it as current.
     if (!presentation) return
     const actualUrl = coverAbsoluteUrl(element.currentSrc || element.src)
     if (!actualUrl) return
@@ -113,7 +117,8 @@ function AlbumCover({ song, store, hero = false, artist = false }: { song?: AllS
   // A cached image can already be complete when React commits the element, so the
   // success check cannot rely on a `load` event that has already been missed. The
   // same applies in reverse: `complete && naturalWidth === 0` is a failed resource
-  // whose `error` event is not coming.
+  // whose `error` event is not coming. Both outcomes must be reported for the
+  // *current* snapshot, including the failure of a cover that had already loaded.
   useLayoutEffect(() => {
     const element = elementRef.current
     if (!element || !element.currentSrc && !element.getAttribute('src')) return

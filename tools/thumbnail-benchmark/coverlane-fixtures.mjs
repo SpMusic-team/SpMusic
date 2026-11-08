@@ -27,7 +27,7 @@ import { join, resolve } from 'node:path'
 import { createHash } from 'node:crypto'
 import {
   sleep, sha256, sha256File, writeJson, mkdir, assertCacheScope,
-  launchArm, closeViaApp, pinViewport, waitForOpenControl, hostFacts, gitFacts, artifactFacts,
+  launchArm, closeViaApp, pinViewport, hostFacts, gitFacts, artifactFacts,
   hashHarness, cacheSnapshot, ensureListPanel, ensureReadyForSourceLoad, runtimeServingFacts,
 } from './coverlane-common.mjs'
 import {
@@ -299,7 +299,6 @@ async function build(options) {
       if (!label) return { hasCover: null, reason: 'probe row missing' }
       return { ...label, sourcePathSha256: pathHash }
     }
-    const finalById = new Map((finalState.rows || []).map(row => [row.id, row]))
     record.universe = {
       size: domIds.length,
       ids: domIds,

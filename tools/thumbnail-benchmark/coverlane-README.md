@@ -27,6 +27,10 @@ measurement defects that the plan names explicitly:
 | File | Role |
 | --- | --- |
 | `coverlane-common.mjs` | shared plumbing: `$CACHE` scope guard, CDP client, `LaneRecorder` (direct counts), process launch, host/WebView2/git facts, manifest writers, `ensureListPanel` |
+| `coverlane-counting.mjs` | the corrected counting model: per-kind source identity, attempt/workload keys, the `CoverAttemptLedger` event ledger, per-command byte detail, byte-comparability verdict |
+| `coverlane-counting.test.mjs` | `node --test` contract for the counting model (the ten cases from correction plan §6) |
+| `coverlane-counting.mutation.mjs` | proves those tests fail against the three original defects |
+| `coverlane-lint.mjs` | unused-binding check, because the repository eslint config only matches `*.ts`/`*.tsx` |
 | `coverlane-page.mjs` | in-page measurement code: pre-input instrumentation, the `t0` wrapper, action bodies (`open`, `leave`, `scroll`), final-state snapshot |
 | `coverlane-fixtures.mjs` | builds and verifies the **frozen** fixture: stable cohort + universe, has-cover labels, privacy-preserving corpus manifest |
 | `coverlane-ab.mjs` | paired A/B over two release binaries, per action, fresh and warm disk modes |
@@ -117,33 +121,64 @@ marked `censored-offscreen`; it is never counted as ready.
 
 ### Direct counting (plan §4)
 
-Fallback is **counted**, not inferred from `.spxr` files. `LaneRecorder` installs
-`Network` handlers and derives:
+Fallback is **counted**, not inferred from `.spxr` files. There are two layers,
+and only the first is authoritative.
 
-| Observation | Recorded as |
+**Layer 1 — the attempt/outcome ledger (`network.ledger`), authoritative.**
+Built from explicit scheduling-boundary events:
+
+`pathStart`, `pathReady`, `pathMissing`, `pathFailed`, `pixelsStart`,
+`fallbackStarted`, `fallbackCompleted`, `fallbackFailed`, `DOMFailure`, `stale`,
+`abort`, `breaker`.
+
+Each event carries `ownerSession`, `clientId`, `generation`, `attemptId`, an
+optional `publishGeneration`, source kind plus a normalized source fingerprint,
+`edge`, `lane`, `recoveryEpoch`, `reason` and a terminal state. A recovery job has
+its own `recoveryAttemptId` pointing at a `parentAttemptId`; a shared native
+request carries a `requestId`. Derived facts:
+
+| Question | Field |
 | --- | --- |
-| Path outcome | per-command lane (`path` / `pixels`), `ok`, `nonOkStatus`, `failed`, `canceled`, `inFlightAtSnapshot` |
-| Fallback | `laneAttempts.fallbackCount` — the same `(kind, generation, source, maxEdge)` seen through **both** lanes |
-| Missing verdict | an IPC 200 whose decoded body is ≤ 8 B (`null`), counted as `missingVerdicts` |
-| IPC bytes | `ipcTotals.decodedBytes` (Σ `Network.dataReceived`), `encodedBytes` (Σ `loadingFinished.encodedDataLength`), `requestBytes` (serialized JSON body) |
-| Asset bytes | `asset.decodedBytes` / `encodedBytes`, plus status, MIME and `fromDiskCache` |
-| Asset scope | `asset.allUrlsInsideCacheRoot` — every asset URL must decode under `LOCALAPPDATA` |
-| Production build | `serving.servingMode` from the URL the WebView actually loaded; a non-`tauri.localhost` load aborts the run |
-| Main thread | long tasks (>50 ms count, max), frame intervals, and JS BMP work (`bmpCreateObjectUrl`, `bmpBytes`) counted by wrapping `URL.createObjectURL`, `Image`, `putImageData`, `drawImage`, `decode` at measurement time only |
-| Identity | a card served for a target id must still carry that id; an unready card that is *unmounted* is recorded separately as `unmountedWhileUnready` and censored |
-| Memory | `coverlane-memory.ps1`, per role, working set and private bytes, 1 s interval |
+| Did anything fall back? | `ledger.fallbacks.count` — distinct `recoveryAttemptId`s, deduped when several consumers await one job |
+| Did it finish? | `fallbacks.completed` / `failed` / `inFlight` |
+| Did a DOM image fail? | `ledger.domFailure.count` (deduped per publication) |
+| Was anything cancelled? | `ledger.cancel.byReason` — `stale`/`abort` are never failures and never open a recovery |
+| Did the breaker trip? | `ledger.breaker.count` |
+| Native vs consumer counts | `ledger.nativeRequests.distinct` vs `.consumerCount`, with `sharedDetail` |
+| Left running at window close? | `ledger.attempts.inFlightDetail` — kept, never counted as success |
 
-Native request count is the number of distinct CDP `requestId`s, so shared or
-deduped work counts once. Attempt identity is the IPC body tuple
-`(clientId, windowGeneration, sourcePath|filePath, maxEdge)`, which is the
-frontend scheduler's own dedupe key. No fixed 100 B size estimate is used
-anywhere; every byte figure is measured, and `snapshot().basis` states the
-counting basis in the artefact itself.
+**Layer 2 — the CDP cross-check (`network.laneAttempts`), NOT authoritative.**
+It is derived from IPC/asset commands, so it can confirm plausibility and flag a
+workload that used both lanes, but "both lanes appeared" does not prove a
+recovery. It exposes `workloads.bothLaneWorkloads` (a shape, deliberately not
+named `fallbackCount`) and `workloads.bothLaneAcrossClientsOnly` (the exact
+defect-A shape).
 
-Note on `inFlightAtSnapshot`: some IPC requests have no response yet when the
-window closes. They are reported as in-flight rather than being folded into `ok`
-or `failed`, because a request still running at teardown is not evidence of either
-outcome.
+Source identity per artifact kind: `folder` = `rootPath` + `directoryPath`,
+`track` = `sourcePath`, `cover` = `filePath`, each with `clientId`, `generation`
+and `edge`. Normalization is the harness's existing one (strip `\\?\`, unify
+separators, lowercase) — no new case semantics were invented.
+
+Byte accounting (`network.commandBytes`) reports per command: request count,
+completed, failed, cancelled, in flight, observed response payload, encoded data
+length, request-body bytes, mean payload per completed request, and the per-request
+payload lengths. `summary.byteComparability` then refuses a ratio whenever the two
+arms are not matched, and says why.
+
+### Known limitation: DOM events are not attributable on the measured panel
+
+`PlaylistCoverImage` only emits a publish token when it receives a
+`coverPresentation` prop. The panel this harness measures (`PlaylistPanel`) does
+not pass one, so the shipped build emits the legacy bare-URL shape instead.
+Verified: a run sees `presentation.tokensSeen: 0` and
+`presentation.attributable: false`.
+
+Consequence, stated rather than papered over: DOM cover failures can be **counted**
+but cannot be attributed to a publication, so the harness never converts them into
+`DOMFailure` ledger events and `ledger.domFailure.count` is 0 for reasons of
+observability, not because failures were proven absent. Panels that do pass a
+token (`PlaylistLibraryPanel`, `AlbumLibraryPanel`, `SearchPanel`,
+`FolderHierarchyPanel`, `BookmarksPanel`) would produce attributions if measured.
 
 ## Usage
 
@@ -217,6 +252,20 @@ snapshot's `dist/` to be present (copy the matching `dist` in, as
 | `COVERLANE_SETTLE_MS` | unmeasured settle after the prerequisite music scan (default 2000) |
 | `COVERLANE_RUST_LOG` | value of `RUST_LOG` for the arms (default `off`; must match across arms) |
 
+## Validation
+
+```powershell
+# Counting contract (the ten cases from correction plan §6, plus the three defects)
+node --test tools/thumbnail-benchmark/coverlane-counting.test.mjs
+
+# Prove those tests actually catch the original defects (mutation check)
+node tools/thumbnail-benchmark/coverlane-counting.mutation.mjs
+
+# Unused-binding check. The repository eslint config only matches *.ts/*.tsx, so
+# `npx eslint tools/thumbnail-benchmark/` exits 0 without inspecting any .mjs file.
+node tools/thumbnail-benchmark/coverlane-lint.mjs
+```
+
 ## What this harness does not do
 
 * No 10 minute memory curve is produced by default; `--memory-seconds` exists but
@@ -232,3 +281,12 @@ snapshot's `dist/` to be present (copy the matching `dist` in, as
 * Backend-internal segments (admission wait, decode, JPEG encode, writer queue)
   are not instrumented; only frontend and protocol-level facts are measured. No
   cross-process time subtraction is performed.
+* **Recovery is not directly observed.** The harness sees lane commands and
+  presentation events, but not the frontend scheduler's recovery出口, so
+  `ledger.fallbacks.count` stays 0 unless a future instrumentation seam reports
+  `fallbackStarted`. Zero means "no recovery observed", not "recovery proven
+  impossible".
+* **No cross-lane byte multiplier is claimed.** Baseline reads RGBA pixels and the
+  candidate reads a JPEG path, so the payloads are different units; the
+  comparability verdict refuses the ratio on principle, not because this sample
+  happens to be small.

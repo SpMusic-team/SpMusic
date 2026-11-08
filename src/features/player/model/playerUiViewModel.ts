@@ -134,7 +134,7 @@ export type PlaylistCoverImage = Readonly<{
 }>
 
 export type PlaylistTrackItemViewModel = TrackSummary
-  & Partial<Pick<Track, 'durationSeconds' | 'fileExtension' | 'coverTone' | 'coverImage' | 'coverImageFallback' | 'audioFormat'>>
+  & Partial<Pick<Track, 'durationSeconds' | 'fileExtension' | 'coverTone' | 'coverImage' | 'coverImageFallback' | 'audioFormat' | 'coverPresentation'>>
   & Readonly<{
     hasLocalArtwork?: boolean
     /** Raw library tags: undefined while pending, null when absent. */
@@ -158,6 +158,14 @@ export type PlaylistTrackMetadata = Pick<
 export type PlaylistTrackVisual = Pick<Track, 'id' | 'coverTone'> & Readonly<{
   hasLocalArtwork: boolean
   coverThumbnail?: PlaylistCoverImage
+  /**
+   * Token of exactly the snapshot `coverThumbnail` came from.
+   *
+   * Consumers render the image and report the token of the same snapshot, so a
+   * failure can be attributed to the publication it belongs to instead of being
+   * matched by URL across owners.
+   */
+  presentation?: import('./playlistCoverReadiness').CoverPresentation
 }>
 
 export type PlaylistLibraryItem = {

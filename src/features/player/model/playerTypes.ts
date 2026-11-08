@@ -14,6 +14,14 @@ export type Track = {
   coverFilePath?: string
   coverImage?: string
   coverImageFallback?: string
+  /**
+   * Token of the published snapshot `coverImage`/`coverThumbnail` came from.
+   *
+   * Optional because most rows carry plain URL artwork with no owner behind it.
+   * A consumer must render the image and report the token of the *same* snapshot;
+   * a report without one cannot be attributed to a publication.
+   */
+  coverPresentation?: import('./playlistCoverReadiness').CoverPresentation
   lyrics: DemoLyricLine[]
   audioFormat?: {
     bitDepth: number | null

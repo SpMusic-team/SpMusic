@@ -33,6 +33,39 @@ import {
   pageInstallScript, pageActionScript, ACTION_SCROLL, ACTION_OPEN_LIST, PAGE_FINAL_STATE,
   captureScreenshot,
 } from './coverlane-page.mjs'
+import { CoverAttemptLedger } from './coverlane-counting.mjs'
+
+/**
+ * Feed the authoritative ledger from one recorded action.
+ *
+ * `records` are the raw CDP request records and `presentation` is the in-page
+ * report from the application's own presentation protocol. Both must be passed
+ * explicitly: reading them off the finished `network` snapshot produces an empty
+ * ledger (the snapshot does not exist yet), which would look like "no fallbacks"
+ * instead of "not measured".
+ */
+function buildLedger({ records = [], presentation = null, ownerSession }) {
+  const ledger = new CoverAttemptLedger({ ownerSession })
+  for (const request of records) {
+    const lane = request.command && /_path$/.test(request.command) ? 'path'
+      : request.command && /cover_pixels|_thumbnail$/.test(request.command) ? 'pixels' : null
+    if (!lane) continue
+    const attemptId = `cdp:${request.order}`
+    if (lane === 'path') {
+      ledger.record({ type: 'pathStart', attemptId, requestId: `native:${request.order}`, at: request.durationMs ?? null, authority: 'observed' })
+      if (request.status === 200) {
+        const type = request.decodedBytes > 0 && request.decodedBytes <= 8 ? 'pathMissing' : 'pathReady'
+        ledger.record({ type, attemptId, at: request.durationMs ?? null, authority: 'observed' })
+      } else if (request.failed) {
+        ledger.record({ type: 'pathFailed', attemptId, reason: request.failed, at: request.durationMs ?? null, authority: 'observed' })
+      }
+    } else {
+      ledger.record({ type: 'pixelsStart', attemptId, requestId: `native:${request.order}`, at: request.durationMs ?? null, authority: 'observed' })
+    }
+  }
+  for (const event of presentation?.ledgerEvents ?? []) ledger.record(event)
+  return ledger
+}
 
 const USAGE = `Usage:
   node coverlane-stress.mjs --exe <app.exe> --fixture <fixture.json> --playlist <playlist.m3u8>
@@ -350,7 +383,17 @@ async function main() {
       opacityThreshold,
       requiredFrames,
     })})`)
-    record.actions.push({ ...openResult, network: recorder.snapshot() })
+    record.actions.push({
+      ...openResult,
+      network: recorder.snapshot({
+        ledger: buildLedger({
+          records: recorder.records(),
+          presentation: openResult.presentation,
+          ownerSession: 'stress-open',
+        }),
+        cacheMode: 'fresh',
+      }),
+    })
     writeJson(join(outDir, 'actions', 'open-list.json'), record.actions.at(-1))
 
     if (options.memorySeconds > 0) {
@@ -376,7 +419,15 @@ async function main() {
           program: program.segments,
         }
         const result = await cdp.evaluate(`(${pageActionScript(ACTION_SCROLL)})(${JSON.stringify(spec)})`)
-        const network = recorder.snapshot()
+        const ownerSession = `stress-${programName}-c${cycle}`
+        const network = recorder.snapshot({
+          ledger: buildLedger({
+            records: recorder.records(),
+            presentation: result.presentation,
+            ownerSession,
+          }),
+          cacheMode: 'fresh',
+        })
         let screenshot = null
         try {
           screenshot = await captureScreenshot(
@@ -404,7 +455,8 @@ async function main() {
           longTasksOver50: result.longTasks?.over50Ms,
           frameP95Ms: result.frameIntervals?.p95Ms,
           framesOver50: result.frameIntervals?.over50Ms,
-          fallbacks: network.laneAttempts.fallbackCount,
+          fallbacks: network.ledger?.fallbacks?.count ?? null,
+          domFailures: network.ledger?.domFailure?.count ?? null,
           assetRequests: network.asset.nativeRequests,
           domErrors: result.summary?.domErrors,
         }))
@@ -525,10 +577,20 @@ function buildSummary(record, manifest) {
         assetRequests: action.network?.asset?.nativeRequests ?? null,
         assetBytes: action.network?.asset?.encodedBytes ?? null,
         assetForbidden: action.network?.asset?.forbiddenOrProtocolError ?? null,
-        fallbackCount: action.network?.laneAttempts?.fallbackCount ?? null,
-        pathAttempts: action.network?.laneAttempts?.byLane?.path ?? null,
-        pixelAttempts: action.network?.laneAttempts?.byLane?.pixels ?? null,
-        missingVerdicts: action.network?.laneAttempts?.missingVerdicts ?? null,
+        /** Authoritative recovery count, from the scheduling-boundary ledger. */
+        fallbackCount: action.network?.ledger?.fallbacks?.count ?? null,
+        fallbackCompleted: action.network?.ledger?.fallbacks?.completed ?? null,
+        fallbackFailed: action.network?.ledger?.fallbacks?.failed ?? null,
+        domFailureCount: action.network?.ledger?.domFailure?.count ?? null,
+        domUnattributed: action.presentation?.unattributed?.length ?? null,
+        staleAbortCount: action.network?.ledger?.cancel?.count ?? null,
+        /** Cross-check only: the two lanes appeared for at least one workload. */
+        bothLaneWorkloads: action.network?.laneAttempts?.workloads?.bothLaneWorkloads ?? null,
+        bothLaneAcrossClientsOnly: action.network?.laneAttempts?.workloads?.bothLaneAcrossClientsOnly ?? null,
+        pathAttempts: action.network?.laneAttempts?.laneAttempts?.byLane?.path ?? null,
+        pixelAttempts: action.network?.laneAttempts?.laneAttempts?.byLane?.pixels ?? null,
+        unmatchedRequests: action.network?.laneAttempts?.unmatched?.count ?? null,
+        missingVerdicts: action.network?.ledger?.eventCounts?.pathMissing ?? null,
       },
       domErrors: action.summary?.domErrors ?? null,
       identityMismatches: action.summary?.identityMismatches ?? null,

@@ -137,6 +137,11 @@ export const PlaylistCard = memo(function PlaylistCard({
     coverTone: visual?.coverTone ?? baseTrack.coverTone,
     coverThumbnail: visual?.coverThumbnail ?? fallback?.coverThumbnail,
     hasLocalArtwork: visual?.hasLocalArtwork ?? baseTrack.hasLocalArtwork ?? fallback?.hasLocalArtwork,
+    // Only pair a token with the image it actually names. The owner verifies the
+    // publication before accepting a report, so a mismatched token here would be
+    // rejected — but passing the right one is what lets a library-cache failure be
+    // attributed at all, instead of silently falling back to a URL-only event.
+    coverPresentation: visual?.presentation ?? fallback?.presentation,
   } : baseTrack
   const disabled = (unavailable && !(selectMode && canSelectUnavailable)) || (!selectMode && !canActivate)
   const longPress = usePlaylistCardLongPress({ identity: songKey ?? track.id,
@@ -237,7 +242,7 @@ function PlaylistCardContent({ rating, ratingMode, playCount, track, positionMs,
         {coverUrl ? (
           <PlaylistCoverImage className="playlist-card-cover-image" src={coverUrl} reveal presentation={coverPresentation} onError={handleCoverError} />
         ) : track.coverThumbnail ? (
-          <PlaylistCoverImage className="playlist-card-cover-image" image={track.coverThumbnail} reveal />
+          <PlaylistCoverImage className="playlist-card-cover-image" image={track.coverThumbnail} reveal presentation={track.coverPresentation} />
         ) : !coverFailed && artworkVisible && track.hasLocalArtwork === false && coverSource ? (
           <PlaylistCoverImage key={`${coverSource}\0${track.coverImageFallback ?? ''}`} className="playlist-card-cover-image" src={coverSource} reveal onError={handleCoverError} />
         ) : null}

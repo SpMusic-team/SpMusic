@@ -1,7 +1,17 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { normalizeAudioSourcePath } from '@/features/player/model/playlistTrackSummary'
 import { playlistCoverImageFromPixels } from '@/features/player/model/playlistCoverPixels'
-import { coverImageEventDetail, decodePlaylistCover, isPlaylistCoverDecoded, releasePlaylistCoverUrl } from '@/features/player/model/playlistCoverReadiness'
+import {
+  coverImageEventDetail,
+  createCoverPresentation,
+  createCoverRecoveryLedger,
+  decodePlaylistCover,
+  isCurrentCoverReport,
+  isPlaylistCoverDecoded,
+  nextCoverSessionGeneration,
+  releasePlaylistCoverUrl,
+  type CoverRecoveryLedger,
+} from '@/features/player/model/playlistCoverReadiness'
 import { createPlaylistArtworkStore, playlistArtworkKey } from '@/features/player/model/playlistArtworkStore'
 import { admitLibraryArtwork } from '@/features/player/model/libraryArtworkAdmission'
 import { playlistArtworkRevision } from '@/features/player/model/playlistArtworkRevision'
@@ -28,6 +38,8 @@ type Runtime = {
   visible: boolean
   controller: AbortController
   revision: number
+  /** Owner lifetime id. A report is only accepted for the owner that published it. */
+  sessionGeneration: number
   descriptors: Map<string, AudioFolderTrackRef & { artworkRevision: number }>
   previews: Map<Element, string>
   desired: Map<string, 128 | 256 | 512>
@@ -41,14 +53,35 @@ type Runtime = {
   pendingReplacements: Map<string, { key: string; previous: CacheEntry; older: CacheEntry[] }>
   failedUpgrades: Set<string>
   /**
-   * Keys whose *first* published image failed in the DOM.
+   * Recovery bookkeeping, shared with the other two cover owners.
    *
-   * Distinct from `failedUpgrades`, which is the "an upgrade failed, keep the
-   * previous image" case. Restoring a previous image is not a fix for a row that
-   * never had one, so this set forces the next job for the key to skip the path
-   * lane and read pixels directly — once per key, then it settles.
+   * `queued` is the single automatic pixel recovery for a key/epoch/edge. It is
+   * claimed synchronously by the first qualifying DOM failure and spent only when
+   * the forced job is admitted. A record that stays present is what keeps the
+   * opportunity gone: a later DOM load does not restore it, and the forced job's
+   * own failure settles the epoch instead of queueing another.
    */
-  forcedPixels: Map<string, string>
+  recovery: CoverRecoveryLedger
+  /** Publish sequence per key; every actual commit replaces the generation. */
+  publishSequences: Map<string, number>
+  /**
+   * Edge the epoch's forced job must use.
+   *
+   * The recovery has to re-read at the *failing* edge: a 512 hero that failed in
+   * the DOM must not be recovered with a 256 list thumbnail, and a 256 row must
+   * not pay for a 512 read.
+   */
+  recoveryEdge: Map<string, 128 | 256 | 512>
+  /**
+   * Rows whose single automatic recovery already ended without an image.
+   *
+   * Without this the pump would immediately re-admit a settled row through the
+   * *normal* lane, which starts with the path helper and would therefore loop
+   * path → pixels → path for as long as the row stays visible. The value is the
+   * identity the verdict describes, so a revision change re-admits naturally, and
+   * a row that leaves demand drops the verdict with the rest of its state.
+   */
+  transientFailures: Map<string, string>
   queued: Set<string>
   active: number
   pump: () => void
@@ -59,6 +92,17 @@ const EMPTY_ROWS: ReadonlyMap<string, ArtworkRow> = new Map()
 const MAX_RESIDENT = 80
 const MAX_DETAIL = 40
 const CONCURRENCY = 2
+
+/**
+ * Full source identity for one library artwork row.
+ *
+ * The artwork revision belongs in it: a rescan replaces the image behind the same
+ * `sourcePath`, so a revision-less identity would let an element still painting
+ * the pre-rescan cover report against the new publication.
+ */
+function artworkIdentity(key: string, descriptor: AudioFolderTrackRef & { artworkRevision: number }): string {
+  return JSON.stringify(['library', key, descriptor.id, descriptor.artworkRevision])
+}
 
 function protectedArtworkPaths(runtime: Runtime): Set<string> {
   const paths = new Set([...runtime.detailVisiblePaths, ...runtime.pinned, ...runtime.consumerPins.keys()])
@@ -124,9 +168,11 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
 
   useEffect(() => {
     const runtime: Runtime = {
-      mounted: true, visible: false, controller: new AbortController(), revision: 0, descriptors: new Map(), previews: new Map(), desired: new Map(),
+      mounted: true, visible: false, controller: new AbortController(), revision: 0, sessionGeneration: nextCoverSessionGeneration(),
+      descriptors: new Map(), previews: new Map(), desired: new Map(),
       pinned: new Set(), consumerPins: new Map(), rows: EMPTY_ROWS,
-      detail: null, detailPaths: new Map(), detailVisiblePaths: new Set(), cache: new Map(), pendingReplacements: new Map(), failedUpgrades: new Set(), forcedPixels: new Map(), queued: new Set(), active: 0,
+      detail: null, detailPaths: new Map(), detailVisiblePaths: new Set(), cache: new Map(), pendingReplacements: new Map(), failedUpgrades: new Set(),
+      recovery: createCoverRecoveryLedger(), recoveryEdge: new Map(), transientFailures: new Map(), publishSequences: new Map(), queued: new Set(), active: 0,
       pump: () => {}, refresh: () => {},
     }
     runtimeRef.current = runtime
@@ -156,12 +202,41 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
           runtime.pendingReplacements.delete(src)
         }
       }
-      // The forced-recovery record is per key and must not outlive its row: a
-      // record for a key that is no longer resident or desired would suppress a
-      // future legitimate read, which is exactly the permanent blacklist this
-      // mechanism must not become.
-      for (const key of [...runtime.forcedPixels.keys()]) {
-        if (!runtime.cache.has(key) && !desired.has(key)) runtime.forcedPixels.delete(key)
+      // A row that is no longer wanted and holds no image is only a placeholder. It
+      // must not stay resident with the edge of a failed read, because that edge is
+      // exactly what the admission predicate compares against: keeping it would make
+      // a returning row look already-satisfied and it would never be read again.
+      for (const [key, entry] of runtime.cache) {
+        if (runtime.desired.has(key) || entry.row.coverThumbnail) continue
+        runtime.cache.delete(key)
+        changed = true
+      }
+      // The recovery record is per key and must not outlive its row: a record for a
+      // key that is no longer resident or desired would suppress a future
+      // legitimate read, which is exactly the permanent blacklist this mechanism
+      // must not become. In-flight records are kept by `prune` on purpose.
+      runtime.recovery.prune((key) => runtime.cache.has(key) || desired.has(key))
+      for (const key of [...runtime.recoveryEdge.keys()]) {
+        if (!runtime.cache.has(key) && !desired.has(key)) runtime.recoveryEdge.delete(key)
+      }
+      // Leaving demand is the documented retry trigger, so a row that is no longer
+      // wanted loses both its transient verdict and its spent epoch. Keeping either
+      // would turn "not on screen right now" into a permanent blacklist, and a row
+      // that never re-enters is dropped by the owner's lifetime anyway.
+      for (const key of [...runtime.transientFailures.keys()]) {
+        if (!desired.has(key)) runtime.transientFailures.delete(key)
+      }
+      for (const key of [...runtime.publishSequences.keys()]) {
+        if (!desired.has(key) && !runtime.cache.has(key)) runtime.publishSequences.delete(key)
+      }
+      for (const record of [...runtime.recovery.entries()]) {
+        if (desired.has(record.key)) continue
+        // An in-flight job is settled by its own finally block; what must not
+        // survive is the *opportunity* record, which would suppress the next visit.
+        runtime.recovery.forget(record.key)
+      }
+      for (const key of [...runtime.failedUpgrades]) {
+        if (!runtime.cache.has(key) && !desired.has(key)) runtime.failedUpgrades.delete(key)
       }
       return changed
     }
@@ -181,21 +256,33 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
         const next = [...runtime.desired].find(([key, edge]) => {
           const descriptor = runtime.descriptors.get(key)
           const entry = runtime.cache.get(key)
-          // A forced pixel recovery ignores the cache-hit short circuit: the entry
-          // it just discarded is exactly why the plain admission skips this key.
-          if (runtime.forcedPixels.has(key)) return descriptor?.available && !runtime.queued.has(key)
-          return descriptor?.available && !runtime.queued.has(key) && (!entry || entry.edge < edge
-            || entry.artworkRevision !== descriptor.artworkRevision && !runtime.failedUpgrades.has(key))
+          if (!descriptor?.available || runtime.queued.has(key)) return false
+          // A queued recovery bypasses the cache-hit short circuit: the entry it
+          // just discarded is exactly why plain admission would skip this key.
+          const record = runtime.recovery.get(key)
+          if (record?.phase === 'queued' && !record.attempted) return true
+          // A spent epoch settles as a transient failure. Re-admitting it through
+          // the normal lane would start with the path helper again, which is the
+          // URL the DOM just rejected — that is the path↔pixels loop this guard
+          // exists to prevent.
+          if (runtime.transientFailures.get(key) === artworkIdentity(key, descriptor)) return false
+          return !entry || entry.edge < edge
+            || entry.artworkRevision !== descriptor.artworkRevision && !runtime.failedUpgrades.has(key)
         })
         if (!next) break
         const [key, edge] = next
         const descriptor = runtime.descriptors.get(key)!
         const revision = runtime.revision
         const current = () => runtime.mounted && runtime.visible && runtime.revision === revision && runtime.desired.has(key)
-        // One forced recovery per key/edge: consumed when the job is admitted, so a
-        // job cancelled before admission does not spend the recovery opportunity.
-        const forcePixels = runtime.forcedPixels.has(key)
-        if (forcePixels) runtime.forcedPixels.delete(key)
+        const record = runtime.recovery.get(key)
+        // A queued recovery is admitted only through `begin`, which is the single
+        // place the opportunity is spent. A job that is cancelled before admission
+        // therefore leaves the epoch unspent.
+        const forcePixels = record?.phase === 'queued' && runtime.recovery.begin(key)
+        // The forced read has to happen at the edge that failed, never at whatever
+        // edge the view currently prefers: a 512 hero failure must not be answered
+        // with a 256 list thumbnail, and a list row must not pay for a 512 read.
+        const forceEdge = forcePixels ? runtime.recoveryEdge.get(key) : undefined
         runtime.queued.add(key)
         runtime.active += 1
         void (async () => {
@@ -205,7 +292,9 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
             if (!current()) return
             if (generation === null) throw new Error('媒体库封面窗口不可用')
             let hasLocalArtwork = false
-            if (edge <= 256) {
+            // The edge this job reads at. Forced recovery reads the failing edge.
+            const readEdge: 128 | 256 | 512 = forcePixels ? (forceEdge ?? edge) : edge
+            if (readEdge <= 256) {
               // Asset path lane first; the pixel lane below is entered only after a
               // real failure. `missing` from the path lane is a confirmed-absent
               // verdict and is published as a placeholder, never as a reason to
@@ -259,34 +348,49 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
               }
               hasLocalArtwork = cover.coverArt !== null
               if (cover.coverArt?.filePath) {
-                // The 512 hero shares the path lane with the list rows. `missing`
-                // is definitive (no fallback, like the 256 branch); a real failure
-                // falls back to the existing pixel command unchanged.
                 const attemptOptions: AttemptOptions = { priority: 2, signal: runtime.controller.signal, isCurrent: current }
-                const attempt = await attemptPlaylistCoverThumbnailPath(
-                  { clientId, filePath: cover.coverArt.filePath, maxEdge: edge, windowGeneration: generation },
-                  attemptOptions,
-                )
-                if (attempt.status === 'dropped') return
-                if (!current()) return
-                if (attempt.status === 'missing') {
-                  // Confirmed absent: settle nothing, exactly as an empty pixel
-                  // response did before this lane existed.
-                  return
-                }
-                if (attempt.status === 'ready') {
-                  thumbnail = attempt.image
-                } else {
+                if (forcePixels) {
+                  // Forced recovery for the 512 hero. The probe still supplies the
+                  // validated cover-file identity (id + normalized source already
+                  // checked above), because the pixel command needs the file path.
+                  // What is skipped is `thumbnail_path`: it produced exactly the URL
+                  // the element could not display.
                   const pixels = await schedulePlaylistCoverPixels(
-                    { clientId, filePath: cover.coverArt.filePath, maxEdge: edge, windowGeneration: generation },
+                    { clientId, filePath: cover.coverArt.filePath, maxEdge: readEdge, windowGeneration: generation },
                     attemptOptions,
                   )
-                  if (!pixels) return
                   if (!current()) return
-                  thumbnail = playlistCoverImageFromPixels(pixels)
+                  hasLocalArtwork = pixels !== null
+                  if (pixels) thumbnail = playlistCoverImageFromPixels(pixels)
+                } else {
+                  // The 512 hero shares the path lane with the list rows. `missing`
+                  // is definitive (no fallback, like the 256 branch); a real failure
+                  // falls back to the existing pixel command unchanged.
+                  const attempt = await attemptPlaylistCoverThumbnailPath(
+                    { clientId, filePath: cover.coverArt.filePath, maxEdge: readEdge, windowGeneration: generation },
+                    attemptOptions,
+                  )
+                  if (attempt.status === 'dropped') return
+                  if (!current()) return
+                  if (attempt.status === 'missing') {
+                    // Confirmed absent: settle nothing, exactly as an empty pixel
+                    // response did before this lane existed.
+                    return
+                  }
+                  if (attempt.status === 'ready') {
+                    thumbnail = attempt.image
+                  } else {
+                    const pixels = await schedulePlaylistCoverPixels(
+                      { clientId, filePath: cover.coverArt.filePath, maxEdge: readEdge, windowGeneration: generation },
+                      attemptOptions,
+                    )
+                    if (!pixels) return
+                    if (!current()) return
+                    thumbnail = playlistCoverImageFromPixels(pixels)
+                  }
                 }
               } else if (cover.coverArt?.dataUrl) {
-                thumbnail = await dataUrlThumbnail(cover.coverArt.dataUrl, edge)
+                thumbnail = await dataUrlThumbnail(cover.coverArt.dataUrl, readEdge)
               }
             }
             if (thumbnail) {
@@ -297,8 +401,20 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
             }
             const previous = runtime.cache.get(key)
             runtime.cache.delete(key)
-            runtime.cache.set(key, { edge: hasLocalArtwork ? Math.max(edge, 256) : 512, trackId: descriptor.id, artworkRevision: descriptor.artworkRevision,
-              row: { hasLocalArtwork, coverThumbnail: thumbnail } })
+            // The published row carries the token of exactly the image it shows, so
+            // a consumer's report can be attributed to this publication instead of
+            // being matched by URL across owners.
+            const presentation = thumbnail ? createCoverPresentation({
+              key,
+              identity: artworkIdentity(key, descriptor),
+              sessionGeneration: runtime.sessionGeneration,
+              publishGeneration: (runtime.publishSequences.get(key) ?? 0) + 1,
+              src: thumbnail.src,
+              image: thumbnail,
+            }) : undefined
+            if (presentation) runtime.publishSequences.set(key, presentation.token.publishGeneration)
+            runtime.cache.set(key, { edge: hasLocalArtwork ? Math.max(readEdge, 256) : 512, trackId: descriptor.id, artworkRevision: descriptor.artworkRevision,
+              row: { hasLocalArtwork, coverThumbnail: thumbnail, ...(presentation ? { presentation } : {}) } })
             if (previous?.row.coverThumbnail) {
               if (thumbnail) {
                 const older = runtime.pendingReplacements.get(previous.row.coverThumbnail.src)
@@ -309,6 +425,9 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
               } else releasePlaylistCoverUrl(previous.row.coverThumbnail.src)
             }
             thumbnail = undefined
+            // A forced recovery now waits for the DOM verdict on its replacement.
+            // The epoch is spent either way; only its phase changes.
+            if (forcePixels) runtime.recovery.published(key)
             publish()
             // The sidebar and hero share the first source. Publish its 256px
             // thumbnail before admitting the optional 512px hero upgrade.
@@ -318,9 +437,15 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
               // Settle this descriptor/window without claiming absent artwork
               // when a real I/O or protocol error prevented the read.
               console.warn('读取媒体库封面失败', { sourcePath: descriptor.sourcePath, error })
+              // A forced recovery that fails terminates its epoch. It must not fall
+              // back to the path lane (that is the URL the DOM just rejected) and it
+              // must not queue another job while the row stays visible.
+              if (forcePixels) runtime.recovery.settle(key)
               const previous = runtime.cache.get(key)
               runtime.cache.set(key, { edge: 512, trackId: descriptor.id, artworkRevision: descriptor.artworkRevision, row: previous?.row ?? {} })
               publish()
+            } else if (forcePixels) {
+              runtime.recovery.settle(key)
             }
           } finally {
             if (thumbnail) releasePlaylistCoverUrl(thumbnail.src)
@@ -420,16 +545,38 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
       for (const oldSource of oldSources) releasePlaylistCoverUrl(oldSource)
     }
     const onImageLoad = (event: Event) => {
-      const src = coverImageEventDetail(event)?.url
-      if (typeof src === 'string') retireReplacement(src)
+      const detail = coverImageEventDetail(event)
+      if (!detail || typeof detail.url !== 'string') return
+      // A token-bearing report confirms one publication of this owner; record it
+      // on the epoch so the opportunity stays spent, but never forget the epoch: a
+      // DOM load is evidence about this moment, not a guarantee that the managed
+      // file remains readable after the shared cache evicts it.
+      const token = detail.token
+      if (token && token.sessionGeneration === runtime.sessionGeneration) {
+        const entry = runtime.cache.get(token.key)
+        if (entry?.row.presentation?.token.publishGeneration === token.publishGeneration) {
+          runtime.recovery.loaded(token.key)
+        }
+      }
+      retireReplacement(detail.url)
     }
     const onImageError = (event: Event) => {
       const detail = coverImageEventDetail(event)
-      const src = detail?.url
-      if (typeof src !== 'string') return
+      if (!detail || typeof detail.url !== 'string') return
+      const { url: src, token } = detail
       const pending = runtime.pendingReplacements.get(src)
       if (pending) {
-        if (runtime.cache.get(pending.key)?.row.coverThumbnail?.src !== src) return
+        const current = runtime.cache.get(pending.key)
+        if (current?.row.coverThumbnail?.src !== src) return
+        const descriptor = runtime.descriptors.get(pending.key)
+        // An upgrade restore is a real state change too, so a token-bearing report
+        // must name the publication it is actually about. A stale element finishing
+        // late must not roll a newer, healthy replacement back to an older image.
+        if (token && descriptor && !isCurrentCoverReport({
+          presentation: current.row.presentation,
+          identity: artworkIdentity(pending.key, descriptor),
+          sessionGeneration: runtime.sessionGeneration,
+        }, { token, actualUrl: detail.actualUrl, outcome: 'failed' })) return
         runtime.pendingReplacements.delete(src)
         runtime.failedUpgrades.add(pending.key)
         runtime.cache.set(pending.key, pending.previous)
@@ -443,19 +590,47 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
         runtime.refresh()
         return
       }
-      // Not an upgrade: this was the row's only published image and the DOM could
-      // not display it. Restoring a previous image is impossible here, so the one
-      // remaining channel is a forced pixel read. The path lane is skipped on the
-      // next job because it already produced this URL, and the recovery is bounded
-      // to one per key/edge so a permanently broken file cannot loop.
-      const entry = [...runtime.cache].find(([, cached]) => cached.row.coverThumbnail?.src === src)
-      if (!entry) return
-      const [key] = entry
-      if (runtime.forcedPixels.get(key) === src) return
-      runtime.forcedPixels.set(key, src)
+      // A tokenless report comes from a consumer that never opted into the token
+      // protocol. It may still be a genuine failure of this owner's image, but it
+      // cannot be attributed to a publication, so it must not open a recovery
+      // epoch: the transition period explicitly forbids URL-only events from
+      // driving recovery state.
+      if (!token) return
+      if (token.sessionGeneration !== runtime.sessionGeneration) return
+      const key = token.key
+      const entry = runtime.cache.get(key)
+      const descriptor = runtime.descriptors.get(key)
+      if (!entry || !descriptor) return
+      if (!isCurrentCoverReport({
+        presentation: entry.row.presentation,
+        identity: artworkIdentity(key, descriptor),
+        sessionGeneration: runtime.sessionGeneration,
+      }, { token, actualUrl: detail.actualUrl, outcome: 'failed' })) return
+      // Restoring a previous image is impossible for a first publish, so the one
+      // remaining channel is a forced pixel read at the edge that failed. The lane
+      // selection is the same for 256 list rows and the 512 hero: the path lane is
+      // skipped because it already produced exactly this URL.
+      const claim = runtime.recovery.claim(key, token.identity, token.publishGeneration, src)
+      if (claim === 'spent') {
+        // The epoch's single recovery is already gone. Terminate here: a transient
+        // failure and the ordinary placeholder, never a broken element and never
+        // another automatic job.
+        runtime.recovery.settle(key)
+        runtime.recoveryEdge.delete(key)
+        runtime.transientFailures.set(key, artworkIdentity(key, descriptor))
+        runtime.failedUpgrades.delete(key)
+        runtime.cache.delete(key)
+        publish()
+        runtime.refresh()
+        return
+      }
+      const failedEdge: 128 | 256 | 512 = entry.edge <= 256 ? 256 : 512
+      runtime.recoveryEdge.set(key, failedEdge)
+      runtime.transientFailures.delete(key)
       runtime.failedUpgrades.delete(key)
-      // The failing URL must stop being the current cache hit; the pump will
-      // re-admit the key because the entry no longer matches the forced read.
+      // The failing URL must stop being the current cache hit so the pump re-admits
+      // the key through the queued forced read. The ledger record is what makes that
+      // admission forced, not a second flag that could be cleared independently.
       releasePlaylistCoverUrl(src)
       runtime.cache.delete(key)
       publish()
@@ -486,7 +661,9 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
       runtime.consumerPins.clear()
       runtime.pendingReplacements.clear()
       runtime.failedUpgrades.clear()
-      runtime.forcedPixels.clear()
+      runtime.recovery.clear()
+      runtime.recoveryEdge.clear()
+      runtime.publishSequences.clear()
       runtime.previews.clear()
       if (runtimeRef.current === runtime) runtimeRef.current = null
     }
@@ -514,12 +691,22 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
     for (const [key, entry] of runtime.cache) {
       const descriptor = runtime.descriptors.get(key)
       if (descriptor?.available && descriptor.id === entry.trackId) {
-        if (descriptor.artworkRevision !== entry.artworkRevision) runtime.failedUpgrades.delete(key)
+        if (descriptor.artworkRevision !== entry.artworkRevision) {
+          // A new revision describes a different resource: the previous failure
+          // verdict and the spent recovery must not gate the new one. Re-arm by
+          // identity, which is also what the upgrade-restore path checks.
+          runtime.failedUpgrades.delete(key)
+          runtime.recovery.forget(key)
+          runtime.recoveryEdge.delete(key)
+        }
         continue
       }
       if (entry.row.coverThumbnail) releasePlaylistCoverUrl(entry.row.coverThumbnail.src)
       runtime.cache.delete(key)
       runtime.failedUpgrades.delete(key)
+      runtime.recovery.forget(key)
+      runtime.recoveryEdge.delete(key)
+      runtime.publishSequences.delete(key)
       for (const [src, pending] of runtime.pendingReplacements) {
         if (pending.key !== key) continue
         if (pending.previous.row.coverThumbnail) releasePlaylistCoverUrl(pending.previous.row.coverThumbnail.src)

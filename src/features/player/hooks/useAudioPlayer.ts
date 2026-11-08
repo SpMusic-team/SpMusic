@@ -43,7 +43,7 @@ import {
 } from '@/features/player/model/playbackSessionStorage'
 import { createPlaylistArtworkGrace } from '@/features/player/model/playlistArtworkGrace'
 import { playlistCoverImageFromPixels } from '@/features/player/model/playlistCoverPixels'
-import { coverImageEventDetail, decodePlaylistCover, isPlaylistCoverDecoded, releasePlaylistCoverUrl } from '@/features/player/model/playlistCoverReadiness'
+import { coverImageEventDetail, createCoverPresentation, createCoverRecoveryLedger, decodePlaylistCover, isCurrentCoverReport, isPlaylistCoverDecoded, nextCoverSessionGeneration, releasePlaylistCoverUrl, type CoverPresentation, type CoverRecoveryLedger } from '@/features/player/model/playlistCoverReadiness'
 import { createPlaylistArtworkStore, playlistArtworkKey } from '@/features/player/model/playlistArtworkStore'
 import { MAX_CONCURRENT, schedulePlaylistCoverPixels, scheduleTrackThumbnail } from '@/features/player/services/playlistCoverScheduler'
 import {
@@ -185,6 +185,14 @@ type PlaylistVisualHydrationJob = {
   maxEdge: 128 | 256 | 512
   attempt: number
   optional: boolean
+  /**
+   * This job is the single forced pixel recovery for a key/epoch.
+   *
+   * It skips the asset path lane entirely — that lane already produced the exact
+   * URL the element could not display — and reads pixels through the original
+   * scheduler at `maxEdge`. It is not a second normal admission.
+   */
+  forcePixels?: boolean
 }
 
 type OptionalIdleHandle = { kind: 'idle' | 'timer'; id: number }
@@ -655,6 +663,29 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
   }, [playlistArtworkStore])
 
   const playlistDesiredEdgeRef = useRef(new Map<string, 128 | 256 | 512>())
+  /**
+   * Build the immutable snapshot for one playlist track's artwork.
+   *
+   * The identity carries the normalized source path, which is also what the
+   * hydration lane validates against, so a job that survives a scope change cannot
+   * publish a token for a resource it no longer describes.
+   */
+  const playlistVisualPresentation = useCallback((
+    trackId: string,
+    normalizedSourcePath: string,
+    image: PlaylistCoverImage,
+  ): CoverPresentation => {
+    const publishGeneration = (playlistVisualPublishRef.current.get(trackId) ?? 0) + 1
+    playlistVisualPublishRef.current.set(trackId, publishGeneration)
+    return createCoverPresentation({
+      key: trackId,
+      identity: JSON.stringify(['playlist', trackId, normalizedSourcePath]),
+      sessionGeneration: playlistArtworkSessionRef.current,
+      publishGeneration,
+      src: image.src,
+      image,
+    })
+  }, [])
   const playlistVisualHydrationQueueRef = useRef<PlaylistVisualHydrationJob[]>([])
   const playlistVisualHydrationActiveRef = useRef(0)
   const playlistVisualHydrationActiveJobsRef = useRef(new Map<string, PlaylistVisualHydrationJob>())
@@ -667,6 +698,13 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
   }
   const playlistCoverWindowBeginRef = useRef<Promise<void>>(Promise.resolve())
   const playlistCoverSessionRef = useRef<Promise<number> | null>(null)
+  /**
+   * Last generation the backend cover window reported.
+   *
+   * Recovery jobs are queued from a DOM event, which is outside any demand pass,
+   * so they need the current window generation without awaiting a new one.
+   */
+  const playlistCoverBackendGenerationRef = useRef(0)
   const playlistCoverSessionFailuresRef = useRef(0)
   const playlistCoverSessionRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const refreshPlaylistVisualDemandRef = useRef<() => void>(() => undefined)
@@ -679,8 +717,45 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     playlistArtworkGrace.setExpiryHandler(expirePlaylistArtworkGrace)
   }, [expirePlaylistArtworkGrace, playlistArtworkGrace])
   const playlistVisualRetryTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>())
-  const playlistImageErrorCountsRef = useRef(new Map<string, number>())
   const playlistVisualFailedRef = useRef(new Map<string, string>())
+  /**
+   * Owner lifetime id for this hook's published playlist artwork.
+   *
+   * Process-wide and never reused, so a report can be attributed to the owner that
+   * published the snapshot even across an unmount/remount of the shell.
+   */
+  const playlistArtworkSessionRef = useRef(0)
+  if (playlistArtworkSessionRef.current === 0) playlistArtworkSessionRef.current = nextCoverSessionGeneration()
+  /** Publish sequence per track; every actual commit replaces the generation. */
+  const playlistVisualPublishRef = useRef(new Map<string, number>())
+  /**
+   * Queue of forced pixel recoveries waiting for the hydration pump.
+   *
+   * A separate queue from the normal hydration jobs, because a forced recovery has
+   * to bypass the admission predicate that skips a track whose visual already
+   * matches its requested edge. The pump drains this first.
+   */
+  const playlistForcedRecoveryQueueRef = useRef<PlaylistVisualHydrationJob[]>([])
+  /**
+   * Tracks whose single automatic recovery already ended without an image.
+   *
+   * This is a *transient* verdict: it keeps the pump from looping on the same
+   * failure while the viewport does not change, and it is cleared by exactly the
+   * documented retry triggers (identity change, owner lifecycle, re-entry into
+   * demand). It is deliberately not `playlistVisualFailedRef`, which is a
+   * session-scoped "do not read again" verdict and would turn a temporary I/O
+   * problem into permanent missing artwork.
+   */
+  const playlistVisualTransientRef = useRef(new Map<string, string>())
+  /**
+   * The one bounded automatic pixel recovery per track/epoch.
+   *
+   * Shared with the other two cover owners, so "one recovery per epoch" means the
+   * same thing everywhere. A stored record that is *not* replaced by a DOM load is
+   * what stops a healthy load from restoring the right to recover.
+   */
+  const playlistArtworkRecoveryRef = useRef<CoverRecoveryLedger | null>(null)
+  if (playlistArtworkRecoveryRef.current === null) playlistArtworkRecoveryRef.current = createCoverRecoveryLedger()
   const playlistPendingReplacementRef = useRef(new Map<string, { trackId: string; previous: PlaylistTrackVisual; edge: 128 | 256 | 512; olderVisuals: Array<{ visual: PlaylistTrackVisual; edge: 128 | 256 | 512 }> }>())
   const artworkPrimeDirectionRef = useRef<Direction>(1)
   const stagedTrackDetailsRef = useRef<{
@@ -779,9 +854,12 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     playlistCoverSessionRetryTimerRef.current = null
     for (const timer of playlistVisualRetryTimersRef.current.values()) clearTimeout(timer)
     playlistVisualRetryTimersRef.current.clear()
-    playlistImageErrorCountsRef.current.clear()
     playlistVisualFailedRef.current.clear()
     playlistVisualStaleIdsRef.current.clear()
+    // The recovery ledger converges with the rest of the owner: an attempt record
+    // for a hook that no longer exists must not be able to suppress a future read.
+    playlistArtworkRecoveryRef.current?.clear()
+    playlistVisualPublishRef.current.clear()
     for (const pending of playlistPendingReplacementRef.current.values()) {
       for (const older of pending.olderVisuals) {
         if (older.visual.coverThumbnail) releasePlaylistCoverUrl(older.visual.coverThumbnail.src)
@@ -1819,9 +1897,12 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     void ensurePlaylistCoverSession().catch(() => undefined)
     for (const timer of playlistVisualRetryTimersRef.current.values()) clearTimeout(timer)
     playlistVisualRetryTimersRef.current.clear()
-    playlistImageErrorCountsRef.current.clear()
     playlistVisualFailedRef.current.clear()
     playlistVisualStaleIdsRef.current.clear()
+    // A new scope is a new owner lifecycle: previous recovery epochs described
+    // tracks of the old scope and must not be able to suppress the new ones.
+    playlistArtworkRecoveryRef.current?.clear()
+    playlistVisualPublishRef.current.clear()
     for (const pending of playlistPendingReplacementRef.current.values()) {
       for (const older of pending.olderVisuals) {
         if (older.visual.coverThumbnail) releasePlaylistCoverUrl(older.visual.coverThumbnail.src)
@@ -2095,8 +2176,13 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     function pump(): void {
       while (
         playlistVisualHydrationActiveRef.current < 2
-        && playlistVisualHydrationQueueRef.current.length > 0
+        && (playlistForcedRecoveryQueueRef.current.length > 0 || playlistVisualHydrationQueueRef.current.length > 0)
       ) {
+        // A forced pixel recovery runs ahead of normal hydration: it was admitted
+        // because a published image is already broken on screen, and it is never
+        // gated by the idle path, which exists for optional warming only.
+        const forced = playlistForcedRecoveryQueueRef.current.shift()
+        if (forced) { startJob(forced); continue }
         const urgentIndex = playlistVisualHydrationQueueRef.current.findIndex((candidate) =>
           !candidate.optional || playlistVisualRequiredIdsRef.current.has(candidate.trackId))
         if (urgentIndex < 0) {
@@ -2125,8 +2211,16 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
         }
         const job = playlistVisualHydrationQueueRef.current.splice(urgentIndex < 0 ? 0 : urgentIndex, 1)[0]
         if (!job) break
+        startJob(job)
+      }
+    }
+    function startJob(job: PlaylistVisualHydrationJob): void {
         playlistVisualHydrationActiveRef.current += 1
         playlistVisualHydrationActiveJobsRef.current.set(job.trackId, job)
+        // Admission is where the epoch's opportunity is actually spent. Until this
+        // point the claim is only `queued`, so a job dropped before it starts does
+        // not cost the row its one recovery.
+        if (job.forcePixels) playlistArtworkRecoveryRef.current?.begin(job.trackId)
         let published = false
         let loadingSource = true
         void (async () => {
@@ -2161,23 +2255,11 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
               const priority = job.trackId === currentTrackId ? 0
                 : libraryVisibleRef.current && playlistVisualRequiredIdsRef.current.has(job.trackId) ? 1 : 2
               const attemptOptions: AttemptOptions = { priority, isCurrent }
-              // Asset path lane first: a `null` verdict is confirmed-absent artwork
-              // and is not re-proven through the pixel lane. Only a real failure
-              // falls through, once.
-              const attempt = await attemptTrackThumbnailPath({
-                clientId: job.clientId,
-                sourcePath: job.sourcePath,
-                maxEdge: 256,
-                windowGeneration: job.backendGeneration,
-              }, attemptOptions)
-              if (attempt.status === 'dropped') return
-              if (jobIsStale()) return
-              if (attempt.status === 'ready') {
-                coverThumbnail = attempt.image
-                hasLocalArtwork = true
-              } else if (attempt.status === 'missing') {
-                hasLocalArtwork = false
-              } else {
+              if (job.forcePixels) {
+                // Forced recovery for a first publish that failed in the DOM. The
+                // path lane produced exactly the URL the element could not display,
+                // so it is not attempted again: the pixel command is the only
+                // channel left, and it reads at the same edge.
                 const pixels = await scheduleTrackThumbnail({
                   clientId: job.clientId,
                   sourcePath: job.sourcePath,
@@ -2187,6 +2269,34 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
                 if (jobIsStale()) return
                 hasLocalArtwork = pixels !== null
                 if (pixels) coverThumbnail = playlistCoverImageFromPixels(pixels)
+              } else {
+                // Asset path lane first: a `null` verdict is confirmed-absent artwork
+                // and is not re-proven through the pixel lane. Only a real failure
+                // falls through, once.
+                const attempt = await attemptTrackThumbnailPath({
+                  clientId: job.clientId,
+                  sourcePath: job.sourcePath,
+                  maxEdge: 256,
+                  windowGeneration: job.backendGeneration,
+                }, attemptOptions)
+                if (attempt.status === 'dropped') return
+                if (jobIsStale()) return
+                if (attempt.status === 'ready') {
+                  coverThumbnail = attempt.image
+                  hasLocalArtwork = true
+                } else if (attempt.status === 'missing') {
+                  hasLocalArtwork = false
+                } else {
+                  const pixels = await scheduleTrackThumbnail({
+                    clientId: job.clientId,
+                    sourcePath: job.sourcePath,
+                    maxEdge: 256,
+                    windowGeneration: job.backendGeneration,
+                  }, attemptOptions)
+                  if (jobIsStale()) return
+                  hasLocalArtwork = pixels !== null
+                  if (pixels) coverThumbnail = playlistCoverImageFromPixels(pixels)
+                }
               }
             } else {
               const coverSource = await probeAudioPlaylistCover(job.sourcePath)
@@ -2256,12 +2366,20 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
               coverTone: coverToneForTrackId(job.trackId),
               hasLocalArtwork,
               coverThumbnail,
+              // A component only ever receives the token of the image it renders.
+              // Without that pairing its report would carry a bare URL, which the
+              // owner cannot attribute to a publication.
+              ...(coverThumbnail ? { presentation: playlistVisualPresentation(job.trackId, job.normalizedSourcePath, coverThumbnail) } : {}),
             }
             const nextVisuals = { ...playlistTrackVisualsRef.current, [job.trackId]: visual }
             playlistTrackVisualsRef.current = nextVisuals
             playlistVisualStaleIdsRef.current.delete(job.trackId)
             if (!hasUnrenderableCover) playlistVisualEdgeRef.current.set(job.trackId, edge)
             playlistVisualSourceRef.current.set(job.trackId, job.normalizedSourcePath)
+            // A forced recovery has now committed its replacement and waits for the
+            // DOM verdict, exactly like the other two owners. The epoch stays spent:
+            // the verdict is never allowed to re-arm it.
+            if (job.forcePixels) playlistArtworkRecoveryRef.current?.published(job.trackId)
             publishPlaylistVisuals(nextVisuals)
             published = !hasUnrenderableCover
             if (previousThumbnail && previousVisual && previousEdge && coverThumbnail) {
@@ -2329,6 +2447,16 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
             if (playlistVisualHydrationActiveJobsRef.current.get(job.trackId) === job) {
               playlistVisualHydrationActiveJobsRef.current.delete(job.trackId)
             }
+            // A forced job that ended without publishing terminates its epoch. The
+            // record is kept so no later report can reopen it while the row stays
+            // in the viewport, and the caller already removed the broken visual, so
+            // the row shows the placeholder rather than a broken element.
+            if (job.forcePixels && !published) {
+              const recovery = playlistArtworkRecoveryRef.current
+              recovery?.settle(job.trackId)
+              const identity = JSON.stringify(['playlist', job.trackId, job.normalizedSourcePath])
+              playlistVisualTransientRef.current.set(job.trackId, identity)
+            }
             // A viewport can request a larger edge while its background 128px
             // job is decoding. Publish that prepared bitmap as a visible
             // fallback, then schedule the upgrade through the same worker pool.
@@ -2356,10 +2484,9 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
             }
             pump()
           })
-      }
     }
     pump()
-  }, [publishPlaylistVisuals])
+  }, [playlistVisualPresentation, publishPlaylistVisuals])
 
   const setVisiblePlaylistTrackIds = useCallback((
     trackIds: readonly string[],
@@ -2513,10 +2640,19 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     )
     for (const [trackId, visual] of Object.entries(currentVisuals)) {
       const sourceChanged = playlistVisualSourceRef.current.get(trackId) !== normalizeAudioSourcePath(descriptorsById.get(trackId)?.sourcePath ?? '')
+      const leftDemand = !residentIds.has(trackId)
+      // Leaving demand is a documented retry trigger: the row is no longer on
+      // screen, so the transient verdict from the spent epoch must not follow it
+      // back in. A source change is an identity change and re-arms the same way.
+      if (leftDemand || sourceChanged) {
+        playlistVisualTransientRef.current.delete(trackId)
+        playlistArtworkRecoveryRef.current?.rearm(trackId, JSON.stringify(['playlist', trackId,
+          normalizeAudioSourcePath(descriptorsById.get(trackId)?.sourcePath ?? '')]))
+      }
       if ((!residentIds.has(trackId) || sourceChanged) && visual.coverThumbnail) {
         releasePlaylistCoverUrl(visual.coverThumbnail.src)
       }
-      if (!residentIds.has(trackId) || sourceChanged) {
+      if (leftDemand || sourceChanged) {
         for (const [src, pending] of playlistPendingReplacementRef.current) {
           if (pending.trackId !== trackId) continue
           if (pending.previous.coverThumbnail) releasePlaylistCoverUrl(pending.previous.coverThumbnail.src)
@@ -2526,7 +2662,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
           playlistPendingReplacementRef.current.delete(src)
         }
       }
-      if (!residentIds.has(trackId) || sourceChanged) {
+      if (leftDemand || sourceChanged) {
         playlistVisualEdgeRef.current.delete(trackId)
         playlistVisualSourceRef.current.delete(trackId)
       }
@@ -2544,6 +2680,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     }
     const playlistEpoch = playlistScopeEpochRef.current
     void backendWindowGeneration.then((backendGeneration) => {
+      playlistCoverBackendGenerationRef.current = backendGeneration
       if (
         playlistVisualGenerationRef.current !== generation
         || playlistScopeEpochRef.current !== playlistEpoch
@@ -2559,6 +2696,11 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
           !descriptor.available
           || !desiredIds.has(descriptor.id)
           || playlistVisualFailedRef.current.get(descriptor.id) === normalizeAudioSourcePath(descriptor.sourcePath)
+          // A spent epoch settles as a transient failure. It must not be re-admitted
+          // by every demand pass while the row stays in the viewport; only the
+          // documented retry triggers (identity change, re-entry, owner lifecycle)
+          // clear this.
+          || playlistVisualTransientRef.current.get(descriptor.id) === normalizeAudioSourcePath(descriptor.sourcePath)
           || playlistVisualRetryTimersRef.current.has(descriptor.id)
           || (playlistTrackVisualsRef.current[descriptor.id]
             && !playlistVisualStaleIdsRef.current.has(descriptor.id)
@@ -2637,30 +2779,77 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       }
     }
     const onImageLoad = (event: Event) => {
-      const src = coverImageEventDetail(event)?.url
-      if (typeof src === 'string') retireLoadedReplacement(src)
+      const detail = coverImageEventDetail(event)
+      if (!detail || typeof detail.url !== 'string') return
+      // A token-bearing load confirms one publication: record it on the epoch so a
+      // later failure of that same snapshot can still use the single recovery, but
+      // never forget the epoch. A DOM load is evidence about this moment only; the
+      // managed JPEG can still be evicted and the element can still fail later.
+      if (detail.token) playlistArtworkRecoveryRef.current?.loaded(detail.token.key)
+      retireLoadedReplacement(detail.url)
     }
     const observer = new MutationObserver(() => {
       for (const src of playlistPendingReplacementRef.current.keys()) retireLoadedReplacement(src)
     })
     observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['src'] })
+    /** Full identity of one track's published playlist artwork. */
+    const visualIdentity = (trackId: string) => JSON.stringify(['playlist', trackId,
+      normalizeAudioSourcePath(folderPlaylistRef.current?.tracks.find((track) => track.id === trackId)?.sourcePath ?? '')])
+    /**
+     * Queue the one forced pixel read for a track whose published image the DOM
+     * rejected.
+     *
+     * This is the recovery the contract requires, and it is deliberately not "clear
+     * the visual and re-run the demand pass": that pass asks for the normal lane,
+     * which starts with the asset path helper and would simply re-request the URL
+     * that already failed. The job below carries `forcePixels`, so the hydration
+     * lane reads pixels directly at the edge that failed.
+     */
+    const queueForcedPixels = (trackId: string, edge: 128 | 256 | 512) => {
+      const descriptor = folderPlaylistRef.current?.tracks.find((track) => track.id === trackId)
+      if (!descriptor?.available) return
+      const playlistEpoch = playlistScopeEpochRef.current
+      const scope = playlistScopeRef.current ?? ''
+      playlistForcedRecoveryQueueRef.current.push({
+        clientId: playlistCoverClientIdRef.current!,
+        generation: playlistVisualGenerationRef.current,
+        backendGeneration: playlistCoverBackendGenerationRef.current,
+        playlistEpoch,
+        scope,
+        trackId,
+        sourcePath: descriptor.sourcePath,
+        normalizedSourcePath: normalizeAudioSourcePath(descriptor.sourcePath),
+        maxEdge: edge,
+        attempt: 0,
+        optional: false,
+        forcePixels: true,
+      })
+      pumpPlaylistVisualHydration()
+    }
     const onImageError = (event: Event) => {
-      const src = coverImageEventDetail(event)?.url
-      if (typeof src !== 'string') return
-      const match = Object.entries(playlistTrackVisualsRef.current).find(([, visual]) => visual.coverThumbnail?.src === src)
-      if (!match) return
-      const [trackId] = match
+      const detail = coverImageEventDetail(event)
+      if (!detail || typeof detail.url !== 'string') return
+      const { url: src, token } = detail
+      // An upgrade replacement rolls back to the image the DOM already confirmed.
+      // That is a restore, not a recovery, so it does not consume an epoch.
       const pending = playlistPendingReplacementRef.current.get(src)
       if (pending) {
+        const current = playlistTrackVisualsRef.current[pending.trackId]
+        if (current?.coverThumbnail?.src !== src) return
+        if (token && !isCurrentCoverReport({
+          presentation: current.presentation,
+          identity: visualIdentity(pending.trackId),
+          sessionGeneration: playlistArtworkSessionRef.current,
+        }, { token, actualUrl: detail.actualUrl, outcome: 'failed' })) return
         playlistPendingReplacementRef.current.delete(src)
-        const restored = { ...playlistTrackVisualsRef.current, [trackId]: pending.previous }
+        const restored = { ...playlistTrackVisualsRef.current, [pending.trackId]: pending.previous }
         playlistTrackVisualsRef.current = restored
-        playlistVisualEdgeRef.current.set(trackId, pending.edge)
+        playlistVisualEdgeRef.current.set(pending.trackId, pending.edge)
         publishPlaylistVisuals(restored)
         const [nextFallback, ...remainingFallbacks] = pending.olderVisuals
         if (pending.previous.coverThumbnail && nextFallback?.visual.coverThumbnail) {
           playlistPendingReplacementRef.current.set(pending.previous.coverThumbnail.src, {
-            trackId,
+            trackId: pending.trackId,
             previous: nextFallback.visual,
             edge: nextFallback.edge,
             olderVisuals: remainingFallbacks,
@@ -2669,38 +2858,62 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
         releasePlaylistCoverUrl(src)
         return
       }
-      // Not an upgrade: this was the row's only published image. Restoring a
-      // previous visual is impossible, so the demand pass below is the recovery —
-      // but the failing URL has to stop being the current visual first, and the
-      // track must not stay marked failed from an earlier, unrelated attempt.
-      const failures = (playlistImageErrorCountsRef.current.get(trackId) ?? 0) + 1
-      playlistImageErrorCountsRef.current.set(trackId, failures)
+      // A tokenless report cannot be attributed to a publication. Emitting one is
+      // still allowed by the component contract for legacy consumers, but it must
+      // never drive recovery state here: matching by URL alone is what let a stale
+      // element's late error evict a healthy replacement.
+      if (!token) return
+      if (token.sessionGeneration !== playlistArtworkSessionRef.current) return
+      const trackId = token.key
+      const visual = playlistTrackVisualsRef.current[trackId]
+      if (!visual?.coverThumbnail) return
+      // Full currentness: owner session, key, complete identity (revision-bearing
+      // source), publish generation, published URL and the element's resolved URL.
+      // An event for an older publication, another owner's key or a src the element
+      // already changed away from is ignored: no eviction, no strike, no IPC.
+      if (!isCurrentCoverReport({
+        presentation: visual.presentation,
+        identity: visualIdentity(trackId),
+        sessionGeneration: playlistArtworkSessionRef.current,
+      }, { token, actualUrl: detail.actualUrl, outcome: 'failed' })) return
+      if (!playlistVisualDesiredIdsRef.current.has(trackId)) return
+      const recovery = playlistArtworkRecoveryRef.current!
+      const claim = recovery.claim(trackId, token.identity, token.publishGeneration, src)
+      if (claim === 'spent') {
+        // This epoch's single recovery is gone. Terminate it as a transient failure:
+        // the placeholder is the final state for this epoch, never a broken element
+        // and never another automatic request, even if the row stays in the viewport.
+        recovery.settle(trackId)
+        playlistVisualTransientRef.current.set(trackId, token.identity)
+        const next = { ...playlistTrackVisualsRef.current }
+        delete next[trackId]
+        playlistTrackVisualsRef.current = next
+        playlistVisualEdgeRef.current.delete(trackId)
+        playlistVisualSourceRef.current.delete(trackId)
+        publishPlaylistVisuals(next)
+        releasePlaylistCoverUrl(src)
+        return
+      }
+      // Admit the forced read at the edge the failing image was published for.
+      // A 512 hero failure stays 512; a list card stays 256. Recovery never
+      // "upgrades" or "downgrades" the request behind the user's back.
+      const failedEdge = playlistVisualEdgeRef.current.get(trackId) ?? 256
+      const edge: 128 | 256 | 512 = failedEdge <= 256 ? 256 : failedEdge
+      // The claim holds `queued`; it becomes `running` only when the job is admitted
+      // inside the hydration pump, so a job dropped before admission does not burn
+      // the epoch. Anything other than `spent` is a queued or in-flight epoch.
+      playlistVisualTransientRef.current.delete(trackId)
+      playlistVisualFailedRef.current.delete(trackId)
+      // The failing URL must stop being the current visual before the replacement
+      // arrives: leaving it mounted is the broken element this path exists to avoid.
       const next = { ...playlistTrackVisualsRef.current }
       delete next[trackId]
       playlistTrackVisualsRef.current = next
       playlistVisualEdgeRef.current.delete(trackId)
       playlistVisualSourceRef.current.delete(trackId)
-      // A first-publish DOM failure is a real failure of the current attempt, so a
-      // previous session-failure verdict for this row must not suppress the single
-      // recovery this hook allows.
-      playlistVisualFailedRef.current.delete(trackId)
       publishPlaylistVisuals(next)
       releasePlaylistCoverUrl(src)
-      // Bounded: after three first-publish failures for the same track the row is
-      // settled as failed and the placeholder is the correct final state.
-      if (failures > 2) {
-        const sourcePath = folderPlaylistRef.current?.tracks.find((track) => track.id === trackId)?.sourcePath
-        if (sourcePath) playlistVisualFailedRef.current.set(trackId, normalizeAudioSourcePath(sourcePath))
-        return
-      }
-      if (!playlistVisualDesiredIdsRef.current.has(trackId)) return
-      playlistVisualWindowKeyRef.current = null
-      setVisiblePlaylistTrackIds(
-        visiblePlaylistTrackIdsRef.current,
-        keepPersistentPlaylistArtworkRef.current,
-        showPlaylistArtworkRef.current,
-        playlistArtworkDemandRef.current,
-      )
+      queueForcedPixels(trackId, edge)
     }
     window.addEventListener('spmusic:playlist-cover-image-load', onImageLoad)
     window.addEventListener('spmusic:playlist-cover-image-error', onImageError)
@@ -2709,7 +2922,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       window.removeEventListener('spmusic:playlist-cover-image-load', onImageLoad)
       window.removeEventListener('spmusic:playlist-cover-image-error', onImageError)
     }
-  }, [setVisiblePlaylistTrackIds, publishPlaylistVisuals])
+  }, [pumpPlaylistVisualHydration, publishPlaylistVisuals])
 
   useEffect(() => {
     if (

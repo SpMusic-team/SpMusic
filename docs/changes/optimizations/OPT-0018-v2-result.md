@@ -26,11 +26,11 @@ source_documents:
 | 问题 | 结论 |
 | --- | --- |
 | 上次为什么失败？ | **前端一个取消谓词传反的 bug**，不是方向错误。成功后仍被当作「已取消」丢弃，所以命令 3 ms 返回、JPEG 和 URL 都对，卡片却永远 loading。 |
-| 这次修好了吗？ | **路径通道本身确认可用**：四批共 26 轮测量 + 30 轮压力测试中，候选版封面 100% 走 `asset.localhost`，全部封面就绪、零失败。但**正确性收尾尚未完成**——发布后 DOM 失败缺一次补救（见 §7.1）。 |
+| 这次修好了吗？ | **路径通道可用且 DOM 失败恢复已补齐**（`de185f6`）。封面 100% 走 `asset.localhost`，全部就绪零失败；发布后 DOM 失败会触发一次强制 pixels 补救。仍缺真实 WebView2 注入验证（§7.1）。 |
 | 更快了吗？ | **确定性地减少了工作量，但端到端可见时延的改善落在噪声带内、未能证明**。请读下面的「诚实结论」。 |
 | 磁盘？ | **25.4 MB → 2.2 MB，约 12 倍**（确定性）。 |
-| 有功能回退吗？ | 已测视图未发现。播放器大封面通道逐字节未动；旧 `.spxr` 缓存不失效。**但 DOM 失败恢复是已知缺口**（§7.1），不能算「正确性全部验证」。 |
-| 我的建议 | **保留**（路径通道可用、资源收益显著、且额外消除了一个会自毁的真实缺陷），但**不要对外宣称「明显变快」**，也**不要宣称「正确性全部验证」**。 |
+| 有功能回退吗？ | 已测视图未发现。播放器大封面通道逐字节未动；旧 `.spxr` 缓存不失效。滚动空白暴露经两臂对照确认是**既有行为**（§7.1b），非本次引入。 |
+| 我的建议 | **保留**（路径通道可用、DOM 补救已补齐、资源收益显著、且额外消除了一个会自毁的真实缺陷），但**不要对外宣称「明显变快」**。 |
 
 ### 诚实结论：关于「快了多少」
 
@@ -45,7 +45,7 @@ source_documents:
 
 | 项 | baseline | candidate | 倍数 |
 | --- | --- | --- | --- |
-| 单张封面 IPC 载荷 | 262,184 B（裸 RGBA） | 约 100 B（路径字符串） | **约 2600 倍** |
+| 单张封面 IPC 载荷 | 262,184 B（裸 RGBA） | 路径字符串 | **实测约 1500 倍**（见下表） |
 | 单张封面磁盘 | 262,228 B | 约 21.2 KB | **约 12.3 倍** |
 | JS 主线程逐像素转码 | 65,536 次/张 | **0 次** | 循环已消除 |
 
@@ -54,6 +54,23 @@ source_documents:
 > 2. **不宣称「主线程 CPU 确定减少多少」**。可以确认的是「逐像素循环被移除」这个代码事实；实际 CPU 时间与占用**必须采样**，不能由 65,536 次循环直接换算成毫秒。
 >
 > 另外，「约 100 B 的 IPC 载荷」是**路径字符串长度**的估算，不是实测的 IPC 序列化总开销（含 JSON 包装、命令参数等）。诚实口径应为：「IPC 载荷从每张约 256 KiB 的裸像素降为一条路径字符串，**具体字节数与节省比例待直接测量**」。
+
+**实测数据（`tools/thumbnail-benchmark/coverlane-ab.mjs`，2026-11-08）**
+
+重建后的测量工具用 CDP `Network` 事实直接测量，取代此前的估算：
+
+| 指标 | baseline | 路径版 | 差值 |
+| --- | --- | --- | --- |
+| `audio_load_track_thumbnail` IPC 载荷 | 786,552 B | — | — |
+| `audio_load_track_thumbnail_path` IPC 载荷 | — | **518 B** | **约 1500 倍** |
+| JS `createObjectURL`（BMP）调用次数 | 3–4 次 | **0 次** | 消除 |
+| BMP 字节 | 786 KB–590 KB | **0** | 消除 |
+| asset 协议请求 | — | 7–10 次，全部 200 / `image/jpeg`，**403 = 0** | — |
+| 回落次数（按 lane 直接判定） | 0 | **0** | — |
+| DOM 错误事件 | 0 | **0** | — |
+
+> 注意：1500 倍是**本次样本内实测**的 IPC 载荷比，与之前推算的 2600 倍不同（那 2600 是「262,184 B ÷ 100 B 估算」）。**以实测 1500 倍为准**，此前的估算不再作为结论。
+> 「回落 0 次」这次是**直接计数**（同一 `(kind,generation,source,maxEdge)` 同时出现在 path 与 pixels 两条 lane），不再是「磁盘上 0 个 `.spxr`」的旁证。
 
 **结论**：收益在「载荷、主线程 CPU、磁盘」上是确定且可量化的；在「端到端可见时延」上本次测量**未能证明**。后者取决于列表规模、滚动强度、机器负载——120 首单屏场景不足以放大差异。若要验证时延收益，需要更贴近真实的场景（见 §7）。
 
@@ -285,23 +302,45 @@ Get-ChildItem "$cache\SpMusic" -Recurse -Directory -Filter thumbnails | Select-O
 
 ## 7. 已知缺陷与处置
 
-### 7.1 DOM 失败恢复缺口（收尾方案点名的剩余正确性缺口）
+### 7.1 DOM 失败恢复缺口（已于 `de185f6` 补齐）
 
-**状态：已确认存在，正在实现中**（见 `docs/architecture/opt-0018-v2-closeout-and-optimization.md` §3–§5）。
+**状态：已实现并通过自动化验证；真实 WebView2 注入仍未做。**
 
-已核实的现状：
+原缺口（已核实）：
 
-| 项 | 现状 |
+| 项 | 原现状 |
 | --- | --- |
-| `AlbumCover`（`AlbumLibraryPanel.tsx:87`） | 原生 `<img>`，**完全没有 onError** |
-| `useAllSongsWindow` | **不监听** `spmusic:playlist-cover-image-error` / `load`（全仓只有 `useLibraryArtwork`、`useAudioPlayer` 监听） |
+| `AlbumCover`（`AlbumLibraryPanel.tsx`） | 原生 `<img>`，**完全没有 onError** |
+| `useAllSongsWindow` | **不监听** `spmusic:playlist-cover-image-error` / `load` |
 | 现有错误处理 | 只做「升级替换失败 → 还原旧图」，**没有首次发布后的像素补救**，也没有 identity/当前性校验 |
-| 自定义事件 detail | 只有 URL 字符串，**无 identity、代次、token**，无法判断过期 |
+| 自定义事件 detail | 只有 URL 字符串，**无 identity、代次、token** |
 | 「下次访问会重试」 | **不是现有保证**。同 identity 的缓存行不再请求，回访只清 `transientFailure`，而 DOM 错误不设置它 |
 
-**后果**：路径预加载成功后，若真实 DOM 图片加载失败（发布后文件被淘汰、损坏、或受管缓存被清理），当前实现**不会触发任何补救**，可能停留在占位或破图状态。
+已实现（`de185f6`）：
 
-因此本报告的「正确性」结论必须限定为：**已测视图的渲染正确性通过；DOM 失败恢复未实现**。
+- **展示快照与 token 契约**：`sessionGeneration` 取自全局注册表单调计数，卸载后新 owner 不可能复用同值而接收旧事件；受理前校验 owner mounted、`publishGeneration`、完整 identity（含 `artworkRevision`）、URL，`actualUrl` 用 `new URL(...).href` 比较。
+- **一次强制 pixels 恢复**：owner 内部 recovery 队列先于普通准入被取出，因此**绕过 pump 的 identity 缓存命中**；完全不经过 path 车道，也不等路径超时。仍进同一 `coverActive` 账本与 scheduler，并发上限未改。
+- **去重与双失败**：同一发布多张 `<img>` 报错只受理一次；双失败结算为 `failed + transientFailure` 并停止自动补救，保留可用旧图或正常占位，不留破图；离开回访或 revision 变化开启新 epoch。
+- **资源释放**：`lastPresented` 仅在 DOM 确认 loaded 时写入；blob 恰好释放一次，asset URL 走既有守卫不 revoke。
+
+验证：新增 23 项真实 hook/组件测试（`coverPresentationContract.test.mjs` 16 项 + `playlistCoverElement.test.mjs` 7 项），另在 `playlistCoverPathLane.test.mjs` 增补 6 项。合计 68 项全通过。
+
+**仍缺**：真实 WebView2 下的第三类注入（真删受管 JPEG、真损坏文件、真慢盘）。当前验证只到「单元替身 + 浏览器生命周期注入」层。两个具体未知：`complete && naturalWidth === 0` 在 WebView2 上是否真会发生，以及 asset URL 失败时 `currentSrc` 的取值形态。
+
+### 7.1b 滚动空白暴露：**是既有行为，不是本次引入**
+
+用重建后的测量工具（`tools/thumbnail-benchmark/coverlane-stress.mjs`）做**两臂同条件对照**（同 fixture、语料、视口、滚动脚本）：
+
+| 程序 | baseline 暴露/就绪/censored/最长空白 | 路径版 |
+| --- | --- | --- |
+| scroll-slow | 16 / 16 / 0 / 0 ms | 16 / 16 / 0 / 0 ms |
+| scroll-fast | 76 / 40 / **36** / **706 ms** | 76 / 40 / **36** / **730 ms** |
+| scroll-reverse | 40 / 36 / 4 / 503 ms | 40 / 36 / 4 / 520 ms |
+| scroll-revisit | 24 / 24 / 0 / 450 ms | 24 / 24 / 0 / 444 ms |
+
+**结论**：两臂几乎一致。快速滚动时「76 张暴露只 40 张就绪、36 张未就绪即离屏、最长空白约 700 ms」在**原始像素版就存在**，与路径通道无关。这是一条值得单独立项优化的既有体验问题，但**不作为本次改动的回退理由**。
+
+> 注意 `censored` 的语义：未就绪就滚出视口记为空缺样本，**不计为成功**。这是方案文档明确要求的，不能被读成「40 张成功」。
 
 ### 7.2 独立复核发现的缺陷（Test Agent，只读，未参与实现）
 

@@ -96,6 +96,7 @@ import { applyManualSongOrder, isSongOrderPermutation, mergeFilteredSongOrder, r
 import {
   AUDIO_PLAYLIST_TRACK_SUMMARY_BATCH_LIMIT,
   beginAudioPlaylistCoverWindow,
+  queryPlaylistDecodePermitWidth,
   cancelLibraryCoverWarmup,
   clearLibraryFolders,
   deleteLibraryTracks,
@@ -696,6 +697,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
   }, [])
   const playlistVisualHydrationQueueRef = useRef<PlaylistVisualHydrationJob[]>([])
   const playlistVisualHydrationActiveRef = useRef(0)
+  const playlistVisualAdmissionWidthRef = useRef(2)
   const playlistVisualHydrationActiveJobsRef = useRef(new Map<string, PlaylistVisualHydrationJob>())
   const playlistVisualRequiredIdsRef = useRef<ReadonlySet<string>>(new Set())
   const playlistOptionalIdleRef = useRef<OptionalIdleHandle | null>(null)
@@ -2189,7 +2191,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
   const pumpPlaylistVisualHydration = useCallback(() => {
     function pump(): void {
       while (
-        playlistVisualHydrationActiveRef.current < 2
+        playlistVisualHydrationActiveRef.current < playlistVisualAdmissionWidthRef.current
         && (playlistForcedRecoveryQueueRef.current.length > 0 || playlistVisualHydrationQueueRef.current.length > 0)
       ) {
         // A forced pixel recovery runs ahead of normal hydration: it was admitted
@@ -2517,6 +2519,19 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     }
     pump()
   }, [playlistVisualPresentation, publishPlaylistVisuals])
+
+  useEffect(() => {
+    let cancelled = false
+    // A missing or failed capability query leaves the existing width in force.
+    void queryPlaylistDecodePermitWidth().then((width) => {
+      if (cancelled || typeof width !== 'number' || !Number.isInteger(width) || width < 3) return
+      if (playlistVisualAdmissionWidthRef.current === 3) return
+      playlistVisualAdmissionWidthRef.current = 3
+      // Existing queued work can use the new slot before either active job completes.
+      pumpPlaylistVisualHydration()
+    }, () => {})
+    return () => { cancelled = true }
+  }, [pumpPlaylistVisualHydration])
 
   const setVisiblePlaylistTrackIds = useCallback((
     trackIds: readonly string[],

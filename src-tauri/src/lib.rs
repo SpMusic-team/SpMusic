@@ -851,6 +851,11 @@ fn audio_begin_playlist_cover_window(
     Ok(window_generation)
 }
 
+#[tauri::command]
+fn audio_playlist_decode_permit_width() -> u32 {
+    audio::playlist_decode_permit_width()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     init_tracing();
@@ -942,6 +947,7 @@ pub fn run() {
             audio_get_output_info,
             audio_load_cover_pixels,
             audio_begin_playlist_cover_window,
+            audio_playlist_decode_permit_width,
             audio_load_playlist_cover_pixels,
             audio_load_track_thumbnail,
             audio_load_folder_thumbnail,

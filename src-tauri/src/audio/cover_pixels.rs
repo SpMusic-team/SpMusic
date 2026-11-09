@@ -69,6 +69,14 @@ fn playlist_decode_permits() -> usize {
     (parallelism / 4).clamp(1, MAX_PLAYLIST_DECODE_PERMITS)
 }
 
+/// Reports the coordinator's width without initializing it for this query.
+pub(crate) fn playlist_decode_permit_width() -> u32 {
+    match PLAYLIST_REQUEST_COORDINATOR.get() {
+        Some(coordinator) => coordinator.slots.width as u32,
+        None => playlist_decode_permits() as u32,
+    }
+}
+
 const MAX_PLAYLIST_REQUESTS: usize = 32;
 /// Slots the background warmup lane must leave free for foreground requests.
 ///

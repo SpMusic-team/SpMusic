@@ -49,7 +49,7 @@ function runtimeBindings(source) {
 }
 
 async function harness(options = {}) {
-  const { trackCount = 3, pixel = 'pixels', path = 'ready' } = options
+  const { trackCount = 3, pixel = 'pixels', path = 'ready', queryPermitWidth, holdPath } = options
   const frames = new Map()
   let frameSequence = 0
   const effects = []
@@ -188,6 +188,7 @@ async function harness(options = {}) {
     isPlaylistCoverDecoded: () => true,
     decodePlaylistCover: async () => {},
     beginAudioPlaylistCoverWindow: async () => 5,
+    queryPlaylistDecodePermitWidth: queryPermitWidth ?? (async () => 2),
     getLibraryFolders: async () => {
       libraryCalls += 1
       // `RootSelection` marks activity with `selected` or a selected directory rule;
@@ -271,6 +272,7 @@ async function harness(options = {}) {
     },
     attemptTrackThumbnailPath: async (input) => {
       pathRequests.push({ kind: 'track', input })
+      if (holdPath) await holdPath()
       if (configuredPath === 'ready') {
         return { status: 'ready', image: { src: `asset://localhost/cache/player-track-${pathRequests.length}.jpg`, width: 256, height: 256, encodedBytes: 12 }, attemptId: `attempt-${pathRequests.length}` }
       }
@@ -279,6 +281,7 @@ async function harness(options = {}) {
     },
     attemptPlaylistCoverThumbnailPath: async (input) => {
       pathRequests.push({ kind: 'cover', input })
+      if (holdPath) await holdPath()
       if (configuredPath === 'ready') {
         return { status: 'ready', image: { src: `asset://localhost/cache/player-cover-${pathRequests.length}.jpg`, width: input.maxEdge, height: input.maxEdge, encodedBytes: 24 }, attemptId: `cover-attempt-${pathRequests.length}` }
       }
@@ -730,6 +733,48 @@ async function harness(options = {}) {
     scope, activated, loadAndPlayCalls, diagnostics, selectionErrors, activationVisuals,
   }
 }
+
+test('a late permit query starts the queued third cover before either in-flight cover settles', async () => {
+  const permit = Promise.withResolvers()
+  const path = Promise.withResolvers()
+  const h = await harness({
+    queryPermitWidth: () => permit.promise,
+    holdPath: () => path.promise,
+  })
+  try {
+    assert.equal(h.pathRequests.length, 2, 'a pending query must not block the first two covers')
+    permit.resolve(3)
+    await h.flush()
+    assert.equal(h.pathRequests.length, 3, 'the width increase must wake the queue without a job completion')
+    assert.equal(new Set(h.pathRequests.map(({ input }) => input.sourcePath)).size, 3, 'the third request belongs to a new track')
+  } finally {
+    path.resolve()
+    await h.flush()
+    h.unmount()
+  }
+})
+
+test('a rejected permit query leaves the queue at two in-flight covers', async () => {
+  const permit = Promise.withResolvers()
+  const path = Promise.withResolvers()
+  const h = await harness({
+    queryPermitWidth: () => permit.promise,
+    holdPath: () => path.promise,
+  })
+  try {
+    assert.equal(h.pathRequests.length, 2)
+    permit.reject(new Error('command unavailable'))
+    await h.flush()
+    assert.equal(h.pathRequests.length, 2)
+    path.resolve()
+    await h.flush()
+    assert.equal(h.pathRequests.length, 3, 'the queued cover proceeds as soon as a regular slot frees up')
+  } finally {
+    path.resolve()
+    await h.flush()
+    h.unmount()
+  }
+})
 
 test('the harness mounts the real hook with every runtime import bound', async () => {
   const h = await harness()

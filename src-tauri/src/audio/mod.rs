@@ -32,7 +32,7 @@ mod visualization;
 mod source_tests;
 
 pub use controller::AudioController;
-pub(crate) use cover_pixels::try_warm_track_thumbnail_path;
+pub(crate) use cover_pixels::{playlist_decode_permit_width, try_warm_track_thumbnail_path};
 pub use cover_pixels::{
     begin_playlist_cover_window, load_cover_pixels, load_folder_thumbnail,
     load_folder_thumbnail_path, load_playlist_cover_pixels, load_playlist_cover_thumbnail_path,

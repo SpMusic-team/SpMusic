@@ -566,6 +566,11 @@ export async function beginAudioPlaylistCoverWindow(clientId: string): Promise<n
   return invoke<number>('audio_begin_playlist_cover_window', { input: { clientId } })
 }
 
+// A separate query keeps the existing cover-window generation response numeric.
+export async function queryPlaylistDecodePermitWidth(): Promise<unknown> {
+  return invoke<unknown>('audio_playlist_decode_permit_width')
+}
+
 // The path lane never carries pixels: it returns an absolute path that the
 // WebView fetches through the asset protocol and decodes itself.
 const THUMBNAIL_PATH_MAX_EDGE = 512

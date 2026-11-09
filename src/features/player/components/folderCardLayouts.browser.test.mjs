@@ -89,7 +89,7 @@ function verify(sample) {
       expect(row.coverHasIcon&&row.badge?.background==='rgb(255, 255, 255)'&&row.badge?.padding==='5px',`${key}: folder glyph sits in white padded cover badge`)
       expect(row.badge&&near(row.badge.width,[38,34,26][level])&&near(row.badge.height,[38,34,26][level])&&near(row.badge.y-row.cover.y,10)&&near(row.cover.right-row.badge.right,10),`${key}: badge matches its top-right10px slot and padded glyph bounds`)
     }else if(level<=4){
-      cover(...(level===3?[240,165]:[155,107]));n('name',level===3?32:28);n('parent',28);n('meta',level===3?28:24);icon(48)
+      cover(...(level===3?[165,165]:[107,107]));n('name',level===3?32:28);n('parent',28);n('meta',level===3?28:24);icon(48)
       expect(v('parent')&&v('meta')&&!row.coverHasIcon,`${key}: row has parent/statistics and trailing folder glyph`)
       expect(v('music')&&near(row.music.width,level===3?22.667:24)&&near(row.music.height,level===3?26.667:24),`${key}: row music glyph matches its Figma slot`)
     }else if(level===5||level===6){

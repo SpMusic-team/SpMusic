@@ -10,8 +10,7 @@ import { AlbumLibraryPanel } from '@/features/player/components/AlbumLibraryPane
 import { FolderHierarchyPanel } from '@/features/player/components/FolderHierarchyPanel'
 import { FolderSelectionDialog } from '@/features/player/components/FolderSelectionDialog'
 import '@/features/player/styles/player.css'
-import { isTauri } from '@tauri-apps/api/core'
-import { getCurrentWindow } from '@tauri-apps/api/window'
+import { invoke, isTauri } from '@tauri-apps/api/core'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject, type TransitionEvent } from 'react'
 import { flushSync } from 'react-dom'
 import { AnimatePresence, LayoutGroup, animate, motion, useMotionValue, useReducedMotion, type Easing, type MotionValue } from 'motion/react'
@@ -883,14 +882,15 @@ export function PlayerSurface({
   const startupWindowShownRef = useRef(false)
   useEffect(() => {
     if (!firstSurfaceReady || startupWindowShownRef.current || !isTauri()) return
-    // Effects run after the complete player DOM has committed. The native
-    // window starts hidden, so intermediate restore renders cannot be seen.
+    // Effects run after the complete player DOM has committed. The
+    // backend restores expanded window modes only now: maximizing a hidden
+    // native window during setup can briefly show its unpainted WebView.
     startupWindowShownRef.current = true
     let cancelled = false
     const reveal = async () => {
       for (let attempt = 0; attempt < 3 && !cancelled; attempt += 1) {
         try {
-          await getCurrentWindow().show()
+          await invoke<void>('window_show_when_ready')
           return
         } catch (error) {
           if (attempt === 2) console.error('无法显示播放器窗口', error)

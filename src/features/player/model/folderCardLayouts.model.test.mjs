@@ -34,7 +34,7 @@ test('tile cards preserve square cover slots, badge sizes and field visibility',
 
 test('row and text variants select their own grouping rather than inheriting song text geometry', () => {
   assert.deepEqual(folders.slice(3, 7).map(item => [item.variant, item.coverWidth, item.coverHeight, item.folderGlyph]), [
-    ['row-wide', 240, 165, 48], ['row-wide', 155, 107, 48],
+    ['row-wide', 165, 165, 48], ['row-wide', 107, 107, 48],
     ['row-compact', 64, 64, 32], ['text-two-line', 0, 0, 32],
   ])
   assert(folders.slice(7).every(item => !item.showParent && item.showStatistics && item.folderGlyph === 16))

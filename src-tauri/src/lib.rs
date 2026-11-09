@@ -48,6 +48,21 @@ use tracing_subscriber::EnvFilter;
 use webview_memory::WebviewMemoryCoordinator;
 
 #[tauri::command]
+fn window_show_when_ready(
+    window: tauri::WebviewWindow,
+    startup: State<'_, window_state::StartupWindowReveal>,
+) -> Result<(), String> {
+    tracing::info!(
+        operation = "window.startup.ready",
+        "frontend surface is ready"
+    );
+    startup.show_when_ready(&window).map_err(|error| {
+        tracing::error!(operation = "window.startup.reveal", error = %error);
+        error
+    })
+}
+
+#[tauri::command]
 async fn audio_open_file(
     app: tauri::AppHandle,
     input: Option<AudioOpenFileInput>,
@@ -884,6 +899,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            window_show_when_ready,
             player_drag_diagnostics::player_drag_diagnostics_export,
             global_shortcuts_get_settings,
             global_shortcuts_update_settings,
@@ -949,46 +965,26 @@ pub fn run() {
             app.manage(library_streams::LibraryStreamRegistry::new(
                 &app_paths.data_dir,
             ));
-            let (window_state_tracker, main_window, restore_mode) =
+            let (window_state_tracker, restore_mode) =
                 if let Some(window) = app.get_webview_window("main") {
                     // The window is configured hidden, so its saved geometry is
-                    // applied before the frontend's first show() call.
+                    // applied before the frontend's ready command. Capture its
+                    // normal bounds before restoring either expanded mode.
                     let restore_mode = window_state::restore(&window, &app_paths.config_dir);
                     (
                         window_state::WindowStateTracker::from_window(&window),
-                        Some(window),
                         restore_mode,
                     )
                 } else {
                     (
                         window_state::WindowStateTracker::default(),
-                        None,
                         window_state::WindowMode::default(),
                     )
                 };
             app.manage(window_state_tracker);
-            if let Some(window) = main_window {
-                // Capture normal geometry before restoring either expanded mode,
-                // so restoring down and closing preserves the normal bounds.
-                if restore_mode.maximized {
-                    if let Err(error) = window.maximize() {
-                        tracing::warn!(
-                            operation = "window_state.restore",
-                            error = %error,
-                            "could not restore maximized state",
-                        );
-                    }
-                }
-                if restore_mode.fullscreen {
-                    if let Err(error) = window.set_fullscreen(true) {
-                        tracing::warn!(
-                            operation = "window_state.restore",
-                            error = %error,
-                            "could not restore fullscreen state",
-                        );
-                    }
-                }
-            }
+            // maximize() may briefly show and re-hide a native Windows window;
+            // only restore expanded modes after the frontend reports readiness.
+            app.manage(window_state::StartupWindowReveal::new(restore_mode));
             app.manage(app_paths);
             app.manage(AudioController::new(app.handle().clone(), audio_cache_dir));
 

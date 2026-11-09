@@ -30,6 +30,68 @@ pub struct WindowMode {
     pub maximized: bool,
 }
 
+/// Expanded modes can show a hidden native window on Windows. Defer every
+/// visibility-changing operation until the frontend has committed its surface.
+pub struct StartupWindowReveal(Mutex<PendingReveal>);
+
+struct PendingReveal {
+    mode: WindowMode,
+    shown: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RevealAction {
+    Maximize,
+    Fullscreen,
+    Show,
+}
+
+impl PendingReveal {
+    fn apply(
+        &mut self,
+        mut apply: impl FnMut(RevealAction) -> Result<(), String>,
+    ) -> Result<(), String> {
+        if self.shown {
+            return Ok(());
+        }
+        if self.mode.maximized {
+            apply(RevealAction::Maximize)?;
+            self.mode.maximized = false;
+        }
+        if self.mode.fullscreen {
+            apply(RevealAction::Fullscreen)?;
+            self.mode.fullscreen = false;
+        }
+        apply(RevealAction::Show)?;
+        self.shown = true;
+        Ok(())
+    }
+}
+
+impl StartupWindowReveal {
+    pub fn new(mode: WindowMode) -> Self {
+        Self(Mutex::new(PendingReveal { mode, shown: false }))
+    }
+
+    pub fn show_when_ready(&self, window: &WebviewWindow) -> Result<(), String> {
+        if window.label() != "main" {
+            return Err("only the main window may reveal the startup surface".into());
+        }
+        let mut pending = self
+            .0
+            .lock()
+            .map_err(|_| "startup window reveal lock is poisoned".to_string())?;
+        pending.apply(|action| {
+            let result = match action {
+                RevealAction::Maximize => window.maximize(),
+                RevealAction::Fullscreen => window.set_fullscreen(true),
+                RevealAction::Show => window.show(),
+            };
+            result.map_err(|error| format!("startup window {action:?} failed: {error}"))
+        })
+    }
+}
+
 #[derive(Default)]
 pub struct WindowStateTracker {
     last_normal: Mutex<Option<WindowState>>,
@@ -356,6 +418,129 @@ fn clamp_position(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn startup_modes_wait_for_ready_and_reveal_once_in_order() {
+        for fullscreen in [false, true] {
+            for maximized in [false, true] {
+                let startup = StartupWindowReveal::new(WindowMode {
+                    fullscreen,
+                    maximized,
+                });
+                let mut actions = Vec::new();
+                // Preparing startup state must not perform any window action.
+                assert!(!startup.0.lock().unwrap().shown);
+                for _ in 0..2 {
+                    startup
+                        .0
+                        .lock()
+                        .unwrap()
+                        .apply(|action| {
+                            actions.push(action);
+                            Ok(())
+                        })
+                        .unwrap();
+                }
+                let mut expected = Vec::new();
+                if maximized {
+                    expected.push(RevealAction::Maximize);
+                }
+                if fullscreen {
+                    expected.push(RevealAction::Fullscreen);
+                }
+                expected.push(RevealAction::Show);
+                assert_eq!(actions, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn failed_startup_action_preserves_remaining_mode_for_retry() {
+        let expected = [
+            RevealAction::Maximize,
+            RevealAction::Fullscreen,
+            RevealAction::Show,
+        ];
+        for failed_action in expected {
+            let startup = StartupWindowReveal::new(WindowMode {
+                fullscreen: true,
+                maximized: true,
+            });
+            let mut actions = Vec::new();
+            let error = startup
+                .0
+                .lock()
+                .unwrap()
+                .apply(|action| {
+                    actions.push(action);
+                    if action == failed_action {
+                        Err("native failure".into())
+                    } else {
+                        Ok(())
+                    }
+                })
+                .unwrap_err();
+            assert_eq!(error, "native failure");
+            assert!(!startup.0.lock().unwrap().shown);
+            startup
+                .0
+                .lock()
+                .unwrap()
+                .apply(|action| {
+                    actions.push(action);
+                    Ok(())
+                })
+                .unwrap();
+            let failure_index = expected
+                .iter()
+                .position(|action| *action == failed_action)
+                .unwrap();
+            let expected_actions: Vec<_> = expected[..=failure_index]
+                .iter()
+                .chain(expected[failure_index..].iter())
+                .copied()
+                .collect();
+            assert_eq!(actions, expected_actions, "retry resumes the failed stage");
+            assert!(startup.0.lock().unwrap().shown);
+        }
+    }
+
+    #[test]
+    fn concurrent_readiness_calls_do_not_repeat_window_actions() {
+        let startup = std::sync::Arc::new(StartupWindowReveal::new(WindowMode {
+            fullscreen: true,
+            maximized: true,
+        }));
+        let actions = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let threads: Vec<_> = (0..8)
+            .map(|_| {
+                let startup = startup.clone();
+                let actions = actions.clone();
+                std::thread::spawn(move || {
+                    startup
+                        .0
+                        .lock()
+                        .unwrap()
+                        .apply(|action| {
+                            actions.lock().unwrap().push(action);
+                            Ok(())
+                        })
+                        .unwrap();
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        assert_eq!(
+            *actions.lock().unwrap(),
+            [
+                RevealAction::Maximize,
+                RevealAction::Fullscreen,
+                RevealAction::Show
+            ]
+        );
+    }
 
     fn normal_geometry() -> serde_json::Value {
         serde_json::json!({

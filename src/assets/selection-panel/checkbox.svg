@@ -1,0 +1,14 @@
+<svg preserveAspectRatio="none" overflow="visible" style="display: block;" width="45" height="45" viewBox="0 0 45 45" fill="none" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<g id="Checkbox">
+<g id="Vector">
+<use xlink:href="#stroke0_0_69" fill="#242424"/>
+<mask id="stroke1_0_69" fill="white">
+<use xlink:href="#stroke0_0_69"/>
+</mask>
+<path d="M9 13.875C9 11.1826 11.1826 9 13.875 9H31.125C33.8174 9 36 11.1826 36 13.875V31.125C36 33.8174 33.8174 36 31.125 36H13.875C11.1826 36 9 33.8174 9 31.125V13.875ZM10.5 13.875C10.5 12.011 12.011 10.5 13.875 10.5H31.125C32.989 10.5 34.5 12.011 34.5 13.875V31.125C34.5 32.989 32.989 34.5 31.125 34.5H13.875C12.011 34.5 10.5 32.989 10.5 31.125V13.875Z" stroke-width="2" stroke="#276389" mask="url(#stroke1_0_69)"/>
+</g>
+</g>
+<defs>
+<path id="stroke0_0_69" d="M9 13.875C9 11.1826 11.1826 9 13.875 9H31.125C33.8174 9 36 11.1826 36 13.875V31.125C36 33.8174 33.8174 36 31.125 36H13.875C11.1826 36 9 33.8174 9 31.125V13.875ZM10.5 13.875C10.5 12.011 12.011 10.5 13.875 10.5H31.125C32.989 10.5 34.5 12.011 34.5 13.875V31.125C34.5 32.989 32.989 34.5 31.125 34.5H13.875C12.011 34.5 10.5 32.989 10.5 31.125V13.875Z" fill-rule="evenodd" clip-rule="evenodd"/>
+</defs>
+</svg>

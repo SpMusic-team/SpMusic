@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen android:title="@string/pref_direct_volume_control" w:searchBreadcrumb1="@string/pref_audio_engine"
+  xmlns:android="http://schemas.android.com/apk/res/android" xmlns:z="http://schemas.android.com/apk/res-auto" xmlns:w="http://schemas.android.com/apk/res-auto">
+    <com.maxmpz.audioplayer.preference.RawTextPreference android:background="@drawable/settings_quote_background" w:line1="@string/pref_summary_direct_volume_control" w:line2="@string/pref_dvc_bt_msg" w:line3="@string/absvol_desc_short" w:line4="@string/some_devices_block_absvol_detect" w:skipSearch="true" w:keepPaddings="true" />
+    <com.maxmpz.audioplayer.preference.MultilineSwitchPreference android:title="@string/pref_enable_direct_volume_control" android:key="dvc_enabled" android:defaultValue="true" />
+    <com.maxmpz.audioplayer.preference.RawTextPreference w:line1="@string/dvc_is_enabled_if" w:line2="@string/dvc_is_enabled_if2" w:line3="@string/dvc_is_enabled_if3" w:skipSearch="true" w:singleNewline="true" w:zeroTopPad="true" />
+    <PreferenceCategory android:title="@string/bluetooth_headset" android:key="bluetooth_headset" />
+    <com.maxmpz.audioplayer.preference.RawTextPreference android:background="@drawable/settings_rounded_background" android:key="bt_absvol_status" w:keepPaddings="true" />
+    <com.maxmpz.audioplayer.preference.MultilineSwitchPreference android:title="@string/pref_no_dvc_bt_absvol" android:key="no_dvc_bt_absvol" android:summary="@string/pref_summary_no_dvc_bt_absvol" android:dependency="dvc_enabled" android:defaultValue="true" />
+    <com.maxmpz.audioplayer.preference.RawTextPreference android:icon="@drawable/exclamation_48dp" android:key="no_dvc_bt_absvol_hint" w:line1="@string/absvol_change_on_bt" w:line2="@string/absvol_change_settings_page" w:singleNewline="true" w:iconAlignedTop="true" w:zeroBottomPad="true" w:zeroTopPad="true" />
+    <com.maxmpz.audioplayer.preference.RawTextPreference android:background="@drawable/settings_quote_background" android:key="no_dvc_bt_absvol_hint_15" w:line1="@string/absvol_detection_15" w:line2="@string/absvol_disabled_bt_15" w:line3="@string/absvol_uncheck_manually" w:keepPaddings="true" />
+    <com.maxmpz.audioplayer.preference.RawTextPreference android:title="@string/pref_disable_bt_abs_vol" android:key="dvc_bt_msg" w:iconAlignedTop="true" />
+    <com.maxmpz.audioplayer.preference.RoundKnobPreference android:title="@string/pref_headroom_gain" android:key="no_dvc_gain_mb" android:summary="@string/pref_summary_headroom_gain" android:defaultValue="-600" w:valueFormat="@string/d_db" w:scale="100.0" w:max="0" w:min="-1000" w:step="50" w:label="@string/d_db" w:summary2="@string/applied_when_no_dvc" />
+    <com.maxmpz.audioplayer.preference.MultilineSwitchPreference android:persistent="true" android:title="@string/pref_compensate_dvc_vol" android:key="compensate_dvc_vol" android:summary="@string/pref_summary_compensate_dvc_vol" android:defaultValue="false" w:skipSearch="peq" />
+    <Preference android:title="@string/pref_restore_defaults" android:key="restore_defaults" />
+</PreferenceScreen>

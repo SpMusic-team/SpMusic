@@ -94,7 +94,35 @@ const THUMBNAIL_PENDING_BYTES: usize = 32 * 1024 * 1024;
 const THUMBNAIL_DISK_MAGIC: [u8; 4] = *b"SPTC";
 const THUMBNAIL_DISK_VERSION: u16 = 1;
 const THUMBNAIL_TRANSFORM_VERSION: u16 = 2;
+/// JPEG encoder parameter version (quality and chroma sampling).
+///
+/// Deliberately independent from [`THUMBNAIL_DISK_VERSION`] and
+/// [`THUMBNAIL_TRANSFORM_VERSION`]: retuning the encoder must invalidate only
+/// the `.jpg` lane, so the player's 1024/1536 `.spxr` cache stays valid. The
+/// transform version still participates in the JPEG filename, so a pixel change
+/// invalidates both lanes together, which is the intended behaviour.
+const THUMBNAIL_IMAGE_VERSION: u16 = 1;
 const THUMBNAIL_DISK_HEADER_LEN: usize = 44;
+/// Upper bound for one published playlist `.jpg`.
+///
+/// A 512 px 4:2:2 JPEG of worst-case high-frequency content stays far below this
+/// value; the bound exists to reject a corrupt or substituted file, not to
+/// constrain encoder output.
+const THUMBNAIL_PATH_MAX_BYTES: u64 = 1024 * 1024;
+const THUMBNAIL_JPEG_QUALITY: u8 = 82;
+/// Foreground budget for the path lane's write-then-publish handshake.
+///
+/// Lower than the background warmup budget (5 s) because a path-lane caller is a
+/// visible list cell: it must either get a published path quickly or fail so the
+/// frontend can fall back to the pixel lane. See decision 3.4.
+const THUMBNAIL_PATH_PUBLISH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+/// Extensions that participate in the shared thumbnail budget.
+///
+/// Every encoding written into the thumbnail directory must be registered here;
+/// otherwise it is neither counted by [`scan_thumbnail_usage`] nor evicted by
+/// [`make_thumbnail_room_with_limits_checked`], which turns the disk cache into
+/// unbounded growth. See decision 3.2.
+const MANAGED_THUMBNAIL_EXTENSIONS: [&str; 2] = ["spxr", "jpg"];
 static THUMBNAIL_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static THUMBNAIL_WRITER: OnceLock<ThumbnailWriter> = OnceLock::new();
 static THUMBNAIL_USAGE: OnceLock<StdMutex<HashMap<PathBuf, ThumbnailUsage>>> = OnceLock::new();
@@ -439,6 +467,27 @@ pub struct AudioBeginPlaylistCoverWindowInput {
     pub client_id: String,
 }
 
+/// Result of the playlist thumbnail *path* lane (decisions 2.3 and 3.4).
+///
+/// `Option::None` from the command that returns this struct means "no artwork
+/// confirmed", which mirrors the empty `Response` of the pixel lane. The path is
+/// only handed out after the JPEG is durably published, so the frontend can pass
+/// it straight to `convertFileSrc()` without racing a 404.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaylistThumbnailPath {
+    /// Absolute path. The frontend may only feed this to `convertFileSrc()`; it
+    /// must not be concatenated, truncated, or re-fetched through JS.
+    pub path: String,
+    /// Real JPEG pixel width, which may be smaller than `maxEdge` because
+    /// [`scaled_dimensions`] never upsamples a small source.
+    pub width: u32,
+    pub height: u32,
+    /// Published JPEG byte length, used by the frontend for resource accounting.
+    #[serde(rename = "byteLength")]
+    pub byte_len: u64,
+}
+
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum CoverPixelsErrorCode {
@@ -617,7 +666,98 @@ impl PlaylistDecodeSlots {
     }
 }
 
-struct PlaylistDecodePermit {
+/// Holds one decode permit for exactly as long as a lane performs CPU work.
+///
+/// A path-lane request has two phases with very different resource needs: decode
+/// plus JPEG encode (CPU bound, this is what the permit exists for) and the
+/// write-then-publish handshake (`wait_path_idle`, which waits on the single
+/// cache writer and burns no CPU at all). Keeping the permit across the wait
+/// would let one cold request hold a slot 閳?on a four-core host the pool is
+/// exactly one 閳?for the publish budget, starving every visible cover behind it.
+/// Worse, a slow disk can make that wait time out, which surfaces as a publish
+/// failure and drives the frontend's circuit breaker toward a permanent fallback.
+///
+/// The release is therefore an explicit, idempotent step: the lane calls
+/// [`Self::release`] once encoding is finished and before it blocks on the
+/// writer, and the permit's `Drop` covers every early-return path.
+pub(super) struct DecodeSlot {
+    permit: StdMutex<Option<PlaylistDecodePermit>>,
+    /// Fires after the permit is back in the pool, before the publish wait.
+    #[cfg(test)]
+    on_release: StdMutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+}
+
+impl DecodeSlot {
+    pub(super) fn new(permit: PlaylistDecodePermit) -> Self {
+        Self {
+            permit: StdMutex::new(Some(permit)),
+            #[cfg(test)]
+            on_release: StdMutex::new(None),
+        }
+    }
+
+    /// Returns the decode permit to the pool. Safe to call more than once.
+    ///
+    /// Idempotent because the folder walk and the sibling search may each reach a
+    /// publish point through different candidate branches, and every one of them
+    /// wants to release before waiting without having to reason about which
+    /// branch ran first.
+    pub(super) fn release(&self) {
+        let released = {
+            let mut slot = self
+                .permit
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            slot.take()
+        };
+        // Dropping outside the lock keeps the pool's wake-up from running while
+        // this mutex is held.
+        drop(released);
+        #[cfg(test)]
+        if let Some(hook) = self
+            .on_release
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+        {
+            hook();
+        }
+    }
+
+    #[cfg(test)]
+    fn set_on_release(&self, hook: Arc<dyn Fn() + Send + Sync>) {
+        *self
+            .on_release
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(hook);
+    }
+
+    /// Slot that owns no permit: for direct blocking-helper tests, which exercise
+    /// the encode/publish split without going through the async admission path.
+    #[cfg(test)]
+    pub(super) fn detached() -> Self {
+        Self {
+            permit: StdMutex::new(None),
+            on_release: StdMutex::new(None),
+        }
+    }
+
+    /// Slot bound to a real pool permit, for tests that assert release timing.
+    #[cfg(test)]
+    pub(super) fn for_test(permit: PlaylistDecodePermit) -> Self {
+        Self::new(permit)
+    }
+
+    #[cfg(test)]
+    fn is_released(&self) -> bool {
+        self.permit
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_none()
+    }
+}
+
+pub(super) struct PlaylistDecodePermit {
     release: tauri::async_runtime::Sender<()>,
     held: Arc<AtomicUsize>,
 }
@@ -1012,6 +1152,145 @@ impl PlaylistCoverRequestCoordinator {
         .map_err(|_| playlist_worker_failed())?
     }
 
+    /// Playlist-cover *path* lane (`audio_load_playlist_cover_thumbnail_path`).
+    ///
+    /// The admission shape intentionally mirrors [`Self::load`]: generation
+    /// check, request reservation, decode permit, worker-side re-check, and a
+    /// final publish-time check. Decision 7 keeps this width unchanged because
+    /// the miss branch still performs the same decode and resize work.
+    ///
+    /// Unlike the pixel lane, the decode permit does not live for the whole
+    /// closure: it is released inside the blocking worker once the JPEG is
+    /// encoded, so the publish wait cannot occupy a decode slot.
+    async fn load_playlist_path(
+        self: &Arc<Self>,
+        app_cache_dir: PathBuf,
+        input: AudioLoadPlaylistCoverPixelsInput,
+    ) -> Result<Option<PlaylistThumbnailPath>, CoverPixelsError> {
+        validate_playlist_max_edge(input.max_edge)?;
+        self.ensure_current(&input.client_id, input.window_generation)?;
+        let request = self.reserve_request()?;
+        let permit = self.slots.acquire().await?;
+        self.ensure_current(&input.client_id, input.window_generation)?;
+        let coordinator = Arc::clone(self);
+        let worker_input = input.clone();
+        let published = tauri::async_runtime::spawn_blocking(move || {
+            let _request = request;
+            let slot = DecodeSlot::new(permit);
+            coordinator.ensure_current(
+                &worker_input.client_id,
+                worker_input.window_generation,
+            )?;
+            let result = load_playlist_thumbnail_path_blocking(
+                &app_cache_dir,
+                &worker_input.file_path,
+                worker_input.max_edge,
+                || {
+                    coordinator
+                        .ensure_current(&worker_input.client_id, worker_input.window_generation)
+                        .is_ok()
+                },
+                &slot,
+            )?;
+            coordinator
+                .ensure_current(&worker_input.client_id, worker_input.window_generation)?;
+            Ok(result)
+        })
+        .await
+        .map_err(|_| playlist_worker_failed())??;
+        self.ensure_current(&input.client_id, input.window_generation)?;
+        Ok(published)
+    }
+
+    /// Track thumbnail *path* lane (`audio_load_track_thumbnail_path`).
+    ///
+    /// Accepts the full playlist edge set rather than the pixel lane's
+    /// 128/256. Supersetting the existing whitelist cannot change what the pixel
+    /// command already accepts, and it keeps one rule for the whole path command
+    /// family (decision 2.2).
+    async fn load_track_path(
+        self: &Arc<Self>,
+        app_cache_dir: PathBuf,
+        input: AudioLoadTrackThumbnailInput,
+    ) -> Result<Option<PlaylistThumbnailPath>, CoverPixelsError> {
+        validate_playlist_max_edge(input.max_edge)?;
+        self.ensure_current(&input.client_id, input.window_generation)?;
+        let request = self.reserve_request()?;
+        let permit = self.slots.acquire().await?;
+        self.ensure_current(&input.client_id, input.window_generation)?;
+        let coordinator = Arc::clone(self);
+        let worker_input = input.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            let _request = request;
+            let slot = DecodeSlot::new(permit);
+            let current = || {
+                coordinator
+                    .ensure_current(&worker_input.client_id, worker_input.window_generation)
+                    .is_ok()
+            };
+            coordinator.ensure_current(
+                &worker_input.client_id,
+                worker_input.window_generation,
+            )?;
+            let result = load_track_thumbnail_path_blocking(
+                &app_cache_dir,
+                &worker_input.source_path,
+                worker_input.max_edge,
+                // A single song is a real cover request, not a folder walk: a
+                // malformed tag is an error here, exactly as in the pixel lane.
+                false,
+                current,
+                &slot,
+            )?;
+            coordinator
+                .ensure_current(&worker_input.client_id, worker_input.window_generation)?;
+            Ok(result)
+        })
+        .await
+        .map_err(|_| playlist_worker_failed())?
+    }
+
+    /// Folder thumbnail *path* lane (`audio_load_folder_thumbnail_path`).
+    async fn load_folder_path(
+        self: &Arc<Self>,
+        app_cache_dir: PathBuf,
+        input: AudioLoadFolderThumbnailInput,
+    ) -> Result<Option<PlaylistThumbnailPath>, CoverPixelsError> {
+        validate_playlist_max_edge(input.max_edge)?;
+        self.ensure_current(&input.client_id, input.window_generation)?;
+        let request = self.reserve_request()?;
+        let permit = self.slots.acquire().await?;
+        self.ensure_current(&input.client_id, input.window_generation)?;
+        let coordinator = Arc::clone(self);
+        let worker_input = input.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            let _request = request;
+            let slot = DecodeSlot::new(permit);
+            let current = || {
+                coordinator
+                    .ensure_current(&worker_input.client_id, worker_input.window_generation)
+                    .is_ok()
+            };
+            coordinator.ensure_current(
+                &worker_input.client_id,
+                worker_input.window_generation,
+            )?;
+            let result = super::folder_cover::load_folder_thumbnail_path_blocking(
+                &app_cache_dir,
+                &worker_input.root_path,
+                &worker_input.directory_path,
+                worker_input.max_edge,
+                current,
+                &slot,
+            )?;
+            coordinator
+                .ensure_current(&worker_input.client_id, worker_input.window_generation)?;
+            Ok(result)
+        })
+        .await
+        .map_err(|_| playlist_worker_failed())?
+    }
+
     fn run_worker(
         &self,
         root: &Path,
@@ -1135,6 +1414,33 @@ pub async fn load_folder_thumbnail(
     let coordinator = PLAYLIST_REQUEST_COORDINATOR
         .get_or_init(|| Arc::new(PlaylistCoverRequestCoordinator::new()));
     coordinator.load_folder(app_cache_dir, input).await
+}
+
+pub async fn load_playlist_cover_thumbnail_path(
+    app_cache_dir: PathBuf,
+    input: AudioLoadPlaylistCoverPixelsInput,
+) -> Result<Option<PlaylistThumbnailPath>, CoverPixelsError> {
+    let coordinator = PLAYLIST_REQUEST_COORDINATOR
+        .get_or_init(|| Arc::new(PlaylistCoverRequestCoordinator::new()));
+    coordinator.load_playlist_path(app_cache_dir, input).await
+}
+
+pub async fn load_track_thumbnail_path(
+    app_cache_dir: PathBuf,
+    input: AudioLoadTrackThumbnailInput,
+) -> Result<Option<PlaylistThumbnailPath>, CoverPixelsError> {
+    let coordinator = PLAYLIST_REQUEST_COORDINATOR
+        .get_or_init(|| Arc::new(PlaylistCoverRequestCoordinator::new()));
+    coordinator.load_track_path(app_cache_dir, input).await
+}
+
+pub async fn load_folder_thumbnail_path(
+    app_cache_dir: PathBuf,
+    input: AudioLoadFolderThumbnailInput,
+) -> Result<Option<PlaylistThumbnailPath>, CoverPixelsError> {
+    let coordinator = PLAYLIST_REQUEST_COORDINATOR
+        .get_or_init(|| Arc::new(PlaylistCoverRequestCoordinator::new()));
+    coordinator.load_folder_path(app_cache_dir, input).await
 }
 
 /// Only synchronous metadata / source-probe workers use this bridge. Thumbnail
@@ -1369,6 +1675,83 @@ pub(super) fn load_folder_track_thumbnail_blocking(
     load_track_thumbnail_blocking_with_mode(app_cache_dir, source_path, max_edge, is_current, true)
 }
 
+/// Outcome of the shared track artwork probe, before any encoding.
+enum TrackCoverProbe {
+    /// Embedded artwork bytes that still need encoding for the calling lane.
+    Bytes(Vec<u8>),
+    /// The tags carried no picture: the caller may fall through to sibling
+    /// artwork.
+    Sibling,
+    /// Proven absence for this call; no sibling fallback applies (the folder
+    /// lane skips malformed tags instead of searching higher levels).
+    Absent,
+}
+
+/// Tag probe plus index bookkeeping shared by the pixel and path lanes.
+///
+/// Extracted so the path lane does not clone the probe order, the negative-index
+/// write, or the fingerprint revalidation; the two lanes differ only in what they
+/// encode. See decision 3.5's rationale for keeping one seam.
+fn probe_track_cover_bytes(
+    app_cache_dir: &Path,
+    source_path: &str,
+    fingerprint: TrackFingerprint,
+    skip_invalid_tags: bool,
+    is_current: impl Fn() -> bool + Copy,
+) -> Result<TrackCoverProbe, CoverPixelsError> {
+    if !is_current() {
+        return Err(CoverPixelsError::stale());
+    }
+    #[cfg(test)]
+    tests::record_track_thumbnail_probe(app_cache_dir);
+    let source = match super::playlist_cover::probe_playlist_cover_blocking(app_cache_dir, source_path) {
+        Ok(source) => source,
+        // Folder selection may continue past malformed/unsupported audio, but
+        // I/O failures must remain distinguishable from proven missing artwork.
+        Err(error)
+            if skip_invalid_tags
+                && matches!(error.code, super::error::AudioErrorCode::UnsupportedFormat) =>
+        {
+            return Ok(TrackCoverProbe::Absent);
+        }
+        Err(error) => {
+            return Err(CoverPixelsError::recoverable(
+                CoverPixelsErrorCode::InvalidPath,
+                error.message,
+            ));
+        }
+    };
+    let Some(cover) = source.cover_art else {
+        if is_current() && source_fingerprint(source_path).ok() == Some(fingerprint) {
+            let _ = write_track_index(app_cache_dir, source_path, fingerprint, None);
+        }
+        return Ok(if skip_invalid_tags {
+            TrackCoverProbe::Absent
+        } else {
+            TrackCoverProbe::Sibling
+        });
+    };
+    let bytes = if let Some(file_path) = cover.file_path {
+        let covers_root = app_cache_dir
+            .join(AUDIO_CACHE_DIRECTORY)
+            .join(COVER_DIRECTORY);
+        let path = validate_cover_path(&covers_root, Path::new(&file_path))?;
+        read_bounded_file(&path)?
+    } else if let Some(data_url) = cover.data_url {
+        use base64::Engine;
+        let encoded = data_url
+            .split_once(",")
+            .map(|(_, encoded)| encoded)
+            .ok_or_else(|| playlist_worker_failed())?;
+        base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .map_err(|_| playlist_worker_failed())?
+    } else {
+        return Err(playlist_worker_failed());
+    };
+    Ok(TrackCoverProbe::Bytes(bytes))
+}
+
 fn load_track_thumbnail_blocking_with_mode(
     app_cache_dir: &Path,
     source_path: &str,
@@ -1398,61 +1781,128 @@ fn load_track_thumbnail_blocking_with_mode(
             }
         }
     }
-    if !is_current() {
-        return Err(CoverPixelsError::stale());
+    // These lanes hold `Copy + FnOnce` predicates (the pixel lane's contract) but
+    // the shared probe and path helpers check staleness several times and so need
+    // `Fn`. This closure performs that upgrade; clippy's "redundant closure" is a
+    // false positive because the inner type is not `Fn`.
+    #[allow(clippy::redundant_closure)]
+    let current = || is_current();
+    match probe_track_cover_bytes(
+        app_cache_dir,
+        source_path,
+        fingerprint,
+        skip_invalid_tags,
+        current,
+    )? {
+        TrackCoverProbe::Bytes(bytes) => {
+            let hash = blake3::hash(&bytes);
+            let response =
+                playlist_pixels_from_bytes(app_cache_dir, &bytes, hash, max_edge, is_current, || {})?;
+            if is_current() && source_fingerprint(source_path).ok() == Some(fingerprint) {
+                let _ = write_track_index(app_cache_dir, source_path, fingerprint, Some(hash));
+            }
+            Ok(response)
+        }
+        TrackCoverProbe::Absent => Ok(Vec::new()),
+        TrackCoverProbe::Sibling => super::folder_cover::load_sibling_thumbnail(
+            app_cache_dir,
+            source_path,
+            max_edge,
+            is_current,
+        ),
     }
-    #[cfg(test)]
-    tests::record_track_thumbnail_probe(app_cache_dir);
-    let source = match super::playlist_cover::probe_playlist_cover_blocking(app_cache_dir, source_path) {
-        Ok(source) => source,
-        // Folder selection may continue past malformed/unsupported audio, but
-        // I/O failures must remain distinguishable from proven missing artwork.
-        Err(error)
-            if skip_invalid_tags
-                && matches!(error.code, super::error::AudioErrorCode::UnsupportedFormat) =>
-        {
-            return Ok(Vec::new());
+}
+
+/// Path-lane counterpart of [`load_track_thumbnail_blocking_with_mode`].
+///
+/// Same fingerprint, index, probe, and sibling order, but the terminal step
+/// publishes a `.jpg` and returns its path. `Ok(None)` means artwork absence is
+/// confirmed, which the frontend maps to the same "no cover" state as the pixel
+/// lane's empty response.
+///
+/// `skip_invalid_tags` mirrors the pixel lane's flag exactly. The folder walk
+/// passes `true` so a directory containing one corrupt audio file still reports a
+/// confirmed absence instead of an `InvalidPath` error; otherwise the path lane
+/// would classify the same "no artwork here" directory differently from the pixel
+/// lane and feed the frontend's failure counter for free.
+///
+/// `slot` is released once encoding finishes and before the publish wait.
+pub(super) fn load_track_thumbnail_path_blocking(
+    app_cache_dir: &Path,
+    source_path: &str,
+    max_edge: u32,
+    skip_invalid_tags: bool,
+    is_current: impl FnOnce() -> bool + Copy,
+    slot: &DecodeSlot,
+) -> Result<Option<PlaylistThumbnailPath>, CoverPixelsError> {
+    let fingerprint = source_fingerprint(source_path)?;
+    let cache_dir = app_cache_dir
+        .join(AUDIO_CACHE_DIRECTORY)
+        .join(THUMBNAIL_DIRECTORY);
+    if let Some(indexed) = read_track_index(app_cache_dir, source_path, fingerprint) {
+        match indexed {
+            None => {
+                return if skip_invalid_tags {
+                    // Indexed as "no artwork": proven absence, exactly like the
+                    // pixel lane's `Ok(Vec::new())`.
+                    Ok(None)
+                } else {
+                    super::folder_cover::load_sibling_thumbnail_path(
+                        app_cache_dir,
+                        source_path,
+                        max_edge,
+                        is_current,
+                        slot,
+                    )
+                };
+            }
+            Some(hash) => {
+                let filename = playlist_thumbnail_path_filename(hash, max_edge);
+                if let Some(hit) = read_playlist_thumbnail_path_cache(&cache_dir, &filename) {
+                    return Ok(Some(hit));
+                }
+            }
         }
-        Err(error) => {
-            return Err(CoverPixelsError::recoverable(
-                CoverPixelsErrorCode::InvalidPath,
-                error.message,
-            ));
-        }
-    };
-    let Some(cover) = source.cover_art else {
-        if is_current() && source_fingerprint(source_path).ok() == Some(fingerprint) {
-            let _ = write_track_index(app_cache_dir, source_path, fingerprint, None);
-        }
-        return if skip_invalid_tags { Ok(Vec::new()) } else {
-            super::folder_cover::load_sibling_thumbnail(app_cache_dir, source_path, max_edge, is_current)
-        };
-    };
-    let bytes = if let Some(file_path) = cover.file_path {
-        let covers_root = app_cache_dir
-            .join(AUDIO_CACHE_DIRECTORY)
-            .join(COVER_DIRECTORY);
-        let path = validate_cover_path(&covers_root, Path::new(&file_path))?;
-        read_bounded_file(&path)?
-    } else if let Some(data_url) = cover.data_url {
-        use base64::Engine;
-        let encoded = data_url
-            .split_once(",")
-            .map(|(_, encoded)| encoded)
-            .ok_or_else(|| playlist_worker_failed())?;
-        base64::engine::general_purpose::STANDARD
-            .decode(encoded)
-            .map_err(|_| playlist_worker_failed())?
-    } else {
-        return Err(playlist_worker_failed());
-    };
-    let hash = blake3::hash(&bytes);
-    let response =
-        playlist_pixels_from_bytes(app_cache_dir, &bytes, hash, max_edge, is_current, || {})?;
-    if is_current() && source_fingerprint(source_path).ok() == Some(fingerprint) {
-        let _ = write_track_index(app_cache_dir, source_path, fingerprint, Some(hash));
     }
-    Ok(response)
+    // Same `Copy + FnOnce` -> `Fn` upgrade as the pixel lane above.
+    #[allow(clippy::redundant_closure)]
+    let current = || is_current();
+    match probe_track_cover_bytes(
+        app_cache_dir,
+        source_path,
+        fingerprint,
+        skip_invalid_tags,
+        current,
+    )? {
+        TrackCoverProbe::Bytes(bytes) => {
+            let hash = blake3::hash(&bytes);
+            let published = match prepare_thumbnail_path(
+                app_cache_dir,
+                &bytes,
+                hash,
+                max_edge,
+                current,
+            )? {
+                ThumbnailPathPreparation::Ready(published) => published,
+                ThumbnailPathPreparation::ReadyToPublish(job) => {
+                    slot.release();
+                    job.publish()?
+                }
+            };
+            if is_current() && source_fingerprint(source_path).ok() == Some(fingerprint) {
+                let _ = write_track_index(app_cache_dir, source_path, fingerprint, Some(hash));
+            }
+            Ok(Some(published))
+        }
+        TrackCoverProbe::Absent => Ok(None),
+        TrackCoverProbe::Sibling => super::folder_cover::load_sibling_thumbnail_path(
+            app_cache_dir,
+            source_path,
+            max_edge,
+            is_current,
+            slot,
+        ),
+    }
 }
 
 // Warm one existing cover source through the ordinary thumbnail cache without
@@ -1510,6 +1960,122 @@ pub(crate) struct TrackWarmupOutcome {
     pub persisted: bool,
 }
 
+/// Path-lane playlist hero loader (`audio_load_playlist_cover_thumbnail_path`).
+///
+/// Reads the cover blob the playlist probe cached, then publishes its `.jpg`.
+/// The pixel lane's `pending` map cannot help here, so publication is awaited
+/// before the path is handed out (decision 3.4).
+///
+/// `slot` is released as soon as the JPEG is encoded, before the publish wait,
+/// so a cold cover cannot hold the decode pool across a disk stall.
+fn load_playlist_thumbnail_path_blocking(
+    app_cache_dir: &Path,
+    requested_path: &str,
+    max_edge: u32,
+    is_current: impl Fn() -> bool + Copy,
+    slot: &DecodeSlot,
+) -> Result<Option<PlaylistThumbnailPath>, CoverPixelsError> {
+    validate_playlist_max_edge(max_edge)?;
+    let covers_root = app_cache_dir
+        .join(AUDIO_CACHE_DIRECTORY)
+        .join(COVER_DIRECTORY);
+    let path = validate_cover_path(&covers_root, Path::new(requested_path))?;
+    let bytes = read_bounded_file(&path)?;
+    let published = match prepare_thumbnail_path(
+        app_cache_dir,
+        &bytes,
+        blake3::hash(&bytes),
+        max_edge,
+        is_current,
+    )? {
+        ThumbnailPathPreparation::Ready(published) => published,
+        ThumbnailPathPreparation::ReadyToPublish(job) => {
+            slot.release();
+            job.publish()?
+        }
+    };
+    Ok(Some(published))
+}
+
+/// Warms the *path* lane's `.jpg` for one track (decision 9).
+///
+/// Once the list lane reads `.jpg`, a warmed `.spxr` at 256 is never read, so
+/// prefetching it would waste both CPU and a share of the shared 8 GiB budget.
+/// This entry point therefore produces exactly the artifact the path command
+/// will later hit. The `.spxr` 256 variant degrades to "generate on fallback".
+pub(crate) async fn try_warm_track_thumbnail_path(
+    app_cache_dir: PathBuf,
+    source_path: String,
+    max_edge: u32,
+) -> Result<Option<TrackWarmupOutcome>, CoverPixelsError> {
+    validate_playlist_max_edge(max_edge)?;
+    let coordinator = PLAYLIST_REQUEST_COORDINATOR
+        .get_or_init(|| Arc::new(PlaylistCoverRequestCoordinator::new()));
+    if coordinator.requests.load(Ordering::Acquire) != 0 {
+        return Ok(None);
+    }
+    let Some(permit) = coordinator.slots.try_acquire_background() else {
+        return Ok(None);
+    };
+    if coordinator.requests.load(Ordering::Acquire) != 0 {
+        return Ok(None);
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let slot = DecodeSlot::new(permit);
+        let published = load_track_thumbnail_path_blocking(
+            &app_cache_dir,
+            &source_path,
+            max_edge,
+            false,
+            || true,
+            &slot,
+        )?;
+        // Release the decode slot before waiting on the single cache writer, so a
+        // visible cover can decode while the writer drains this entry. The blocking
+        // helper already released it on the publish branch; this covers the cache
+        // hit and the confirmed-absence branches.
+        slot.release();
+        let cache_dir = app_cache_dir
+            .join(AUDIO_CACHE_DIRECTORY)
+            .join(THUMBNAIL_DIRECTORY);
+        let Some(Some(hash)) = read_track_index(
+            &app_cache_dir,
+            &source_path,
+            source_fingerprint(&source_path)?,
+        ) else {
+            return Ok(TrackWarmupOutcome {
+                has_cover: published.is_some(),
+                persisted: published.is_some(),
+            });
+        };
+        if published.is_some() {
+            return Ok(TrackWarmupOutcome {
+                has_cover: true,
+                persisted: true,
+            });
+        }
+        let filename = playlist_thumbnail_path_filename(hash, max_edge);
+        THUMBNAIL_WRITER
+            .get_or_init(ThumbnailWriter::new)
+            .wait_path_idle(&cache_dir.join(&filename), std::time::Duration::from_secs(5));
+        Ok(TrackWarmupOutcome {
+            has_cover: false,
+            persisted: read_playlist_thumbnail_path_cache(&cache_dir, &filename).is_some(),
+        })
+    })
+    .await
+    .map_err(|_| playlist_worker_failed())?
+    .map(Some)
+}
+
+/// Warm the pixel lane's 256 `.spxr` for one track.
+///
+/// Since decision 9 the library prefetch calls
+/// [`try_warm_track_thumbnail_path`] instead, because the list lane reads `.jpg`
+/// and a prefetched `.spxr` would never be read. This entry point is retained
+/// (and exercised by the cache/index tests) as the pixel-lane warmup primitive;
+/// production `.spxr` at 256 is now generated on demand by the fallback path.
+#[allow(dead_code)]
 pub(crate) async fn try_warm_track_thumbnail(
     app_cache_dir: PathBuf,
     source_path: String,
@@ -1651,6 +2217,42 @@ fn thumbnail_filename(source_hash: blake3::Hash, max_edge: u32) -> String {
     )
 }
 
+/// JPEG counterpart of [`thumbnail_filename`].
+///
+/// Both names share the cover-content BLAKE3, the edge, and the transform
+/// version, but differ in extension and version marker (`j{image}` instead of
+/// `d{disk}`). The two lanes therefore never overwrite or misread each other,
+/// while a pixel change that bumps [`THUMBNAIL_TRANSFORM_VERSION`] still
+/// invalidates both, which is the intended behaviour.
+fn playlist_thumbnail_path_filename(source_hash: blake3::Hash, max_edge: u32) -> String {
+    format!(
+        "{}-{max_edge}-t{THUMBNAIL_TRANSFORM_VERSION}-j{THUMBNAIL_IMAGE_VERSION}.jpg",
+        source_hash.to_hex()
+    )
+}
+
+/// Whether `path` is one of the encodings the shared thumbnail budget manages.
+///
+/// Both the usage scan and the eviction pass must use this predicate. A single
+/// missed call site silently exempts a whole encoding from the budget.
+fn managed_thumbnail_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| MANAGED_THUMBNAIL_EXTENSIONS.contains(&extension))
+}
+
+/// Whether the filename belongs to the raw-JPEG playlist path lane.
+///
+/// This is the only place the writer branches on container format, so the
+/// `.spxr` encapsulation and the raw `.jpg` body share one budget, one temp-file
+/// protocol, and one atomic rename.
+fn is_playlist_thumbnail_path_name(filename: &str) -> bool {
+    Path::new(filename)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        == Some("jpg")
+}
+
 pub(super) fn playlist_pixels_from_bytes(
     app_cache_dir: &Path,
     bytes: &[u8],
@@ -1705,6 +2307,121 @@ fn thumbnail_cache_root(cache_dir: &Path) -> Option<()> {
     safe_create_directory(cache_dir).ok()
 }
 
+/// Publishes one playlist JPEG and returns the path only once it is durable.
+///
+/// The pixel lane can answer from memory (`pending`) while the writer drains,
+/// but the path lane cannot: the frontend turns the returned string into an
+/// `asset:` URL immediately, so a not-yet-published file is a failed image load.
+/// The order is therefore enqueue -> wait for this path to leave the pending set
+/// -> re-stat and re-validate -> only then return (decision 3.4). Any failure
+/// becomes `Err`, which the frontend answers by falling back to the pixel lane.
+fn publish_playlist_thumbnail_path(
+    cache_dir: PathBuf,
+    filename: String,
+    jpeg: &[u8],
+) -> Result<PlaylistThumbnailPath, CoverPixelsError> {
+    let target = cache_dir.join(&filename);
+    let writer = THUMBNAIL_WRITER.get_or_init(ThumbnailWriter::new);
+    writer.try_enqueue(cache_dir.clone(), filename.clone(), jpeg);
+    writer.wait_path_idle(&target, THUMBNAIL_PATH_PUBLISH_TIMEOUT);
+    read_playlist_thumbnail_path_cache(&cache_dir, &filename).ok_or_else(|| {
+        tracing::debug!(
+            operation = "audio.playlist_thumbnail_path.publish",
+            "playlist thumbnail JPEG was not published before the deadline",
+        );
+        CoverPixelsError::internal(
+            CoverPixelsErrorCode::WorkerFailed,
+            "playlist thumbnail could not be published",
+        )
+    })
+}
+
+/// Outcome of the CPU half of the path lane.
+///
+/// Split out so a caller can release its decode permit between the two phases.
+/// A cache hit needs no permit at all and is answered immediately; a miss hands
+/// back the encoded JPEG plus the exact key needed to publish it. See
+/// [`DecodeSlot`] for why that boundary is load-bearing.
+pub(super) enum ThumbnailPathPreparation {
+    /// Already published and validated: nothing left to wait for.
+    Ready(PlaylistThumbnailPath),
+    /// Encoded but not yet on disk. The caller must publish and wait.
+    ReadyToPublish(ThumbnailPublishJob),
+}
+
+pub(super) struct ThumbnailPublishJob {
+    cache_dir: PathBuf,
+    filename: String,
+    jpeg: Vec<u8>,
+}
+
+impl ThumbnailPublishJob {
+    /// Enqueues, waits for the writer, then re-validates (decision 3.4).
+    ///
+    /// Callers must have dropped their decode permit before this point: every
+    /// branch here is disk-bound, and the permit's whole purpose is to bound CPU.
+    pub(super) fn publish(self) -> Result<PlaylistThumbnailPath, CoverPixelsError> {
+        publish_playlist_thumbnail_path(self.cache_dir, self.filename, &self.jpeg)
+    }
+}
+
+/// CPU half of the path lane: cache lookup, then decode and JPEG encode.
+///
+/// This is the only function in the path family that performs image work, so it
+/// is the only one that legitimately holds a decode permit. Everything after it
+/// is a disk handshake and must run with the permit released.
+pub(super) fn prepare_thumbnail_path(
+    app_cache_dir: &Path,
+    bytes: &[u8],
+    source_hash: blake3::Hash,
+    max_edge: u32,
+    is_current: impl Fn() -> bool + Copy,
+) -> Result<ThumbnailPathPreparation, CoverPixelsError> {
+    let cache_dir = app_cache_dir
+        .join(AUDIO_CACHE_DIRECTORY)
+        .join(THUMBNAIL_DIRECTORY);
+    let filename = playlist_thumbnail_path_filename(source_hash, max_edge);
+    if let Some(hit) = read_playlist_thumbnail_path_cache(&cache_dir, &filename) {
+        return Ok(ThumbnailPathPreparation::Ready(hit));
+    }
+    if !is_current() {
+        return Err(CoverPixelsError::stale());
+    }
+    let (image, ..) = decode_playlist_image(bytes, max_edge)?;
+    let jpeg = encode_playlist_jpeg(image)?;
+    // A stale request must not pay the publish wait and must not hand the
+    // frontend a path it will immediately discard.
+    if !is_current() {
+        return Err(CoverPixelsError::stale());
+    }
+    Ok(ThumbnailPathPreparation::ReadyToPublish(
+        ThumbnailPublishJob {
+            cache_dir,
+            filename,
+            jpeg,
+        },
+    ))
+}
+
+/// Convenience wrapper for callers that own no decode permit and have no slot to
+/// release (tests, and the background warmup once it has already dropped its
+/// permit). Foreground path lanes must use [`prepare_thumbnail_path`] plus an
+/// explicit [`DecodeSlot::release`] instead, or they reintroduce the stall this
+/// split exists to remove.
+#[cfg(test)]
+pub(super) fn playlist_thumbnail_path_from_bytes(
+    app_cache_dir: &Path,
+    bytes: &[u8],
+    source_hash: blake3::Hash,
+    max_edge: u32,
+    is_current: impl Fn() -> bool + Copy,
+) -> Result<PlaylistThumbnailPath, CoverPixelsError> {
+    match prepare_thumbnail_path(app_cache_dir, bytes, source_hash, max_edge, is_current)? {
+        ThumbnailPathPreparation::Ready(published) => Ok(published),
+        ThumbnailPathPreparation::ReadyToPublish(job) => job.publish(),
+    }
+}
+
 fn read_thumbnail_cache(cache_dir: &Path, filename: &str, max_edge: u32) -> Option<Vec<u8>> {
     thumbnail_cache_root(cache_dir)?;
     let path = cache_dir.join(filename);
@@ -1755,6 +2472,92 @@ fn parse_thumbnail_cache(bytes: &[u8], max_edge: u32) -> Option<Vec<u8>> {
         return None;
     }
     Some(payload.to_vec())
+}
+
+/// Reads and validates a published playlist `.jpg` (decision 3.3).
+///
+/// Applies the same defences as [`read_thumbnail_cache`] 閳?ordinary file, size
+/// bounds, canonical containment inside `cache_dir`, delete-and-miss on any
+/// failure 閳?but validates the JPEG container instead of the SPTC/SPXR headers,
+/// because a `.jpg` carries neither. On a hit the mtime is refreshed so the
+/// shared mtime eviction order still reflects recent use.
+fn read_playlist_thumbnail_path_cache(
+    cache_dir: &Path,
+    filename: &str,
+) -> Option<PlaylistThumbnailPath> {
+    thumbnail_cache_root(cache_dir)?;
+    let path = cache_dir.join(filename);
+    let metadata = fs::symlink_metadata(&path).ok()?;
+    if !ordinary_file(&metadata)
+        || metadata.len() == 0
+        || metadata.len() > THUMBNAIL_PATH_MAX_BYTES
+    {
+        let _ = fs::remove_file(&path);
+        return None;
+    }
+    if !fs::canonicalize(&path)
+        .ok()?
+        .starts_with(fs::canonicalize(cache_dir).ok()?)
+    {
+        return None;
+    }
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            let _ = fs::remove_file(&path);
+            return None;
+        }
+    };
+    let Some((width, height)) = parse_playlist_jpeg(&bytes) else {
+        let _ = fs::remove_file(&path);
+        return None;
+    };
+    let _ = File::open(&path).and_then(|file| file.set_modified(SystemTime::now()));
+    // Return the plain absolute path, never a `fs::canonicalize` result.
+    //
+    // On Windows `canonicalize` yields a verbatim path (`\\?\C:\...`). The asset
+    // protocol receives this string through `convertFileSrc`, and a verbatim
+    // path is not what its scope matching and `File::open` expect, so every
+    // thumbnail fails to load. `cache_dir` is already an absolute, non-verbatim
+    // path that `starts_with`/containment above validated, so joining is enough.
+    Some(PlaylistThumbnailPath {
+        path: path.to_string_lossy().into_owned(),
+        width,
+        height,
+        byte_len: metadata.len(),
+    })
+}
+
+/// Container check plus real pixel dimensions for a published `.jpg`.
+///
+/// `SOI`/`EOI` bracket the stream and the encoder wrote it from the *already*
+/// oriented and resized image, so the declared dimensions are the delivered
+/// ones. Reading them from the file rather than echoing `maxEdge` keeps the
+/// frontend's `<img width/height>` truthful for sources smaller than the edge.
+///
+/// The edge bound is the playlist lane's own ceiling, not an arbitrary guess:
+/// [`scaled_dimensions`] never upsamples, so a file this lane publishes can never
+/// exceed the largest allowed playlist edge. An entry above it was substituted or
+/// written by an older, wider configuration, and serving it would hand the
+/// WebView geometry this command was never allowed to produce.
+fn parse_playlist_jpeg(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.len() < 4
+        || bytes[0..2] != [0xFF, 0xD8]
+        || bytes[bytes.len() - 2..] != [0xFF, 0xD9]
+        || bytes.len() as u64 > THUMBNAIL_PATH_MAX_BYTES
+    {
+        return None;
+    }
+    let (width, height) = ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?
+        .into_dimensions()
+        .ok()?;
+    let ceiling = *ALLOWED_PLAYLIST_MAX_EDGES
+        .iter()
+        .max()
+        .expect("the playlist edge whitelist is never empty");
+    (width > 0 && height > 0 && width.max(height) <= ceiling).then_some((width, height))
 }
 
 fn valid_cached_spxr(bytes: &[u8], max_edge: u32) -> bool {
@@ -1830,12 +2633,20 @@ fn write_thumbnail_cache_with_limits(
         Err(error) => return ThumbnailWriteOutcome::Failed("target_metadata", error),
     }
     let mut encoded = Vec::with_capacity(THUMBNAIL_DISK_HEADER_LEN + response.len());
-    encoded.extend_from_slice(&THUMBNAIL_DISK_MAGIC);
-    encoded.extend_from_slice(&THUMBNAIL_DISK_VERSION.to_le_bytes());
-    encoded.extend_from_slice(&0_u16.to_le_bytes());
-    encoded.extend_from_slice(&response_len.to_le_bytes());
-    encoded.extend_from_slice(blake3::hash(response).as_bytes());
-    encoded.extend_from_slice(response);
+    if is_playlist_thumbnail_path_name(filename) {
+        // `.jpg` is stored as raw JPEG bytes: there is no SPTC container, so the
+        // bytes on disk stay directly consumable by the asset protocol. Budget
+        // accounting, the temp-file protocol, atomic rename, and eviction are
+        // shared with `.spxr` and intentionally not forked.
+        encoded.extend_from_slice(response);
+    } else {
+        encoded.extend_from_slice(&THUMBNAIL_DISK_MAGIC);
+        encoded.extend_from_slice(&THUMBNAIL_DISK_VERSION.to_le_bytes());
+        encoded.extend_from_slice(&0_u16.to_le_bytes());
+        encoded.extend_from_slice(&response_len.to_le_bytes());
+        encoded.extend_from_slice(blake3::hash(response).as_bytes());
+        encoded.extend_from_slice(response);
+    }
     let tracked = byte_limit == THUMBNAIL_CACHE_BYTES && file_limit == THUMBNAIL_CACHE_FILES;
     let mut usage_guard = tracked.then(|| {
         THUMBNAIL_USAGE
@@ -1959,11 +2770,9 @@ fn scan_thumbnail_usage(cache_dir: &Path) -> io::Result<ThumbnailUsage> {
             return Err(io::ErrorKind::InvalidData.into());
         }
         let entry = entry?;
-        if entry
-            .path()
-            .extension()
-            .is_some_and(|extension| extension == "spxr")
-        {
+        // Every managed encoding must be accounted here, or the files it writes
+        // are invisible to the shared budget and grow the cache without bound.
+        if managed_thumbnail_file(&entry.path()) {
             let metadata = fs::symlink_metadata(entry.path())?;
             if ordinary_file(&metadata) {
                 usage.bytes = usage.bytes.saturating_add(metadata.len());
@@ -2054,7 +2863,7 @@ fn make_thumbnail_room_with_limits_checked(
             }
             continue;
         }
-        if !metadata.file_type().is_file() || path.extension().is_none_or(|ext| ext != "spxr") {
+        if !metadata.file_type().is_file() || !managed_thumbnail_file(&path) {
             continue;
         }
         bytes = bytes.saturating_add(metadata.len());
@@ -2120,7 +2929,7 @@ fn validate_max_edge(max_edge: u32) -> Result<(), CoverPixelsError> {
     }
 }
 
-fn validate_playlist_max_edge(max_edge: u32) -> Result<(), CoverPixelsError> {
+pub(super) fn validate_playlist_max_edge(max_edge: u32) -> Result<(), CoverPixelsError> {
     if ALLOWED_PLAYLIST_MAX_EDGES.contains(&max_edge) {
         Ok(())
     } else {
@@ -2330,6 +3139,48 @@ fn decode_and_pack_with_strategy(
     max_edge: u32,
     playlist: bool,
 ) -> Result<Vec<u8>, CoverPixelsError> {
+    let (image, width, height, source_width, source_height, orientation_applied, resized) =
+        decode_image(bytes, max_edge, playlist)?;
+    // `image` exposes ICC bytes but does not apply arbitrary embedded ICC profiles
+    // during DynamicImage decoding. The protocol therefore deliberately describes
+    // channel layout only and does not claim the returned values were converted to sRGB.
+    let pixels = image.into_rgba8().into_raw();
+    pack_rgba(
+        pixels,
+        width,
+        height,
+        source_width,
+        source_height,
+        orientation_applied,
+        resized,
+    )
+}
+
+/// Decode, orient, pre-reduce, and Lanczos3-resize one cover.
+///
+/// Both encoders share this seam so the JPEG and SPXR lanes always receive the
+/// same pixels. If the JPEG lane grew its own orientation/resize code, a fallback
+/// between the two lanes would visibly jump; see decision 3.5.
+///
+/// The returned tuple is fixed by that decision's documented contract, so the
+/// "very complex type" lint is expected rather than factored into a private alias.
+#[allow(clippy::type_complexity)]
+fn decode_image(
+    bytes: &[u8],
+    max_edge: u32,
+    playlist: bool,
+) -> Result<
+    (
+        DynamicImage,
+        u32,
+        u32,
+        u32,
+        u32,
+        bool,
+        bool,
+    ),
+    CoverPixelsError,
+> {
     validate_decode_max_edge(max_edge)?;
 
     let mut reader = ImageReader::new(Cursor::new(bytes))
@@ -2384,19 +3235,60 @@ fn decode_and_pack_with_strategy(
         image = image.resize_exact(width, height, FilterType::Lanczos3);
     }
 
-    // `image` exposes ICC bytes but does not apply arbitrary embedded ICC profiles
-    // during DynamicImage decoding. The protocol therefore deliberately describes
-    // channel layout only and does not claim the returned values were converted to sRGB.
-    let pixels = image.into_rgba8().into_raw();
-    pack_rgba(
-        pixels,
+    Ok((
+        image,
         width,
         height,
         source_width,
         source_height,
         orientation_applied,
         resized,
-    )
+    ))
+}
+
+/// Playlist-lane variant of [`decode_image`] with the documented tuple shape.
+#[allow(clippy::type_complexity)]
+fn decode_playlist_image(
+    bytes: &[u8],
+    max_edge: u32,
+) -> Result<
+    (
+        DynamicImage,
+        u32,
+        u32,
+        u32,
+        u32,
+        bool,
+        bool,
+    ),
+    CoverPixelsError,
+> {
+    decode_image(bytes, max_edge, true)
+}
+
+/// Encodes a playlist cover as baseline JPEG (decision 3.6).
+///
+/// Alpha is dropped with `to_rgb8()` exactly as the list lane's BMP path already
+/// does, no EXIF is written (orientation was applied during decode, so the
+/// WebView must not rotate again), and no ICC conversion is performed 閳?matching
+/// the existing SPXR lane's stated channel-layout-only contract.
+fn encode_playlist_jpeg(image: DynamicImage) -> Result<Vec<u8>, CoverPixelsError> {
+    let rgb = image.to_rgb8();
+    let mut output = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut output, THUMBNAIL_JPEG_QUALITY)
+        .encode_image(&rgb)
+        .map_err(|error| {
+            tracing::warn!(
+                operation = "audio.cover_pixels.encode_jpeg",
+                error = %error,
+                "playlist cover JPEG encoding failed",
+            );
+            CoverPixelsError::internal(
+                CoverPixelsErrorCode::WorkerFailed,
+                "playlist cover JPEG encoding failed",
+            )
+        })?;
+    Ok(output)
 }
 
 fn validate_source_dimensions(
@@ -4580,5 +5472,640 @@ mod tests {
                 .await
                 .expect("new client remains isolated");
         });
+    }
+
+    // --- Playlist thumbnail path lane (decisions 2, 3, 4, 9) --------------
+
+    #[test]
+    fn managed_extensions_cover_every_written_encoding() {
+        // Decision 3.2 / acceptance 4: an encoding missing from this list is
+        // invisible to both the usage scan and eviction, i.e. unbounded growth.
+        assert!(managed_thumbnail_file(Path::new(
+            "abc-256-t2-d1.spxr"
+        )));
+        assert!(managed_thumbnail_file(Path::new("abc-256-t2-j1.jpg")));
+        assert!(!managed_thumbnail_file(Path::new("abc.png")));
+        assert!(!managed_thumbnail_file(Path::new(".tmp-123-456")));
+        assert!(!managed_thumbnail_file(Path::new("no-extension")));
+    }
+
+    #[test]
+    fn thumbnail_path_filename_is_distinct_from_spxr_and_keeps_transform_version() {
+        let hash = blake3::hash(b"cover");
+        assert_eq!(
+            playlist_thumbnail_path_filename(hash, 256),
+            format!("{}-256-t2-j1.jpg", hash.to_hex())
+        );
+        // Both lanes must invalidate together when the transform version moves,
+        // so the JPEG key has to carry the same marker, and differ everywhere
+        // else (extension + version tag) so they never collide.
+        assert!(playlist_thumbnail_path_filename(hash, 256).contains("-t2-"));
+        assert_ne!(
+            playlist_thumbnail_path_filename(hash, 256),
+            thumbnail_filename(hash, 256)
+        );
+        assert_eq!(THUMBNAIL_TRANSFORM_VERSION, 2);
+        assert_eq!(THUMBNAIL_DISK_VERSION, 1);
+    }
+
+    #[test]
+    fn scan_and_eviction_count_jpeg_files_as_budgeted() {
+        let directory = TestDirectory::new();
+        let thumbs = directory.path().join("audio").join(THUMBNAIL_DIRECTORY);
+        fs::create_dir_all(&thumbs).unwrap();
+        fs::write(thumbs.join("a-256-t2-j1.jpg"), [0xFFu8; 8]).unwrap();
+        fs::write(thumbs.join("b-256-t2-j1.jpg"), [0xFFu8; 8]).unwrap();
+        fs::write(thumbs.join("c-256-t2-d1.spxr"), [1u8; 8]).unwrap();
+        let usage = scan_thumbnail_usage(&thumbs).unwrap();
+        assert_eq!(usage.files, 3, "both managed encodings are counted");
+        assert_eq!(usage.bytes, 24);
+        // Eviction must consider the JPEGs as removable managed entries.
+        assert!(make_thumbnail_room_with_limits(&thumbs, 8, 1, 16, 3));
+        let remaining = fs::read_dir(&thumbs).unwrap().count();
+        assert!(remaining <= 2, "budget must evict to make room");
+    }
+
+    #[test]
+    fn jpeg_round_trips_through_publish_and_cache_read() {
+        let directory = TestDirectory::new();
+        let thumbs = directory.path().join("audio").join(THUMBNAIL_DIRECTORY);
+        let bytes = png_bytes(64, 48);
+        let published =
+            playlist_thumbnail_path_from_bytes(directory.path(), &bytes, blake3::hash(&bytes), 256, || true)
+                .expect("publish thumbnail JPEG");
+        assert_eq!((published.width, published.height), (64, 48));
+        assert!(published.path.ends_with("-256-t2-j1.jpg"));
+        // The frontend hands this string straight to `convertFileSrc`, so it must
+        // stay a plain path. On Windows a `fs::canonicalize` result starts with
+        // `\\?\`, which the asset protocol cannot serve; every list cover would
+        // fail to load. Keep the assertion portable: only Windows produces it.
+        #[cfg(windows)]
+        assert!(
+            !published.path.starts_with(r"\\?\"),
+            "returned path must not be a verbatim Windows path: {}",
+            published.path
+        );
+        assert!(
+            Path::new(&published.path).is_absolute(),
+            "returned path must be absolute for convertFileSrc: {}",
+            published.path
+        );
+        assert!(
+            Path::new(&published.path).exists(),
+            "the returned path must already exist (decision 3.4 / acceptance 5)"
+        );
+        assert!(published.byte_len > 0);
+        // A second call must hit the cache rather than re-encode, and the file
+        // body must be a bare JPEG (the pixel lane's fallback re-reads it).
+        let again =
+            playlist_thumbnail_path_from_bytes(directory.path(), &bytes, blake3::hash(&bytes), 256, || true)
+                .unwrap();
+        assert_eq!(again.path, published.path);
+        let raw = fs::read(&published.path).unwrap();
+        assert_eq!(&raw[..2], [0xFF, 0xD8]);
+        assert_eq!(&raw[raw.len() - 2..], [0xFF, 0xD9]);
+        assert!(read_playlist_thumbnail_path_cache(&thumbs, "missing-256-t2-j1.jpg").is_none());
+    }
+
+    #[test]
+    fn corrupt_jpeg_cache_is_rejected_and_removed() {
+        let directory = TestDirectory::new();
+        let thumbs = directory.path().join("audio").join(THUMBNAIL_DIRECTORY);
+        fs::create_dir_all(&thumbs).unwrap();
+        // Right extension, wrong container: must not be served as a hit.
+        fs::write(thumbs.join("bad-256-t2-j1.jpg"), b"not a jpeg").unwrap();
+        assert!(read_playlist_thumbnail_path_cache(&thumbs, "bad-256-t2-j1.jpg").is_none());
+        assert!(
+            !thumbs.join("bad-256-t2-j1.jpg").exists(),
+            "an invalid entry is evicted so the next request regenerates it"
+        );
+    }
+
+    #[test]
+    fn path_lane_shares_one_decode_seam_with_the_pixel_lane() {
+        // Decision 3.5 / risk 3: the two encoders must observe identical
+        // orientation, pre-reduction and Lanczos3 output. Comparing the packed
+        // SPXR header against the JPEG's own dimensions is the cheap proxy.
+        let bytes = png_bytes(400, 200);
+        let (image, width, height, source_width, source_height, _, resized) =
+            decode_playlist_image(&bytes, 128).unwrap();
+        assert_eq!((width, height), (128, 64));
+        assert_eq!((source_width, source_height), (400, 200));
+        assert!(resized);
+        let jpeg = encode_playlist_jpeg(image).unwrap();
+        assert_eq!(parse_playlist_jpeg(&jpeg), Some((width, height)));
+        // The pixel lane's packed header must agree on the same geometry.
+        let packed = decode_playlist_and_pack(&bytes, 128).unwrap();
+        assert!(valid_cached_spxr(&packed, 128));
+        let packed_width = u32::from_le_bytes(packed[8..12].try_into().unwrap());
+        let packed_height = u32::from_le_bytes(packed[12..16].try_into().unwrap());
+        assert_eq!((packed_width, packed_height), (width, height));
+    }
+
+    #[test]
+    fn path_lane_rejects_edges_outside_the_playlist_set() {
+        assert!(validate_playlist_max_edge(128).is_ok());
+        assert!(validate_playlist_max_edge(256).is_ok());
+        assert!(validate_playlist_max_edge(512).is_ok());
+        // 768 is a reserved player-lane edge and must not be routable here.
+        assert!(validate_playlist_max_edge(768).is_err());
+        assert!(validate_playlist_max_edge(1024).is_err());
+    }
+
+    #[test]
+    fn player_lane_still_accepts_512_as_pixels() {
+        // Acceptance 1: the player command keeps the SPXR pixel path even at 512.
+        let packed = decode_and_pack(&png_bytes(600, 300), 512).unwrap();
+        assert_eq!(&packed[..4], b"SPXR");
+        assert!(valid_cached_spxr(&packed, 512));
+    }
+
+    /// Correction (a): the returned string is exactly `cache_dir.join(filename)`.
+    ///
+    /// `Path::starts_with` compares prefix components, so a Windows verbatim path
+    /// (`\\?\C:\...`) does not start with the plain `C:\...` cache directory. That
+    /// makes the containment assertion below fail on the exact regression this
+    /// test exists for, instead of relying on a `#[cfg(windows)]` string check
+    /// alone.
+    #[test]
+    fn returned_thumbnail_path_is_plain_absolute_and_inside_the_cache_directory() {
+        let directory = TestDirectory::new();
+        let thumbs = directory.path().join("audio").join(THUMBNAIL_DIRECTORY);
+        let bytes = png_bytes(64, 48);
+        let hash = blake3::hash(&bytes);
+        let filename = playlist_thumbnail_path_filename(hash, 256);
+        let published =
+            playlist_thumbnail_path_from_bytes(directory.path(), &bytes, hash, 256, || true)
+                .expect("publish thumbnail JPEG");
+
+        let reported = Path::new(&published.path);
+        assert!(reported.is_absolute(), "not absolute: {}", published.path);
+        assert!(
+            !published.path.starts_with(r"\\?\"),
+            "verbatim Windows path cannot be served by the asset protocol: {}",
+            published.path
+        );
+        // The strongest portable form: the returned path is the plain join, so
+        // its parent is the cache directory exactly as the caller passed it in.
+        assert_eq!(
+            reported.parent(),
+            Some(thumbs.as_path()),
+            "returned path must be the plain join, not a canonicalized path: {}",
+            published.path
+        );
+        assert!(reported.starts_with(&thumbs));
+        assert_eq!(reported.file_name().unwrap().to_string_lossy(), filename);
+
+        // A direct cache read must produce the identical string, because the
+        // publish handshake re-reads through this same function before returning.
+        let reread = read_playlist_thumbnail_path_cache(&thumbs, &filename).expect("cache hit");
+        assert_eq!(reread.path, published.path);
+        assert_eq!(
+            reread.byte_len,
+            fs::metadata(&published.path).unwrap().len(),
+            "byteLength must be the published file size"
+        );
+    }
+
+    /// Correction (c): the `.spxr` container bytes and name are untouched.
+    ///
+    /// The JPEG lane shares the writer, so this locks the SPTC encapsulation that
+    /// the player's 1024/1536 lane reads back byte for byte.
+    #[test]
+    fn spxr_container_bytes_are_unaffected_by_the_jpeg_lane() {
+        let directory = TestDirectory::new();
+        let thumbs = directory.path().join("audio").join(THUMBNAIL_DIRECTORY);
+        let payload = decode_playlist_and_pack(&png_bytes(64, 48), 256).unwrap();
+        assert!(valid_cached_spxr(&payload, 256));
+        let filename = thumbnail_filename(blake3::hash(&payload), 256);
+        assert!(filename.ends_with("-256-t2-d1.spxr"));
+        assert!(matches!(
+            write_thumbnail_cache(&thumbs, &filename, &payload),
+            ThumbnailWriteOutcome::Written
+        ));
+
+        let stored = fs::read(thumbs.join(&filename)).unwrap();
+        assert_eq!(&stored[0..4], b"SPTC");
+        assert_eq!(u16_at(&stored, 4), THUMBNAIL_DISK_VERSION);
+        assert_eq!(u16_at(&stored, 6), 0, "reserved field stays zero");
+        assert_eq!(u32_at(&stored, 8) as usize, payload.len());
+        assert_eq!(
+            &stored[12..THUMBNAIL_DISK_HEADER_LEN],
+            blake3::hash(&payload).as_bytes()
+        );
+        assert_eq!(&stored[THUMBNAIL_DISK_HEADER_LEN..], &payload[..]);
+        // And the .spxr read path still returns the payload, not JPEG bytes.
+        assert_eq!(
+            read_thumbnail_cache(&thumbs, &filename, 256).unwrap(),
+            payload
+        );
+        // The JPEG lane must not have created a parallel key from this write.
+        assert_eq!(fs::read_dir(&thumbs).unwrap().count(), 1);
+    }
+
+    /// Correction (b): a `.jpg` written through the shared writer enters the budget.
+    ///
+    /// The scan/eviction predicate is the only thing keeping the new encoding
+    /// inside the 8 GiB / 32768-file ceiling, so this exercises the real write
+    /// path (not a hand-placed file) and then evicts through that same predicate.
+    #[test]
+    fn jpeg_written_through_the_shared_writer_enters_the_shared_budget() {
+        let directory = TestDirectory::new();
+        let thumbs = directory.path().join("audio").join(THUMBNAIL_DIRECTORY);
+        let jpeg =
+            encode_playlist_jpeg(decode_playlist_image(&png_bytes(64, 48), 256).unwrap().0).unwrap();
+        let filename = playlist_thumbnail_path_filename(blake3::hash(&jpeg), 256);
+        assert!(matches!(
+            write_thumbnail_cache(&thumbs, &filename, &jpeg),
+            ThumbnailWriteOutcome::Written
+        ));
+
+        let usage = THUMBNAIL_USAGE
+            .get()
+            .unwrap()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let tracked = usage.get(&thumbs).expect("jpeg write is tracked");
+        assert_eq!(tracked.files, 1, "a published .jpg must occupy one file slot");
+        assert_eq!(
+            tracked.bytes,
+            jpeg.len() as u64,
+            "a published .jpg must occupy its raw byte count, not a container size"
+        );
+        drop(usage);
+
+        // Eviction must be able to reclaim that slot, or the cache only grows.
+        assert!(make_thumbnail_room_with_limits(
+            &thumbs,
+            1,
+            1,
+            jpeg.len() as u64,
+            1
+        ));
+        assert!(!thumbs.join(&filename).exists(), "the .jpg must be evictable");
+    }
+
+    /// Correction (e): the returned path is only ever observable after the file
+    /// it names exists on disk.
+    ///
+    /// The pixel lane may answer from the in-memory `pending` map while the
+    /// writer drains, but the path lane must not: the frontend turns the string
+    /// into an `asset:` URL immediately, so a not-yet-renamed file is a broken
+    /// image. Asserting "exists at return time" across a burst of distinct covers
+    /// fails as soon as the publish wait is removed, because each request then
+    /// hands back a name whose rename has not happened yet.
+    #[test]
+    fn every_returned_thumbnail_path_exists_at_return_time() {
+        let directory = TestDirectory::new();
+        for index in 0..12u32 {
+            // Distinct content per iteration so each request is a real publish
+            // rather than a cache hit on the previous one.
+            let bytes = patterned_png(48 + index, 32);
+            let published = playlist_thumbnail_path_from_bytes(
+                directory.path(),
+                &bytes,
+                blake3::hash(&bytes),
+                256,
+                || true,
+            )
+            .expect("publish thumbnail JPEG");
+            assert!(
+                Path::new(&published.path).is_file(),
+                "the path must be durable before it is returned: {}",
+                published.path
+            );
+            let raw = fs::read(&published.path).expect("published bytes are readable");
+            assert_eq!(published.byte_len, raw.len() as u64);
+            assert_eq!(&raw[..2], [0xFF, 0xD8]);
+            assert_eq!(&raw[raw.len() - 2..], [0xFF, 0xD9]);
+        }
+        // Nothing may be left half-published in the cache directory.
+        let thumbs = directory.path().join("audio").join(THUMBNAIL_DIRECTORY);
+        let leftovers = fs::read_dir(&thumbs)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with(".tmp-"))
+            .count();
+        assert_eq!(leftovers, 0, "no temporary file may survive a publish");
+    }
+
+    /// Correction (f): every hit check that can fail must delete and return a miss.
+    ///
+    /// A miss here means "regenerate from the source", never a poisoned path.
+    #[test]
+    fn hit_validation_rejects_and_removes_oversized_or_marked_corrupt_jpegs() {
+        let directory = TestDirectory::new();
+        let thumbs = directory.path().join("audio").join(THUMBNAIL_DIRECTORY);
+        fs::create_dir_all(&thumbs).unwrap();
+
+        // Valid markers, but above THUMBNAIL_PATH_MAX_BYTES.
+        let oversized_name = "oversized-256-t2-j1.jpg";
+        let mut oversized = Vec::with_capacity(THUMBNAIL_PATH_MAX_BYTES as usize + 4);
+        oversized.extend_from_slice(&[0xFF, 0xD8]);
+        oversized.resize(THUMBNAIL_PATH_MAX_BYTES as usize + 2, 0);
+        oversized.extend_from_slice(&[0xFF, 0xD9]);
+        fs::write(thumbs.join(oversized_name), &oversized).unwrap();
+        assert!(read_playlist_thumbnail_path_cache(&thumbs, oversized_name).is_none());
+        assert!(!thumbs.join(oversized_name).exists());
+
+        // Empty file: a truncated publish must never be served.
+        let empty_name = "empty-256-t2-j1.jpg";
+        fs::write(thumbs.join(empty_name), b"").unwrap();
+        assert!(read_playlist_thumbnail_path_cache(&thumbs, empty_name).is_none());
+        assert!(!thumbs.join(empty_name).exists());
+
+        // Right size, wrong container: missing EOI is not a decodable JPEG.
+        let truncated_name = "truncated-256-t2-j1.jpg";
+        let mut truncated = png_bytes(8, 8);
+        truncated[0] = 0xFF;
+        truncated[1] = 0xD8;
+        fs::write(thumbs.join(truncated_name), &truncated).unwrap();
+        assert!(read_playlist_thumbnail_path_cache(&thumbs, truncated_name).is_none());
+        assert!(!thumbs.join(truncated_name).exists());
+
+        // A directory wearing the managed extension is not an ordinary file.
+        let directory_name = "dir-256-t2-j1.jpg";
+        fs::create_dir(thumbs.join(directory_name)).unwrap();
+        assert!(read_playlist_thumbnail_path_cache(&thumbs, directory_name).is_none());
+
+        // A structurally valid JPEG wider than any allowed playlist edge cannot
+        // have come from this lane, so it must be treated as corrupt as well.
+        let wide_name = "wide-256-t2-j1.jpg";
+        let wide =
+            encode_playlist_jpeg(decode_playlist_image(&patterned_png(600, 8), 1024).unwrap().0)
+                .unwrap();
+        assert_eq!(parse_playlist_jpeg(&wide), None);
+        fs::write(thumbs.join(wide_name), &wide).unwrap();
+        assert!(read_playlist_thumbnail_path_cache(&thumbs, wide_name).is_none());
+        assert!(!thumbs.join(wide_name).exists());
+    }
+
+    /// Corrections (e) and (g): a publish that cannot complete is `Err`.
+    ///
+    /// The path lane must never hand back a target name that is not yet durable,
+    /// and it must not disguise that failure as `Ok(None)` (confirmed absence).
+    #[test]
+    fn publish_failure_surfaces_an_error_instead_of_a_missing_cover() {
+        let directory = TestDirectory::new();
+        let blocked = directory.path().join("audio").join(THUMBNAIL_DIRECTORY);
+        fs::create_dir_all(blocked.parent().unwrap()).unwrap();
+        fs::write(&blocked, b"not a directory").unwrap();
+
+        let bytes = png_bytes(64, 48);
+        let error = playlist_thumbnail_path_from_bytes(
+            directory.path(),
+            &bytes,
+            blake3::hash(&bytes),
+            256,
+            || true,
+        )
+        .expect_err("an unpublishable thumbnail must not be reported as success");
+        assert!(
+            matches!(error.code, CoverPixelsErrorCode::WorkerFailed),
+            "expected WorkerFailed, got {:?}",
+            error.code
+        );
+        assert!(
+            !error.recoverable,
+            "a publish failure is not a recoverable miss"
+        );
+        // The blocked path must be left exactly as the caller created it.
+        assert_eq!(fs::read(&blocked).unwrap(), b"not a directory");
+    }
+
+    /// Correction (e): a superseded request publishes nothing at all.
+    ///
+    /// Checking staleness *before* the publish wait keeps a cancelled list cell
+    /// from paying the 2 s budget and from leaving an orphan artifact behind.
+    #[test]
+    fn stale_request_returns_stale_and_publishes_no_jpeg() {
+        let directory = TestDirectory::new();
+        let thumbs = directory.path().join("audio").join(THUMBNAIL_DIRECTORY);
+        let bytes = png_bytes(64, 48);
+        let error = playlist_thumbnail_path_from_bytes(
+            directory.path(),
+            &bytes,
+            blake3::hash(&bytes),
+            256,
+            || false,
+        )
+        .expect_err("a stale request must not return a path");
+        assert!(matches!(error.code, CoverPixelsErrorCode::StaleRequest));
+        assert!(
+            !thumbs.exists() || fs::read_dir(&thumbs).unwrap().next().is_none(),
+            "a stale request must not enqueue a thumbnail write"
+        );
+    }
+
+    /// The folder lane's path exit publishes, and only absence yields `None`.
+    #[test]
+    fn folder_path_lane_publishes_directory_artwork_and_distinguishes_absence() {
+        let directory = TestDirectory::new();
+        let root = directory.path().join("root");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("art.png"), png_bytes(64, 48)).unwrap();
+
+        let published = super::super::folder_cover::load_folder_thumbnail_path_blocking(
+            directory.path(),
+            root.to_str().unwrap(),
+            root.to_str().unwrap(),
+            256,
+            || true,
+            &DecodeSlot::detached(),
+        )
+        .expect("folder artwork lookup")
+        .expect("an ordinary directory image is a confirmed cover");
+        assert!(published.path.ends_with("-256-t2-j1.jpg"));
+        assert!(Path::new(&published.path).is_file());
+        assert!(!published.path.starts_with(r"\\?\"));
+        assert_eq!((published.width, published.height), (64, 48));
+
+        // A directory with neither images nor tagged songs is a *confirmed*
+        // absence, which is the only thing `Ok(None)` may mean.
+        let empty = directory.path().join("empty");
+        fs::create_dir_all(&empty).unwrap();
+        assert!(
+            super::super::folder_cover::load_folder_thumbnail_path_blocking(
+                directory.path(),
+                empty.to_str().unwrap(),
+                empty.to_str().unwrap(),
+                256,
+                || true,
+                &DecodeSlot::detached(),
+            )
+            .expect("an exhausted walk is not an error")
+            .is_none()
+        );
+    }
+
+    /// Correction (d): the player lane's accepted edges and output are unchanged.
+    #[test]
+    fn player_pixel_lane_edges_stay_separate_from_the_playlist_whitelist() {
+        // The player keeps its seven edges; nothing added for the path lane may
+        // widen them, and the path lane must reject every player-only edge.
+        assert_eq!(ALLOWED_MAX_EDGES, [256, 512, 768, 1024, 1536, 2048, 3072]);
+        assert_eq!(ALLOWED_PLAYLIST_MAX_EDGES, [128, 256, 512]);
+        for edge in [1024, 1536, 2048, 3072] {
+            assert!(validate_max_edge(edge).is_ok(), "player edge {edge}");
+            assert!(
+                validate_playlist_max_edge(edge).is_err(),
+                "the path lane must not accept the player-only edge {edge}"
+            );
+            let packed = decode_and_pack(&png_bytes(64, 48), edge).unwrap();
+            assert_eq!(&packed[..4], b"SPXR");
+            assert!(valid_cached_spxr(&packed, edge));
+        }
+    }
+
+    // --- F1: the decode permit must not survive into the publish wait -----
+
+    /// F1: a `.jpg` publish leaves the decode pool free while it waits on disk.
+    ///
+    /// The defect was that the three foreground path lanes held their decode
+    /// permit for the whole blocking closure, so `wait_path_idle` 鈥?pure waiting on
+    /// the single cache writer 鈥?occupied a slot. On a four-core host the pool is
+    /// one token wide, so a single cold cover could starve every other cover for
+    /// the entire 2 s publish budget.
+    ///
+    /// This drives the real encode/publish split through `prepare_thumbnail_path`
+    /// with a permit taken from a real pool, then proves the pool is free at the
+    /// exact moment the publish wait begins: the `on_release` hook fires after the
+    /// permit is returned and before `job.publish()` blocks.
+    #[test]
+    fn publish_wait_does_not_hold_the_decode_permit() {
+        let directory = TestDirectory::new();
+        let coordinator = PlaylistCoverRequestCoordinator::new();
+        let permit = tauri::async_runtime::block_on(coordinator.slots.acquire())
+            .expect("decode permit is available on an idle pool");
+        assert_eq!(
+            coordinator.slots.held.load(Ordering::Acquire),
+            1,
+            "the permit under test must actually be held"
+        );
+
+        let slot = Arc::new(DecodeSlot::for_test(permit));
+        let observed = Arc::new(StdMutex::new(None::<(bool, usize)>));
+        {
+            let observed = Arc::clone(&observed);
+            let slots_held = Arc::clone(&coordinator.slots.held);
+            slot.set_on_release(Arc::new(move || {
+                // Read the pool state at the release point, before the writer is
+                // ever asked to do anything.
+                *observed.lock().unwrap() =
+                    Some((true, slots_held.load(Ordering::Acquire)));
+            }));
+        }
+
+        let bytes = png_bytes(64, 48);
+        let preparation = prepare_thumbnail_path(
+            directory.path(),
+            &bytes,
+            blake3::hash(&bytes),
+            256,
+            || true,
+        )
+        .expect("misssssing cover encodes");
+        let job = match preparation {
+            ThumbnailPathPreparation::ReadyToPublish(job) => job,
+            ThumbnailPathPreparation::Ready(_) => panic!("first request must be a miss"),
+        };
+        // Encoding is finished and the permit is still held: this is the state the
+        // bug depended on being carried into the publish wait.
+        assert!(
+            !slot.is_released(),
+            "the permit must be held until encoding is complete"
+        );
+
+        slot.release();
+        let (released, held) = observed
+            .lock()
+            .unwrap()
+            .expect("the release hook must fire exactly once");
+        assert!(released);
+        assert_eq!(
+            held, 0,
+            "the pool must show no held slots at the publish-wait boundary"
+        );
+        assert!(slot.is_released());
+        // Releasing twice must be harmless: the walk may reach a publish point
+        // from more than one candidate branch.
+        slot.release();
+
+        // And the publish still completes and still yields a durable path.
+        let published = job.publish().expect("publish after releasing the permit");
+        assert!(Path::new(&published.path).is_file());
+        assert_eq!((published.width, published.height), (64, 48));
+    }
+
+    /// F1: the pool genuinely admits another request while a publish is waiting.
+    ///
+    /// The point of releasing early is that a *second* cold cover can decode while
+    /// the first is still draining through the writer. With the pool width at one
+    /// on a four-core host, a permit held across the wait would block it.
+    #[test]
+    fn another_request_can_acquire_while_a_publish_is_waiting() {
+        let coordinator = PlaylistCoverRequestCoordinator::new();
+        let permit = tauri::async_runtime::block_on(coordinator.slots.acquire()).unwrap();
+        let slot = DecodeSlot::for_test(permit);
+
+        slot.release();
+        // The released permit must be immediately visible to a competing acquire.
+        let second = tauri::async_runtime::block_on(coordinator.slots.acquire())
+            .expect("the pool must admit a second decode after the first released");
+        assert_eq!(coordinator.slots.held.load(Ordering::Acquire), 1);
+        drop(second);
+        assert_eq!(
+            coordinator.slots.held.load(Ordering::Acquire),
+            0,
+            "the pool returns to empty when every permit is dropped"
+        );
+    }
+
+    /// F2: a corrupt audio file inside a folder still yields a confirmed absence.
+    ///
+    /// The pixel lane's folder entry point passes `skip_invalid_tags = true`, so a
+    /// directory holding one malformed track reports "no artwork here" and the walk
+    /// continues. The path lane previously hard-coded `false`, which turned the same
+    /// directory into `InvalidPath` 鈥?an error the frontend counts toward its
+    /// fallback circuit breaker, for a directory the pixel lane answers cleanly.
+    #[test]
+    fn folder_path_lane_treats_corrupt_audio_as_confirmed_absence() {
+        let directory = TestDirectory::new();
+        let root = directory.path().join("root");
+        fs::create_dir_all(&root).unwrap();
+        // A file with a supported audio extension but no parseable container.
+        fs::write(root.join("broken.wav"), b"not a real wave file at all").unwrap();
+
+        let result = super::super::folder_cover::load_folder_thumbnail_path_blocking(
+            directory.path(),
+            root.to_str().unwrap(),
+            root.to_str().unwrap(),
+            256,
+            || true,
+            &DecodeSlot::detached(),
+        );
+        let published = result.expect(
+            "a corrupt track must not surface as an error: the pixel lane reports a \
+             confirmed absence for the same directory",
+        );
+        assert!(
+            published.is_none(),
+            "no readable artwork exists, so this must be Ok(None), not a path"
+        );
+
+        // The pixel lane over the same directory must agree. Its folder entry
+        // point lives in `folder_cover` and is only visible to the `audio` module,
+        // so assert the equivalent contract directly: a corrupt track probed with
+        // folder semantics is a confirmed absence, not an error.
+        assert!(
+            load_folder_track_thumbnail_blocking(
+                directory.path(),
+                root.join("broken.wav").to_str().unwrap(),
+                256,
+                || true,
+            )
+            .expect("the pixel lane's folder mode reports a confirmed absence")
+            .is_empty()
+        );
     }
 }

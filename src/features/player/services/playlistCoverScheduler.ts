@@ -2,34 +2,61 @@ import {
   loadAudioPlaylistCoverPixels,
   loadAudioTrackThumbnail,
   loadAudioFolderThumbnail,
-  type AudioCoverPixels,
-  type AudioLoadPlaylistCoverPixelsInput,
-  type AudioLoadTrackThumbnailInput,
-  type AudioLoadFolderThumbnailInput,
+} from './audioCommands'
+// Type-only, so it is erased and leaves the single substitutable native-command
+// import above as this module's only runtime boundary.
+import type {
+  AudioCoverPixels,
+  AudioLoadPlaylistCoverPixelsInput,
+  AudioLoadTrackThumbnailInput,
+  AudioLoadFolderThumbnailInput,
 } from './audioCommands'
 
 export type PlaylistCoverPriority = 0 | 1 | 2
 
+/**
+ * Which list-cover channel a job belongs to.
+ *
+ * The lane is part of a job's identity, not a detail of it: the same source and
+ * `maxEdge` read through both lanes produces two different payloads (RGBA pixels
+ * vs. an asset path). Without the lane in the dedupe key a fallback request would
+ * be absorbed by the still-running path request for the same source and resolve
+ * with the wrong payload type.
+ */
+export type PlaylistCoverLane = 'pixels' | 'path'
+
+export type LaneJobKind = 'cover' | 'track' | 'folder'
+
 type Consumer = {
   signal?: AbortSignal
   isCurrent?: () => boolean
-  resolve: (pixels: AudioCoverPixels | null) => void
+  resolve: (payload: unknown | null) => void
   reject: (error: unknown) => void
   abort: () => void
 }
 
 type Job = {
   key: string
-  input: AudioLoadPlaylistCoverPixelsInput | AudioLoadTrackThumbnailInput | AudioLoadFolderThumbnailInput
-  kind: 'cover' | 'track' | 'folder'
+  load: () => Promise<unknown | null>
   priority: PlaylistCoverPriority
   sequence: number
   consumers: Set<Consumer>
   active: boolean
 }
 
+/** Identity a job is deduplicated by, excluding the lane that requested it. */
+export type LaneJobIdentity = {
+  clientId: string
+  windowGeneration: number
+  /** `[rootPath, directoryPath]` for folders, `[sourcePath|filePath]` otherwise. */
+  source: (string | undefined)[]
+  maxEdge: number
+}
+
+type LaneScheduleOptions = { priority: PlaylistCoverPriority; signal?: AbortSignal; isCurrent?: () => boolean }
+
 /**
- * Ceiling for concurrent native cover-pixel invokes.
+ * Ceiling for concurrent native cover invokes.
  *
  * Cover work is a mixed IO + CPU load, so the width is chosen to match what the
  * backend can actually execute rather than to fill the renderer's queue:
@@ -47,8 +74,11 @@ type Job = {
  *   steady-state memory; only the transient in-flight pixel buffers multiply
  *   (at most 4 x 512 x 512 x 4 bytes = 4 MiB).
  *
- * This module owns the bound for both lanes (`scheduleTrackThumbnail` and
- * `schedulePlaylistCoverPixels`); the hooks keep their own per-consumer limits.
+ * This module owns the bound for every lane (`scheduleTrackThumbnail`,
+ * `schedulePlaylistCoverPixels`, and the asset path entries), and the hooks keep
+ * their own per-consumer limits. The path lane is admitted from this same queue on
+ * purpose: an asset request still triggers the backend's decode + Lanczos3 + JPEG
+ * encode on a cold cache, so it costs the same permits as a pixel request.
  */
 export const MAX_CONCURRENT = 4
 
@@ -56,6 +86,19 @@ const pending: Job[] = []
 const jobs = new Map<string, Job>()
 let activeCount = 0
 let sequence = 0
+
+/**
+ * Dedupe key of one lane request.
+ *
+ * The lane leads the key on purpose: it is part of a job's identity, not a detail
+ * of it. The same source and `maxEdge` read through both lanes produces two
+ * different payloads (RGBA pixels vs. an asset path), so without it a fallback
+ * request would be absorbed by the still-running path request for the same source
+ * and would resolve with the wrong payload type.
+ */
+function laneJobKey(lane: PlaylistCoverLane, kind: LaneJobKind, identity: LaneJobIdentity): string {
+  return JSON.stringify([lane, kind, identity.clientId, identity.windowGeneration, ...identity.source, identity.maxEdge])
+}
 
 function currentConsumers(job: Job): Consumer[] {
   for (const consumer of job.consumers) {
@@ -68,12 +111,12 @@ function currentConsumers(job: Job): Consumer[] {
   return [...job.consumers]
 }
 
-function finish(job: Job, pixels?: AudioCoverPixels | null, error?: unknown) {
+function finish(job: Job, payload?: unknown | null, error?: unknown) {
   if (jobs.get(job.key) === job) jobs.delete(job.key)
   for (const consumer of currentConsumers(job)) {
     consumer.signal?.removeEventListener('abort', consumer.abort)
     job.consumers.delete(consumer)
-    if (error === undefined) consumer.resolve(pixels ?? null)
+    if (error === undefined) consumer.resolve(payload ?? null)
     else consumer.reject(error)
   }
   // Decrement before pumping: this job no longer occupies a slot, so its
@@ -95,12 +138,8 @@ function pump() {
     }
     activeCount += 1
     job.active = true
-    const load = job.kind === 'folder'
-      ? loadAudioFolderThumbnail(job.input as AudioLoadFolderThumbnailInput)
-      : job.kind === 'track' ? loadAudioTrackThumbnail(job.input as AudioLoadTrackThumbnailInput)
-        : loadAudioPlaylistCoverPixels(job.input as AudioLoadPlaylistCoverPixelsInput)
-    void load.then(
-      (pixels) => finish(job, pixels),
+    void job.load().then(
+      (payload) => finish(job, payload),
       (error: unknown) => finish(job, undefined, error),
     )
   }
@@ -112,47 +151,70 @@ function pump() {
  */
 export function schedulePlaylistCoverPixels(
   input: AudioLoadPlaylistCoverPixelsInput,
-  options: { priority: PlaylistCoverPriority; signal?: AbortSignal; isCurrent?: () => boolean },
+  options: LaneScheduleOptions,
 ): Promise<AudioCoverPixels | null> {
-  return scheduleCoverPixels(input, 'cover', options)
+  return scheduleLaneJob(
+    'pixels', 'cover',
+    { clientId: input.clientId, windowGeneration: input.windowGeneration, source: [input.filePath], maxEdge: input.maxEdge },
+    () => loadAudioPlaylistCoverPixels(input),
+    options,
+  )
 }
 
 /** Use the persisted song thumbnail lane for 128/256 pixel list artwork. */
 export function scheduleTrackThumbnail(
   input: AudioLoadTrackThumbnailInput,
-  options: { priority: PlaylistCoverPriority; signal?: AbortSignal; isCurrent?: () => boolean },
+  options: LaneScheduleOptions,
 ): Promise<AudioCoverPixels | null> {
-  return scheduleCoverPixels(input, 'track', options)
+  return scheduleLaneJob(
+    'pixels', 'track',
+    { clientId: input.clientId, windowGeneration: input.windowGeneration, source: [input.sourcePath], maxEdge: input.maxEdge },
+    () => loadAudioTrackThumbnail(input),
+    options,
+  )
 }
 
 /** Resolve folder artwork in the same bounded native queue as song covers. */
 export function scheduleFolderThumbnail(
   input: AudioLoadFolderThumbnailInput,
-  options: { priority: PlaylistCoverPriority; signal?: AbortSignal; isCurrent?: () => boolean },
+  options: LaneScheduleOptions,
 ): Promise<AudioCoverPixels | null> {
-  return scheduleCoverPixels(input, 'folder', options)
+  return scheduleLaneJob(
+    'pixels', 'folder',
+    { clientId: input.clientId, windowGeneration: input.windowGeneration, source: [input.rootPath, input.directoryPath], maxEdge: input.maxEdge },
+    () => loadAudioFolderThumbnail(input),
+    options,
+  )
 }
 
-function scheduleCoverPixels(
-  input: AudioLoadPlaylistCoverPixelsInput | AudioLoadTrackThumbnailInput | AudioLoadFolderThumbnailInput,
-  kind: Job['kind'],
-  options: { priority: PlaylistCoverPriority; signal?: AbortSignal; isCurrent?: () => boolean },
-): Promise<AudioCoverPixels | null> {
+/**
+ * Admit one request on either lane through the shared pool.
+ *
+ * Exported for the asset path lane (`playlistCoverPathLane.ts`), which owns the
+ * path commands and the circuit breaker. Keeping the queue here and the loaders
+ * there is deliberate: this module has exactly one substitutable native-command
+ * import, which is what lets the scheduler's own unit test observe admission
+ * without a native backend.
+ */
+export function scheduleLaneJob<T>(
+  lane: PlaylistCoverLane,
+  kind: LaneJobKind,
+  identity: LaneJobIdentity,
+  load: () => Promise<T | null>,
+  options: LaneScheduleOptions,
+): Promise<T | null> {
   if (options.signal?.aborted || (options.isCurrent && !options.isCurrent())) return Promise.resolve(null)
-  const source = kind === 'folder'
-    ? [(input as AudioLoadFolderThumbnailInput).rootPath, (input as AudioLoadFolderThumbnailInput).directoryPath]
-    : [kind === 'track' ? (input as AudioLoadTrackThumbnailInput).sourcePath : (input as AudioLoadPlaylistCoverPixelsInput).filePath]
-  const key = JSON.stringify([kind, input.clientId, input.windowGeneration, ...source, input.maxEdge])
+  const key = laneJobKey(lane, kind, identity)
   let job = jobs.get(key)
   if (!job) {
-    job = { key, input, kind, priority: options.priority, sequence: sequence++, consumers: new Set(), active: false }
+    job = { key, load, priority: options.priority, sequence: sequence++, consumers: new Set(), active: false }
     jobs.set(key, job)
     pending.push(job)
   } else if (options.priority < job.priority) {
     job.priority = options.priority
   }
   const queuedJob = job
-  const promise = new Promise<AudioCoverPixels | null>((resolve, reject) => {
+  const promise = new Promise<unknown | null>((resolve, reject) => {
     const consumer: Consumer = {
       signal: options.signal,
       isCurrent: options.isCurrent,
@@ -172,5 +234,5 @@ function scheduleCoverPixels(
     options.signal?.addEventListener('abort', consumer.abort, { once: true })
   })
   pump()
-  return promise
+  return promise as Promise<T | null>
 }

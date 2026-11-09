@@ -1,4 +1,5 @@
 import type { PlaylistCoverImage } from '@/features/player/model/playerUiViewModel'
+import type { CoverPresentation } from '@/features/player/model/playlistCoverReadiness'
 
 /**
  * The fields the read-only media-library artwork cache owns. Everything else in
@@ -10,6 +11,8 @@ export type ReadOnlyArtworkRow = Readonly<{
   id?: string
   hasLocalArtwork?: boolean
   coverThumbnail?: PlaylistCoverImage
+  /** Token of exactly the snapshot `coverThumbnail` came from. */
+  presentation?: CoverPresentation
 }>
 
 /**
@@ -29,12 +32,19 @@ export function withReadOnlyArtworkFallback<T extends object>(
   if (!artwork) return row as T & ReadOnlyArtworkRow
   const coverThumbnail = current.coverThumbnail ?? artwork.coverThumbnail
   const hasLocalArtwork = current.hasLocalArtwork ?? artwork.hasLocalArtwork
+  // A token that does not name the rendered image is worse than no token: it would
+  // let one owner's element report against another owner's publication. Only pair
+  // them when the thumbnail actually came from this artwork row.
+  const presentation = coverThumbnail === artwork.coverThumbnail
+    && artwork.presentation?.src === artwork.coverThumbnail?.src
+    ? artwork.presentation : undefined
   if (coverThumbnail === current.coverThumbnail && hasLocalArtwork === current.hasLocalArtwork) {
     return row as T & ReadOnlyArtworkRow
   }
-  const layered: { coverThumbnail?: PlaylistCoverImage; hasLocalArtwork?: boolean } = {}
+  const layered: { coverThumbnail?: PlaylistCoverImage; hasLocalArtwork?: boolean; presentation?: CoverPresentation } = {}
   if (coverThumbnail !== undefined) layered.coverThumbnail = coverThumbnail
   if (hasLocalArtwork !== undefined) layered.hasLocalArtwork = hasLocalArtwork
+  if (presentation !== undefined) layered.presentation = presentation
   return { ...row, ...layered }
 }
 

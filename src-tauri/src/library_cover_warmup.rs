@@ -7,7 +7,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::audio::try_warm_track_thumbnail;
+use crate::audio::try_warm_track_thumbnail_path;
 use crate::library_folders::LibraryError;
 
 const MAX_WARMUP_PATHS: usize = 256;
@@ -95,7 +95,10 @@ pub async fn warm(
                     result.cancelled = true;
                     break;
                 }
-                match try_warm_track_thumbnail(cache_dir.clone(), path.clone(), edge).await {
+                // Warm the path lane's `.jpg`, not a `.spxr` that the list lane
+                // would never read again. See decision 9: prefetching an unread
+                // encoding wastes CPU and a share of the shared disk budget.
+                match try_warm_track_thumbnail_path(cache_dir.clone(), path.clone(), edge).await {
                     Ok(Some(outcome)) => {
                         if outcome.has_cover {
                             result.computed += 1;

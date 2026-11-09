@@ -11,6 +11,7 @@ import { usePlaylistCardLongPress } from '@/features/player/hooks/usePlaylistCar
 import { appCopy } from '@/features/player/model/playerCopy'
 import type { PlaylistTrackItemViewModel } from '@/features/player/model/playerUiViewModel'
 import type { PlaylistArtworkSource } from '@/features/player/model/playlistArtworkStore'
+import type { CoverPresentation } from '@/features/player/model/playlistCoverReadiness'
 import checkbox from '@/assets/song-card/checkbox-unchecked.svg'
 import arrowMove from '@/assets/song-card/arrow-move.svg'
 import streamGlyph from '@/assets/media-library/streams-root.svg'
@@ -27,6 +28,15 @@ type PlaylistCardProps = {
   positionMs?: number
   songKey?: string
   coverUrl?: string
+  /**
+   * The owner's published snapshot for `coverUrl`.
+   *
+   * Without it a card renders the URL but its load/error reports carry no token,
+   * which means the owner cannot verify that the report describes the presentation
+   * it committed. The store-backed callers therefore pass the presentation, not
+   * just its URL.
+   */
+  coverPresentation?: CoverPresentation
   index?: number
   current: boolean
   unavailable: boolean
@@ -92,6 +102,7 @@ export const PlaylistCard = memo(function PlaylistCard({
   songKey,
   positionMs,
   coverUrl,
+  coverPresentation,
   index = 0,
   current,
   unavailable,
@@ -129,6 +140,11 @@ export const PlaylistCard = memo(function PlaylistCard({
     coverTone: visual?.coverTone ?? baseTrack.coverTone,
     coverThumbnail: visual?.coverThumbnail ?? fallback?.coverThumbnail,
     hasLocalArtwork: visual?.hasLocalArtwork ?? baseTrack.hasLocalArtwork ?? fallback?.hasLocalArtwork,
+    // Only pair a token with the image it actually names. The owner verifies the
+    // publication before accepting a report, so a mismatched token here would be
+    // rejected — but passing the right one is what lets a library-cache failure be
+    // attributed at all, instead of silently falling back to a URL-only event.
+    coverPresentation: visual?.presentation ?? fallback?.presentation,
   } : baseTrack
   const disabled = (unavailable && !(selectMode && canSelectUnavailable)) || (!selectMode && !canActivate)
   const longPress = usePlaylistCardLongPress({ identity: songKey ?? track.id,
@@ -190,14 +206,14 @@ export const PlaylistCard = memo(function PlaylistCard({
       onPointerDown={longPress.onPointerDown}
       onContextMenu={longPress.onContextMenu}
     >
-      {contentVisible ? <PlaylistCardContent queued={queued} rating={rating} ratingMode={ratingMode} playCount={playCount} track={track} positionMs={positionMs} songKey={songKey} coverUrl={coverUrl} artworkVisible={artworkVisible}
+      {contentVisible ? <PlaylistCardContent queued={queued} rating={rating} ratingMode={ratingMode} playCount={playCount} track={track} positionMs={positionMs} songKey={songKey} coverUrl={coverUrl} coverPresentation={coverPresentation} artworkVisible={artworkVisible}
         selectMode={selectMode} showReorderHandle={showReorderHandle} unavailable={unavailable} showExtendedMetadata={showExtendedMetadata}
         coverState={coverState} coverFailed={coverFailed} onCoverFailed={onCoverFailed} /> : null}
     </button>
   )
 })
 
-function PlaylistCardContent({ queued, rating, ratingMode, playCount, track, positionMs, songKey, coverUrl, artworkVisible, selectMode, showReorderHandle, unavailable, showExtendedMetadata, coverState, coverFailed, onCoverFailed }: Pick<PlaylistCardProps, 'queued' | 'rating' | 'ratingMode' | 'playCount' | 'track' | 'positionMs' | 'songKey' | 'coverUrl' | 'artworkVisible' | 'selectMode' | 'showReorderHandle' | 'unavailable' | 'showExtendedMetadata' | 'coverFailed' | 'onCoverFailed'> & { coverState: PlaylistCardCoverState }) {
+function PlaylistCardContent({ queued, rating, ratingMode, playCount, track, positionMs, songKey, coverUrl, coverPresentation, artworkVisible, selectMode, showReorderHandle, unavailable, showExtendedMetadata, coverState, coverFailed, onCoverFailed }: Pick<PlaylistCardProps, 'queued' | 'rating' | 'ratingMode' | 'playCount' | 'track' | 'positionMs' | 'songKey' | 'coverUrl' | 'coverPresentation' | 'artworkVisible' | 'selectMode' | 'showReorderHandle' | 'unavailable' | 'showExtendedMetadata' | 'coverFailed' | 'onCoverFailed'> & { coverState: PlaylistCardCoverState }) {
   const systemIcons = useSystemIcons()
   const badge = rating !== undefined || playCount !== undefined || queued ? <span className="playlist-card-badges">{rating !== undefined ? <SongRatingBadge rating={rating} mode={ratingMode ?? 'thumbs'} /> : playCount}{queued ? <span className={ratingMode === 'stars' ? 'playlist-card-glyph playlist-card-queue-mark is-stars' : 'playlist-card-glyph playlist-card-queue-mark'} aria-label="队列未播放" style={{ maskImage: `url("${pendingQueueGlyph}")` }} /> : null}</span> : undefined
   const coverSource = coverUrl ?? track.coverImage ?? track.coverImageFallback
@@ -227,9 +243,9 @@ function PlaylistCardContent({ queued, rating, ratingMode, playCount, track, pos
   return <>
       <span className="playlist-card-cover" aria-hidden="true">
         {coverUrl ? (
-          <PlaylistCoverImage className="playlist-card-cover-image" src={coverUrl} reveal onError={handleCoverError} />
+          <PlaylistCoverImage className="playlist-card-cover-image" src={coverUrl} reveal presentation={coverPresentation} onError={handleCoverError} />
         ) : track.coverThumbnail ? (
-          <PlaylistCoverImage className="playlist-card-cover-image" image={track.coverThumbnail} reveal />
+          <PlaylistCoverImage className="playlist-card-cover-image" image={track.coverThumbnail} reveal presentation={track.coverPresentation} />
         ) : !coverFailed && artworkVisible && track.hasLocalArtwork === false && coverSource ? (
           <PlaylistCoverImage key={`${coverSource}\0${track.coverImageFallback ?? ''}`} className="playlist-card-cover-image" src={coverSource} reveal onError={handleCoverError} />
         ) : null}

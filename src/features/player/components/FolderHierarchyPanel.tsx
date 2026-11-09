@@ -30,7 +30,8 @@ import { PlaylistActionButtons } from './PlaylistActionButtons'
 import { getShuffleModePresentation } from './playbackModePresentation'
 import { useCollectionLayout } from '../hooks/useCollectionLayout'
 import { useAllSongsRenderWindow } from '../hooks/useAllSongsRenderWindow'
-import { folderCoverRevisions, useAllSongsCoverUrl, useCollectionCoverUrl, useAllSongsCoverLease, useAllSongsWindow, type AllSongsCoverStore, type AllSongsCoverItem, type TrackCandidatesCoverItem } from '../hooks/useAllSongsWindow'
+import { folderCoverRevisions, useAllSongsCoverPresentation, useCollectionCoverPresentation, useAllSongsCoverLease, useAllSongsWindow, type AllSongsCoverStore, type AllSongsCoverItem, type TrackCandidatesCoverItem } from '../hooks/useAllSongsWindow'
+import { reportCoverPresentation } from '../model/playlistCoverReadiness'
 import { flatFolderEntries, folderNavigationKey, folderEntries, folderRootSongs, folderName, folderPath, insideFolder, parentFolder, type FolderHierarchyEntry } from '../model/folderHierarchy'
 import { PLAYLIST_SONG_LAYOUTS } from '../model/playlistSongLayouts'
 import { mediaLibraryCategories, type MediaLibraryCategoryId } from '../model/mediaLibraryCategories'
@@ -57,15 +58,19 @@ function totalClock(songs: readonly AllSongsItem[]) {
 }
 
 function Cover({ item, store, hero = false }: { item?: AllSongsCoverItem; store: AllSongsCoverStore; hero?: boolean }) {
-  const cover = useCollectionCoverUrl(store, item)
-  if (hero) return cover ? <img className="playlist-hero-image" src={cover} alt="" decoding="async" /> : null
-  return cover ? <img src={cover} alt="" decoding="async" /> : <img className="folder-cover-placeholder" src={folderIcon} alt="" />
+  const cover = useCollectionCoverPresentation(store, item)
+  if (hero) return cover ? <img className="playlist-hero-image" src={cover.src} alt="" decoding="async"
+    onLoad={event => reportCoverPresentation(cover.token, event.currentTarget, 'loaded')}
+    onError={event => reportCoverPresentation(cover.token, event.currentTarget, 'failed')} /> : null
+  return cover ? <img src={cover.src} alt="" decoding="async"
+    onLoad={event => reportCoverPresentation(cover.token, event.currentTarget, 'loaded')}
+    onError={event => reportCoverPresentation(cover.token, event.currentTarget, 'failed')} /> : <img className="folder-cover-placeholder" src={folderIcon} alt="" />
 }
 
 function Song({ item, store, playlist, selectMode, selected, artworkVisible, showExtendedMetadata, onSelect, onPlay, onEnterSelectMode }: { item: AllSongsItem; store: AllSongsCoverStore; playlist: PlayerPlaylistViewModel; selectMode: boolean; selected: boolean; artworkVisible: boolean; showExtendedMetadata: boolean; onSelect: (key: string) => void; onPlay: (key: string) => void; onEnterSelectMode: (key: string) => void }) {
-  const coverUrl = useAllSongsCoverUrl(store, item.key, item.trackId, item.sourcePath)
+  const cover = useAllSongsCoverPresentation(store, item.key, item.trackId, item.sourcePath)
   const [failed, setFailed] = useState(false)
-  return <PlaylistCard songKey={item.key} track={item.track} coverUrl={coverUrl}
+  return <PlaylistCard songKey={item.key} track={item.track} coverUrl={cover?.src} coverPresentation={cover}
     current={playlist.currentTrackId === item.trackId} unavailable={!item.available} canSelectUnavailable
     canActivate={!playlist.isOpenAudioDisabled} selectMode={selectMode} showReorderHandle={false} selected={selected}
     artworkVisible={artworkVisible} showExtendedMetadata={showExtendedMetadata} contentVisible contentRepresentative={false} contentShape={15}

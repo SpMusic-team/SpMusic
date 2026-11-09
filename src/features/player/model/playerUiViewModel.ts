@@ -5,6 +5,7 @@ import type { BookmarkEntry } from './bookmarks'
 import type { MediaLibraryCategoryId, MediaLibraryRoute } from '@/features/player/model/mediaLibraryCategories'
 import type { LibraryFolderSettings, DirectoryChildren, ReplaceLibraryFoldersInput, RootSelection } from '@/features/player/services/audioCommands'
 import type { PlaylistArtworkSource } from '@/features/player/model/playlistArtworkStore'
+import type { CoverPresentation } from '@/features/player/model/playlistCoverReadiness'
 import type { RepeatMode, ShuffleMode } from '@/features/player/model/playbackModes'
 import type { PlaylistDurationStatus } from '@/features/player/model/playlistDuration'
 import type { Track, TrackArtwork, TrackArtworkPrefetchCandidate, TrackFeedback, TrackRating, TrackSummary } from '@/features/player/model/playerTypes'
@@ -134,9 +135,19 @@ export type PlaylistCoverImage = Readonly<{
 }>
 
 export type PlaylistTrackItemViewModel = TrackSummary
-  & Partial<Pick<Track, 'durationSeconds' | 'fileExtension' | 'coverTone' | 'coverImage' | 'coverImageFallback' | 'audioFormat'>>
+  & Partial<Pick<Track, 'durationSeconds' | 'fileExtension' | 'coverTone' | 'coverImage' | 'coverImageFallback' | 'audioFormat' | 'coverPresentation'>>
   & Readonly<{
     hasLocalArtwork?: boolean
+    /**
+     * Token of exactly the snapshot `coverThumbnail` came from.
+     *
+     * This is the name the publishing lanes already use: `PlaylistTrackVisual`
+     * carries `presentation`, and `withReadOnlyArtworkFallback` layers it under
+     * the same key, so a row built from either source exposes the token here
+     * beside the image it describes. A consumer must render `coverThumbnail` and
+     * report this token: without it the report is a bare URL nobody can attribute.
+     */
+    presentation?: CoverPresentation
     /** Raw library tags: undefined while pending, null when absent. */
     libraryAlbumName?: string | null
     libraryArtistName?: string | null
@@ -158,6 +169,14 @@ export type PlaylistTrackMetadata = Pick<
 export type PlaylistTrackVisual = Pick<Track, 'id' | 'coverTone'> & Readonly<{
   hasLocalArtwork: boolean
   coverThumbnail?: PlaylistCoverImage
+  /**
+   * Token of exactly the snapshot `coverThumbnail` came from.
+   *
+   * Consumers render the image and report the token of the same snapshot, so a
+   * failure can be attributed to the publication it belongs to instead of being
+   * matched by URL across owners.
+   */
+  presentation?: import('./playlistCoverReadiness').CoverPresentation
 }>
 
 export type PlaylistLibraryItem = {

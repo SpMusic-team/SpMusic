@@ -215,6 +215,8 @@ export type PlaylistAddResult = Readonly<{
 export type PlaylistAddAction = (snapshot: PlaylistAddSnapshot, targetScope: string, position?: PlaylistInsertionPosition) => Promise<PlaylistAddResult>
 export type PlaylistRemoveAction = (snapshot: PlaylistAddSnapshot, targetScope: string) => Promise<PlaylistAddResult>
 export type PlaylistAddCallbacks = {
+  onAddToQueue?: (snapshot: PlaylistAddSnapshot) => boolean
+  onAddCollectionsToQueue?: (scopes: readonly string[]) => boolean
   onPreparePlaylistAdd?: (snapshot: PlaylistAddSnapshot) => PlaylistAddRequest | undefined
   onAddToPlaylist?: PlaylistAddAction
   onRemoveFromPlaylist?: PlaylistRemoveAction
@@ -230,6 +232,13 @@ export type PlaylistLibraryViewModel = PlaylistAddCallbacks & {
   onDeleteStreams?: PlaylistDeleteAction
   streamSort?: StreamSort
   onStreamSortChange?: (sort: StreamSort) => void
+  currentQueueEntryId?: string | null
+  queueSongs?: readonly AllSongsItem[]
+  queueUnplayedEntryIds?: ReadonlySet<string>
+  queuePlayedCount?: number
+  queueTotalCount?: number
+  onClearQueue?: () => boolean
+  onPlayQueueEntry?: (entryId?: string, shuffle?: boolean) => Promise<boolean>
   bookmarks?: readonly BookmarkEntry[]
   onDeleteBookmarks?: (ids: readonly string[]) => boolean
   onRestoreBookmark?: (bookmark: BookmarkEntry, item: AllSongsItem) => Promise<boolean>

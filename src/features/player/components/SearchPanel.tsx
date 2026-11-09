@@ -167,6 +167,7 @@ export function SearchPanel({ viewModel, store, controllerMode = 'movable' }: { 
   useLibraryDockBinding('search', { searchOpen: true, onSearchToggle: () => search.onOpenChange(false),
     controllerOffsetY: controllerMotion.offsetY, controllerHidden: controllerMotion.hidden, selection: {
     active: selectMode, count: selected.size, total: visibleKeys.length, allSelected: visibleKeys.length > 0 && visibleKeys.every(key => selected.has(key)), canSelectAll: visibleKeys.length > 0,
+    onAddToQueue: () => library?.onAddToQueue?.({ scope: null, songKeys: selectedSongs.map(song => song.key) }) ?? false,
     canPlay: selectedSongs.some(song => song.available) && !viewModel.playlist.isOpenAudioDisabled, canCreatePlaylist,
     onSelectAll: () => setSelected(new Set(visibleKeys)), onClear: () => setSelected(new Set()), onExit: () => { setSelectMode(false); setSelected(new Set()) },
     onPlay: () => playSongs(selectedSongs), onCreatePlaylist: () => { if (canCreatePlaylist) library?.onCreatePlaylist?.('搜索结果', selectedSongs.map(song => song.key)) },

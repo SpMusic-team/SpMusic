@@ -1,3 +1,4 @@
+import { appendLibraryQueue, markLibraryQueuePlayed, readLibraryQueue, writeLibraryQueue } from '../model/libraryQueue'
 import { readTrackRatings, writeTrackRatings, updateTrackRating } from '../model/trackRatingStorage'
 import { readMostPlayed, writeMostPlayed, recordMostPlayed } from '../model/mostPlayed'
 import { RecentlyPlayedTracker, readRecentlyPlayed, writeRecentlyPlayed } from '../model/recentlyPlayed'
@@ -317,11 +318,11 @@ function resolveAvailablePlaylistTarget(
     const index = resolvePageShuffleTarget(pageSession, playlist.tracks, originTrackId, direction)
     return index === null ? null : { index, track: playlist.tracks[index] }
   }
-  let targetIndex = resolveNextTrackIndex(tracks, originIndex, direction, shuffleMode)
+  let targetIndex = resolveNextTrackIndex(tracks, originIndex, direction, playbackQueueOrigin(playlist)?.kind === 'queue' ? 'none' : shuffleMode)
   const step = direction < 0 ? -1 : 1
   for (let attempts = 0; attempts < playlist.tracks.length; attempts += 1) {
     const candidate = playlist.tracks[targetIndex]
-    if (candidate?.available && candidate.id !== originTrackId) {
+    if (candidate?.available && (candidate.id !== originTrackId || playbackQueueOrigin(playlist)?.kind === 'queue' && targetIndex !== originIndex)) {
       return { index: targetIndex, track: candidate }
     }
     targetIndex = (targetIndex + step + playlist.tracks.length) % playlist.tracks.length
@@ -466,6 +467,13 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
   const startupRestoreTimedOutRef = useRef(false)
   const [startupRestoreReady, setStartupRestoreReady] = useState(savedSession === null)
   const recentTrackerRef = useRef(new RecentlyPlayedTracker())
+  const [libraryQueue, setLibraryQueue] = useState(readLibraryQueue)
+  const libraryQueueRef = useRef(libraryQueue)
+  const libraryQueueClearEpochRef = useRef(0)
+  const queueConfirmedPlaybackRef = useRef<Pick<AudioPlaybackState, 'phase' | 'currentTrackId' | 'generation'> | null>(null)
+  const [currentQueueEntryId, setCurrentQueueEntryId] = useState<string | null>(null)
+  const libraryQueueCursorRef = useRef<{ scope: string; index: number } | null>(null)
+  const libraryQueuePendingCursorRef = useRef<{ scope: string; index: number; requestId: number } | null>(null)
   const [bookmarks, setBookmarks] = useState(readBookmarks)
   const bookmarksRef = useRef(bookmarks)
   const bookmarkRestoringRef = useRef(false)
@@ -717,7 +725,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
   const folderPlaylistRef = useRef<AudioFolderPlaylist | null>(null)
   const pageShuffleSessionRef = useRef<PageShuffleSession | null>(null)
   const getPageShuffleSession = useCallback((playlist: AudioFolderPlaylist, currentId: string): PageShuffleSession | null => {
-    if (shuffleMode !== 'shuffle-all' || repeatMode !== 'all-categories-until-stop') return null
+    if (playbackQueueOrigin(playlist)?.kind === 'queue' || shuffleMode !== 'shuffle-all' || repeatMode !== 'all-categories-until-stop') return null
     const scope = playlistScope(playlist)
     const existing = pageShuffleSessionRef.current
     if (existing?.scope === scope) return existing
@@ -730,6 +738,12 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     return session
   }, [repeatMode, shuffleMode])
   const queueTrackIndexRef = useRef(new Map<string, number>())
+  const playbackTrackIndex = useCallback((trackId: string) => {
+    const cursor = libraryQueuePendingCursorRef.current ?? libraryQueueCursorRef.current
+    const source = folderPlaylistRef.current
+    if (cursor && source && cursor.scope === playlistScope(source) && source.tracks[cursor.index]?.id === trackId) return cursor.index
+    return queueTrackIndexRef.current.get(trackId)
+  }, [])
   const trackDetailsHandlerRef = useRef<(details: AudioTrackDetailsChanged) => void>(() => undefined)
   const trackDetailsUnlistenRef = useRef<(() => void) | null>(null)
   const trackDetailsListenerPromiseRef = useRef<Promise<void> | null>(null)
@@ -839,7 +853,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       version: 1,
       sourcePath: current.sourcePath,
       playlist: playlist.sourceKind === 'custom'
-        ? { sourceKind: 'custom', sourcePath: playlist.sourcePath, customPlaylist: playlist }
+        ? { sourceKind: 'custom', sourcePath: playlist.sourcePath, customPlaylist: { ...playlist, selectedIndex: playbackTrackIndex(current.id) ?? playlist.selectedIndex } }
         : playlist.sourceKind === 'folder'
           ? { sourceKind: 'folder', sourcePath: playlist.sourcePath,
             folderMode: libraryPlaylistObjectsRef.current.has(playlist) ? 'library' : 'file' }
@@ -851,7 +865,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       queueOpen,
       volume,
     })
-  }, [queueOpen, volume])
+  }, [playbackTrackIndex, queueOpen, volume])
 
   useEffect(() => {
     persistCurrentSession()
@@ -887,7 +901,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
   }, [])
 
   const commitQueueTrackSummary = useCallback((nextTrack: Track) => {
-    const index = queueTrackIndexRef.current.get(nextTrack.id)
+    const index = playbackTrackIndex(nextTrack.id)
     if (index === undefined) return
     const nextSummary = trackSummaryFromTrack(nextTrack)
     setQueueTracks((previous) => {
@@ -897,7 +911,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       next[index] = nextSummary
       return next
     })
-  }, [])
+  }, [playbackTrackIndex, ])
 
   const commitPresentationArtwork = useCallback((nextTrack: Track) => {
     const currentArtwork = presentationArtworkRef.current
@@ -2948,7 +2962,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     const generation = artworkPrefetchGenerationRef.current + 1
     artworkPrefetchGenerationRef.current = generation
     const playlist = folderPlaylistRef.current
-    const originIndex = queueTrackIndexRef.current.get(trackId)
+    const originIndex = playbackTrackIndex(trackId)
     if (!playlist?.tracks.length || originIndex === undefined) {
       setArtworkPrefetchCandidates([])
       return
@@ -3018,7 +3032,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       // then swap the complete window in one state publication.
       setArtworkPrefetchCandidates(ready.slice(0, 6))
     })()
-  }, [queueTracks, requestHydratedAudioTrack, shuffleMode])
+  }, [playbackTrackIndex, queueTracks, requestHydratedAudioTrack, shuffleMode])
 
   const primeTrackArtwork = useCallback((direction: Direction) => {
     artworkPrimeDirectionRef.current = direction
@@ -3160,6 +3174,16 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
         try { writeMostPlayed(statistics) } catch (error) { console.error('Failed to save most played', error) }
       }
     }
+    const confirmedQueuePlayback = queueConfirmedPlaybackRef.current
+    if (nextAudioState.phase === 'playing' && audioTrackRef.current?.id === nextAudioState.currentTrackId
+      && (confirmedQueuePlayback?.phase !== 'playing' || confirmedQueuePlayback.currentTrackId !== nextAudioState.currentTrackId || confirmedQueuePlayback.generation !== nextAudioState.generation)) {
+      const next = markLibraryQueuePlayed(libraryQueueRef.current, audioTrackRef.current.sourcePath)
+      if (next !== libraryQueueRef.current) {
+        libraryQueueRef.current = [...next]; setLibraryQueue([...next])
+        try { writeLibraryQueue(next) } catch { toast.error('队列播放状态保存失败') }
+      }
+    }
+    queueConfirmedPlaybackRef.current = nextAudioState
     const previousAudioState = latestAudioStateRef.current
     const previousTrackId = previousAudioState?.currentTrackId ?? null
     const previousPhase = previousAudioState?.phase
@@ -3179,7 +3203,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
 
     latestAudioStateRef.current = nextAudioState
     const playlist = folderPlaylistRef.current
-    const currentIndex = nextTrackId ? queueTrackIndexRef.current.get(nextTrackId) ?? 0 : 0
+    const currentIndex = nextTrackId ? playbackTrackIndex(nextTrackId) ?? 0 : 0
     const pageSession = playlist && nextTrackId ? getPageShuffleSession(playlist, nextTrackId) : null
     const stopsAtPlaylistEnd = pageSession && playlist && nextTrackId && pageSession.scope === playlistScope(playlist)
       ? resolvePageShuffleTarget(pageSession, playlist.tracks, nextTrackId, 1) === null
@@ -3299,7 +3323,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       && audioTrackRef.current?.id !== nextAudioState.currentTrackId
       && !audioSelectionInProgressRef.current
     ) hydrateCurrentAudioTrack(nextAudioState.currentTrackId)
-  }, [
+  }, [playbackTrackIndex,
     clearPresentationTrack,
     commitAudioError,
     commitPresentationTrack,
@@ -3468,11 +3492,13 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     visualSource?: TrackSelectionVisualSource,
   ) => {
     if (!playlist.tracks.length) return false
+    const queueClearEpoch = libraryQueueClearEpochRef.current
 
     const targetScope = playlistScope(playlist)
     const step = direction < 0 ? -1 : 1
     let index = Math.min(Math.max(startIndex, 0), playlist.tracks.length - 1)
     for (let attempts = 0; attempts < playlist.tracks.length; attempts += 1) {
+      if ((playlist as PlaybackQueuePlaylist).libraryQueueEntryIds && queueClearEpoch !== libraryQueueClearEpochRef.current) return false
       const target = playlist.tracks[index]
       if (!target) return false
       if (!target.available && playlist.sourceKind !== 'folder' && skipMissing) {
@@ -3486,13 +3512,24 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
         continue
       }
       const expectedSelectionRequestId = selectionRequestIdRef.current + 1
+      const queueOccurrence = (playlist as PlaybackQueuePlaylist).libraryQueueEntryIds ? { scope: targetScope, index, requestId: expectedSelectionRequestId } : null
+      if (queueOccurrence) libraryQueuePendingCursorRef.current = queueOccurrence
       if (await loadFolderAudioTrack(
         target,
         autoplay,
         legacyInitialSelection,
         targetScope,
         visualSource ? { direction, source: visualSource } : undefined,
-      )) return true
+      )) {
+        if (queueOccurrence && queueClearEpoch !== libraryQueueClearEpochRef.current) return false
+        if (queueOccurrence && selectionRequestIdRef.current === expectedSelectionRequestId) {
+          libraryQueueCursorRef.current = queueOccurrence
+          setCurrentQueueEntryId((playlist as PlaybackQueuePlaylist).libraryQueueEntryIds?.[index] ?? null)
+          if (libraryQueuePendingCursorRef.current === queueOccurrence) libraryQueuePendingCursorRef.current = null
+        }
+        return true
+      }
+      if (libraryQueuePendingCursorRef.current === queueOccurrence) libraryQueuePendingCursorRef.current = null
       if (selectionRequestIdRef.current !== expectedSelectionRequestId) return false
       if (playlist.sourceKind === 'folder' || !skipMissing) return false
 
@@ -3527,7 +3564,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       ?? presentationTrackRef.current?.id
       ?? latestAudioStateRef.current?.currentTrackId
       ?? audioTrackRef.current?.id
-    const originIndex = originTrackId ? queueTrackIndexRef.current.get(originTrackId) : undefined
+    const originIndex = originTrackId ? playbackTrackIndex(originTrackId) : undefined
     if (!playlist?.tracks.length || !originTrackId || originIndex === undefined) {
       if (isPlayerDragDiagnosticsRecording()) recordPlayerDragDiagnostic('audio-preview.rejected', { reason: !playlist?.tracks.length ? 'empty-queue' : !originTrackId ? 'no-origin' : 'missing-index', direction, originId: playerDragDiagnosticId(originTrackId), queueSize: playlist?.tracks.length ?? 0 })
       return Promise.resolve(null)
@@ -3599,12 +3636,12 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       }
       return null
     })
-  }, [getPageShuffleSession, primeTrackArtwork, queueTracks, requestHydratedAudioTrack, shuffleMode])
+  }, [playbackTrackIndex, getPageShuffleSession, primeTrackArtwork, queueTracks, requestHydratedAudioTrack, shuffleMode])
   useLayoutEffect(() => registerPlayerDragDiagnosticSnapshot('audio', () => ({
     logicalId: playerDragDiagnosticId(logicalCursorTrackIdRef.current), desiredId: playerDragDiagnosticId(desiredAudioTrackIdRef.current),
     presentationId: playerDragDiagnosticId(presentationTrackRef.current?.id), engineId: playerDragDiagnosticId(latestAudioStateRef.current?.currentTrackId),
     epoch: playlistScopeEpochRef.current, scopeId: playerDragDiagnosticId(playlistScopeRef.current), queueSize: folderPlaylistRef.current?.tracks.length ?? 0,
-    logicalIndex: logicalCursorTrackIdRef.current ? queueTrackIndexRef.current.get(logicalCursorTrackIdRef.current) ?? null : null,
+    logicalIndex: logicalCursorTrackIdRef.current ? playbackTrackIndex(logicalCursorTrackIdRef.current) ?? null : null,
     hydrationCount: hydrationInFlightRef.current.size, hydrationIds: [...hydrationInFlightRef.current.keys()].slice(0, 16).map(file => playerDragDiagnosticId(file)),
     hydrationTruncated: hydrationInFlightRef.current.size > 16, hydratedCacheSize: hydratedAudioTrackCacheRef.current.size,
     previewSequence: trackCardPreviewIdRef.current, prepared: preparedTrackCardPreviewRef.current ? { tokenId: preparedTrackCardPreviewRef.current.id, originId: playerDragDiagnosticId(preparedTrackCardPreviewRef.current.originTrackId), targetId: playerDragDiagnosticId(preparedTrackCardPreviewRef.current.targetTrackId), epoch: preparedTrackCardPreviewRef.current.playlistEpoch } : null,
@@ -3632,6 +3669,8 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     if (!valid || !playlist || !target
       || transportOperationInProgress()
       || timelineInteractionRef.current === 'seeking') return false
+    const queueOccurrence = (playlist as PlaybackQueuePlaylist).libraryQueueEntryIds ? { scope: token.playlistScope, index: token.targetIndex, requestId: selectionRequestIdRef.current + 1 } : null
+    if (queueOccurrence) libraryQueuePendingCursorRef.current = queueOccurrence
     const committedTrack = token.track
     const committedArtwork = token.artwork
     logicalCursorTrackIdRef.current = token.targetTrackId
@@ -3654,7 +3693,11 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
         previewTokenId: token.id,
       },
       token,
-    )
+    ).then(loaded => {
+      if (libraryQueuePendingCursorRef.current !== queueOccurrence) return
+      if (loaded && queueOccurrence && queueOccurrence.requestId === selectionRequestIdRef.current) { libraryQueueCursorRef.current = queueOccurrence; setCurrentQueueEntryId((playlist as PlaybackQueuePlaylist).libraryQueueEntryIds?.[token.targetIndex] ?? null) }
+      libraryQueuePendingCursorRef.current = null
+    })
     return true
   }, [loadFolderAudioTrack, prefetchAdjacentPlaylistTracks])
 
@@ -3724,7 +3767,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       ?? presentationTrackRef.current?.id
       ?? latestAudioStateRef.current?.currentTrackId
       ?? audioTrackRef.current?.id
-    const currentIndex = activeTrackId ? queueTrackIndexRef.current.get(activeTrackId) ?? 0 : 0
+    const currentIndex = activeTrackId ? playbackTrackIndex(activeTrackId) ?? 0 : 0
     const pageSession = activeTrackId ? getPageShuffleSession(playlist, activeTrackId) : null
     if (pageSession && pageSession.scope === playlistScope(playlist) && activeTrackId) {
       const autoplay = automatic || latestAudioStateRef.current?.phase === 'playing'
@@ -3751,7 +3794,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
 
     const targetIndex = automatic && repeatMode === 'repeat-one'
       ? currentIndex
-      : resolveNextTrackIndex(queueTracks, currentIndex, direction, shuffleMode)
+      : resolveNextTrackIndex(queueTracks, currentIndex, direction, playbackQueueOrigin(playlist)?.kind === 'queue' ? 'none' : shuffleMode)
     const autoplay = automatic || latestAudioStateRef.current?.phase === 'playing'
     const allowMissingSkipWrap = !(
       automatic && (repeatMode === 'sequential' || repeatMode === 'all-categories-until-stop')
@@ -3769,7 +3812,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       false,
       visualSource,
     )
-  }, [getPageShuffleSession, loadPlaylistTrackOrSkip, queueTracks, repeatMode, shuffleMode])
+  }, [playbackTrackIndex, getPageShuffleSession, loadPlaylistTrackOrSkip, queueTracks, repeatMode, shuffleMode])
 
   function applyOptimisticTransportPhase(phase: TransportIntentPhase) {
     transportIntentRef.current = phase
@@ -4014,7 +4057,8 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
         if (playlist?.sourceKind === 'folder' && folderMode !== 'file') {
           libraryPlaylistObjectsRef.current.add(playlist)
         }
-        const target = playlist?.tracks.find((item) => normalizeAudioSourcePath(item.sourcePath)
+        const occurrence = (playlist as PlaybackQueuePlaylist | null)?.libraryQueueEntryIds ? playlist?.tracks[playlist.selectedIndex] : undefined
+        const target = occurrence && normalizeAudioSourcePath(occurrence.sourcePath) === normalizeAudioSourcePath(saved.sourcePath) ? occurrence : playlist?.tracks.find((item) => normalizeAudioSourcePath(item.sourcePath)
           === normalizeAudioSourcePath(saved.sourcePath))
         if (!playlist || playlist.sourceKind !== saved.playlist.sourceKind
           || normalizeAudioSourcePath(playlist.sourcePath) !== normalizeAudioSourcePath(saved.playlist.sourcePath)
@@ -4022,6 +4066,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
           clearPlaybackSession()
           return
         }
+        if ((playlist as PlaybackQueuePlaylist).libraryQueueEntryIds) { libraryQueueCursorRef.current = { scope: playlistScope(playlist), index: playlist.selectedIndex }; setCurrentQueueEntryId((playlist as PlaybackQueuePlaylist).libraryQueueEntryIds?.[playlist.selectedIndex] ?? null) }
         restoredPlaylist = playlist
         audioStateRequestGenerationRef.current += 1
         const loading = loadFolderAudioTrack(target, false, true, playlistScope(playlist))
@@ -4510,14 +4555,14 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       || timelineInteractionRef.current === 'seeking'
       || !folderPlaylist
     ) return
-    const targetIndex = queueTrackIndexRef.current.get(trackId)
+    const targetIndex = playbackTrackIndex(trackId)
     if (targetIndex !== undefined) {
       const activeTrackId = latestAudioStateRef.current?.currentTrackId ?? audioTrackRef.current?.id
-      const currentIndex = activeTrackId ? queueTrackIndexRef.current.get(activeTrackId) ?? targetIndex : targetIndex
+      const currentIndex = activeTrackId ? playbackTrackIndex(activeTrackId) ?? targetIndex : targetIndex
       const direction: Direction = targetIndex < currentIndex ? -1 : 1
       void loadPlaylistTrackOrSkip(folderPlaylist, targetIndex, true, direction, false, false, false, 'queue')
     }
-  }, [folderPlaylist, loadPlaylistTrackOrSkip])
+  }, [playbackTrackIndex, folderPlaylist, loadPlaylistTrackOrSkip])
 
   const selectSessionPlaylistTrack = useCallback(async (scope: string, trackId: string) => {
     if (transportOperationInProgress()
@@ -4796,6 +4841,75 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       return track ? [[key, track] as const] : []
     }))
   }, [findPlaylistForScope, selectableSourceTracks, selectedLibraryTracks])
+
+  function appendToActiveLibraryQueue(entries: readonly import('../model/libraryQueue').LibraryQueueEntry[]) {
+    const active = folderPlaylistRef.current as PlaybackQueuePlaylist | null
+    if (!active?.tracks.length || playbackQueueOrigin(active)?.kind !== 'queue') return
+    const ids = new Set(active.libraryQueueEntryIds)
+    const added = entries.filter(e => !ids.has(e.entryId))
+    if (!added.length) return
+    activatePlaylistScope({ ...active, tracks: [...active.tracks, ...added.map(e => ({ ...e.descriptor }))], libraryQueueEntryIds: [...(active.libraryQueueEntryIds ?? []), ...added.map(e => e.entryId)] } as PlaybackQueuePlaylist)
+  }
+  function addToLibraryQueue(snapshot: PlaylistAddSnapshot) {
+    if (libraryRestorePending || playlistRestorePending || deletePendingRef.current) return false
+    const live = [...sessionPlaylistDescriptorsRef.current.values()].filter(source => !playbackQueueOrigin(source)).flatMap(selectableSourceTracks)
+    const candidates = snapshot.scope ? selectableSourceTracks(findPlaylistForScope(snapshot.scope)) : [...selectedLibraryTracks(), ...live]
+    const byKey = new Map(candidates.map(track => [snapshot.scope ? track.id : normalizeAudioSourcePath(track.sourcePath), track]))
+    const tracks = [...new Set(snapshot.songKeys)].flatMap(key => { const track = byKey.get(key); return track ? [track] : [] })
+    if (!tracks.length || tracks.length !== new Set(snapshot.songKeys).size) { toast.error('所选歌曲已变化，请重新选择'); return false }
+    const next = appendLibraryQueue(libraryQueueRef.current, tracks)
+    const added = next.length - libraryQueueRef.current.length
+    if (!added) return false
+    try { writeLibraryQueue(next) } catch { toast.error('队列保存失败，请重试'); return false }
+    libraryQueueRef.current = next; setLibraryQueue(next); appendToActiveLibraryQueue(next)
+    toast.success('已添加 ' + added + ' 首歌曲到队列')
+    return true
+  }
+  function addCollectionsToLibraryQueue(scopes: readonly string[]) {
+    const sources = scopes.map(findPlaylistForScope)
+    if (!sources.length || sources.some(source => !source)) return false
+    const tracks = sources.flatMap(source => selectableSourceTracks(source))
+    const next = appendLibraryQueue(libraryQueueRef.current, tracks)
+    const added = next.length - libraryQueueRef.current.length
+    if (!added) return false
+    try { writeLibraryQueue(next) } catch { toast.error('队列保存失败，请重试'); return false }
+    libraryQueueRef.current = next; setLibraryQueue(next); appendToActiveLibraryQueue(next); toast.success('已添加 ' + added + ' 首歌曲到队列'); return true
+  }
+  function clearLibraryQueue() {
+    try { writeLibraryQueue([]) } catch { toast.error('队列清空失败，请检查本地存储后重试'); return false }
+    libraryQueueClearEpochRef.current += 1
+    libraryQueueRef.current = []; setLibraryQueue([])
+    libraryQueuePendingCursorRef.current = null
+    const active = folderPlaylistRef.current as PlaybackQueuePlaylist | null
+    if (active?.playbackQueue?.kind === 'queue') {
+      trackCardPreviewIdRef.current += 1; preparedTrackCardPreviewRef.current = null
+      libraryQueueCursorRef.current = null; libraryQueuePendingCursorRef.current = null; setCurrentQueueEntryId(null)
+      activatePlaylistScope({ ...active, tracks: [], selectedIndex: 0, libraryQueueEntryIds: [] } as PlaybackQueuePlaylist)
+      clearPlaybackSession()
+    }
+    toast.success('已清空队列'); return true
+  }
+  async function playLibraryQueue(entryId?: string, shuffle = false) {
+    if (transportOperationInProgress() || timelineInteractionRef.current === 'seeking') return false
+    const entries = [...libraryQueueRef.current]
+    if (!entries.length) return false
+    if (shuffle) for (let i = entries.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [entries[i], entries[j]] = [entries[j], entries[i]] }
+    const index = entryId ? entries.findIndex(e => e.entryId === entryId) : Math.max(0, entries.findIndex(e => e.playedAt === null))
+    if (index < 0) return false
+    const liveSources = [...sessionPlaylistDescriptorsRef.current.values()].filter(source => !playbackQueueOrigin(source))
+    const liveTracks = new Map(liveSources.flatMap(selectableSourceTracks).map(track => [normalizeAudioSourcePath(track.sourcePath), track]))
+    if (!liveTracks.get(normalizeAudioSourcePath(entries[index].sourcePath))?.available) { toast.error('队列歌曲已不可用'); return false }
+    const playlist: PlaybackQueuePlaylist = { sourceKind: 'custom', sourcePath: 'queue:library:' + crypto.randomUUID(), sourceName: '队列', directoryPath: '', directoryName: '队列', selectedIndex: index,
+      tracks: entries.map(e => ({ ...(liveTracks.get(normalizeAudioSourcePath(e.sourcePath)) ?? { ...e.descriptor, available: false }) })), libraryQueueEntryIds: entries.map(e => e.entryId), playbackQueue: { kind: 'queue' } }
+    const request = selectionRequestIdRef.current + 1
+    const clearEpoch = libraryQueueClearEpochRef.current
+    const oldCursor = libraryQueueCursorRef.current
+    const loaded = await loadPlaylistTrackOrSkip(playlist, index, true, 1, false, false, false, 'queue')
+    if (!loaded || request !== selectionRequestIdRef.current) { if (request === selectionRequestIdRef.current && clearEpoch === libraryQueueClearEpochRef.current) libraryQueueCursorRef.current = oldCursor; return false }
+    activatePlaylistScope(playlist)
+    setShuffleMode('none'); setRepeatMode('sequential')
+    return true
+  }
 
   const preparePlaylistAdd = useCallback((snapshot: PlaylistAddSnapshot): PlaylistAddRequest | undefined => {
     if (deletePendingRef.current || libraryImportPendingRef.current || libraryRestorePending || playlistRestorePending
@@ -5263,6 +5377,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     playbackSourceScope: playbackQueueOrigin(folderPlaylist)?.sourceScope
       ?? (folderPlaylist && !playbackQueueOrigin(folderPlaylist) ? playlistScope(folderPlaylist) : null),
     playbackQueueKind: playbackQueueOrigin(folderPlaylist)?.kind,
+    libraryQueue, currentQueueEntryId: playbackQueueOrigin(folderPlaylist)?.kind === 'queue' ? currentQueueEntryId : null, addToLibraryQueue, addCollectionsToLibraryQueue, clearLibraryQueue, playLibraryQueue,
     selectPlaybackQueueTrack,
     shufflePlaybackQueue,
     selectSessionPlaylistTrack,

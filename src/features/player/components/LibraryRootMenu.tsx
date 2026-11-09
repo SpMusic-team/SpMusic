@@ -80,7 +80,7 @@ function actionsFor(id: MediaLibraryCategoryId): Action[] {
     { label: '新增', icon: addIcon, kind: 'placeholder', description: '空白播放列表尚未接入。现在可从所有歌曲中选择歌曲，再新建播放列表；也可在媒体库总览导入 M3U8。' },
   ]
   if (id === 'queue') return [rescan, sort, pin, settings,
-    { label: '清空队列', icon: clearQueueIcon, kind: 'placeholder', description: '队列清空功能尚未接入，当前播放队列未改变。' }]
+    { label: '清空队列', icon: clearQueueIcon, kind: 'placeholder' }]
   if (id === 'streams') return [
     { label: '添加地址', icon: addIcon, kind: 'placeholder' },
     { label: '导入播放列表', icon: selectIcon, kind: 'placeholder' }, sort, pin, settings]
@@ -119,6 +119,7 @@ export function LibraryRootMenu({ categoryId, library, onSort, onListOptions, ro
   const pinned = library.pinnedCategoryIds?.includes(categoryId) ?? false
   const busy = library.isImportPending || library.isFolderRescanPending
   const run = (action: Action) => {
+    if (categoryId === 'queue' && action.label === '清空队列') { if (library.onClearQueue?.()) setOpen(false); return }
     if (categoryId === 'streams') {
       if (action.label === '添加地址') { setStreamUrl('http://'); setStreamError(''); setStreamAdd(true); return }
       if (action.label === '导入播放列表') { setOpen(false); library.onImportPlaylist?.(); return }

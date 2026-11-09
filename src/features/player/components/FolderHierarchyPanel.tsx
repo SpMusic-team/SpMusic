@@ -263,6 +263,7 @@ function FolderHierarchyScene({ categoryId = 'folders', playlist, allSongsCoverS
       canCreatePlaylist: false,
       canDelete: Boolean(selectedSongKeys.length && library.onDeleteSongs && !playlist.isOpenAudioDisabled && !library.isDeletePending),
       canAddToPlaylist: Boolean(selectedSongKeys.length && library.onPreparePlaylistAdd && library.onAddToPlaylist && !playlist.isOpenAudioDisabled && !library.isDeletePending),
+      onAddToQueue: () => library.onAddToQueue?.({ scope: null, songKeys: [...selectedSongKeys] }) ?? false,
       onPrepareAddToPlaylist: () => library.onPreparePlaylistAdd?.({ scope: null, songKeys: Object.freeze([...selectedSongKeys]) }),
       onRefreshAddToPlaylist: library.onPreparePlaylistAdd,
       onAddToPlaylist: library.onAddToPlaylist,

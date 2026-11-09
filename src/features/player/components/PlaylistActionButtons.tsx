@@ -16,7 +16,7 @@ type Props = {
   playDisabled: boolean
   playbackLocked?: boolean
   searchOpen: boolean
-  onSearch: () => void
+  onSearch?: () => void
   selectMode: boolean
   onSelect: () => void
   selectDisabled?: boolean
@@ -34,8 +34,8 @@ export function PlaylistActionButtons({ onBack, shuffle, onShuffle, shuffleDisab
     <IconButton className="playlist-hero-icon playlist-hero-shuffle-button" icon={shuffle.icon} label={shuffle.label} aria-pressed={undefined} data-selected={undefined} data-playback-command-lock={playbackLocked || undefined} disabled={shuffleDisabled} onClick={onShuffle} />
     <IconButton className="playlist-hero-icon playlist-hero-play-button" icon={icons.play} label={appCopy.playlistPage.play}
       data-playback-command-lock={playbackLocked || undefined} disabled={playDisabled} pressFeedback={!compact} pressFeedbackTone="surface-variant" onClick={onPlay} />
-    <Button className="playlist-search-button playlist-hero-icon" aria-label={appCopy.playlistPage.search} aria-pressed={searchOpen}
-      data-selected={searchOpen ? 'true' : undefined} size="icon" variant="ghost" onClick={onSearch}><Search aria-hidden="true" /></Button>
+    {onSearch ? <Button className="playlist-search-button playlist-hero-icon" aria-label={appCopy.playlistPage.search} aria-pressed={searchOpen}
+      data-selected={searchOpen ? 'true' : undefined} size="icon" variant="ghost" onClick={onSearch}><Search aria-hidden="true" /></Button> : null}
     <Button className="playlist-select-toggle" aria-pressed={selectMode} data-selected={selectMode ? 'true' : undefined} disabled={selectDisabled} onClick={onSelect}>
       {selectMode ? appCopy.playlistPage.done : appCopy.playlistPage.select}
     </Button>

@@ -203,3 +203,10 @@
   [data-library-category='streams'] .playlist-management-actions { gap: 8px; }
   [data-library-category='streams'] .playlist-management-actions button { height: 52px; min-width: 82px; padding: 5px 20px; border-width: 1px; }
 }
+
+/* Center the slash (or empty label) over the overflow icon. */
+.library-queue-count { position: absolute; right: 25px; top: 50%; translate: 0 -50%; width: 64px; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; color: var(--player-inverse-primary); font-size: calc(22px * var(--app-font-scale)); line-height: 28px; text-align: center; }
+.playlist-management-heading:has(.library-queue-count) { position: relative; padding-right: 100px; }
+.library-queue-count > :first-child:not(:only-child) { text-align: right; }
+.library-queue-count > :last-child:not(:only-child) { text-align: left; }
+.library-queue-count > :only-child { grid-column: 1 / -1; }

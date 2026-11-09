@@ -1,3 +1,4 @@
+import pendingQueueGlyph from '@/assets/selection-panel/queue.svg'
 import type { TrackRating } from '../model/playerTypes'
 import type { RatingMode } from '../model/trackRating'
 import { SongRatingBadge } from './SongRating'
@@ -15,6 +16,7 @@ import arrowMove from '@/assets/song-card/arrow-move.svg'
 import streamGlyph from '@/assets/media-library/streams-root.svg'
 
 type PlaylistCardProps = {
+  queued?: boolean
   hideRating?: boolean
   rating?: TrackRating
   ratingMode?: RatingMode
@@ -83,7 +85,7 @@ function useCardArtwork(source: PlaylistArtworkSource | undefined, trackId: stri
 }
 
 export const PlaylistCard = memo(function PlaylistCard({
-  hideRating = false, rating: suppliedRating, ratingMode: suppliedRatingMode, playCount,
+  queued: suppliedQueued, hideRating = false, rating: suppliedRating, ratingMode: suppliedRatingMode, playCount,
   track: baseTrack,
   artworkSource,
   fallbackArtworkSource,
@@ -109,6 +111,7 @@ export const PlaylistCard = memo(function PlaylistCard({
   onToggleSelect,
   onEnterSelectMode,
 }: PlaylistCardProps) {
+  const queued = suppliedQueued ?? false
   const inheritedRating = useSongRating(baseTrack.id)
   const ratingMode = suppliedRatingMode ?? inheritedRating.mode
   const rating = hideRating || playCount !== undefined ? undefined : visibleSongRating(suppliedRating ?? inheritedRating.rating, ratingMode)
@@ -167,7 +170,7 @@ export const PlaylistCard = memo(function PlaylistCard({
       className="playlist-card"
       data-source-kind={track.stream ? 'stream' : undefined}
       data-playlist-track-id={track.id}
-      data-has-play-count={(playCount !== undefined || rating !== undefined) || undefined}
+      data-has-play-count={(playCount !== undefined || rating !== undefined || queued) || undefined}
       data-song-key={songKey}
       data-cover-state={coverState}
       data-content-visible={contentVisible ? 'true' : 'false'}
@@ -187,16 +190,16 @@ export const PlaylistCard = memo(function PlaylistCard({
       onPointerDown={longPress.onPointerDown}
       onContextMenu={longPress.onContextMenu}
     >
-      {contentVisible ? <PlaylistCardContent rating={rating} ratingMode={ratingMode} playCount={playCount} track={track} positionMs={positionMs} songKey={songKey} coverUrl={coverUrl} artworkVisible={artworkVisible}
+      {contentVisible ? <PlaylistCardContent queued={queued} rating={rating} ratingMode={ratingMode} playCount={playCount} track={track} positionMs={positionMs} songKey={songKey} coverUrl={coverUrl} artworkVisible={artworkVisible}
         selectMode={selectMode} showReorderHandle={showReorderHandle} unavailable={unavailable} showExtendedMetadata={showExtendedMetadata}
         coverState={coverState} coverFailed={coverFailed} onCoverFailed={onCoverFailed} /> : null}
     </button>
   )
 })
 
-function PlaylistCardContent({ rating, ratingMode, playCount, track, positionMs, songKey, coverUrl, artworkVisible, selectMode, showReorderHandle, unavailable, showExtendedMetadata, coverState, coverFailed, onCoverFailed }: Pick<PlaylistCardProps, 'rating' | 'ratingMode' | 'playCount' | 'track' | 'positionMs' | 'songKey' | 'coverUrl' | 'artworkVisible' | 'selectMode' | 'showReorderHandle' | 'unavailable' | 'showExtendedMetadata' | 'coverFailed' | 'onCoverFailed'> & { coverState: PlaylistCardCoverState }) {
+function PlaylistCardContent({ queued, rating, ratingMode, playCount, track, positionMs, songKey, coverUrl, artworkVisible, selectMode, showReorderHandle, unavailable, showExtendedMetadata, coverState, coverFailed, onCoverFailed }: Pick<PlaylistCardProps, 'queued' | 'rating' | 'ratingMode' | 'playCount' | 'track' | 'positionMs' | 'songKey' | 'coverUrl' | 'artworkVisible' | 'selectMode' | 'showReorderHandle' | 'unavailable' | 'showExtendedMetadata' | 'coverFailed' | 'onCoverFailed'> & { coverState: PlaylistCardCoverState }) {
   const systemIcons = useSystemIcons()
-  const badge = rating !== undefined ? <SongRatingBadge rating={rating} mode={ratingMode ?? 'thumbs'} /> : playCount
+  const badge = rating !== undefined || playCount !== undefined || queued ? <span className="playlist-card-badges">{rating !== undefined ? <SongRatingBadge rating={rating} mode={ratingMode ?? 'thumbs'} /> : playCount}{queued ? <span className={ratingMode === 'stars' ? 'playlist-card-glyph playlist-card-queue-mark is-stars' : 'playlist-card-glyph playlist-card-queue-mark'} aria-label="队列未播放" style={{ maskImage: `url("${pendingQueueGlyph}")` }} /> : null}</span> : undefined
   const coverSource = coverUrl ?? track.coverImage ?? track.coverImageFallback
   const coverMarkVisible = Boolean(track.stream && coverState !== 'ready') || coverState === 'empty' || coverState === 'error'
   // Empty text means "unknown", so a missing artist/album must not leave an

@@ -3,6 +3,7 @@ import { useIsPresent, type MotionValue } from 'motion/react'
 import type { PlaylistDeleteAction, PlaylistDeleteSnapshot, PlaylistAddAction, PlaylistAddSnapshot, PlaylistAddRequest, PlaylistAddCallbacks, PlaylistRemoveAction } from '../model/playerUiViewModel'
 
 export type LibraryDockSelection = {
+  identity?: string
   scope?: string | null
   limitedActions?: boolean
   imageAction?: boolean
@@ -17,6 +18,7 @@ export type LibraryDockSelection = {
   onPrepareDelete?: () => PlaylistDeleteSnapshot | undefined
   onDelete?: PlaylistDeleteAction
   canAddToPlaylist?: boolean
+  onAddToQueue?: () => boolean
   onPrepareAddToPlaylist?: () => PlaylistAddRequest | undefined
   onRefreshAddToPlaylist?: (snapshot: PlaylistAddSnapshot) => PlaylistAddRequest | undefined
   onAddToPlaylist?: PlaylistAddAction
@@ -65,6 +67,7 @@ export function useLibraryDockBinding(routeKey: string, binding: LibraryDockBind
   const play = useCallback(() => selectionRef.current?.onPlay(), [])
   const create = useCallback(() => selectionRef.current?.onCreatePlaylist?.(), [])
   const prepareDelete = useCallback(() => selectionRef.current?.onPrepareDelete?.(), [])
+  const addQueue = useCallback(() => selectionRef.current?.onAddToQueue?.() ?? false, [])
   const prepareAdd = useCallback(() => selectionRef.current?.onPrepareAddToPlaylist?.(), [])
   const refreshAdd = useCallback((snapshot: PlaylistAddSnapshot) => {
     const current = selectionRef.current
@@ -104,14 +107,16 @@ export function useLibraryDockBinding(routeKey: string, binding: LibraryDockBind
   const canCreatePlaylist = binding.selection?.canCreatePlaylist ?? false
   const canDelete = binding.selection?.canDelete ?? false
   const canAddToPlaylist = binding.selection?.canAddToPlaylist ?? false
+  const hasAddQueue = Boolean(binding.selection?.onAddToQueue)
   const hasSelection = Boolean(binding.selection)
   const selection = useMemo(() => hasSelection ? {
-    scope: selectionScope, limitedActions, imageAction, active: selectionActive, count, total, allSelected, canSelectAll, canPlay, canCreatePlaylist, canDelete, canAddToPlaylist,
+    identity: routeKey, scope: selectionScope, limitedActions, imageAction, active: selectionActive, count, total, allSelected, canSelectAll, canPlay, canCreatePlaylist, canDelete, canAddToPlaylist,
     onPrepareDelete: prepareDelete, onDelete: deleteSongs,
+    onAddToQueue: hasAddQueue ? addQueue : undefined,
     onPrepareAddToPlaylist: prepareAdd, onRefreshAddToPlaylist: refreshAdd, onAddToPlaylist: addSongs, onRemoveFromPlaylist: removeSongs,
     onCreateAddPlaylist: createAdd, onOpenPlaylistTarget: openTarget,
     onSelectAll: selectAll, onClear: clear, onExit: exit, onPlay: play, onCreatePlaylist: create,
-  } : undefined, [hasSelection, selectionScope, limitedActions, imageAction, selectionActive, count, total, allSelected, canSelectAll, canPlay, canCreatePlaylist, canDelete, canAddToPlaylist, prepareDelete, deleteSongs, prepareAdd, refreshAdd, addSongs, removeSongs, createAdd, openTarget, selectAll, clear, exit, play, create])
+  } : undefined, [routeKey, hasSelection, selectionScope, limitedActions, imageAction, selectionActive, count, total, allSelected, canSelectAll, canPlay, canCreatePlaylist, canDelete, canAddToPlaylist, prepareDelete, deleteSongs, addQueue, hasAddQueue, prepareAdd, refreshAdd, addSongs, removeSongs, createAdd, openTarget, selectAll, clear, exit, play, create])
   const hasSearch = Boolean(binding.onSearchToggle)
   const stableBinding = useMemo(() => ({
     searchOpen: binding.searchOpen,

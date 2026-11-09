@@ -3215,7 +3215,7 @@ export function PlayerSurface({
               onPreviewCoverError={dockPreviewLayer ? () => markArtworkLoadError(dockPreviewLayer.id) : undefined}
               visualIsPlaying={visualPlaybackState === 'playing'} playbackTransitionPending={playbackTransitionPending}
               onPlayToggle={handlePlayToggle}
-              searchOpen={dockSearchOpen} onSearchToggle={searchChange ? toggleGlobalSearch : dockBinding?.onSearchToggle}
+              hideSearch={playlist.library?.route?.view === 'category' && playlist.library.route.categoryId === 'queue'} searchOpen={dockSearchOpen} onSearchToggle={searchChange ? toggleGlobalSearch : dockBinding?.onSearchToggle}
               onClose={() => { if (searchOpen) searchChange?.(false); else requestPlaylistOpenChange(false) }}
               homeSelected={!dockSearchOpen && playlist.isOpen}
               onHome={dockSearchOpen
@@ -3285,6 +3285,7 @@ export function PlayerSurface({
               canRemoveFromList={playlist.canRemoveFromList}
               onDeleteSongs={playlist.onDeleteSongs}
               onReorderSongs={playlist.onReorderSongs}
+              onAddToQueue={playlist.onAddToQueue}
               onPreparePlaylistAdd={playlist.onPreparePlaylistAdd}
               onAddToPlaylist={playlist.onAddToPlaylist}
               onRemoveFromPlaylist={playlist.onRemoveFromPlaylist}

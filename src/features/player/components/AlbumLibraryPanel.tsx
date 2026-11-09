@@ -181,7 +181,7 @@ function AlbumScene({ albums: rootEntries, categoryId = 'album', playlist, allSo
   const changeGenreLocation = library.onGenreLocationChange
   const yearMode = categoryId === 'year'
   const artistMode = categoryId !== 'album' && !yearMode && !genreMode
-  const selectionEnabled = categoryId === 'album' || categoryId === 'artist' || categoryId === 'album-artist' || yearMode || genreMode
+  const selectionEnabled = categoryId === 'album' || categoryId === 'artist' || categoryId === 'album-artist' || categoryId === 'composer' || yearMode || genreMode
   const contributor = contributorNavigation(library, categoryId)
   const yearLocation = yearMode ? library.yearLocation : null
   const yearRoot = yearMode && !yearLocation
@@ -342,6 +342,7 @@ function AlbumScene({ albums: rootEntries, categoryId = 'album', playlist, allSo
       canPlay: Boolean(candidates.length && library.onPlaySong && !playlist.isOpenAudioDisabled && !loading), canCreatePlaylist: false,
       canDelete: Boolean(selectedSongKeys.length && library.onDeleteSongs && !playlist.isOpenAudioDisabled && !library.isDeletePending),
       canAddToPlaylist: Boolean(selectedSongKeys.length && library.onPreparePlaylistAdd && library.onAddToPlaylist && !playlist.isOpenAudioDisabled && !library.isDeletePending),
+      onAddToQueue: () => library.onAddToQueue?.({ scope: null, songKeys: [...selectedSongKeys] }) ?? false,
       onPrepareAddToPlaylist: () => library.onPreparePlaylistAdd?.({ scope: null, songKeys: Object.freeze([...selectedSongKeys]) }),
       onRefreshAddToPlaylist: library.onPreparePlaylistAdd, onAddToPlaylist: library.onAddToPlaylist,
       onRemoveFromPlaylist: library.onRemoveFromPlaylist, onCreateAddPlaylist: library.onCreateAddPlaylist, onOpenPlaylistTarget: library.onSelect,

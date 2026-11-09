@@ -37,6 +37,7 @@ type PlaylistPanelProps = {
   canRemoveFromList?: boolean
   onDeleteSongs?: PlayerPlaylistViewModel['onDeleteSongs']
   onReorderSongs?: PlayerPlaylistViewModel['onReorderSongs']
+  onAddToQueue?: PlayerPlaylistViewModel['onAddToQueue']
   onPreparePlaylistAdd?: PlayerPlaylistViewModel['onPreparePlaylistAdd']
   onAddToPlaylist?: PlayerPlaylistViewModel['onAddToPlaylist']
   onRemoveFromPlaylist?: PlayerPlaylistViewModel['onRemoveFromPlaylist']
@@ -253,6 +254,7 @@ export function PlaylistPanel({
   canRemoveFromList = false,
   onDeleteSongs,
   onReorderSongs,
+  onAddToQueue,
   onPreparePlaylistAdd,
   onAddToPlaylist,
   onRemoveFromPlaylist,
@@ -494,6 +496,7 @@ export function PlaylistPanel({
     canCreatePlaylist: false,
     canDelete: Boolean(onDeleteSongs && selectedIds.size && !isOpenAudioDisabled && !isDeletePending),
     canAddToPlaylist: Boolean(onPreparePlaylistAdd && onAddToPlaylist && selectedIds.size && !isOpenAudioDisabled && !isDeletePending),
+    onAddToQueue: () => onAddToQueue?.({ scope: deleteScope ?? null, songKeys: [...selectedIds] }) ?? false,
     onPrepareAddToPlaylist: () => onPreparePlaylistAdd?.({ scope: deleteScope ?? null, songKeys: Object.freeze([...selectedIds]) }),
     onRefreshAddToPlaylist: onPreparePlaylistAdd,
     onAddToPlaylist,

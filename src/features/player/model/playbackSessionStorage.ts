@@ -40,6 +40,12 @@ export function readPlaybackSession(): SavedPlaybackSession | null {
       if ('playbackQueue' in custom && (!isPlaybackQueueOrigin(custom.playbackQueue)
         || !custom.sourcePath.startsWith('queue:'))) return null
       if (custom.sourcePath.startsWith('queue:') && !('playbackQueue' in custom)) return null
+      const snapshot = custom as PlaybackQueuePlaylist
+      if (snapshot.playbackQueue?.kind === 'queue' && (!Array.isArray(snapshot.libraryQueueEntryIds)
+        || snapshot.libraryQueueEntryIds.length !== custom.tracks.length
+        || snapshot.libraryQueueEntryIds.some(id => typeof id !== 'string' || !id)
+        || new Set(snapshot.libraryQueueEntryIds).size !== snapshot.libraryQueueEntryIds.length
+        || !Number.isInteger(custom.selectedIndex) || custom.selectedIndex < 0 || custom.selectedIndex >= custom.tracks.length)) return null
     }
     if (playlist.folderMode !== undefined && (playlist.sourceKind !== 'folder'
       || !['library', 'file'].includes(playlist.folderMode))) return null

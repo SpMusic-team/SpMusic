@@ -18,7 +18,7 @@ type Actions = {
   playbackLocked?: boolean
   searchLabel: string
   searchOpen: boolean
-  onSearch: () => void
+  onSearch?: () => void
   selectMode: boolean
   selectDisabled?: boolean
   onSelect: () => void
@@ -32,7 +32,7 @@ export function ManagementActionButtons({ shuffleLabel, shuffleDisabled, onShuff
   return <>
     <Button variant="outline" aria-label={shuffleLabel} data-playback-action="shuffle" data-playback-command-lock={playbackLocked || undefined} disabled={shuffleDisabled} onClick={onShuffle}><img src={shuffleIcon} alt="" /></Button>
     <Button variant="outline" aria-label={playLabel} data-playback-action="play" data-playback-command-lock={playbackLocked || undefined} disabled={playDisabled} onClick={onPlay}><img src={playIcon} alt="" /></Button>
-    <Button variant="outline" aria-label={searchLabel} aria-expanded={searchOpen} onClick={onSearch}><img src={searchIcon} alt="" /></Button>
+    {onSearch ? <Button variant="outline" aria-label={searchLabel} aria-expanded={searchOpen} onClick={onSearch}><img src={searchIcon} alt="" /></Button> : null}
     <Button variant="outline" aria-pressed={selectMode} disabled={selectDisabled} onClick={onSelect}>{selectMode ? '取消选择' : '选择'}</Button>
     {selectMode ? <span role="status">已选择 {selectedCount} 项</span> : null}
     {extra}
@@ -43,6 +43,7 @@ type Props = {
   chrome: ReturnType<typeof useCollectionManagementChrome>
   category: typeof mediaLibraryCategories[number]
   title?: string
+  trailing?: ReactNode
   sharedProjection: boolean
   onOverview?: () => void
   actions?: Actions
@@ -53,7 +54,7 @@ type Props = {
 }
 
 export function CollectionManagementHeader({ chrome, category, title = category.label, sharedProjection,
-  onOverview, actions, more, actionsScope, hideActions = false, returnTransition }: Props) {
+  onOverview, actions, more, actionsScope, trailing, hideActions = false, returnTransition }: Props) {
   const { headingRef, toolbarRef, toolbarControls, toolbarOffset, navigationMotion, atomicOverview } = chrome
   const projectionKey = sharedProjection ? 'shared' : 'local'
   return <>
@@ -67,6 +68,7 @@ export function CollectionManagementHeader({ chrome, category, title = category.
         transition={{ layout: navigationMotion.transition }}><span className="media-library-category-glyph" style={{ width: category.glyphWidth, height: category.glyphHeight, maskImage: `url("${category.overviewIcon}")`, WebkitMaskImage: `url("${category.overviewIcon}")` }} /></motion.span>
       <motion.h2 key={`category-label:${projectionKey}`} layoutId={sharedProjection ? `library-category-label:${category.id}` : undefined} layoutCrossfade={false}
         transition={{ layout: navigationMotion.transition }}>{title}</motion.h2>
+      {trailing}
     </header>
     <motion.div ref={toolbarRef} className="playlist-management-toolbar" custom={toolbarOffset} variants={navigationMotion.toolbar}
       initial={false} animate={toolbarControls} exit={atomicOverview ? 'exit' : 'animate'} transition={navigationMotion.transition}>

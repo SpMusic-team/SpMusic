@@ -1067,3 +1067,7 @@
 .playlist-card[data-source-kind='stream'][data-has-play-count] .playlist-card-stream-source { width: 100%; }
 .playlist-card-stream-source .playlist-card-stream-rating { margin-left: auto; flex: 0 0 auto; }
 .playlist-grid:is([data-layout-level='5'], [data-layout-level='6']) .playlist-card-stream-source .playlist-card-stream-rating { display: none; }
+
+.playlist-card-queue-mark { display: inline-block; width: var(--playlist-rating-thumb-size); height: var(--playlist-rating-thumb-size); flex: 0 0 var(--playlist-rating-thumb-size); background: currentColor; mask-size: contain; mask-repeat: no-repeat; mask-position: center; }
+.playlist-card-queue-mark.is-stars { width: var(--playlist-rating-star-size); height: var(--playlist-rating-star-size); flex-basis: var(--playlist-rating-star-size); }
+.playlist-card-badges { display: inline-flex; align-items: center; gap: 4px; }

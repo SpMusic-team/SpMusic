@@ -82,6 +82,7 @@ export function BookmarksPanel({ playlist, allSongsCoverStore, librarySidebarOpe
   useLibraryDockBinding('category:bookmarks', { searchOpen: search, onSearchToggle: () => { setSearch(!search); setQuery('') }, selection: {
     active: selecting, limitedActions: true, count: selected.size, total: rows.length,
     allSelected: visible.length > 0 && visible.every(row => selected.has(row.bookmark.id)), canSelectAll: visible.length > 0,
+    onAddToQueue: () => library.onAddToQueue?.({ scope: null, songKeys: rows.filter(row => selected.has(row.bookmark.id) && row.item).map(row => row.item!.key) }) ?? false,
     canPlay: !busy && candidates.length > 0, canCreatePlaylist: false,
     onSelectAll: () => setSelected(new Set(visible.map(row => row.bookmark.id))), onClear: () => setSelected(new Set()),
     onExit: () => { setSelecting(false); setSelected(new Set()) }, onPlay: () => { if (candidates[0]) void play(candidates[0]) },

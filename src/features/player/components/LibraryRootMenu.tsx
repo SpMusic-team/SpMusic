@@ -18,6 +18,7 @@ import rescanIcon from '@/assets/folder-root-menu/9b2af.svg'
 import pinIcon from '@/assets/folder-root-menu/b969c.svg'
 import settingsIcon from '@/assets/folder-root-menu/e41ce.svg'
 import exportIcon from '@/assets/library-root-menu/fe2f6.svg'
+import importIcon from '@/assets/library-root-menu/import.svg'
 import addIcon from '@/assets/library-root-menu/323da.svg'
 import sortIcon from '@/assets/library-root-menu/b9f3f.svg'
 import clearQueueIcon from '@/assets/library-root-menu/bbf7d.svg'
@@ -66,7 +67,7 @@ const categoryIcons: Record<MediaLibraryCategoryId, string> = {
   'long-tracks': category18,
 }
 
-type Action = { label: string; icon: string; kind: 'select' | 'rescan' | 'pin' | 'placeholder'; description?: string }
+type Action = { label: string; icon: string; kind: 'select' | 'import' | 'rescan' | 'pin' | 'placeholder'; description?: string }
 const select: Action = { label: '选择文件夹', icon: selectIcon, kind: 'select' }
 const rescan: Action = { label: '重新扫描', icon: rescanIcon, kind: 'rescan' }
 const pin: Action = { label: '在侧栏置顶', icon: pinIcon, kind: 'pin' }
@@ -74,6 +75,7 @@ const settings: Action = { label: '列表选项', icon: settingsIcon, kind: 'pla
 const sort: Action = { label: '重新排序', icon: sortIcon, kind: 'placeholder', description: '此分类的排序功能尚未接入。' }
 function actionsFor(id: MediaLibraryCategoryId): Action[] {
   if (id === 'playlists') return [
+    { label: '导入', icon: importIcon, kind: 'import' },
     { label: '导出', icon: exportIcon, kind: 'placeholder', description: '批量导出播放列表尚未接入。' },
     { label: '重新扫描/解析播放列表', icon: rescanIcon, kind: 'placeholder', description: '重新扫描和解析播放列表尚未接入。' },
     pin, settings,
@@ -119,6 +121,7 @@ export function LibraryRootMenu({ categoryId, library, onSort, onListOptions, ro
   const pinned = library.pinnedCategoryIds?.includes(categoryId) ?? false
   const busy = library.isImportPending || library.isFolderRescanPending
   const run = (action: Action) => {
+    if (action.kind === 'import') { setOpen(false); library.onImportPlaylist?.(); return }
     if (categoryId === 'queue' && action.label === '清空队列') { if (library.onClearQueue?.()) setOpen(false); return }
     if (categoryId === 'streams') {
       if (action.label === '添加地址') { setStreamUrl('http://'); setStreamError(''); setStreamAdd(true); return }
@@ -246,7 +249,7 @@ export function LibraryRootMenu({ categoryId, library, onSort, onListOptions, ro
       <Separator className="folder-root-menu-divider" />
       <div className="folder-root-menu-actions">
         {(categoryId === 'streams' ? actionsFor(categoryId) : categoryId === 'year' || categoryId === 'genre' ? [select, rescan, settings] : onSort ? [select, rescan, sort, pin, settings] : actionsFor(categoryId)).map(action => <Button key={action.label} className="folder-root-menu-action" variant="ghost"
-          disabled={action.kind === 'select' ? busy || !library.onSelectFolders : action.kind === 'rescan' ? busy || !library.onRescanFolders : action.kind === 'pin' ? !library.onToggleCategoryPin : false}
+          disabled={action.kind === 'import' ? library.isImportPending || !library.onImportPlaylist : action.kind === 'select' ? busy || !library.onSelectFolders : action.kind === 'rescan' ? busy || !library.onRescanFolders : action.kind === 'pin' ? !library.onToggleCategoryPin : false}
           aria-pressed={action.kind === 'pin' ? pinned : undefined}
           onClick={() => run(action)}>
           <img className={action === settings ? 'folder-root-menu-settings' : undefined} src={action.icon} alt="" /><span>{action.kind === 'pin' && pinned ? '取消侧栏置顶' : action.label}</span>

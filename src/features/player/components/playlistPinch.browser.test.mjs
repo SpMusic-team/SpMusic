@@ -1,11 +1,16 @@
 // Optional browser regression. Start Vite, then set SPMUSIC_PLAYWRIGHT to an
 // existing Playwright package and run: node src/features/player/components/playlistPinch.browser.test.mjs
-// Uses real Chromium touch input through CDP, without adding a project dependency.
+// Uses Chromium touch and touchpad gesture input through CDP, without adding a
+// project dependency. Browser coverage does not verify WebView2 host settings.
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
 const { chromium } = require(process.env.SPMUSIC_PLAYWRIGHT || 'playwright')
+const nativeGestureSource = readFileSync(new URL('../../../../src-tauri/src/webview_gestures.rs', import.meta.url), 'utf8')
+const nativePageZoomGuard = nativeGestureSource.match(/const PREVENT_PAGE_ZOOM: &str = r#"([\s\S]*?)"#;/)?.[1]
+assert(nativePageZoomGuard, 'load the actual Windows page zoom guard')
 const origin = process.env.SPMUSIC_TEST_ORIGIN || 'http://127.0.0.1:5173'
 const panelPath = '/src/features/player/components/PlaylistPanel.tsx'
 const panelSource = await (await fetch(origin + panelPath)).text()
@@ -41,9 +46,11 @@ async function open(level = 3, reducedMotion = 'no-preference') {
   const page = await browser.newPage({viewport:{width:1280,height:900},hasTouch:true,reducedMotion})
   const errors = []
   page.on('pageerror', error => errors.push(error.message))
+  await page.addInitScript(nativePageZoomGuard)
   await page.addInitScript(level => {
     localStorage.setItem('spmusic.playlist.layout-level.v1', String(level))
     window.touchEvidence = []
+    window.wheelEvidence = []
     window.animationsStarted = 0
     window.cardAnimations = []
     window.panelListeners = []
@@ -72,6 +79,7 @@ async function open(level = 3, reducedMotion = 'no-preference') {
     for (const type of ['touchstart','touchmove','touchend','touchcancel']) {
       document.addEventListener(type, event => window.touchEvidence.push({type,trusted:event.isTrusted,canceled:event.defaultPrevented,touches:event.touches.length}), {passive:true})
     }
+    document.addEventListener('wheel', event => window.wheelEvidence.push({trusted:event.isTrusted,ctrlKey:event.ctrlKey,cancelable:event.cancelable,canceled:event.defaultPrevented,deltaY:event.deltaY,inCollection:Boolean(event.target.closest('.playlist-grid'))}), {passive:true})
   }, level)
   await page.route('**/__pinch_fixture.js', route => route.fulfill({contentType:'text/javascript',body:fixture}))
   await page.route('**/__pinch_test', route => route.fulfill({contentType:'text/html',body:html}))
@@ -169,7 +177,52 @@ try {
     await page.keyboard.up('Control')
     assert.equal(await page.evaluate(() => visualViewport.scale), 1)
   })
-  await check('trackpad pinch consumes one level across long burst and reversal; idle resets', async ({page,cdp}) => {
+  await check('native Chromium touchpad pinch generates consumed wheel without physical Ctrl', async ({page,cdp}) => {
+    // CDP calls the touchpad source "mouse" (its enum is default/touch/mouse).
+    // This exercises Chromium's pinch conversion rather than injecting an
+    // already-converted Ctrl+wheel event, which bypasses native recognition.
+    const pinch = scaleFactor => cdp.send('Input.synthesizePinchGesture', {
+      x:640,y:320,scaleFactor,relativeSpeed:400,gestureSourceType:'mouse',
+    })
+    await pinch(1.6)
+    await levelIs(page,2)
+    const evidence = await page.evaluate(() => window.wheelEvidence)
+    assert(evidence.some(event => event.trusted && event.ctrlKey && event.cancelable && event.canceled && event.inCollection && event.deltaY < 0), 'native touchpad gesture reaches cancelable Ctrl+wheel path')
+    assert.equal(await page.evaluate(() => visualViewport.scale),1,'native touchpad does not zoom page')
+    await page.waitForTimeout(400)
+    await pinch(0.6)
+    await levelIs(page,3)
+    assert.equal(await page.evaluate(() => visualViewport.scale),1)
+    assert.deepEqual(await page.evaluate(() => window.actions),[],'native touchpad never selects or plays a track')
+  })
+  await check('host guard prevents page zoom outside collections without consuming ordinary wheel or single touch', async ({page,cdp}) => {
+    await page.evaluate(() => {
+      const outside = document.createElement('div')
+      outside.id = 'outside-gesture-fixture'
+      outside.style.cssText = 'position:fixed;inset:0;background:white;z-index:99999'
+      document.body.append(outside)
+      window.hostGuardEvidence = []
+      for (const type of ['wheel', 'touchmove']) window.addEventListener(type, event => window.hostGuardEvidence.push({type,ctrlKey:event.ctrlKey,touches:event.touches?.length,canceled:event.defaultPrevented}))
+    })
+    for (const gestureSourceType of ['mouse', 'touch']) {
+      await cdp.send('Input.synthesizePinchGesture', {x:600,y:300,scaleFactor:1.7,relativeSpeed:400,gestureSourceType})
+      assert.equal(await page.evaluate(() => visualViewport.scale),1,'outside pinch cannot zoom the page: ' + gestureSourceType)
+      await levelIs(page,3)
+    }
+    const evidence = await page.evaluate(() => window.hostGuardEvidence)
+    assert(evidence.some(event => event.type === 'wheel' && event.ctrlKey && event.canceled),'outside touchpad wheel reaches the host guard')
+    assert(evidence.some(event => event.type === 'touchmove' && event.touches > 1 && event.canceled),'outside touchscreen pinch reaches the host guard')
+    const ordinary = await page.locator('#outside-gesture-fixture').evaluate(element => {
+      const wheel = new WheelEvent('wheel',{bubbles:true,cancelable:true,deltaY:80})
+      element.dispatchEvent(wheel)
+      const touch = new Touch({identifier:1,target:element,clientX:100,clientY:100})
+      const move = new TouchEvent('touchmove',{bubbles:true,cancelable:true,touches:[touch]})
+      element.dispatchEvent(move)
+      return {wheelCanceled:wheel.defaultPrevented,singleTouchCanceled:move.defaultPrevented}
+    })
+    assert.deepEqual(ordinary,{wheelCanceled:false,singleTouchCanceled:false})
+  })
+  await check('converted trackpad wheel consumes one level across long burst and reversal; idle resets', async ({page,cdp}) => {
     const wheel = deltaY => cdp.send('Input.dispatchMouseEvent', {type:'mouseWheel',x:640,y:320,deltaX:0,deltaY,modifiers:2})
     for (let i = 0; i < 4; i++) await cdp.send('Input.dispatchMouseEvent', {type:'mouseWheel',x:640,y:320,deltaX:0,deltaY:-8,modifiers:2})
     await levelIs(page, 2)

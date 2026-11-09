@@ -10,6 +10,8 @@ mod library_playlist_addition;
 mod library_playlists;
 mod library_streams;
 mod player_drag_diagnostics;
+#[cfg(target_os = "windows")]
+mod webview_gestures;
 mod webview_memory;
 mod window_state;
 
@@ -866,6 +868,10 @@ pub fn run() {
         debug_assertions = cfg!(debug_assertions),
         "starting SpMusic Tauri backend",
     );
+    #[allow(unused_mut)]
+    let mut context = tauri::generate_context!();
+    #[cfg(target_os = "windows")]
+    let main_window_config = webview_gestures::defer_main_window(context.config_mut());
     tauri::Builder::default()
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
@@ -955,7 +961,12 @@ pub fn run() {
             audio_load_folder_thumbnail_path,
             audio_load_playlist_cover_thumbnail_path,
         ])
-        .setup(|app| {
+        .setup(move |app| {
+            #[cfg(target_os = "windows")]
+            let pending_navigation = main_window_config
+                .as_ref()
+                .map(|config| webview_gestures::create_main_window(app, config))
+                .transpose()?;
             let app_paths = AppPaths::prepare()?;
             tracing::info!(
                 operation = "app.setup",
@@ -1012,9 +1023,15 @@ pub fn run() {
                         .build(),
                 )?;
             }
+            // The frontend must not run until both its native gesture policy
+            // and all command-managed startup state are ready.
+            #[cfg(target_os = "windows")]
+            if let Some(pending) = pending_navigation {
+                webview_gestures::navigate_main_window(app, pending)?;
+            }
             Ok(())
         })
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building tauri application")
         .run(|app, event| {
             if matches!(event, tauri::RunEvent::Exit) {

@@ -71,7 +71,7 @@ const cases = [
   ['songs', '所有歌曲', common], ['folder', '文件夹', common], ['folders', '文件夹层次结构', common],
   ['album', '专辑', common], ['artist', '艺术家', common], ['album-artist', '专辑艺术家', common],
   ['genre', '流派', common], ['year', '年份', common], ['composer', '作曲家', common],
-  ['playlists', '播放列表', ['导出', '重新扫描/解析播放列表', '在侧栏置顶', '列表选项', '新增']],
+  ['playlists', '播放列表', ['导入', '导出', '重新扫描/解析播放列表', '在侧栏置顶', '列表选项', '新增']],
   ['streams', '流', ['添加地址', '导入播放列表', '重新排序', '在侧栏置顶', '列表选项']],
   ['queue', '队列', ['重新扫描', '重新排序', '在侧栏置顶', '列表选项', '清空队列']],
   ['bookmarks', '书签', ['选择文件夹', '重新扫描', '重新排序', '在侧栏置顶', '列表选项']],
@@ -120,7 +120,7 @@ try {
   // legacy placeholder check continues to cover the remaining categories.
   for (const [id, label, labels] of cases.filter(row => !['folders', 'streams'].includes(row[0]))) {
     await select(page, id)
-    const placeholders = labels.filter(item => !['选择文件夹', '重新扫描', '在侧栏置顶'].includes(item))
+    const placeholders = labels.filter(item => !['导入', '选择文件夹', '重新扫描', '在侧栏置顶'].includes(item))
     for (const item of placeholders) {
       await trigger(page, id).click()
       await page.getByRole('dialog', { name: label, exact: true }).getByRole('button', { name: item, exact: true }).click()

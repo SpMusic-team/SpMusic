@@ -65,7 +65,7 @@ flowchart LR
 
 1. [PlaylistPanel.tsx](../../src/features/player/components/PlaylistPanel.tsx) 挂载全部筛选后的卡片，滚动、`ResizeObserver`、窗口尺寸与 DPR 变化时，在动画帧里计算真实可见、附近一屏和转场保留集合；播放栏遮挡会缩小真实可见范围。当前几何计算仍遍历全量挂载卡片。
 2. [useAudioPlayer.ts](../../src/features/player/hooks/useAudioPlayer.ts) 优先处理真实可见、首曲、播放栏和转场保留需求，余量才供预取；根据封面 CSS 尺寸和 DPR 选择 128/256/512px。48 MiB 是应用侧受管预算而非硬性进程上限，且与"当前曲目前后各 3 首"的解码封面预热窗口无关。元数据补水与封面补水各有有限任务数，过期结果不会写入新列表。列表行文本另有独立的只读标签摘要通道（见下方第 6 条），它只以 scope 键缓存、不写补水状态。
-3. [audioCommands.ts](../../src/features/player/services/audioCommands.ts) 的列表输入为 `clientId`、原图 `filePath`、`maxEdge` 和 `windowGeneration`。Rust 仅允许列表档位 128/256/512px；播放器大图命令有独立请求身份和档位。列表会话代次在列表资源会话失效时更新，不随每次普通滚动递增。
+3. [audioCommands.ts](../../src/features/player/services/audioCommands.ts) 的列表输入为 `clientId`、原图 `filePath`、`maxEdge` 和 `windowGeneration`。Rust 的**路径通道**允许列表档位 128/256/512/1024/1536px（`ALLOWED_PATH_MAX_EDGES`），用于 hero 大图；**像素通道**仍只允许 128/256/512px，因为该通道把 RGBA 解码进受管预算。2048 暂缓，播放器大图命令有独立请求身份和档位。列表会话代次在列表资源会话失效时更新，不随每次普通滚动递增。
 4. [cover_pixels.rs](../../src-tauri/src/audio/cover_pixels.rs) 校验原图在应用缓存 `audio/covers` 内、不是符号链接且是普通文件；限制原图字节、尺寸和解码量。当前每次未被前端驻留资源满足的请求都读取原图、完整解码、按 Lanczos3 缩放，并返回 SPXR v1 RGBA 像素。列表请求共享串行解码门，和播放器大图解码门隔离。
 5. 前端将 RGBA 转成未压缩 BMP Blob URL 给 `<img>`。升级换图时保留旧 URL 及更早回退链，等使用者真正加载新图后才撤销；失败恢复不能把仍在使用的旧图登记为自身的待撤销 URL。Object URL 释放和 WebView 原生图片内存需分别观察。
 6. 列表行文本走**独立的只读标签摘要通道** `audio_probe_playlist_track_summaries`（[playlist_summary.rs](../../src-tauri/src/audio/playlist_summary.rs)），契约见 [playlist-track-summaries.md](./playlist-track-summaries.md)。它每批 ≤256 条、按 scope 分块、只读标签（`read_cover_art(false)`），不打开解码器、不写 `audio/covers`、不读 sidecar `.lrc`、不写 `playlistTrackMetadata`，也不改变上面任何封面通道、预算或代次语义。
@@ -94,7 +94,7 @@ flowchart LR
 
 本轮仅实施 PM 批准的探索实验，不据此宣称正式性能验收完成。Rust/Tauri Agent 拥有生成、读取、淘汰和恢复；前端维持现有视口调度、SPXR 响应和 Object URL 所有权。
 
-- **键**：`实际读取的原图内容 BLAKE3 + maxEdge + 变换版本 + 磁盘编码版本`。沿用现有有界原图读取并对实际字节哈希，不仅信任路径名中的哈希；因此热命中仍可能读原图，但不再完整解码和缩放。原图路径、曲目 ID 或修改时间不能单独当键。`maxEdge` 仍只取 128/256/512；方向校正、缩放算法、像素格式或编码改变必须提高版本。原图同名内容改变时不得命中旧图。
+- **键**：`实际读取的原图内容 BLAKE3 + maxEdge + 变换版本 + 磁盘编码版本`。沿用现有有界原图读取并对实际字节哈希，不仅信任路径名中的哈希；因此热命中仍可能读原图，但不再完整解码和缩放。原图路径、曲目 ID 或修改时间不能单独当键。`maxEdge` 在路径通道取 128/256/512/1024/1536、在像素通道取 128/256/512；方向校正、缩放算法、像素格式或编码改变必须提高版本。原图同名内容改变时不得命中旧图。
 - **读写与安全**：只读已按现有规则校验的原图；缩略图路径由 Rust 从键派生并限定在专属目录，拒绝符号链接/非普通文件和越界路径。缓存命中仍校验版本、尺寸、长度及编码完整性，输出不得突破现有像素限制。缓存文件不能成为前端可指定的任意文件读取入口。
 - **原子发布**：在同目录以唯一临时文件独占创建，完整写入并刷新后原子发布为不可变键文件；并发同键写入至多保留一份有效结果，失败或崩溃残留的临时文件可清理。Windows 上目标已存在的冲突要安全处理，不能覆盖正在读的有效文件或把半成品暴露为命中。
 - **容量与清理**：字节和文件数都要硬上限，写入前为待写文件留出预算；清理只处理衍生目录，不能递归删除 `audio/covers`。用可复现的最近使用记录或等价顺序淘汰；限制每次启动/请求的扫描与清理工作量，异常中断后最终收敛到上限。容量数值和清理节奏由后续任务依据基线决定。

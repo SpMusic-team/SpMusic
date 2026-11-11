@@ -36,6 +36,23 @@ const FLAG_RESIZED: u32 = 1 << 1;
 
 const ALLOWED_MAX_EDGES: [u32; 7] = [256, 512, 768, 1024, 1536, 2048, 3072];
 const ALLOWED_PLAYLIST_MAX_EDGES: [u32; 3] = [128, 256, 512];
+/// Edges the PATH lane accepts, for playlist, track and folder alike.
+///
+/// Hero artwork is a full-width banner, so at 2560@1x it needs ~2190 physical pixels
+/// and the 512 cap left it upscaled ~4.3x. The path lane only hands back a file on
+/// disk, so widening its accepted edges costs no resident memory by itself; what it
+/// does cost is a larger JPEG per hero, which [`thumbnail_path_max_bytes_for_edge`]
+/// bounds per tier.
+///
+/// This list is deliberately SEPARATE from [`ALLOWED_PLAYLIST_MAX_EDGES`]:
+///   * the playlist PIXEL lane keeps 128/256/512 鈥?it decodes RGBA into the managed
+///     budget, where a 1536 hero would cost ~9 MiB per image and break the
+///     in-flight reservation that is sized for 512;
+///   * track/folder PIXEL lanes keep their own 128/256 hard limit;
+///   * 2048 is intentionally absent: the architecture plan defers it until a real
+///     WebView bit-residency measurement exists, and the player's large-art edge
+///     list is a different contract.
+const ALLOWED_PATH_MAX_EDGES: [u32; 5] = [128, 256, 512, 1024, 1536];
 const MAX_PLAYLIST_CLIENTS: usize = 16;
 /// Ceiling for concurrent *playlist/track pixel decodes*.
 ///
@@ -113,10 +130,33 @@ const THUMBNAIL_IMAGE_VERSION: u16 = 1;
 const THUMBNAIL_DISK_HEADER_LEN: usize = 44;
 /// Upper bound for one published playlist `.jpg`.
 ///
-/// A 512 px 4:2:2 JPEG of worst-case high-frequency content stays far below this
-/// value; the bound exists to reject a corrupt or substituted file, not to
-/// constrain encoder output.
+/// Kept as the 1 MiB floor of [`thumbnail_path_max_bytes_for_edge`]; see that
+/// function for the per-tier rule.
 const THUMBNAIL_PATH_MAX_BYTES: u64 = 1024 * 1024;
+
+/// Hard ceiling any single path-lane JPEG may reach, regardless of edge.
+const THUMBNAIL_PATH_MAX_BYTES_CEILING: u64 = 16 * 1024 * 1024;
+
+/// Largest JPEG the path lane will accept for a request at `max_edge`.
+///
+/// `min(16 MiB, max(1 MiB, edge^2 / 2))`:
+///   * 512  -> 1 MiB (floor)   鈥?unchanged from the previous fixed cap
+///   * 1024 -> 1 MiB (floor)   鈥?`edge^2/2` is 512 KiB, i.e. below the floor
+///   * 1536 -> 1.125 MiB       鈥?`edge^2/2` = 1_179_648 B
+///
+/// The bound exists to reject a corrupt, truncated or substituted file, not to
+/// constrain encoder output. Deriving it from the requested edge keeps that meaning
+/// at every tier: a 1536 hero is allowed proportionally more bytes, while a request
+/// at 512 can never smuggle in a 16 MiB payload.
+///
+/// `edge` is clamped to the smallest allowed edge so a caller that somehow passes a
+/// tiny value still gets the 1 MiB floor rather than a sub-megabyte cap.
+fn thumbnail_path_max_bytes_for_edge(max_edge: u32) -> u64 {
+    let edge = max_edge.max(1) as u64;
+    let derived = edge.saturating_mul(edge) / 2;
+    derived
+        .clamp(THUMBNAIL_PATH_MAX_BYTES, THUMBNAIL_PATH_MAX_BYTES_CEILING)
+}
 const THUMBNAIL_JPEG_QUALITY: u8 = 82;
 /// Foreground budget for the path lane's write-then-publish handshake.
 ///
@@ -186,6 +226,7 @@ struct ThumbnailWriterState {
 struct ThumbnailWriter {
     shared: Arc<(StdMutex<ThumbnailWriterState>, Condvar)>,
 }
+
 
 impl ThumbnailWriter {
     fn new() -> Self {
@@ -1175,7 +1216,7 @@ impl PlaylistCoverRequestCoordinator {
         app_cache_dir: PathBuf,
         input: AudioLoadPlaylistCoverPixelsInput,
     ) -> Result<Option<PlaylistThumbnailPath>, CoverPixelsError> {
-        validate_playlist_max_edge(input.max_edge)?;
+        validate_path_max_edge(input.max_edge)?;
         self.ensure_current(&input.client_id, input.window_generation)?;
         let request = self.reserve_request()?;
         let permit = self.slots.acquire().await?;
@@ -1221,7 +1262,7 @@ impl PlaylistCoverRequestCoordinator {
         app_cache_dir: PathBuf,
         input: AudioLoadTrackThumbnailInput,
     ) -> Result<Option<PlaylistThumbnailPath>, CoverPixelsError> {
-        validate_playlist_max_edge(input.max_edge)?;
+        validate_path_max_edge(input.max_edge)?;
         self.ensure_current(&input.client_id, input.window_generation)?;
         let request = self.reserve_request()?;
         let permit = self.slots.acquire().await?;
@@ -1264,7 +1305,7 @@ impl PlaylistCoverRequestCoordinator {
         app_cache_dir: PathBuf,
         input: AudioLoadFolderThumbnailInput,
     ) -> Result<Option<PlaylistThumbnailPath>, CoverPixelsError> {
-        validate_playlist_max_edge(input.max_edge)?;
+        validate_path_max_edge(input.max_edge)?;
         self.ensure_current(&input.client_id, input.window_generation)?;
         let request = self.reserve_request()?;
         let permit = self.slots.acquire().await?;
@@ -1866,7 +1907,7 @@ pub(super) fn load_track_thumbnail_path_blocking(
             }
             Some(hash) => {
                 let filename = playlist_thumbnail_path_filename(hash, max_edge);
-                if let Some(hit) = read_playlist_thumbnail_path_cache(&cache_dir, &filename) {
+                if let Some(hit) = read_playlist_thumbnail_path_cache(&cache_dir, &filename, max_edge) {
                     return Ok(Some(hit));
                 }
             }
@@ -1983,7 +2024,7 @@ fn load_playlist_thumbnail_path_blocking(
     is_current: impl Fn() -> bool + Copy,
     slot: &DecodeSlot,
 ) -> Result<Option<PlaylistThumbnailPath>, CoverPixelsError> {
-    validate_playlist_max_edge(max_edge)?;
+    validate_path_max_edge(max_edge)?;
     let covers_root = app_cache_dir
         .join(AUDIO_CACHE_DIRECTORY)
         .join(COVER_DIRECTORY);
@@ -2016,6 +2057,9 @@ pub(crate) async fn try_warm_track_thumbnail_path(
     source_path: String,
     max_edge: u32,
 ) -> Result<Option<TrackWarmupOutcome>, CoverPixelsError> {
+    // The public warmup surface stays at the pixel lane's 128/256 set: warming a hero
+    // tier is the path commands' job, and this helper must not widen the surface its
+    // caller already narrows (`library_cover_warmup.rs`).
     validate_playlist_max_edge(max_edge)?;
     let coordinator = PLAYLIST_REQUEST_COORDINATOR
         .get_or_init(|| Arc::new(PlaylistCoverRequestCoordinator::new()));
@@ -2068,7 +2112,7 @@ pub(crate) async fn try_warm_track_thumbnail_path(
             .wait_path_idle(&cache_dir.join(&filename), std::time::Duration::from_secs(5));
         Ok(TrackWarmupOutcome {
             has_cover: false,
-            persisted: read_playlist_thumbnail_path_cache(&cache_dir, &filename).is_some(),
+            persisted: read_playlist_thumbnail_path_cache(&cache_dir, &filename, max_edge).is_some(),
         })
     })
     .await
@@ -2327,12 +2371,34 @@ fn publish_playlist_thumbnail_path(
     cache_dir: PathBuf,
     filename: String,
     jpeg: &[u8],
+    max_edge: u32,
 ) -> Result<PlaylistThumbnailPath, CoverPixelsError> {
+    // Validate the EDGE here as well as at the coordinator. This function is reachable
+    // with a caller-supplied filename, so relying on the coordinator alone let an
+    // unaccepted tier (768, 2048) reach the writer and produce a file.
+    validate_path_max_edge(max_edge)?;
+    // Reject an over-cap JPEG HERE, before it can occupy the writer queue or touch the
+    // disk. Checking after the write would already have paid both costs, and the
+    // reviewer's rule is that oversized output must never be enqueued at all.
+    let max_bytes = thumbnail_path_max_bytes_for_edge(max_edge);
+    if jpeg.len() as u64 > max_bytes {
+        tracing::debug!(
+            operation = "audio.playlist_thumbnail_path.publish",
+            edge = max_edge,
+            bytes = jpeg.len(),
+            cap = max_bytes,
+            "encoded thumbnail exceeds the per-edge byte cap; refusing to enqueue",
+        );
+        return Err(CoverPixelsError::recoverable(
+            CoverPixelsErrorCode::ImageTooLarge,
+            "encoded playlist thumbnail exceeds the per-edge byte cap",
+        ));
+    }
     let target = cache_dir.join(&filename);
     let writer = THUMBNAIL_WRITER.get_or_init(ThumbnailWriter::new);
     writer.try_enqueue(cache_dir.clone(), filename.clone(), jpeg);
     writer.wait_path_idle(&target, THUMBNAIL_PATH_PUBLISH_TIMEOUT);
-    read_playlist_thumbnail_path_cache(&cache_dir, &filename).ok_or_else(|| {
+    read_playlist_thumbnail_path_cache(&cache_dir, &filename, max_edge).ok_or_else(|| {
         tracing::debug!(
             operation = "audio.playlist_thumbnail_path.publish",
             "playlist thumbnail JPEG was not published before the deadline",
@@ -2361,6 +2427,9 @@ pub(super) struct ThumbnailPublishJob {
     cache_dir: PathBuf,
     filename: String,
     jpeg: Vec<u8>,
+    /// Edge this job was prepared at. The publish step re-checks the written file
+    /// against the per-tier cap, so it must use the same edge the preparation used.
+    max_edge: u32,
 }
 
 impl ThumbnailPublishJob {
@@ -2369,7 +2438,7 @@ impl ThumbnailPublishJob {
     /// Callers must have dropped their decode permit before this point: every
     /// branch here is disk-bound, and the permit's whole purpose is to bound CPU.
     pub(super) fn publish(self) -> Result<PlaylistThumbnailPath, CoverPixelsError> {
-        publish_playlist_thumbnail_path(self.cache_dir, self.filename, &self.jpeg)
+        publish_playlist_thumbnail_path(self.cache_dir, self.filename, &self.jpeg, self.max_edge)
     }
 }
 
@@ -2389,7 +2458,7 @@ pub(super) fn prepare_thumbnail_path(
         .join(AUDIO_CACHE_DIRECTORY)
         .join(THUMBNAIL_DIRECTORY);
     let filename = playlist_thumbnail_path_filename(source_hash, max_edge);
-    if let Some(hit) = read_playlist_thumbnail_path_cache(&cache_dir, &filename) {
+    if let Some(hit) = read_playlist_thumbnail_path_cache(&cache_dir, &filename, max_edge) {
         return Ok(ThumbnailPathPreparation::Ready(hit));
     }
     if !is_current() {
@@ -2407,6 +2476,7 @@ pub(super) fn prepare_thumbnail_path(
             cache_dir,
             filename,
             jpeg,
+            max_edge,
         },
     ))
 }
@@ -2492,13 +2562,17 @@ fn parse_thumbnail_cache(bytes: &[u8], max_edge: u32) -> Option<Vec<u8>> {
 fn read_playlist_thumbnail_path_cache(
     cache_dir: &Path,
     filename: &str,
+    max_edge: u32,
 ) -> Option<PlaylistThumbnailPath> {
     thumbnail_cache_root(cache_dir)?;
     let path = cache_dir.join(filename);
     let metadata = fs::symlink_metadata(&path).ok()?;
+    // Per-tier cap: a 1536 hero may be larger than a 512 one, but a 512 request can
+    // never accept a 16 MiB payload.
+    let max_bytes = thumbnail_path_max_bytes_for_edge(max_edge);
     if !ordinary_file(&metadata)
         || metadata.len() == 0
-        || metadata.len() > THUMBNAIL_PATH_MAX_BYTES
+        || metadata.len() > max_bytes
     {
         let _ = fs::remove_file(&path);
         return None;
@@ -2509,14 +2583,17 @@ fn read_playlist_thumbnail_path_cache(
     {
         return None;
     }
-    let bytes = match fs::read(&path) {
+    // Read at most cap + 1 bytes. The extra byte is what makes the bound exact: a file
+    // of exactly `max_bytes` still reads completely, while a file that grew or was
+    // swapped after the `stat` above cannot make us allocate without limit.
+    let bytes = match read_bounded_thumbnail_file(&path, max_bytes) {
         Ok(bytes) => bytes,
         Err(_) => {
             let _ = fs::remove_file(&path);
             return None;
         }
     };
-    let Some((width, height)) = parse_playlist_jpeg(&bytes) else {
+    let Some((width, height)) = parse_playlist_jpeg(&bytes, max_edge) else {
         let _ = fs::remove_file(&path);
         return None;
     };
@@ -2532,8 +2609,35 @@ fn read_playlist_thumbnail_path_cache(
         path: path.to_string_lossy().into_owned(),
         width,
         height,
-        byte_len: metadata.len(),
+        // The length of the bytes that were actually read and parsed, not the length
+        // the earlier `stat` reported. If the file changed in between, the stale value
+        // would describe a file we never validated.
+        byte_len: bytes.len() as u64,
     })
+}
+
+/// Read a thumbnail file, refusing anything larger than `max_bytes`.
+///
+/// At most `max_bytes + 1` bytes are requested, so a file of exactly `max_bytes` is
+/// fully readable and a larger one is rejected without being buffered. This closes the
+/// gap between the caller's `stat` and the read: a file that grew after the check can no
+/// longer be read unbounded.
+fn read_bounded_thumbnail_file(
+    path: &Path,
+    max_bytes: u64,
+) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    let file = File::open(path)?;
+    let limit = max_bytes.saturating_add(1);
+    let mut bytes = Vec::with_capacity(limit.min(64 * 1024) as usize);
+    file.take(limit).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "published thumbnail exceeds the per-edge byte cap",
+        ));
+    }
+    Ok(bytes)
 }
 
 /// Container check plus real pixel dimensions for a published `.jpg`.
@@ -2548,11 +2652,11 @@ fn read_playlist_thumbnail_path_cache(
 /// exceed the largest allowed playlist edge. An entry above it was substituted or
 /// written by an older, wider configuration, and serving it would hand the
 /// WebView geometry this command was never allowed to produce.
-fn parse_playlist_jpeg(bytes: &[u8]) -> Option<(u32, u32)> {
+fn parse_playlist_jpeg(bytes: &[u8], max_edge: u32) -> Option<(u32, u32)> {
     if bytes.len() < 4
         || bytes[0..2] != [0xFF, 0xD8]
         || bytes[bytes.len() - 2..] != [0xFF, 0xD9]
-        || bytes.len() as u64 > THUMBNAIL_PATH_MAX_BYTES
+        || bytes.len() as u64 > thumbnail_path_max_bytes_for_edge(max_edge)
     {
         return None;
     }
@@ -2561,10 +2665,9 @@ fn parse_playlist_jpeg(bytes: &[u8]) -> Option<(u32, u32)> {
         .ok()?
         .into_dimensions()
         .ok()?;
-    let ceiling = *ALLOWED_PLAYLIST_MAX_EDGES
-        .iter()
-        .max()
-        .expect("the playlist edge whitelist is never empty");
+    // The ceiling follows the edge this request asked for: a 512 request must still
+    // reject a 1536-sized file, and a 1536 request must accept it.
+    let ceiling = max_edge;
     (width > 0 && height > 0 && width.max(height) <= ceiling).then_some((width, height))
 }
 
@@ -2944,6 +3047,25 @@ pub(super) fn validate_playlist_max_edge(max_edge: u32) -> Result<(), CoverPixel
         Err(CoverPixelsError::recoverable(
             CoverPixelsErrorCode::InvalidMaxEdge,
             "playlist cover maxEdge must be 128, 256, or 512",
+        ))
+    }
+}
+
+/// Validate an edge on the PATH lane (playlist, track and folder alike).
+///
+/// Separate from [`validate_playlist_max_edge`] on purpose: that function also guards
+/// the playlist PIXEL lane, whose budget cannot absorb a 1536 decode. Callers that
+/// only read a file back off disk go through this one.
+///
+/// The rejection message names the whole accepted set so a wrong value (768, 2048, or
+/// 3072) is diagnosable from the error alone.
+pub(super) fn validate_path_max_edge(max_edge: u32) -> Result<(), CoverPixelsError> {
+    if ALLOWED_PATH_MAX_EDGES.contains(&max_edge) {
+        Ok(())
+    } else {
+        Err(CoverPixelsError::recoverable(
+            CoverPixelsErrorCode::InvalidMaxEdge,
+            "thumbnail path maxEdge must be 128, 256, 512, 1024, or 1536",
         ))
     }
 }
@@ -4728,6 +4850,40 @@ mod tests {
         assert_eq!(fs::read_dir(thumbnails).unwrap().count(), 2);
     }
 
+    /// Track fixture whose embedded cover is `cover_edge` px on its longest side.
+    ///
+    /// Same container shape as `track_thumbnail_fixture` (RIFF/WAVE + ID3v2 APIC), but
+    /// the picture size is caller-chosen. The round-06 entry-level tests need a source
+    /// longer than 1024 so that a 1024 request and a 1536 request provably produce
+    /// different output; with the fixed 400x400 helper both tiers would clamp to 400.
+    fn track_thumbnail_fixture_at(directory: &TestDirectory, cover_edge: u32) -> PathBuf {
+        let path = directory.path().join(format!("indexed-{cover_edge}.wav"));
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&52u32.to_le_bytes());
+        bytes.extend_from_slice(b"WAVEfmt ");
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&8000u32.to_le_bytes());
+        bytes.extend_from_slice(&16000u32.to_le_bytes());
+        bytes.extend_from_slice(&2u16.to_le_bytes());
+        bytes.extend_from_slice(&16u16.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.resize(60, 0);
+        fs::write(&path, bytes).unwrap();
+        let mut tag = Tag::new(TagType::Id3v2);
+        tag.push_picture(
+            Picture::unchecked(png_bytes(cover_edge, cover_edge / 4))
+                .pic_type(PictureType::CoverFront)
+                .mime_type(MimeType::Png)
+                .build(),
+        );
+        tag.save_to_path(&path, WriteOptions::default()).unwrap();
+        path
+    }
+
     fn track_thumbnail_fixture(directory: &TestDirectory, cover: bool) -> PathBuf {
         let path = directory.path().join("indexed.wav");
         let mut bytes = Vec::new();
@@ -5572,7 +5728,7 @@ mod tests {
         let raw = fs::read(&published.path).unwrap();
         assert_eq!(&raw[..2], [0xFF, 0xD8]);
         assert_eq!(&raw[raw.len() - 2..], [0xFF, 0xD9]);
-        assert!(read_playlist_thumbnail_path_cache(&thumbs, "missing-256-t2-j1.jpg").is_none());
+        assert!(read_playlist_thumbnail_path_cache(&thumbs, "missing-256-t2-j1.jpg", 256).is_none());
     }
 
     #[test]
@@ -5582,7 +5738,7 @@ mod tests {
         fs::create_dir_all(&thumbs).unwrap();
         // Right extension, wrong container: must not be served as a hit.
         fs::write(thumbs.join("bad-256-t2-j1.jpg"), b"not a jpeg").unwrap();
-        assert!(read_playlist_thumbnail_path_cache(&thumbs, "bad-256-t2-j1.jpg").is_none());
+        assert!(read_playlist_thumbnail_path_cache(&thumbs, "bad-256-t2-j1.jpg", 256).is_none());
         assert!(
             !thumbs.join("bad-256-t2-j1.jpg").exists(),
             "an invalid entry is evicted so the next request regenerates it"
@@ -5601,7 +5757,7 @@ mod tests {
         assert_eq!((source_width, source_height), (400, 200));
         assert!(resized);
         let jpeg = encode_playlist_jpeg(image).unwrap();
-        assert_eq!(parse_playlist_jpeg(&jpeg), Some((width, height)));
+        assert_eq!(parse_playlist_jpeg(&jpeg, 512), Some((width, height)));
         // The pixel lane's packed header must agree on the same geometry.
         let packed = decode_playlist_and_pack(&bytes, 128).unwrap();
         assert!(valid_cached_spxr(&packed, 128));
@@ -5666,7 +5822,7 @@ mod tests {
 
         // A direct cache read must produce the identical string, because the
         // publish handshake re-reads through this same function before returning.
-        let reread = read_playlist_thumbnail_path_cache(&thumbs, &filename).expect("cache hit");
+        let reread = read_playlist_thumbnail_path_cache(&thumbs, &filename, 256).expect("cache hit");
         assert_eq!(reread.path, published.path);
         assert_eq!(
             reread.byte_len,
@@ -5813,13 +5969,13 @@ mod tests {
         oversized.resize(THUMBNAIL_PATH_MAX_BYTES as usize + 2, 0);
         oversized.extend_from_slice(&[0xFF, 0xD9]);
         fs::write(thumbs.join(oversized_name), &oversized).unwrap();
-        assert!(read_playlist_thumbnail_path_cache(&thumbs, oversized_name).is_none());
+        assert!(read_playlist_thumbnail_path_cache(&thumbs, oversized_name, 256).is_none());
         assert!(!thumbs.join(oversized_name).exists());
 
         // Empty file: a truncated publish must never be served.
         let empty_name = "empty-256-t2-j1.jpg";
         fs::write(thumbs.join(empty_name), b"").unwrap();
-        assert!(read_playlist_thumbnail_path_cache(&thumbs, empty_name).is_none());
+        assert!(read_playlist_thumbnail_path_cache(&thumbs, empty_name, 256).is_none());
         assert!(!thumbs.join(empty_name).exists());
 
         // Right size, wrong container: missing EOI is not a decodable JPEG.
@@ -5828,13 +5984,13 @@ mod tests {
         truncated[0] = 0xFF;
         truncated[1] = 0xD8;
         fs::write(thumbs.join(truncated_name), &truncated).unwrap();
-        assert!(read_playlist_thumbnail_path_cache(&thumbs, truncated_name).is_none());
+        assert!(read_playlist_thumbnail_path_cache(&thumbs, truncated_name, 256).is_none());
         assert!(!thumbs.join(truncated_name).exists());
 
         // A directory wearing the managed extension is not an ordinary file.
         let directory_name = "dir-256-t2-j1.jpg";
         fs::create_dir(thumbs.join(directory_name)).unwrap();
-        assert!(read_playlist_thumbnail_path_cache(&thumbs, directory_name).is_none());
+        assert!(read_playlist_thumbnail_path_cache(&thumbs, directory_name, 256).is_none());
 
         // A structurally valid JPEG wider than any allowed playlist edge cannot
         // have come from this lane, so it must be treated as corrupt as well.
@@ -5842,9 +5998,9 @@ mod tests {
         let wide =
             encode_playlist_jpeg(decode_playlist_image(&patterned_png(600, 8), 1024).unwrap().0)
                 .unwrap();
-        assert_eq!(parse_playlist_jpeg(&wide), None);
+        assert_eq!(parse_playlist_jpeg(&wide, 512), None);
         fs::write(thumbs.join(wide_name), &wide).unwrap();
-        assert!(read_playlist_thumbnail_path_cache(&thumbs, wide_name).is_none());
+        assert!(read_playlist_thumbnail_path_cache(&thumbs, wide_name, 256).is_none());
         assert!(!thumbs.join(wide_name).exists());
     }
 
@@ -6114,6 +6270,528 @@ mod tests {
             )
             .expect("the pixel lane's folder mode reports a confirmed absence")
             .is_empty()
+        );
+    }
+
+
+    // --- round-04: path-lane edge whitelist contract -----------------------
+
+
+    #[test]
+    fn path_lane_rejects_deferred_and_intermediate_tiers() {
+        // 768 is an intermediate tier nobody asked for; 2048 is deliberately deferred
+        // until a real WebView bit-residency measurement exists; 3072 is the player's
+        // large-art reserve and is not a path tier.
+        for edge in [0u32, 64, 192, 768, 2048, 3072, 4096] {
+            assert!(
+                validate_path_max_edge(edge).is_err(),
+                "path lane must reject {edge}"
+            );
+        }
+    }
+
+    #[test]
+    fn playlist_pixel_lane_keeps_the_old_ceiling() {
+        // The pixel lane decodes RGBA into the managed budget, so it must NOT inherit
+        // the path whitelist.
+        for edge in [128u32, 256, 512] {
+            assert!(validate_playlist_max_edge(edge).is_ok(), "pixel lane keeps {edge}");
+        }
+        for edge in [1024u32, 1536] {
+            assert!(
+                validate_playlist_max_edge(edge).is_err(),
+                "pixel lane must not accept the hero tier {edge}"
+            );
+        }
+    }
+
+    #[test]
+    fn jpeg_cap_follows_the_requested_edge() {
+        // floor 1 MiB, then edge^2/2 once that exceeds the floor
+        assert_eq!(thumbnail_path_max_bytes_for_edge(128), 1_048_576);
+        assert_eq!(thumbnail_path_max_bytes_for_edge(256), 1_048_576);
+        assert_eq!(thumbnail_path_max_bytes_for_edge(512), 1_048_576);
+        assert_eq!(thumbnail_path_max_bytes_for_edge(1024), 1_048_576);
+        assert_eq!(thumbnail_path_max_bytes_for_edge(1536), 1_179_648);
+        // 3072^2/2 = 4.5 MiB, still under the ceiling
+        assert_eq!(thumbnail_path_max_bytes_for_edge(3072), 4_718_592);
+        // an absurd edge must clamp at the 16 MiB ceiling, not grow without bound
+        assert_eq!(thumbnail_path_max_bytes_for_edge(8192), 16 * 1024 * 1024);
+        assert_eq!(thumbnail_path_max_bytes_for_edge(u32::MAX), 16 * 1024 * 1024);
+    }
+
+    #[test]
+    fn path_cap_is_strictly_ordered_across_tiers() {
+        // A larger tier must never be capped below a smaller one, or a 1536 hero could
+        // be rejected for bytes that a 512 hero is allowed to spend.
+        let tiers = [128u32, 256, 512, 1024, 1536];
+        for pair in tiers.windows(2) {
+            let lo = thumbnail_path_max_bytes_for_edge(pair[0]);
+            let hi = thumbnail_path_max_bytes_for_edge(pair[1]);
+            assert!(hi >= lo, "cap must not shrink from {} to {}", pair[0], pair[1]);
+        }
+    }
+
+    // --- round-05: production-chain coverage for the widened path tiers ---------
+
+    /// Generate a decodable PNG and publish it through the real path-chain seam.
+    ///
+    /// How the synthetic fixture reaches the real checks: the PNG goes through
+    /// `decode_playlist_image` (real decode), then `encode_playlist_jpeg` (real
+    /// encoder), then the per-edge cap is applied before enqueue and again when the
+    /// published file is re-read. Nothing here bypasses production code.
+    fn publish_png_at_edge(dir: &Path, width: u32, height: u32, edge: u32) -> Option<PlaylistThumbnailPath> {
+        let bytes = png_bytes(width, height);
+        playlist_thumbnail_path_from_bytes(dir, &bytes, blake3::hash(&bytes), edge, || true).ok()
+    }
+
+    /// Pad a real JPEG with trailing bytes up to `target_len`, keeping SOI/EOI valid.
+    ///
+    /// A JPEG decoder ignores bytes after EOI, so the padded file still parses and its
+    /// dimensions are the encoder's. That makes the FILE SIZE the only thing the cache
+    /// reader can object to 鈥?which is exactly what the cap boundary test needs, and
+    /// what a zero-filled fake could not provide (it failed on dimensions instead).
+    fn pad_jpeg_to(jpeg: &[u8], target_len: usize) -> Vec<u8> {
+        assert!(jpeg.len() >= 4, "a JPEG has SOI and EOI");
+        assert_eq!(&jpeg[0..2], &[0xFF, 0xD8], "fixture must start with SOI");
+        assert_eq!(&jpeg[jpeg.len() - 2..], &[0xFF, 0xD9], "fixture must end with EOI");
+        assert!(target_len >= jpeg.len(), "padding must not truncate");
+        // Keep the EOI marker last: pad by inserting before it.
+        let mut out = Vec::with_capacity(target_len);
+        out.extend_from_slice(&jpeg[..jpeg.len() - 2]);
+        out.resize(target_len - 2, 0x00);
+        out.extend_from_slice(&[0xFF, 0xD9]);
+        out
+    }
+
+    #[test]
+    fn oversize_cache_entry_is_rejected_and_removed_within_the_cap_bound() {
+        // The cache reader must serve a file of exactly the per-edge cap and refuse (and
+        // delete) one byte more. Both fixtures are REAL JPEGs padded to the target
+        // length, so size is the deciding factor and the dimensions still parse.
+        for edge in [512u32, 1536] {
+            let directory = TestDirectory::new();
+            let thumbs = directory.path().join("audio").join(THUMBNAIL_DIRECTORY);
+            fs::create_dir_all(&thumbs).unwrap();
+            let cap = thumbnail_path_max_bytes_for_edge(edge);
+
+            let base = encode_playlist_jpeg(
+                decode_playlist_image(&png_bytes(64, 48), edge).unwrap().0,
+            )
+            .unwrap();
+
+            // Exactly cap bytes -> accepted.
+            let exact_name = format!("{}-{}-t2-j1.jpg", blake3::hash(b"exact"), edge);
+            let exact = pad_jpeg_to(&base, cap as usize);
+            assert_eq!(exact.len() as u64, cap);
+            fs::write(thumbs.join(&exact_name), &exact).unwrap();
+            let hit = read_playlist_thumbnail_path_cache(&thumbs, &exact_name, edge);
+            assert!(
+                hit.is_some(),
+                "a file of exactly the cap must still be readable (edge {edge})"
+            );
+            assert_eq!(hit.unwrap().byte_len, cap, "reported length is the validated one");
+
+            // cap + 1 bytes -> refused and removed.
+            let over_name = format!("{}-{}-t2-j1.jpg", blake3::hash(b"over"), edge);
+            let over = pad_jpeg_to(&base, cap as usize + 1);
+            assert_eq!(over.len() as u64, cap + 1);
+            fs::write(thumbs.join(&over_name), &over).unwrap();
+            assert!(
+                read_playlist_thumbnail_path_cache(&thumbs, &over_name, edge).is_none(),
+                "a file one byte over the cap must be refused (edge {edge})"
+            );
+            assert!(
+                !thumbs.join(&over_name).exists(),
+                "an over-cap cache entry must be removed (edge {edge})"
+            );
+        }
+    }
+
+    #[test]
+    fn oversize_encoded_output_is_refused_without_writing_its_target() {
+        // Every assertion here is local to this test's own directory, so it stays
+        // correct when the suite runs in parallel. The writer's process-global
+        // `enqueued` counter is deliberately NOT consulted: a parallel test's enqueue
+        // advances it (observed: 1 -> 2 with no enqueue from this test), which made the
+        // round-06 assertion flaky. The guard's presence is proven instead by the
+        // negative experiment (removing it turns the error into `WorkerFailed`).
+        //
+        // Asserted here:
+        //   1. the refusal is exactly `ImageTooLarge`,
+        //   2. the EXACT path the writer would publish to does not exist,
+        //   3. the payload was a real JPEG at exactly cap + 1 bytes, so size is the only
+        //      possible objection.
+        let directory = TestDirectory::new();
+        let edge = 512u32;
+        let cap = thumbnail_path_max_bytes_for_edge(edge);
+        let filename = playlist_thumbnail_path_filename(blake3::hash(b"oversize-output"), edge);
+        assert!(filename.ends_with("-512-t2-j1.jpg"));
+
+        // ONE directory variable, created before the call: this is the directory handed to
+        // the publisher AND the directory the assertion joins with. Using two different
+        // paths (a cache root for the call, a thumbnails subpath for the assertion) is what
+        // the reviewer flagged, because the two would not describe the same write.
+        let thumbnails = directory.path().join(AUDIO_CACHE_DIRECTORY).join(THUMBNAIL_DIRECTORY);
+        fs::create_dir_all(&thumbnails).unwrap();
+        let target_path = thumbnails.join(&filename);
+        assert!(
+            !target_path.exists(),
+            "precondition: the target must not exist before the call"
+        );
+
+        let base = encode_playlist_jpeg(
+            decode_playlist_image(&png_bytes(64, 48), edge).unwrap().0,
+        )
+        .unwrap();
+        let oversized = pad_jpeg_to(&base, cap as usize + 1);
+        assert_eq!(oversized.len() as u64, cap + 1, "the fixture must be exactly cap + 1");
+
+        let refused = publish_playlist_thumbnail_path(
+            thumbnails.clone(),
+            filename.clone(),
+            &oversized,
+            edge,
+        );
+        let error = refused.expect_err("an over-cap payload must be refused");
+        assert!(
+            matches!(error.code, CoverPixelsErrorCode::ImageTooLarge),
+            "the refusal must be ImageTooLarge, got {:?}",
+            error.code
+        );
+        assert!(
+            !target_path.exists(),
+            "the exact publish target must not exist after an over-cap refusal: {}",
+            target_path.display()
+        );
+    }
+
+    #[test]
+    fn real_512_key_accepts_512px_and_refuses_a_replaced_513px_file() {
+        // The REAL 512-tier cache key, exercised with two valid JPEGs that differ only in
+        // width. No 1536 filename is involved: the key comes from the same function the
+        // 512 path command uses, so this covers the actual same-name replacement case the
+        // reviewer asked for.
+        let directory = TestDirectory::new();
+        let cache = directory.path();
+        let thumbs = cache.join(AUDIO_CACHE_DIRECTORY).join(THUMBNAIL_DIRECTORY);
+        fs::create_dir_all(&thumbs).unwrap();
+
+        let source_hash = blake3::hash(b"same-name-replacement");
+        let name = playlist_thumbnail_path_filename(source_hash, 512);
+        assert!(
+            name.ends_with("-512-t2-j1.jpg"),
+            "the key under test must be the real 512 tier: {name}"
+        );
+        let path = thumbs.join(&name);
+
+        // (a) A valid 512px-wide JPEG at the 512 key: accepted.
+        // Build the images directly: `decode_playlist_image(.., 512)` would pre-reduce a
+        // 513px source back down to 512, so it cannot produce the over-wide fixture. The
+        // encoder itself does not resize, which models a substituted cache file faithfully.
+        let ok_image = image::DynamicImage::ImageRgba8(
+            image::RgbaImage::from_pixel(512, 128, image::Rgba([90, 140, 200, 255])),
+        );
+        let ok_jpeg = encode_playlist_jpeg(ok_image).unwrap();
+        fs::write(&path, &ok_jpeg).unwrap();
+        let accepted = read_playlist_thumbnail_path_cache(&thumbs, &name, 512)
+            .expect("a 512px image at the 512 key must be accepted");
+        assert_eq!(
+            (accepted.width, accepted.height),
+            (512, 128),
+            "the accepted entry must report the real dimensions"
+        );
+        assert_eq!(accepted.byte_len, ok_jpeg.len() as u64);
+
+        // (b) Overwrite the SAME name with a valid 513px-wide JPEG: refused, because a
+        //     512 request can never have produced it, and the file must be removed.
+        let over_image = image::DynamicImage::ImageRgba8(
+            image::RgbaImage::from_pixel(513, 128, image::Rgba([90, 140, 200, 255])),
+        );
+        let over_jpeg = encode_playlist_jpeg(over_image).unwrap();
+        // Confirm the replacement fixture really is 513 wide, otherwise the test could
+        // pass for the wrong reason.
+        let (over_width, _) = parse_playlist_jpeg(&over_jpeg, 513)
+            .expect("the 513px fixture must still be a parseable JPEG");
+        assert_eq!(over_width, 513, "the replacement fixture must be 513px wide");
+        fs::write(&path, &over_jpeg).unwrap();
+
+        assert!(
+            read_playlist_thumbnail_path_cache(&thumbs, &name, 512).is_none(),
+            "a 513px image under the 512 key must be refused"
+        );
+        assert!(
+            !path.exists(),
+            "a refused same-name replacement must be removed from the cache"
+        );
+    }
+
+    #[test]
+    fn warmup_helper_still_refuses_hero_tiers() {
+        // The public warmup surface stays at the pixel lane's 128/256 set even though the
+        // path commands accept more.
+        for edge in [1024u32, 1536] {
+            assert!(
+                validate_playlist_max_edge(edge).is_err(),
+                "the public warmup surface must refuse {edge}"
+            );
+        }
+        for edge in [128u32, 256] {
+            assert!(validate_playlist_max_edge(edge).is_ok(), "warmup keeps {edge}");
+        }
+    }
+
+    // --- round-06: the three REAL production command entries -------------------
+
+    /// Allocate a current generation for a fresh client so the coordinator's
+    /// `ensure_current` accepts the request.
+    ///
+    /// The coordinator is a process-wide static, so each test uses its own client id;
+    /// a shared id would let one test's `begin_window` invalidate another's request.
+    fn current_generation(client_id: &str) -> u64 {
+        begin_playlist_cover_window(client_id).expect("allocate a cover window generation")
+    }
+
+    /// A decodable source image whose long edge EXCEEDS 1024.
+    ///
+    /// The reviewer asked for this explicitly: with a source smaller than the tiers, a
+    /// 1024 and a 1536 result would both equal the source size and the test could not
+    /// show that the tier actually selected a different output.
+    fn wide_source_png() -> Vec<u8> {
+        png_bytes(1400, 350)
+    }
+
+    /// Drive the playlist PATH command entry end to end.
+    fn call_playlist_path_entry(
+        cache: &Path,
+        client: &str,
+        generation: u64,
+        edge: u32,
+        source: &Path,
+    ) -> Result<Option<PlaylistThumbnailPath>, CoverPixelsError> {
+        tauri::async_runtime::block_on(load_playlist_cover_thumbnail_path(
+            cache.to_path_buf(),
+            AudioLoadPlaylistCoverPixelsInput {
+                client_id: client.to_owned(),
+                file_path: source.to_string_lossy().into_owned(),
+                max_edge: edge,
+                window_generation: generation,
+            },
+        ))
+    }
+
+    /// Drive the track PATH command entry end to end.
+    fn call_track_path_entry(
+        cache: &Path,
+        client: &str,
+        generation: u64,
+        edge: u32,
+        source: &Path,
+    ) -> Result<Option<PlaylistThumbnailPath>, CoverPixelsError> {
+        tauri::async_runtime::block_on(load_track_thumbnail_path(
+            cache.to_path_buf(),
+            AudioLoadTrackThumbnailInput {
+                client_id: client.to_owned(),
+                source_path: source.to_string_lossy().into_owned(),
+                max_edge: edge,
+                window_generation: generation,
+            },
+        ))
+    }
+
+    /// Drive the folder PATH command entry end to end.
+    fn call_folder_path_entry(
+        cache: &Path,
+        client: &str,
+        generation: u64,
+        edge: u32,
+        root: &Path,
+        directory: &Path,
+    ) -> Result<Option<PlaylistThumbnailPath>, CoverPixelsError> {
+        tauri::async_runtime::block_on(load_folder_thumbnail_path(
+            cache.to_path_buf(),
+            AudioLoadFolderThumbnailInput {
+                client_id: client.to_owned(),
+                root_path: root.to_string_lossy().into_owned(),
+                directory_path: directory.to_string_lossy().into_owned(),
+                max_edge: edge,
+                window_generation: generation,
+            },
+        ))
+    }
+
+    /// The three production entries all accept 1024 and 1536, and the published files
+    /// differ per tier because the source is larger than 1024.
+    #[test]
+    fn production_path_entries_publish_each_hero_tier() {
+        // --- playlist entry -------------------------------------------------
+        // The playlist path entry canonicalises `cache/audio/covers`, so the source
+        // image must live inside that managed root or the entry returns
+        // "cover cache directory is unavailable".
+        {
+            let directory = TestDirectory::new();
+            let covers = directory.path().join(AUDIO_CACHE_DIRECTORY).join(COVER_DIRECTORY);
+            fs::create_dir_all(&covers).unwrap();
+            let source = covers.join("playlist-cover-wide.png");
+            fs::write(&source, wide_source_png()).unwrap();
+            let client = "r06-playlist-path";
+
+            let mut sizes = Vec::new();
+            for edge in [1024u32, 1536] {
+                let generation = current_generation(client);
+                let published = call_playlist_path_entry(directory.path(), client, generation, edge, &source)
+                    .unwrap_or_else(|e| panic!("playlist path entry refused edge {edge}: {e:?}"))
+                    .unwrap_or_else(|| panic!("playlist path entry returned None at {edge}"));
+                assert!(
+                    published.path.ends_with(&format!("-{edge}-t2-j1.jpg")),
+                    "the derived key must carry the requested edge {edge}: {}",
+                    published.path
+                );
+                assert!(Path::new(&published.path).is_file(), "file must exist for {edge}");
+                assert!(published.byte_len <= thumbnail_path_max_bytes_for_edge(edge));
+                sizes.push(published.width.max(published.height));
+            }
+            assert_ne!(
+                sizes[0], sizes[1],
+                "a source larger than 1024 must yield different long edges at 1024 vs 1536, got {sizes:?}"
+            );
+        }
+
+        // --- track entry ----------------------------------------------------
+        // The track path entry reads the audio tag, so the source must be a real audio
+        // file with an embedded cover. The cover is 1400px wide so 1024 and 1536 must
+        // land on different sizes: with a small cover both tiers would clamp to it and
+        // the tier selection would be untestable.
+        {
+            let directory = TestDirectory::new();
+            let source = track_thumbnail_fixture_at(&directory, 1400);
+            let client = "r06-track-path";
+
+            let mut sizes = Vec::new();
+            for edge in [1024u32, 1536] {
+                let generation = current_generation(client);
+                let published = call_track_path_entry(directory.path(), client, generation, edge, &source)
+                    .unwrap_or_else(|e| panic!("track path entry refused edge {edge}: {e:?}"))
+                    .unwrap_or_else(|| panic!("track path entry returned None at {edge}"));
+                assert!(
+                    published.path.ends_with(&format!("-{edge}-t2-j1.jpg")),
+                    "the derived key must carry the requested edge {edge}: {}",
+                    published.path
+                );
+                assert!(Path::new(&published.path).is_file(), "file must exist for {edge}");
+                sizes.push(published.width.max(published.height));
+            }
+            assert_ne!(sizes[0], sizes[1], "1024 vs 1536 must differ, got {sizes:?}");
+        }
+
+        // --- folder entry (the one that had the stale nested validator) ------
+        {
+            let directory = TestDirectory::new();
+            let root = directory.path().join("root");
+            fs::create_dir_all(&root).unwrap();
+            fs::write(root.join("art.png"), wide_source_png()).unwrap();
+            let client = "r06-folder-path";
+
+            let mut sizes = Vec::new();
+            for edge in [1024u32, 1536] {
+                let generation = current_generation(client);
+                let published = call_folder_path_entry(directory.path(), client, generation, edge, &root, &root)
+                    .unwrap_or_else(|e| panic!("folder path entry refused edge {edge}: {e:?}"))
+                    .unwrap_or_else(|| panic!("folder path entry returned None at {edge}"));
+                assert!(
+                    published.path.ends_with(&format!("-{edge}-t2-j1.jpg")),
+                    "the derived key must carry the requested edge {edge}: {}",
+                    published.path
+                );
+                assert!(Path::new(&published.path).is_file(), "file must exist for {edge}");
+                sizes.push(published.width.max(published.height));
+            }
+            assert_ne!(sizes[0], sizes[1], "1024 vs 1536 must differ, got {sizes:?}");
+        }
+    }
+
+    /// Every production path entry refuses the deferred and intermediate tiers.
+    #[test]
+    fn production_path_entries_reject_unaccepted_tiers() {
+        for edge in [768u32, 2048] {
+            let directory = TestDirectory::new();
+            let covers = directory.path().join(AUDIO_CACHE_DIRECTORY).join(COVER_DIRECTORY);
+            fs::create_dir_all(&covers).unwrap();
+            let source = covers.join("reject.png");
+            fs::write(&source, png_bytes(200, 100)).unwrap();
+            let audio = track_thumbnail_fixture_at(&directory, 400);
+            let root = directory.path().join("root");
+            fs::create_dir_all(&root).unwrap();
+            fs::write(root.join("art.png"), png_bytes(200, 100)).unwrap();
+
+            let playlist_client = format!("r06-reject-playlist-{edge}");
+            let generation = current_generation(&playlist_client);
+            let playlist = call_playlist_path_entry(directory.path(), &playlist_client, generation, edge, &source);
+            assert!(playlist.is_err(), "playlist entry must refuse {edge}, got {playlist:?}");
+
+            let track_client = format!("r06-reject-track-{edge}");
+            let generation = current_generation(&track_client);
+            let track = call_track_path_entry(directory.path(), &track_client, generation, edge, &audio);
+            assert!(track.is_err(), "track entry must refuse {edge}, got {track:?}");
+
+            let folder_client = format!("r06-reject-folder-{edge}");
+            let generation = current_generation(&folder_client);
+            let folder = call_folder_path_entry(directory.path(), &folder_client, generation, edge, &root, &root);
+            assert!(folder.is_err(), "folder entry must refuse {edge}, got {folder:?}");
+        }
+    }
+
+    /// The playlist PIXEL entry keeps the old acceptance: 1024/1536 are not pixel tiers.
+    #[test]
+    fn production_pixel_entry_still_refuses_hero_tiers() {
+        let directory = TestDirectory::new();
+        let covers = directory.path().join(AUDIO_CACHE_DIRECTORY).join(COVER_DIRECTORY);
+        fs::create_dir_all(&covers).unwrap();
+        let source = covers.join("pixel.png");
+        fs::write(&source, png_bytes(200, 100)).unwrap();
+
+        for edge in [1024u32, 1536] {
+            let client = format!("r06-pixel-{edge}");
+            let generation = current_generation(&client);
+            let result = tauri::async_runtime::block_on(load_playlist_cover_pixels(
+                directory.path().to_path_buf(),
+                AudioLoadPlaylistCoverPixelsInput {
+                    client_id: client.clone(),
+                    file_path: source.to_string_lossy().into_owned(),
+                    max_edge: edge,
+                    window_generation: generation,
+                },
+            ));
+            assert!(
+                result.is_err(),
+                "the playlist pixel lane must still refuse {edge}, got {result:?}"
+            );
+        }
+    }
+
+    /// A 320-wide source is not upscaled at a hero tier, through the production entry.
+    #[test]
+    fn production_path_entry_never_upscales_a_small_source() {
+        let directory = TestDirectory::new();
+        // A 320-wide embedded cover: the lane must never upscale it, whatever tier is
+        // requested.
+        let source = track_thumbnail_fixture_at(&directory, 320);
+        let client = "r06-small-source";
+        let generation = current_generation(client);
+
+        let published = call_track_path_entry(directory.path(), client, generation, 1536, &source)
+            .expect("track path entry")
+            .expect("a 320px source is a confirmed cover");
+        // The fixture embeds a 320x80 cover (320 long edge, 4:1). At edge 1536 the lane
+        // must return the SOURCE size unchanged — never upscale toward 1536.
+        assert_eq!(
+            (published.width, published.height),
+            (320, 80),
+            "a 320-wide source must stay 320 wide at edge 1536 (no upscaling)"
+        );
+        assert!(
+            published.width.max(published.height) < 1536,
+            "the lane must not fabricate pixels up to the requested edge"
         );
     }
 }

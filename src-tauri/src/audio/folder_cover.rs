@@ -819,10 +819,14 @@ pub(super) fn load_folder_thumbnail_path_blocking(
     slot: &DecodeSlot,
 ) -> Result<Option<PlaylistThumbnailPath>, CoverPixelsError> {
     current(is_current)?;
-    // The path command family validates against ALLOWED_PLAYLIST_MAX_EDGES at the
-    // coordinator, so this lane accepts the same 128/256/512 set. Narrowing it
-    // here would make the command advertise an edge it then always rejects.
-    super::cover_pixels::validate_playlist_max_edge(max_edge)?;
+    // The folder PATH command validates against ALLOWED_PATH_MAX_EDGES at the
+    // coordinator, which accepts 128/256/512/1024/1536. This nested check must accept
+    // the same set: narrowing it here would let the command advertise a tier that it
+    // then always rejects one layer down.
+    //
+    // The pixel lanes keep their own 128/256 limit — they decode RGBA into the managed
+    // budget, and this function never touches the pixel lane.
+    super::cover_pixels::validate_path_max_edge(max_edge)?;
     let root = canonical_directory(Path::new(root_path))?;
     let target = canonical_directory(Path::new(directory_path))?;
     if !target.starts_with(&root) {

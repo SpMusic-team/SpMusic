@@ -149,10 +149,22 @@ export type AudioThumbnailPath = {
   byteLength: number
 }
 
+/**
+ * Edges the PATH lane accepts, for playlist, track and folder alike.
+ *
+ * Kept separate from the pixel lane's `128 | 256 | 512` on purpose: the path lane hands
+ * back a file on disk, so a 1536 hero costs a bigger JPEG, not a resident RGBA buffer.
+ * The backend whitelist is `ALLOWED_PATH_MAX_EDGES` in `cover_pixels.rs`.
+ *
+ * 2048 is intentionally absent — the architecture plan defers it until a WebView
+ * bit-residency measurement exists.
+ */
+export type AudioThumbnailPathMaxEdge = 128 | 256 | 512 | 1024 | 1536
+
 export type AudioLoadTrackThumbnailPathInput = {
   clientId: string
   sourcePath: string
-  maxEdge: 128 | 256 | 512
+  maxEdge: AudioThumbnailPathMaxEdge
   windowGeneration: number
 }
 
@@ -160,14 +172,14 @@ export type AudioLoadFolderThumbnailPathInput = {
   clientId: string
   rootPath: string
   directoryPath: string
-  maxEdge: 128 | 256 | 512
+  maxEdge: AudioThumbnailPathMaxEdge
   windowGeneration: number
 }
 
 export type AudioLoadPlaylistCoverThumbnailPathInput = {
   clientId: string
   filePath: string
-  maxEdge: 128 | 256 | 512
+  maxEdge: AudioThumbnailPathMaxEdge
   windowGeneration: number
 }
 
@@ -573,11 +585,27 @@ export async function queryPlaylistDecodePermitWidth(): Promise<unknown> {
 
 // The path lane never carries pixels: it returns an absolute path that the
 // WebView fetches through the asset protocol and decodes itself.
-const THUMBNAIL_PATH_MAX_EDGE = 512
-// Mirrors the backend `THUMBNAIL_PATH_MAX_BYTES` acceptance bound
-// (`src-tauri/src/audio/cover_pixels.rs`); anything larger cannot be a JPEG this
-// lane produced, so it is a protocol error rather than asset artwork.
-const THUMBNAIL_PATH_MAX_BYTES = 1024 * 1024
+//
+// These mirror the backend exactly:
+//   `ALLOWED_PATH_MAX_EDGES`            -> THUMBNAIL_PATH_ALLOWED_EDGES
+//   `thumbnail_path_max_bytes_for_edge` -> thumbnailPathMaxBytesForEdge
+//
+// The pixel lane keeps its own older bounds below; do not merge the two.
+const THUMBNAIL_PATH_ALLOWED_EDGES: readonly AudioThumbnailPathMaxEdge[] = [128, 256, 512, 1024, 1536]
+const THUMBNAIL_PATH_MIN_BYTES = 1024 * 1024
+const THUMBNAIL_PATH_MAX_BYTES_CEILING = 16 * 1024 * 1024
+
+/**
+ * Largest JPEG the path lane may return for a request at `maxEdge`.
+ *
+ * Mirrors `min(16 MiB, max(1 MiB, edge^2 / 2))` in `cover_pixels.rs`:
+ * 512 -> 1 MiB (floor), 1024 -> 1 MiB (floor), 1536 -> 1_179_648 B.
+ */
+export function thumbnailPathMaxBytesForEdge(maxEdge: number): number {
+  const edge = Math.max(1, Math.floor(maxEdge))
+  const derived = Math.floor((edge * edge) / 2)
+  return Math.min(THUMBNAIL_PATH_MAX_BYTES_CEILING, Math.max(THUMBNAIL_PATH_MIN_BYTES, derived))
+}
 
 // Validate as strictly as `parseCoverPixels` does for its header. `null` is a
 // verdict, not a failure: it means the backend confirmed there is no artwork, and
@@ -595,15 +623,19 @@ function parseAudioThumbnailPath(response: unknown, maxEdge: number): AudioThumb
     || !Number.isSafeInteger(candidate.byteLength)
   ) throw new Error('Thumbnail path response dimensions are not integers')
   const { width, height, byteLength } = candidate as AudioThumbnailPath
+  // The response must describe something this request could have produced: never wider
+  // than the requested edge, never outside the accepted edge set, and never larger than
+  // the per-tier byte cap.
+  const allowedEdge = (THUMBNAIL_PATH_ALLOWED_EDGES as readonly number[]).includes(maxEdge)
+  const maxBytes = thumbnailPathMaxBytesForEdge(maxEdge)
   if (
-    width <= 0
+    !allowedEdge
+    || width <= 0
     || height <= 0
     || width > maxEdge
     || height > maxEdge
-    || width > THUMBNAIL_PATH_MAX_EDGE
-    || height > THUMBNAIL_PATH_MAX_EDGE
     || byteLength <= 0
-    || byteLength > THUMBNAIL_PATH_MAX_BYTES
+    || byteLength > maxBytes
   ) throw new Error('Thumbnail path response metadata is inconsistent')
   return { path: candidate.path, width, height, byteLength }
 }

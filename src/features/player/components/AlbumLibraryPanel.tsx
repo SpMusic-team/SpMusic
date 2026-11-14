@@ -1,4 +1,6 @@
 import { useLibrarySearch } from '../hooks/useLibrarySearch'
+import type { AudioThumbnailPathMaxEdge } from '@/features/player/services/audioCommands'
+import { useHeroTier } from '@/features/player/hooks/useHeroTier'
 import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import { AnimatePresence, motion, useIsPresent } from 'motion/react'
 import { CollectionReturnIcon } from './CollectionReturnIcon'
@@ -75,10 +77,21 @@ function clock(songs: readonly AllSongsItem[]) {
   return formatDurationClock(seconds)
 }
 
-function collectionCover(entry: AlbumEntry, identityPrefix: string): TrackCandidatesCoverItem {
-  return { kind: 'track-candidates', key: JSON.stringify(['collection-cover', identityPrefix, entry.key]),
+/**
+ * Cover item for one collection.
+ *
+ * `heroEdge` produces the HERO variant: a distinct key carrying the measured tier, so the
+ * hero never shares a cache row with the collection card (plan §4.2 B2, C1). Omitting it
+ * reproduces the previous key and the ordinary 256 row exactly.
+ */
+function collectionCover(entry: AlbumEntry, identityPrefix: string, heroEdge?: AudioThumbnailPathMaxEdge): TrackCandidatesCoverItem {
+  const key = heroEdge === undefined
+    ? JSON.stringify(['collection-cover', identityPrefix, entry.key])
+    : JSON.stringify(['collection-cover', identityPrefix, entry.key, 'hero'])
+  return { kind: 'track-candidates', key,
     candidates: entry.songs.map(({ key, trackId, sourcePath, available, artworkRevision }) => ({ key, trackId, sourcePath, available, artworkRevision })),
-    available: entry.songs.some(song => song.available) }
+    available: entry.songs.some(song => song.available),
+    ...(heroEdge === undefined ? {} : { heroEdge }) }
 }
 
 function uniqueCovers(items: readonly AllSongsCoverItem[]): AllSongsCoverItem[] {
@@ -331,9 +344,24 @@ function AlbumScene({ albums: rootEntries, categoryId = 'album', playlist, allSo
     if (row) panel.scrollTop += row.getBoundingClientRect().top - panel.getBoundingClientRect().top - 8
   }
   const heroCover = hasHero ? album?.coverSong : undefined
-  const heroCoverItem = useMemo(() => hasHero && album ? collectionCover(album, heroPrefix) : undefined, [hasHero, album, heroPrefix])
+  // The hero's tier is measured after commit (never during render: reading a ref while
+  // rendering would neither re-render on resize nor satisfy the React rules). Offscreen drops
+  // it to the cheap lane, which changes the item identity and therefore re-fetches — the
+  // plan's exit downgrade (§7.4 (c)).
+  const heroTier = useHeroTier(hasHero && !heroOffscreen)
+  const heroCoverItem = useMemo(
+    () => hasHero && album ? collectionCover(album, heroPrefix, heroTier) : undefined,
+    [hasHero, album, heroPrefix, heroTier],
+  )
   const artistCoverItem = useMemo(() => currentArtist ? collectionCover(currentArtist, categoryId) : undefined, [currentArtist, categoryId])
   const entryCovers = useMemo(() => new Map(visibleAlbums.map(entry => [entry.key, collectionCover(entry, identityPrefix)])), [visibleAlbums, identityPrefix])
+  // Small surfaces (the "all songs" tiles and the more-menu thumbnail) must NOT reuse the
+  // hero item: with the hero at a high tier they would each pull a full-size image into a
+  // 20–60 px box (plan C7). They keep an ordinary 256 item of their own.
+  const heroThumbItem = useMemo(
+    () => hasHero && album ? collectionCover(album, heroPrefix) : undefined,
+    [hasHero, album, heroPrefix],
+  )
   useAllSongsCoverLease(store, heroCoverItem?.key)
   useAllSongsCoverLease(store, present ? undefined : departureCover)
   const coverItems = useMemo(() => uniqueCovers([...(heroCoverItem ? [heroCoverItem] : []),
@@ -426,7 +454,7 @@ function AlbumScene({ albums: rootEntries, categoryId = 'album', playlist, allSo
   const menuSongs = genreMode ? genreOverview ? uniqueArtistSongs(albums.flatMap(item => item.songs)) : songs : yearMode ? yearOverview ? uniqueArtistSongs(albums.flatMap(item => item.songs)) : songs : artistMode ? currentArtist?.songs ?? EMPTY : songs
   const heroMore = hasHero ? <PlaylistHeroMoreMenu contextLabel={categoryLabel} title={genreMode ? albumDetail ? album?.name ?? '未知专辑' : currentGenre?.name ?? '未知流派' : yearMode ? albumDetail ? album?.name ?? '未知专辑' : currentYear?.name ?? '未知年份' : artistMode ? currentArtist?.name ?? `未知${categoryLabel}` : album?.name ?? '未知专辑'}
     count={menuSongs.length} totalClock={clock(menuSongs) ?? '读取中'} actions={artistMenuActions}
-    artwork={<ArtistMenuArtwork item={artistMode ? artistCoverItem : heroCoverItem} store={store} />} /> : renderMore()
+    artwork={<ArtistMenuArtwork item={artistMode ? artistCoverItem : heroThumbItem} store={store} />} /> : renderMore()
   const renderActions = (compact = false) => <motion.div ref={compact ? compactRef : actionsRef}
     className={compact ? 'playlist-hero-actions playlist-controller-actions' : 'playlist-hero-actions'}
     role="group" aria-label={`${categoryLabel}歌曲操作`} data-selection-hidden={selectionEnabled && selectMode || undefined} aria-hidden={selectionEnabled && selectMode || compact && (!actionsPassed || !present) || undefined} inert={selectionEnabled && selectMode || compact && (!actionsPassed || !present) || undefined}
@@ -468,11 +496,11 @@ function AlbumScene({ albums: rootEntries, categoryId = 'album', playlist, allSo
         {showSearch ? <motion.div className="playlist-management-search" variants={navigationMotion.chrome} initial={atomicOverview ? 'initial' : false} animate="animate" exit={atomicOverview ? 'exit' : 'animate'} transition={navigationMotion.transition}><Input ref={searchRef} type="search" aria-label={`搜索${categoryLabel}和歌曲`} placeholder={detail ? '搜索集合中的歌曲' : genreRoot ? '搜索流派' : artistRoot ? `搜索${categoryLabel}` : '搜索专辑或专辑作者'} value={query} onChange={event => setQuery(event.target.value)} onKeyDown={event => { if (event.key === 'Escape') { setQuery(''); setSearchOpen(false); setDismissedRequest(searchRequestId) } }} /></motion.div> : null}
         <span className="sr-only" role="status">{announcement}</span>
         {detail && selectMode && !selectionEnabled ? <p className="folder-selection-status" role="status">已选择 {selected.size} 项</p> : null}
-        {genreOverview ? <Button variant="ghost" className="artist-all-songs genre-all-songs" disabled={loading || selectMode} onClick={() => changeGenreLocation?.({ genreKey: genreLocation!.genreKey, view: 'songs' })}><span className="artist-all-songs-cover" aria-hidden="true"><AlbumCover song={heroCoverItem} store={store} /></span><span className="artist-all-songs-copy"><span className="artist-all-songs-title">所有流派歌曲</span><span className="artist-song-count">{currentGenre?.songs.length ?? 0} 首歌曲</span></span></Button> : null}
-        {yearOverview ? <Button variant="ghost" className="artist-all-songs year-all-songs" disabled={loading || selectMode} onClick={() => changeYearLocation?.({ year: yearLocation!.year, view: 'songs' })}><span className="artist-all-songs-cover" aria-hidden="true"><AlbumCover song={heroCoverItem} store={store} /></span><span className="artist-all-songs-copy"><span className="artist-all-songs-title">所有年份歌曲</span><span className="artist-song-count">{currentYear?.songs.length ?? 0} 首歌曲</span></span></Button> : null}
-        {artistOverview ? <Button variant="ghost" className="artist-all-songs" data-song-key={heroCover?.key} data-cover-key={heroCoverItem?.key} disabled={loading || selectMode}
+        {genreOverview ? <Button variant="ghost" className="artist-all-songs genre-all-songs" disabled={loading || selectMode} onClick={() => changeGenreLocation?.({ genreKey: genreLocation!.genreKey, view: 'songs' })}><span className="artist-all-songs-cover" aria-hidden="true"><AlbumCover song={heroThumbItem} store={store} /></span><span className="artist-all-songs-copy"><span className="artist-all-songs-title">所有流派歌曲</span><span className="artist-song-count">{currentGenre?.songs.length ?? 0} 首歌曲</span></span></Button> : null}
+        {yearOverview ? <Button variant="ghost" className="artist-all-songs year-all-songs" disabled={loading || selectMode} onClick={() => changeYearLocation?.({ year: yearLocation!.year, view: 'songs' })}><span className="artist-all-songs-cover" aria-hidden="true"><AlbumCover song={heroThumbItem} store={store} /></span><span className="artist-all-songs-copy"><span className="artist-all-songs-title">所有年份歌曲</span><span className="artist-song-count">{currentYear?.songs.length ?? 0} 首歌曲</span></span></Button> : null}
+        {artistOverview ? <Button variant="ghost" className="artist-all-songs" data-song-key={heroCover?.key} data-cover-key={heroThumbItem?.key} disabled={loading || selectMode}
           onClick={() => changeArtistLocation?.({ artistKey: artistLocation!.artistKey, view: 'songs' })}>
-          <span className="artist-all-songs-cover" aria-hidden="true"><AlbumCover song={heroCoverItem} store={store} artist /></span>
+          <span className="artist-all-songs-cover" aria-hidden="true"><AlbumCover song={heroThumbItem} store={store} artist /></span>
           <span className="artist-all-songs-copy"><span className="artist-all-songs-title">所有{categoryLabel}歌曲</span>
             <span className="artist-song-count"><span className="artist-all-songs-music" style={{ maskImage: `url("${artistMusicNote}")` }} aria-hidden="true" /><span>{currentArtist?.songs.length ?? 0} 首歌曲</span></span>
           </span>

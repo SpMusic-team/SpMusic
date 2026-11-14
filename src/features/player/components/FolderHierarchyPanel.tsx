@@ -1,4 +1,5 @@
 import { useLibrarySearch } from '../hooks/useLibrarySearch'
+import { useHeroTier } from '@/features/player/hooks/useHeroTier'
 import { LibraryRootMenu } from './LibraryRootMenu'
 import { compareByQuickIndex } from '../model/quickIndex'
 import { formatDurationClock } from '../model/playlistDuration'
@@ -44,10 +45,21 @@ const EMPTY_SONGS: readonly AllSongsItem[] = []
 const MotionEmpty = motion.create(Empty)
 const EMPTY_ROOTS: NonNullable<PlayerPlaylistViewModel['library']>['folderRoots'] = []
 const SELECTORS = { item: '[data-collection-key]', cover: '.folder-cover, .playlist-card-cover', copy: '.folder-copy, .playlist-card-copy', getId: (node: HTMLElement) => node.dataset.collectionKey }
-function flatFolderCover(directoryPath: string, songs: readonly AllSongsItem[]): TrackCandidatesCoverItem {
-  return { kind: 'track-candidates', key: `flat-folder:${folderPath(directoryPath)}`,
+/**
+ * Cover item for one folder.
+ *
+ * `heroEdge` produces the HERO variant: a distinct key carrying the measured tier, so the
+ * hero never shares a cache row with the folder card for the same directory (plan C8/C10).
+ * Omitting it reproduces the previous key exactly.
+ */
+function flatFolderCover(directoryPath: string, songs: readonly AllSongsItem[], heroEdge?: number): TrackCandidatesCoverItem {
+  const key = heroEdge === undefined
+    ? `flat-folder:${folderPath(directoryPath)}`
+    : `flat-folder:${folderPath(directoryPath)}:hero`
+  return { kind: 'track-candidates', key,
     candidates: songs.map(({ key, trackId, sourcePath, available, artworkRevision }) => ({ key, trackId, sourcePath, available, artworkRevision })),
-    available: songs.some(song => song.available) }
+    available: songs.some(song => song.available),
+    ...(heroEdge === undefined ? {} : { heroEdge }) }
 }
 const defaultLevel = () => 3
 
@@ -207,14 +219,29 @@ function FolderHierarchyScene({ categoryId = 'folders', playlist, allSongsCoverS
     if (node) { pendingFocus.current = null; node.focus({ preventScroll: true }) }
   }, [renderedSongs])
   const coverKey = useCallback((rootPath: string, directoryPath: string) => `folder:${folderNavigationKey(rootPath, directoryPath)}:${coverRevisions.get(folderPath(rootPath)) ?? 0}`, [coverRevisions])
+  /** The hero's own key: same revision basis, but a distinct identity from the folder card. */
+  const heroCoverKey = useCallback(
+    (rootPath: string, directoryPath: string) => `${coverKey(rootPath, directoryPath)}:hero`,
+    [coverKey],
+  )
   const folderCovers = useMemo<AllSongsCoverItem[]>(() => visibleDirectories.map(item => flat ? flatFolderCover(item.path, item.songs) : ({
     kind: 'folder', key: coverKey(location?.rootPath ?? item.path, item.path),
     rootPath: location?.rootPath ?? item.path, directoryPath: item.path, available: item.status === 'ready',
   })), [flat, visibleDirectories, location, coverKey])
-  const heroCover = useMemo<AllSongsCoverItem | undefined>(() => flat ? location ? flatFolderCover(location.directoryPath, directSongs) : undefined : location ? {
-    kind: 'folder', key: coverKey(location.rootPath, location.directoryPath), rootPath: location.rootPath,
-    directoryPath: location.directoryPath, available: root?.status === 'ready',
-  } : undefined, [flat, directSongs, location, coverKey, root?.status])
+  // Measured tier for the hero, sampled after commit. Offscreen drops it to the cheap lane,
+  // which changes the identity and therefore re-fetches (the plan's exit downgrade, §7.4 (c)).
+  // Offscreen drops the hero to the cheap lane, which changes the item identity and therefore
+  // re-fetches (the plan's exit downgrade, §7.4 (c)).
+  const heroTier = useHeroTier(Boolean(location) && !heroOffscreen)
+  const heroCover = useMemo<AllSongsCoverItem | undefined>(() => flat
+    ? location ? flatFolderCover(location.directoryPath, directSongs, heroTier) : undefined
+    : location ? {
+      kind: 'folder', key: heroCoverKey(location.rootPath, location.directoryPath),
+      rootPath: location.rootPath, directoryPath: location.directoryPath,
+      available: root?.status === 'ready',
+      ...(heroTier === undefined ? {} : { heroEdge: heroTier }),
+    } : undefined,
+  [flat, directSongs, location, heroCoverKey, root?.status, heroTier])
   useAllSongsCoverLease(store, heroCover?.key)
   const coverItems = useMemo(() => [...(heroCover ? [heroCover] : []), ...(layout.showArtwork ? [...folderCovers, ...visibleSongs] : [])], [heroCover, folderCovers, visibleSongs, layout.showArtwork])
   const renderedCoverItems = useMemo(() => [...(heroCover ? [heroCover] : []), ...(layout.showArtwork ? [...folderCovers, ...renderedSongs] : [])], [heroCover, folderCovers, renderedSongs, layout.showArtwork])

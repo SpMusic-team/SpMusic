@@ -369,6 +369,13 @@ export type PlaylistArtworkDemand = {
   heldIds: readonly string[]
   coverCssPixels: number
   dpr: number
+  /**
+   * Continuously measured tier for the first-track hero.
+   *
+   * Supplied by the panel so the hero's tier follows the viewport. Absent means the caller does
+   * not measure, and the artwork hook falls back to its own one-shot measurement.
+   */
+  heroEdge?: number
 }
 
 export type PlayerFeedbackViewModel = {

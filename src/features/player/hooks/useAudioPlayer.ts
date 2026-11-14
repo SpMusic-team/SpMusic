@@ -52,6 +52,7 @@ import {
   attemptTrackThumbnailPath,
   type AttemptOptions,
 } from '@/features/player/services/playlistCoverPathLane'
+import { HERO_MAX_EDGE, isHeroEdge, selectHeroEdge, type HeroEdge } from '@/features/player/services/heroCoverEdge'
 import {
   chunkPlaylistSummaryPaths,
   pendingPlaylistTrackRow,
@@ -186,7 +187,7 @@ type PlaylistVisualHydrationJob = {
   trackId: string
   sourcePath: string
   normalizedSourcePath: string
-  maxEdge: 128 | 256 | 512
+  maxEdge: PlaylistArtworkEdge
   attempt: number
   optional: boolean
   /**
@@ -215,26 +216,64 @@ function cancelOptionalArtworkIdle(handle: OptionalIdleHandle): void {
   else window.clearTimeout(handle.id)
 }
 
+/**
+ * Edge a playlist artwork job may run at.
+ *
+ * Rows stay at 256/512; the first-track hero may take a measured tier. Named so the several
+ * maps and refs that carry it cannot drift apart.
+ */
+type PlaylistArtworkEdge = 128 | 256 | 512 | HeroEdge
+
 const HYDRATED_TRACK_CACHE_CAPACITY = 8
 // Application-owned BMP URLs and in-flight RGBA buffers. Renderer/GPU memory
 // still needs Release measurement; visible minimum quality is never truncated.
-// Halved from 96 MiB: the whole-list thumbnail lane is a scroll-smoothness aid,
-// while the adjacent-track decoded covers behind it (the +/-3 prefetch window
-// in prefetchAdjacentPlaylistTracks) already keep track switches instant. The
-// two budgets are independent, so lowering this one does not affect switching.
-const PLAYLIST_ARTWORK_RESIDENT_BUDGET = 48 * 1024 * 1024
-// In-flight RGBA reservations for the shared cover scheduler. The scheduler
-// admits up to MAX_CONCURRENT decodes, and the largest playlist edge it serves
-// is 512, so the reservation must cover every slot or the admission bound above
-// under-counts real transient memory. This hook's own hydration pump is capped
-// at 2 concurrent jobs, but the library hooks feeding the same scheduler are
-// not, so the width comes from the scheduler itself.
+//
+// Raised 48 -> 64 MiB together with the hero tier change. A 1536 hero commits
+// 15.75 MiB (7 B/px + 54, the documented worst case) versus 1.75 MiB at 512, i.e.
+// +14 MiB. Without the increase the warm allowance would fall from 42.25 to
+// 28.25 MiB and prefetch would drop from ~96 ordinary cards to ~64 (-33%),
+// cancelling the scroll-smoothness work this budget exists for. At 64 MiB the warm
+// allowance is 64 - 15.75 - 4 = 44.25 MiB (~100 cards), so net prefetch capacity
+// does not regress. Derivation and the 2048 case are in the plan (§7.2).
+const PLAYLIST_ARTWORK_RESIDENT_BUDGET = 64 * 1024 * 1024
+// In-flight RGBA reservations for the shared cover scheduler.
+//
+// Deliberately NOT raised to the hero tier. 512 is still the widest edge that can
+// really allocate an RGBA buffer on this budget: this hook's own hydration jobs are
+// charged per job by `activeBytes` (edge² × 4), the category-page hook is always 256,
+// and the hero's high tier travels the PATH lane (a file on disk, no JS pixel buffer)
+// and falls back to 256 pixels, not to the hero edge. Sizing this reservation for 1536
+// would be 36 MiB and drive the warm allowance negative (-3.75 MiB), rejecting every
+// optional prefetch (plan §7.2 P-1).
 const PLAYLIST_ARTWORK_INFLIGHT_BUDGET = MAX_CONCURRENT * 512 * 512 * 4
+
+/**
+ * Clamp an edge to what the PIXEL commands accept (128/256/512).
+ *
+ * The path lane may run at a hero tier; the pixel lane did not widen, so a hero tier must
+ * step down here rather than be sent and rejected (plan §4.3). This is the "deliberate降档"
+ * the plan requires, applied at the one place the pixel command is invoked.
+ */
+function pixelEdgeWithin(edge: number): 128 | 256 | 512 {
+  if (edge <= 128) return 128
+  if (edge <= 256) return 256
+  return 512
+}
 
 function playlistImageBytes(image: PlaylistCoverImage): number {
   return image.encodedBytes + image.width * image.height * 4
 }
 
+/**
+ * Worst-case JS-side bytes for one cover at `edge`.
+ *
+ * 7 B/px = RGBA (4) + BMP object URL (3), i.e. the PIXEL lane's worst case. For a path-lane
+ * image (an `asset:` URL string, ~100 B) this over-estimates by orders of magnitude, but it
+ * is the correct ADMISSION bound: it must cover the worst channel or a pixel fallback would
+ * exceed the budget the moment it happens. Making it lane-aware would require threading
+ * lane information through the commit and preload paths, i.e. touching the visual ledger
+ * this budget protects (plan §7.3). Formula unchanged on purpose.
+ */
 function playlistArtworkBytes(edge: number): number {
   return edge * edge * 7 + 54
 }
@@ -630,7 +669,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
   const playlistTrackMetadataRef = useRef<Readonly<Record<string, PlaylistTrackMetadata>>>({})
   const playlistVisualWindowKeyRef = useRef<string | null>(null)
   const playlistTrackVisualsRef = useRef<Readonly<Record<string, PlaylistTrackVisual>>>({})
-  const playlistVisualEdgeRef = useRef(new Map<string, 128 | 256 | 512>())
+  const playlistVisualEdgeRef = useRef(new Map<string, PlaylistArtworkEdge>())
   const playlistVisualStaleIdsRef = useRef(new Set<string>())
   const currentArtworkRefreshRef = useRef(0)
   const playlistVisualSourceRef = useRef(new Map<string, string>())
@@ -673,7 +712,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     }
   }, [playlistArtworkStore])
 
-  const playlistDesiredEdgeRef = useRef(new Map<string, 128 | 256 | 512>())
+  const playlistDesiredEdgeRef = useRef(new Map<string, PlaylistArtworkEdge>())
   /**
    * Build the immutable snapshot for one playlist track's artwork.
    *
@@ -768,7 +807,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
    */
   const playlistArtworkRecoveryRef = useRef<CoverRecoveryLedger | null>(null)
   if (playlistArtworkRecoveryRef.current === null) playlistArtworkRecoveryRef.current = createCoverRecoveryLedger()
-  const playlistPendingReplacementRef = useRef(new Map<string, { trackId: string; previous: PlaylistTrackVisual; edge: 128 | 256 | 512; olderVisuals: Array<{ visual: PlaylistTrackVisual; edge: 128 | 256 | 512 }> }>())
+  const playlistPendingReplacementRef = useRef(new Map<string, { trackId: string; previous: PlaylistTrackVisual; edge: PlaylistArtworkEdge; olderVisuals: Array<{ visual: PlaylistTrackVisual; edge: PlaylistArtworkEdge }> }>())
   const artworkPrimeDirectionRef = useRef<Direction>(1)
   const stagedTrackDetailsRef = useRef<{
     requestId: number
@@ -959,14 +998,38 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
   }, [audioState, folderPlaylist, queueOpen, volume, persistCurrentSession])
 
   useEffect(() => {
-    const checkpoint = window.setInterval(persistCurrentSession, 1000)
+    let checkpoint: number | null = null
     const flush = () => persistCurrentSession()
+    const startCheckpoint = () => {
+      if (checkpoint !== null) return
+      checkpoint = window.setInterval(persistCurrentSession, 1000)
+    }
+    const stopCheckpoint = () => {
+      if (checkpoint === null) return
+      window.clearInterval(checkpoint)
+      checkpoint = null
+    }
+    // A hidden page still runs timers, but nothing the user can see is moving.
+    // The session is flushed once on the transition so hiding the window cannot
+    // lose the latest position, then the periodic checkpoint stops until the
+    // page is visible again.
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        flush()
+        stopCheckpoint()
+      } else {
+        startCheckpoint()
+      }
+    }
+    if (!document.hidden) startCheckpoint()
     window.addEventListener('pagehide', flush)
     window.addEventListener('beforeunload', flush)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
     return () => {
-      window.clearInterval(checkpoint)
+      stopCheckpoint()
       window.removeEventListener('pagehide', flush)
       window.removeEventListener('beforeunload', flush)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
   }, [persistCurrentSession])
 
@@ -2342,7 +2405,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
                   // failure (null, or a rejection) ends the epoch in `.finally`,
                   // which settles the row as a placeholder instead of a broken image.
                   const pixels = await schedulePlaylistCoverPixels({
-                    clientId: job.clientId, filePath: coverFilePath, maxEdge: edge,
+                    clientId: job.clientId, filePath: coverFilePath, maxEdge: pixelEdgeWithin(edge),
                     windowGeneration: job.backendGeneration,
                   }, attemptOptions)
                   if (!pixels || jobIsStale()) return
@@ -2363,7 +2426,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
                     coverThumbnail = attempt.image
                   } else {
                     const pixels = await schedulePlaylistCoverPixels({
-                      clientId: job.clientId, filePath: coverFilePath, maxEdge: edge,
+                      clientId: job.clientId, filePath: coverFilePath, maxEdge: pixelEdgeWithin(edge),
                       windowGeneration: job.backendGeneration,
                     }, attemptOptions)
                     if (!pixels || jobIsStale()) return
@@ -2381,7 +2444,10 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
               jobIsStale()
               || (playlistTrackVisualsRef.current[job.trackId]
                 && !playlistVisualStaleIdsRef.current.has(job.trackId)
-                && (playlistVisualEdgeRef.current.get(job.trackId) ?? 0) >= job.maxEdge)
+                // Exact match, not "at least": a measured tier must match the layout, so a hero
+                // at 1536 with a 1024 target is OUT of date and its replacement must publish.
+                // (This is the publish-site twin of the dispatch-site rule.)
+                && playlistVisualEdgeRef.current.get(job.trackId) === job.maxEdge)
             ) {
               if (coverThumbnail) releasePlaylistCoverUrl(coverThumbnail.src)
               return
@@ -2468,7 +2534,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
                 || !playlistVisualDesiredIdsRef.current.has(job.trackId)
                 || (playlistTrackVisualsRef.current[job.trackId]
                   && !playlistVisualStaleIdsRef.current.has(job.trackId)
-                  && (playlistVisualEdgeRef.current.get(job.trackId) ?? 0) >= job.maxEdge)
+                  && playlistVisualEdgeRef.current.get(job.trackId) === job.maxEdge)
               ) return
               if (playlistVisualHydrationActiveJobsRef.current.has(job.trackId)) return
               playlistVisualHydrationQueueRef.current.unshift({ ...job, attempt: job.attempt + 1 })
@@ -2609,13 +2675,32 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
         || playlistVisualFailedRef.current.has(id)
     })
     const heldOnly = (id: string) => heldIds.has(id) && !visibleIds.has(id) && id !== firstTrackId && id !== dockTrackId
-    const targetEdgeFor = (id: string): 256 | 512 => {
+    const targetEdgeFor = (id: string): 256 | HeroEdge => {
       if (id === firstTrackId) {
         const firstVisual = playlistTrackVisualsRef.current[id]
-        return firstVisual?.coverThumbnail && !playlistVisualStaleIdsRef.current.has(id) && visibleArtworkSettled ? 512 : 256
+        // The hero targets the MEASURED layout tier. The active playlist is served by this
+        // hook even while paused, so a fixed 512 here would make the same detail page sharp
+        // when browsed inactive and blurry when it is the active one — the regression the
+        // plan calls out as hardest to notice (plan §5.5 P1, §5.7 C13).
+        //
+        // The two-level rule is unchanged: until the persisted thumbnail has arrived and
+        // settled, the hero stays on the cheap tier (plan §2.1).
+        if (!firstVisual?.coverThumbnail || playlistVisualStaleIdsRef.current.has(id) || !visibleArtworkSettled) {
+          return 256
+        }
+        // Prefer the panel's continuously measured tier. Falling back to a one-shot measurement
+        // here means the tier is frozen at publish time, so a later viewport change never lands
+        // (observed: a 1536 hero kept inside a 942 px box).
+        const measured = playlistArtworkDemandRef.current?.heroEdge
+        if (typeof measured === 'number' && measured > 256) {
+          // Any valid hero tier, not just <=1536: hard-coding the old cap would truncate a
+          // 2048 request after that tier was enabled.
+          return isHeroEdge(measured) ? measured : HERO_MAX_EDGE
+        }
+        return selectHeroEdge()
       }
       // List cards use the persisted 256px thumbnail regardless of display
-      // scaling; only the first-track hero needs the original 512px lane.
+      // scaling; only the first-track hero takes the high-tier lane.
       return 256
     }
     // Reserve all screen items before offering spare bytes to prefetch. A dense
@@ -2674,7 +2759,10 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     const warmIds = playlistArtworkGrace.retain(residents, desiredIds,
       PLAYLIST_ARTWORK_RESIDENT_BUDGET - committedBytes - PLAYLIST_ARTWORK_INFLIGHT_BUDGET)
     const residentIds = new Set([...desiredIds, ...warmIds])
-    const windowKey = `${playlistScopeEpochRef.current}\u0000${scope}\u0000${keepPersistentArtwork}\u0000${[...visibleIds].join('\u0000')}\u0001${[...heldIds].join('\u0000')}\u0002${budgetedIds.map((id) => `${id}:${normalizeAudioSourcePath(descriptorsById.get(id)?.sourcePath ?? '')}`).join('\u0000')}\u0003${[...warmIds].join('\u0000')}`
+    // The hero tier participates in the key: a viewport change moves only the tier, and without
+    // it here the early return below would skip the recompute entirely.
+    const heroTierForKey = playlistArtworkDemandRef.current?.heroEdge ?? 0
+    const windowKey = `${playlistScopeEpochRef.current}\u0000${scope}\u0000${keepPersistentArtwork}\u0000${heroTierForKey}\u0000${[...visibleIds].join('\u0000')}\u0001${[...heldIds].join('\u0000')}\u0002${budgetedIds.map((id) => `${id}:${normalizeAudioSourcePath(descriptorsById.get(id)?.sourcePath ?? '')}`).join('\u0000')}\u0003${[...warmIds].join('\u0000')}`
     if (playlistVisualWindowKeyRef.current === windowKey) return
     playlistVisualWindowKeyRef.current = windowKey
     const generation = playlistVisualGenerationRef.current
@@ -2751,7 +2839,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
           || playlistVisualRetryTimersRef.current.has(descriptor.id)
           || (playlistTrackVisualsRef.current[descriptor.id]
             && !playlistVisualStaleIdsRef.current.has(descriptor.id)
-            && (playlistVisualEdgeRef.current.get(descriptor.id) ?? 0) >= targetEdgeFor(descriptor.id))
+            && playlistVisualEdgeRef.current.get(descriptor.id) === targetEdgeFor(descriptor.id))
           || (activeJob?.generation === generation
             && activeJob.normalizedSourcePath === normalizeAudioSourcePath(descriptor.sourcePath))
         ) continue
@@ -2852,7 +2940,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
      * that already failed. The job below carries `forcePixels`, so the hydration
      * lane reads pixels directly at the edge that failed.
      */
-    const queueForcedPixels = (trackId: string, edge: 128 | 256 | 512) => {
+    const queueForcedPixels = (trackId: string, edge: PlaylistArtworkEdge) => {
       const descriptor = folderPlaylistRef.current?.tracks.find((track) => track.id === trackId)
       if (!descriptor?.available) return
       const playlistEpoch = playlistScopeEpochRef.current
@@ -2945,7 +3033,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       // A 512 hero failure stays 512; a list card stays 256. Recovery never
       // "upgrades" or "downgrades" the request behind the user's back.
       const failedEdge = playlistVisualEdgeRef.current.get(trackId) ?? 256
-      const edge: 128 | 256 | 512 = failedEdge <= 256 ? 256 : failedEdge
+      const edge: PlaylistArtworkEdge = failedEdge <= 256 ? 256 : failedEdge
       // The claim holds `queued`; it becomes `running` only when the job is admitted
       // inside the hydration pump, so a job dropped before admission does not burn
       // the epoch. Anything other than `spent` is a queued or in-flight epoch.

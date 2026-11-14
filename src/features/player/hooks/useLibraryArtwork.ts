@@ -30,8 +30,42 @@ import {
   attemptTrackThumbnailPath,
   type AttemptOptions,
 } from '@/features/player/services/playlistCoverPathLane'
+import { HERO_MAX_EDGE, isHeroEdge, selectHeroEdge, type HeroEdge } from '@/features/player/services/heroCoverEdge'
 
 type ArtworkRow = ReadOnlyArtworkRow
+
+/**
+ * Edge the PIXEL lane may be asked for.
+ *
+ * The original playlist set, deliberately: `audio_load_playlist_cover_pixels` never widened,
+ * so a hero tier there is an ERROR, not a fallback (plan §4.3, T1/T4).
+ */
+type PixelFallbackEdge = 128 | 256 | 512
+
+/** Step a path-lane edge down to something the pixel lane accepts. */
+function pixelFallbackEdge(edge: number): PixelFallbackEdge {
+  if (edge <= 128) return 128
+  if (edge <= 256) return 256
+  return 512
+}
+
+/** Narrow a plain number to a cover edge within the documented tier set. */
+function toPlaylistCoverEdge(edge: number): PlaylistCoverEdge {
+  if (edge <= 128) return 128
+  if (edge <= 256) return 256
+  if (edge <= 512) return 512
+  // Pass through whichever hero tier was requested. Hard-coding 1536 here would truncate a
+  // legitimate 2048 request once that tier is enabled.
+  return isHeroEdge(edge) ? edge : HERO_MAX_EDGE
+}
+
+/**
+ * Edge a detail/row cover may be read at.
+ *
+ * Rows and prefetch entries stay at 256; the hero may be promoted to a measured tier. The
+ * union is named so the three maps below cannot drift apart (plan 搂5.3 T7).
+ */
+type PlaylistCoverEdge = 128 | 256 | 512 | HeroEdge
 type CacheEntry = { row: ArtworkRow; edge: number; trackId: string; artworkRevision: number }
 type Runtime = {
   mounted: boolean
@@ -42,12 +76,12 @@ type Runtime = {
   sessionGeneration: number
   descriptors: Map<string, AudioFolderTrackRef & { artworkRevision: number }>
   previews: Map<Element, string>
-  desired: Map<string, 128 | 256 | 512>
+  desired: Map<string, PlaylistCoverEdge>
   pinned: Set<string>
   consumerPins: Map<string, number>
   rows: ReadonlyMap<string, ArtworkRow>
   detail: AudioFolderPlaylist | null
-  detailPaths: Map<string, 128 | 256 | 512>
+  detailPaths: Map<string, PlaylistCoverEdge>
   detailVisiblePaths: Set<string>
   cache: Map<string, CacheEntry>
   pendingReplacements: Map<string, { key: string; previous: CacheEntry; older: CacheEntry[] }>
@@ -71,7 +105,7 @@ type Runtime = {
    * the DOM must not be recovered with a 256 list thumbnail, and a 256 row must
    * not pay for a 512 read.
    */
-  recoveryEdge: Map<string, 128 | 256 | 512>
+  recoveryEdge: Map<string, PlaylistCoverEdge>
   /**
    * Rows whose single automatic recovery already ended without an image.
    *
@@ -266,8 +300,12 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
           // URL the DOM just rejected — that is the path↔pixels loop this guard
           // exists to prevent.
           if (runtime.transientFailures.get(key) === artworkIdentity(key, descriptor)) return false
-          return !entry || entry.edge < edge
-            || entry.artworkRevision !== descriptor.artworkRevision && !runtime.failedUpgrades.has(key)
+          if (!entry) return true
+          if (entry.edge < edge) return true
+          // A viewport shrink lowers the hero's demand; without this the oversized image would
+          // stay published because a "smaller demand" is not a cache miss under the old rule.
+          if (entry.edge > edge && edge > 256) return true
+          return entry.artworkRevision !== descriptor.artworkRevision && !runtime.failedUpgrades.has(key)
         })
         if (!next) break
         const [key, edge] = next
@@ -293,7 +331,7 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
             if (generation === null) throw new Error('媒体库封面窗口不可用')
             let hasLocalArtwork = false
             // The edge this job reads at. Forced recovery reads the failing edge.
-            const readEdge: 128 | 256 | 512 = forcePixels ? (forceEdge ?? edge) : edge
+            const readEdge: PlaylistCoverEdge = forcePixels ? (forceEdge ?? edge) : edge
             if (readEdge <= 256) {
               // Asset path lane first; the pixel lane below is entered only after a
               // real failure. `missing` from the path lane is a confirmed-absent
@@ -356,7 +394,7 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
                   // What is skipped is `thumbnail_path`: it produced exactly the URL
                   // the element could not display.
                   const pixels = await schedulePlaylistCoverPixels(
-                    { clientId, filePath: cover.coverArt.filePath, maxEdge: readEdge, windowGeneration: generation },
+                    { clientId, filePath: cover.coverArt.filePath, maxEdge: pixelFallbackEdge(readEdge), windowGeneration: generation },
                     attemptOptions,
                   )
                   if (!current()) return
@@ -367,7 +405,7 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
                   // is definitive (no fallback, like the 256 branch); a real failure
                   // falls back to the existing pixel command unchanged.
                   const attempt = await attemptPlaylistCoverThumbnailPath(
-                    { clientId, filePath: cover.coverArt.filePath, maxEdge: readEdge, windowGeneration: generation },
+                    { clientId, filePath: cover.coverArt.filePath, maxEdge: pixelFallbackEdge(readEdge), windowGeneration: generation },
                     attemptOptions,
                   )
                   if (attempt.status === 'dropped') return
@@ -381,7 +419,7 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
                     thumbnail = attempt.image
                   } else {
                     const pixels = await schedulePlaylistCoverPixels(
-                      { clientId, filePath: cover.coverArt.filePath, maxEdge: readEdge, windowGeneration: generation },
+                      { clientId, filePath: cover.coverArt.filePath, maxEdge: pixelFallbackEdge(readEdge), windowGeneration: generation },
                       attemptOptions,
                     )
                     if (!pixels) return
@@ -457,7 +495,7 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
       }
     }
     runtime.refresh = () => {
-      const required = new Map<string, 128 | 256 | 512>()
+      const required = new Map<string, PlaylistCoverEdge>()
       const hero = runtime.detail?.tracks[0]
       const heroKey = hero ? normalizeAudioSourcePath(hero.sourcePath) : undefined
       const heroReady = heroKey ? Boolean(runtime.cache.get(heroKey)?.row.coverThumbnail)
@@ -624,7 +662,12 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
         runtime.refresh()
         return
       }
-      const failedEdge: 128 | 256 | 512 = entry.edge <= 256 ? 256 : 512
+      // The recovery must re-read at the edge that actually failed. Clamping anything
+      // above 256 down to 512 violated that contract for hero tiers: a 1536 failure would
+      // have been retried at 512 and, if that also failed, pinned the row at the wrong
+      // edge forever. `entry.edge` is the edge the failed publication was produced at, so
+      // for tiers above 256 it is the correct retry edge (plan §5.4 L4).
+      const failedEdge: PlaylistCoverEdge = entry.edge <= 256 ? 256 : toPlaylistCoverEdge(entry.edge)
       runtime.recoveryEdge.set(key, failedEdge)
       runtime.transientFailures.delete(key)
       runtime.failedUpgrades.delete(key)
@@ -723,8 +766,14 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
     for (const key of runtime.detailPaths.keys()) if (!detailPaths.has(key)) runtime.detailPaths.delete(key)
     for (const key of runtime.detailVisiblePaths) if (!detailPaths.has(key)) runtime.detailVisiblePaths.delete(key)
     // Keep the first row's hero available while the table is still loading.
+    //
+    // The hero is seeded at its MEASURED tier rather than a fixed 512: this is the second
+    // admission level, and its target value is the plan's only intended mechanism change
+    // (plan 搂5.4 L1, 搂2.1).
     const first = detail?.tracks[0]
-    if (first?.available && first.id !== warmTrackId) runtime.detailPaths.set(normalizeAudioSourcePath(first.sourcePath), 512)
+    if (first?.available && first.id !== warmTrackId) {
+      runtime.detailPaths.set(normalizeAudioSourcePath(first.sourcePath), selectHeroEdge())
+    }
     runtime.refresh()
     runtime.rows = new Map([...runtime.cache].map(([key, entry]) => [key, entry.row]))
     artworkStore.notifyAll()
@@ -736,9 +785,9 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
     if (!runtime || !detail || !warmTrackId) return
     const available = detail.tracks.filter((descriptor) => descriptor.available)
     const currentIndex = available.findIndex((descriptor) => descriptor.id === warmTrackId)
-    const paths = new Map<string, 128 | 256 | 512>()
+    const paths = new Map<string, PlaylistCoverEdge>()
     const first = available[0]
-    if (first && first.id !== warmTrackId) paths.set(normalizeAudioSourcePath(first.sourcePath), 512)
+    if (first && first.id !== warmTrackId) paths.set(normalizeAudioSourcePath(first.sourcePath), selectHeroEdge())
     for (let distance = 1; distance <= MAX_DETAIL && paths.size < MAX_DETAIL; distance += 1) {
       for (const descriptor of [available[currentIndex + distance], available[currentIndex - distance]]) {
         if (descriptor && descriptor.id !== warmTrackId) paths.set(normalizeAudioSourcePath(descriptor.sourcePath), 256)
@@ -753,12 +802,18 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
     const runtime = runtimeRef.current
     const playlist = runtime?.detail
     if (!runtime || !playlist || playlist.sourcePath !== scopePath) return
-    const paths = new Map<string, 128 | 256 | 512>()
+    const paths = new Map<string, PlaylistCoverEdge>()
     const visiblePaths = new Set<string>()
     const first = keepPersistentArtwork ? playlist.tracks[0] : undefined
     if (first?.available) {
       const key = normalizeAudioSourcePath(first.sourcePath)
-      paths.set(key, 512)
+      // Prefer the caller's continuously measured tier. Falling back to a one-shot measurement
+      // here is what froze the hero: this callback only re-runs when the demand object changes,
+      // and a shrinking viewport did not change it.
+      const heroEdge = typeof demand?.heroEdge === 'number' && demand.heroEdge > 256
+        ? toPlaylistCoverEdge(demand.heroEdge)
+        : selectHeroEdge()
+      paths.set(key, heroEdge)
       visiblePaths.add(key)
     }
     if (showArtwork) {

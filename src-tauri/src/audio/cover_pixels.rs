@@ -52,7 +52,17 @@ const ALLOWED_PLAYLIST_MAX_EDGES: [u32; 3] = [128, 256, 512];
 ///   * 2048 is intentionally absent: the architecture plan defers it until a real
 ///     WebView bit-residency measurement exists, and the player's large-art edge
 ///     list is a different contract.
-const ALLOWED_PATH_MAX_EDGES: [u32; 5] = [128, 256, 512, 1024, 1536];
+/// Edges the PATH lane accepts.
+///
+/// The PIXEL lane stays at 128/256/512 because it decodes RGBA into the managed budget; a hero
+/// tier there would be a real failure, not a fallback (plan §4.3). The path lane returns a file
+/// on disk, so it can carry the hero tiers.
+///
+/// 2048 was enabled after the WV2 measurement showed WebView bitmaps live in GPU memory rather
+/// than the JS heap (~10 MB per tier step for the whole process tree), which was D2's stated
+/// precondition. Note the residual gain is small: at the widest supported window the hero needs
+/// 2190 physical px, so 1536 already leaves 1.43x and 2048 reaches 1.07x.
+const ALLOWED_PATH_MAX_EDGES: [u32; 6] = [128, 256, 512, 1024, 1536, 2048];
 const MAX_PLAYLIST_CLIENTS: usize = 16;
 /// Ceiling for concurrent *playlist/track pixel decodes*.
 ///
@@ -3065,7 +3075,7 @@ pub(super) fn validate_path_max_edge(max_edge: u32) -> Result<(), CoverPixelsErr
     } else {
         Err(CoverPixelsError::recoverable(
             CoverPixelsErrorCode::InvalidMaxEdge,
-            "thumbnail path maxEdge must be 128, 256, 512, 1024, or 1536",
+            "thumbnail path maxEdge must be 128, 256, 512, 1024, 1536, or 2048",
         ))
     }
 }
@@ -6278,16 +6288,21 @@ mod tests {
 
 
     #[test]
-    fn path_lane_rejects_deferred_and_intermediate_tiers() {
-        // 768 is an intermediate tier nobody asked for; 2048 is deliberately deferred
-        // until a real WebView bit-residency measurement exists; 3072 is the player's
-        // large-art reserve and is not a path tier.
-        for edge in [0u32, 64, 192, 768, 2048, 3072, 4096] {
+    fn path_lane_rejects_intermediate_and_player_only_tiers() {
+        // 768 is an intermediate tier nobody asked for; 3072 is the player's large-art reserve.
+        // 2048 is NO LONGER deferred: the WV2 measurement showed WebView bitmaps live in GPU
+        // memory rather than the JS heap, which was the stated precondition for enabling it.
+        for edge in [0u32, 64, 192, 768, 3072, 4096] {
             assert!(
                 validate_path_max_edge(edge).is_err(),
                 "path lane must reject {edge}"
             );
         }
+        // ...and the newly enabled tier must be accepted, so the change is proven both ways.
+        assert!(
+            validate_path_max_edge(2048).is_ok(),
+            "2048 is an accepted path tier after the WV2 measurement"
+        );
     }
 
     #[test]
@@ -6526,6 +6541,70 @@ mod tests {
         );
     }
 
+    /// The JPEG dimension ceiling follows the REQUESTED edge (plan §8.1 RS7).
+    ///
+    /// The ceiling used to be derived from the whitelist maximum. Now that the path lane accepts
+    /// 1024/1536 while the pixel lane does not, a derived-from-pixel-ceiling check would reject
+    /// every hero file; a derived-from-path-ceiling check would let a 512 request accept a 1536
+    /// image. Only "ceiling = requested edge" is correct.
+    #[test]
+    fn parse_playlist_jpeg_ceiling_follows_the_requested_edge() {
+        use image::{DynamicImage, Rgba, RgbaImage};
+
+        // A genuinely encoded 1536x512 JPEG: the hero's real output shape at the top tier.
+        let hero = encode_playlist_jpeg(DynamicImage::ImageRgba8(RgbaImage::from_pixel(
+            1536,
+            512,
+            Rgba([40, 90, 160, 255]),
+        )))
+        .unwrap();
+
+        // Accepted when the request asked for 1536, with the real dimensions reported.
+        assert_eq!(
+            parse_playlist_jpeg(&hero, 1536),
+            Some((1536, 512)),
+            "a 1536-wide file must parse at the 1536 edge"
+        );
+
+        // Refused when the request asked for 512: this request could never have produced it.
+        assert_eq!(
+            parse_playlist_jpeg(&hero, 512),
+            None,
+            "a 512 request must not accept a 1536-wide file"
+        );
+
+        // And still refused at the pixel lane's own ceiling, which is unchanged.
+        assert_eq!(
+            parse_playlist_jpeg(&hero, 256),
+            None,
+            "a 256 request must not accept a 1536-wide file"
+        );
+
+        // A 1024 request likewise rejects it (1536 > 1024), while a 1536 request accepts.
+        assert_eq!(parse_playlist_jpeg(&hero, 1024), None, "1024 must reject a 1536 file");
+    }
+
+    /// The byte cap is strictly ordered across the accepted tiers (plan §8.1 RS8).
+    ///
+    /// A larger tier must never be capped BELOW a smaller one, otherwise a hero read could be
+    /// refused for a byte count that a list row is allowed to spend.
+    #[test]
+    fn path_cap_never_shrinks_as_the_edge_grows() {
+        let tiers = [128u32, 256, 512, 1024, 1536];
+        for pair in tiers.windows(2) {
+            let lower = thumbnail_path_max_bytes_for_edge(pair[0]);
+            let upper = thumbnail_path_max_bytes_for_edge(pair[1]);
+            assert!(
+                upper >= lower,
+                "cap must not shrink from {} to {}: {} vs {}",
+                pair[0],
+                pair[1],
+                lower,
+                upper
+            );
+        }
+    }
+
     #[test]
     fn warmup_helper_still_refuses_hero_tiers() {
         // The public warmup surface stays at the pixel lane's 128/256 set even though the
@@ -6713,7 +6792,8 @@ mod tests {
     /// Every production path entry refuses the deferred and intermediate tiers.
     #[test]
     fn production_path_entries_reject_unaccepted_tiers() {
-        for edge in [768u32, 2048] {
+        // 768 is the only remaining unaccepted tier; 2048 was enabled with the WV2 measurement.
+        for edge in [768u32] {
             let directory = TestDirectory::new();
             let covers = directory.path().join(AUDIO_CACHE_DIRECTORY).join(COVER_DIRECTORY);
             fs::create_dir_all(&covers).unwrap();

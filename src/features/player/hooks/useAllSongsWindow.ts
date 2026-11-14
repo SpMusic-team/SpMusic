@@ -20,7 +20,7 @@ import {
 } from '@/features/player/model/playlistCoverReadiness'
 import type { PlaylistCoverImage } from '@/features/player/model/playerUiViewModel'
 import type { AllSongsItem } from '@/features/player/model/playerUiViewModel'
-import { beginAudioPlaylistCoverWindow } from '@/features/player/services/audioCommands'
+import { beginAudioPlaylistCoverWindow, type AudioThumbnailPathMaxEdge } from '@/features/player/services/audioCommands'
 import { scheduleFolderThumbnail, scheduleTrackThumbnail } from '@/features/player/services/playlistCoverScheduler'
 import {
   attemptFolderThumbnailPath,
@@ -31,10 +31,33 @@ import {
 import { orderPlaylistArtworkRows, type PlaylistArtworkDirection } from '@/features/player/model/playlistArtworkOrder'
 import { isStreamSource } from '../model/streams'
 
-export type FolderCoverItem = Readonly<{ kind: 'folder'; key: string; rootPath: string; directoryPath: string; available: boolean }>
-type TrackCoverItem = Pick<AllSongsItem, 'key' | 'trackId' | 'sourcePath' | 'available' | 'artworkRevision'>
-export type TrackCandidatesCoverItem = Readonly<{ kind: 'track-candidates'; key: string; candidates: readonly TrackCoverItem[]; available: boolean }>
+/**
+ * Edge a category-page cover row should be read at.
+ *
+ * `undefined` means "the ordinary 256 row". Only a hero item carries a value, and the value
+ * is always one of the hero tiers.
+ */
+type HeroCoverEdge = number | undefined
+
+export type FolderCoverItem = Readonly<{ kind: 'folder'; key: string; rootPath: string; directoryPath: string; available: boolean; heroEdge?: HeroCoverEdge }>
+type TrackCoverItem = Pick<AllSongsItem, 'key' | 'trackId' | 'sourcePath' | 'available' | 'artworkRevision'> & Readonly<{ heroEdge?: HeroCoverEdge }>
+export type TrackCandidatesCoverItem = Readonly<{ kind: 'track-candidates'; key: string; candidates: readonly TrackCoverItem[]; available: boolean; heroEdge?: HeroCoverEdge }>
 export type AllSongsCoverItem = TrackCoverItem | FolderCoverItem | TrackCandidatesCoverItem
+
+/**
+ * Edge the PATH lane should request for this item.
+ *
+ * Hero items may ask for a high tier; everything else — and every item with no hero marker —
+ * stays on the ordinary 256 lane. The pixel fallback never calls this (see the call sites):
+ * the pixel commands refuse anything above 256, so a high value there would be a counted
+ * failure rather than a fallback (plan §4.3).
+ */
+function heroPathEdge(item: AllSongsCoverItem): AudioThumbnailPathMaxEdge {
+  const hero = 'heroEdge' in item ? item.heroEdge : undefined
+  // Only tiers the PATH command actually accepts may be forwarded; anything else falls back
+  // to the ordinary row lane rather than being sent and rejected.
+  return hero === 1024 || hero === 1536 ? hero : 256
+}
 
 /** Which channel produced a row's current URL. Recovery semantics depend on it. */
 export type CoverSourceLane = 'path' | 'pixels'
@@ -67,10 +90,18 @@ type WindowRow = (Readonly<{ trackId: string; sourcePath: string; artworkRevisio
 }>
 
 function coverIdentity(item: AllSongsCoverItem | WindowRow, revision = true): string {
-  if ('kind' in item && item.kind === 'track-candidates') return JSON.stringify(['track-candidates', item.candidates.map(candidate => [candidate.trackId, candidate.sourcePath, candidate.available, ...(revision ? [candidate.artworkRevision ?? 0] : [])])])
+  // The hero's tier participates in the identity for HERO items only. A hero upgrade or an
+  // exit downgrade is therefore an identity change, which reuses the existing
+  // "identity changed → re-fetch" path instead of needing a new mechanism (plan §7.4 (c)).
+  // Ordinary rows contribute nothing here, so their identity — and their cache rows — are
+  // exactly as before.
+  const edge = 'heroEdge' in item && typeof item.heroEdge === 'number' && item.heroEdge > 256
+    ? item.heroEdge
+    : 0
+  if ('kind' in item && item.kind === 'track-candidates') return JSON.stringify(['track-candidates', edge, item.candidates.map(candidate => [candidate.trackId, candidate.sourcePath, candidate.available, ...(revision ? [candidate.artworkRevision ?? 0] : [])])])
   return 'kind' in item && item.kind === 'folder'
-    ? JSON.stringify(['folder', item.rootPath, item.directoryPath])
-    : JSON.stringify(['track', (item as TrackCoverItem).trackId, (item as TrackCoverItem).sourcePath, ...(revision ? [(item as TrackCoverItem).artworkRevision ?? 0] : [])])
+    ? JSON.stringify(['folder', edge, item.rootPath, item.directoryPath])
+    : JSON.stringify(['track', edge, (item as TrackCoverItem).trackId, (item as TrackCoverItem).sourcePath, ...(revision ? [(item as TrackCoverItem).artworkRevision ?? 0] : [])])
 }
 
 function cacheDescriptor(item: AllSongsCoverItem): WindowRow {
@@ -714,7 +745,7 @@ export function useAllSongsWindow(items: readonly AllSongsCoverItem[], panelRef:
                 if (!itemIsCurrent()) return
                 if (!candidate.available || isStreamSource(candidate)) continue
                 const attempt = await attemptTrackThumbnailPath(
-                  { clientId, sourcePath: candidate.sourcePath, maxEdge: 256, windowGeneration: coverGeneration },
+                  { clientId, sourcePath: candidate.sourcePath, maxEdge: heroPathEdge(item), windowGeneration: coverGeneration },
                   attemptOptions,
                 )
                 // A superseded candidate request ends this row without publishing
@@ -761,11 +792,11 @@ export function useAllSongsWindow(items: readonly AllSongsCoverItem[], panelRef:
             } else if ('kind' in item || !isStreamSource(item)) {
               const attempt = 'kind' in item
                 ? await attemptFolderThumbnailPath(
-                  { clientId, rootPath: item.rootPath, directoryPath: item.directoryPath, maxEdge: 256, windowGeneration: coverGeneration },
+                  { clientId, rootPath: item.rootPath, directoryPath: item.directoryPath, maxEdge: heroPathEdge(item), windowGeneration: coverGeneration },
                   attemptOptions,
                 )
                 : await attemptTrackThumbnailPath(
-                  { clientId, sourcePath: item.sourcePath, maxEdge: 256, windowGeneration: coverGeneration },
+                  { clientId, sourcePath: item.sourcePath, maxEdge: heroPathEdge(item), windowGeneration: coverGeneration },
                   attemptOptions,
                 )
               if (attempt.status === 'dropped') return

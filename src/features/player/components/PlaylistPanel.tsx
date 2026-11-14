@@ -22,6 +22,7 @@ import { mergeFilteredSongOrder } from '@/features/player/model/manualSongOrderS
 import { CollectionHero } from '@/features/player/components/CollectionHero'
 import { PlaylistHeroMoreMenu } from '@/features/player/components/PlaylistHeroMoreMenu'
 import { useCollectionHeroMotion, useCollectionHeroVisibility } from '@/features/player/hooks/useCollectionHeroMotion'
+import { useHeroTier } from '@/features/player/hooks/useHeroTier'
 import { LibraryDockContext, useLibraryDockBinding } from '@/features/player/hooks/useLibraryDockBinding'
 import { LibraryChromeTransitionContext } from '@/features/player/hooks/useLibraryChromeTransition'
 import { readLibraryLayoutRect } from '@/features/player/model/libraryNavigationGeometry'
@@ -294,6 +295,12 @@ export function PlaylistPanel({
   // those nodes while their layoutId still identifies the old projection stack.
   const [heroOffscreen, setHeroOffscreen] = useState(false)
   const isPresent = useIsPresent()
+  // The hero's tier follows the viewport. Without this the tier is whatever the artwork hook
+  // happened to measure when it first seeded its detail paths, so shrinking the window (or
+  // dragging to a smaller display) keeps requesting the larger image indefinitely.
+  //
+  // Gated on presence so an exiting panel stops asking for a high tier.
+  const heroTier = useHeroTier(isPresent && !heroOffscreen)
   const onEntrySettledRef = useRef(onEntrySettled)
   useLayoutEffect(() => { onEntrySettledRef.current = onEntrySettled }, [onEntrySettled])
   const entryMotionSettledRef = useRef(false)
@@ -697,7 +704,9 @@ export function PlaylistPanel({
       const cover = grid.querySelector<HTMLElement>('.playlist-card-cover')
       const coverCssPixels = cover?.getBoundingClientRect().width ?? 128
       const dpr = window.devicePixelRatio || 1
-      const windowKey = `${coverCssPixels}\u0000${dpr}\u0000${visibleTrackIds.join('\u0000')}\u0001${orderedIds.join('\u0000')}`
+      // The hero tier participates in the dedupe key: a tier-only change (same cards, same DPR,
+      // smaller viewport) must still reach the artwork pipeline.
+      const windowKey = `${coverCssPixels}\u0000${dpr}\u0000${heroTier ?? 0}\u0000${visibleTrackIds.join('\u0000')}\u0001${orderedIds.join('\u0000')}`
       if (artworkWindowKeyRef.current === windowKey) return
       const nextWindow = new Set(orderedIds)
       artworkWindowKeyRef.current = windowKey
@@ -709,6 +718,7 @@ export function PlaylistPanel({
         heldIds: heldIds ? [...heldIds] : [],
         coverCssPixels,
         dpr,
+        heroEdge: heroTier,
       })
     }
     const schedulePublish = () => {
@@ -779,7 +789,7 @@ export function PlaylistPanel({
       resolution.removeEventListener('change', onResolutionChange)
       if (frameId !== null) cancelAnimationFrame(frameId)
     }
-  }, [filteredTrackIdsKey, firstFilteredTrackId, layout.level, layout.showArtwork, metadataStatus, onVisibleTrackIdsChange, artworkWindowRevision, clearArtworkWindow])
+  }, [filteredTrackIdsKey, firstFilteredTrackId, layout.level, layout.showArtwork, metadataStatus, onVisibleTrackIdsChange, artworkWindowRevision, clearArtworkWindow, heroTier])
 
   const playableTrackId = filteredTracks.find((track) => !unavailable.has(track.id))?.id
   const shuffleTracks = useMemo(() => filteredTracks.filter((track) => !unavailable.has(track.id)

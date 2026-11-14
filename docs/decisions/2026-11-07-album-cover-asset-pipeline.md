@@ -73,6 +73,8 @@ C1 是唯一必须在实现中修掉的缺陷，否则本次优化会引入磁�
 
 **结论**：分层由「调用哪条命令」决定，不由 `maxEdge` 数值决定。新增路径命令独占 128/256/512；播放器命令无论收到什么数值都留在像素通道。
 
+> **2026-11-12 修订（hero 清晰度方案落地）**：分层规则**不变**（仍由命令族决定），但路径族的档位集已扩大：`ALLOWED_PATH_MAX_EDGES = [128, 256, 512, 1024, 1536]`，像素族保持 `[128, 256, 512]`。「数值交叠但语义不同」的论证依然有效，且 1024/1536 现在同时存在于播放器集与路径集中，正由命令族而非数值区分。
+
 ## 决策 2：新增独立命令，不给现有命令加参数
 
 ### 2.1 为什么不加参数
@@ -320,6 +322,8 @@ export function scheduleFolderThumbnailPath(input: AudioLoadFolderThumbnailPathI
 
 **需要记录的行为变化**：解码方从 Rust 变成 WebView（asset 协议），前端不再持有 262 KiB 的 RGBA 中转缓冲。`useAudioPlayer.ts:214` 的 `PLAYLIST_ARTWORK_INFLIGHT_BUDGET = MAX_CONCURRENT * 512 * 512 * 4`（4 MiB）与 `:207` 的 48 MiB 驻留预算本次**均不改**——前者仍在像素回落通道下为真，后者按 `playlistArtworkBytes(edge) = edge*edge*7 + 54`（`:220-222`）估算，对 JPEG 通道是**高估**（7 B/px 假设 BMP+RGBA，实际 asset 通道只有 WebView 侧 4 B/px 解码位图），保守方向，可以留到有实测数据再收敛。
 
+> **2026-11-12 修订（hero 清晰度方案落地）**：本条对 `INFLIGHT_BUDGET` 的结论**仍然成立**（保持 `MAX_CONCURRENT * 512 * 512 * 4`，因 512 仍是可能真实分配 RGBA 的最大宽度）；但 `PLAYLIST_ARTWORK_RESIDENT_BUDGET` 已由 48 MiB 提升到 **64 MiB**，理由与推导见 `hero-cover-sharpness-plan.md` §7.2（hero 提档后 committed +14 MiB，不扩容会使 warm 预算缩水 33%）。「7 B/px 对 JPEG 通道是高估」的结论保留。
+
 ## 决策 8：`sweep()` 与 URL 生命周期——不需要改动
 
 流程如下（`useAllSongsWindow.ts:60-71`）：
@@ -516,6 +520,8 @@ flowchart TB
 
 1. 分层：`audio_load_cover_pixels` 收到 `maxEdge=512` 时**仍返回 SPXR 裸像素**，不得改道 JPEG。
 2. 命令族：`audio_load_track_thumbnail_path` 接受 128/256/512，拒绝 768/1024；`audio_load_track_thumbnail`（像素）仍拒绝 512。
+
+> **2026-11-12 修订（hero 清晰度方案落地）**：该描述已过时：`audio_load_track_thumbnail_path` 现接受 128/256/512/1024/1536（拒绝 768/3072），而 `audio_load_track_thumbnail`（像素）仍只接受 128/256。
 3. 语义对齐：同一曲目在路径通道 `Ok(None)` 与像素通道零长 `Response` 两个场景下，前端 `hasLocalArtwork` 结论一致。
 4. 预算：写入一批 `.jpg` 后，`scan_thumbnail_usage` 的 `bytes`/`files` 必须包含它们；构造超限场景时 `.jpg` 会被 mtime 淘汰，且 `audio/covers` 原图不受影响。
 5. 原子性：并发同键请求最多产生一份有效文件，不出现半成品被当作命中；`wait_path_idle` 超时后返回 `Err` 而非不存在的路径。

@@ -159,7 +159,7 @@ export type AudioThumbnailPath = {
  * 2048 is intentionally absent — the architecture plan defers it until a WebView
  * bit-residency measurement exists.
  */
-export type AudioThumbnailPathMaxEdge = 128 | 256 | 512 | 1024 | 1536
+export type AudioThumbnailPathMaxEdge = 128 | 256 | 512 | 1024 | 1536 | 2048
 
 export type AudioLoadTrackThumbnailPathInput = {
   clientId: string
@@ -591,7 +591,7 @@ export async function queryPlaylistDecodePermitWidth(): Promise<unknown> {
 //   `thumbnail_path_max_bytes_for_edge` -> thumbnailPathMaxBytesForEdge
 //
 // The pixel lane keeps its own older bounds below; do not merge the two.
-const THUMBNAIL_PATH_ALLOWED_EDGES: readonly AudioThumbnailPathMaxEdge[] = [128, 256, 512, 1024, 1536]
+const THUMBNAIL_PATH_ALLOWED_EDGES: readonly AudioThumbnailPathMaxEdge[] = [128, 256, 512, 1024, 1536, 2048]
 const THUMBNAIL_PATH_MIN_BYTES = 1024 * 1024
 const THUMBNAIL_PATH_MAX_BYTES_CEILING = 16 * 1024 * 1024
 

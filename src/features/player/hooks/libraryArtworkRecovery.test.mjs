@@ -101,6 +101,11 @@ async function harness(options = {}) {
   }
 
   globalThis.__libraryArtworkTest = {
+  // Deterministic hero tier for these recovery tests: they assert that a failure is retried
+  // at the SAME edge, which must hold at any tier.
+  selectHeroEdge: () => 1536,
+  isHeroEdge: value => value === 1024 || value === 1536 || value === 2048,
+  HERO_MAX_EDGE: 1536,
     useState: (initial) => {
       const index = stateIndex++
       if (!(index in states)) states[index] = typeof initial === 'function' ? initial() : initial
@@ -248,6 +253,7 @@ async function harness(options = {}) {
       probeAudioPlaylistCover, scheduleTrackThumbnail, schedulePlaylistCoverPixels,
       attemptTrackThumbnailPath, attemptPlaylistCoverThumbnailPath,
       playlistCoverImageFromPixels, isPlaylistCoverDecoded, decodePlaylistCover,
+      selectHeroEdge, isHeroEdge, HERO_MAX_EDGE,
       URL, document, IntersectionObserver, ResizeObserver, MutationObserver } = globalThis.__libraryArtworkTest
     const window = globalThis.__libraryArtworkTest
     const createImageBitmap = () => globalThis.__libraryArtworkTest.createImageBitmap()
@@ -542,7 +548,11 @@ test('a 512 hero whose presented image fails later forces the cover pixel lane a
     const coverPathRequests = h.pathRequests.filter((request) => request.kind === 'cover')
     assert.equal(coverPathRequests.length, 1,
       `the 512 hero used the cover path helper; path=${JSON.stringify(h.pathRequests.map((r) => [r.kind, r.input.maxEdge]))}`)
-    assert.equal(coverPathRequests[0].input.maxEdge, 512, 'the hero read the original 512 edge')
+    // Pin the RECOVERY contract rather than a literal tier: whatever edge this request used,
+    // the retry below must use the same one. (Which tier is chosen is covered by the selector's
+    // own tests; this file is about recovery.)
+    const heroEdge = coverPathRequests[0].input.maxEdge
+    assert.ok(heroEdge >= 256, `the hero read through the path lane, got ${heroEdge}`)
 
     // The element confirmed the image, so the upgrade is no longer "pending": a
     // later failure is a failure of the current presentation, not a rollback. The
@@ -555,7 +565,9 @@ test('a 512 hero whose presented image fails later forces the cover pixel lane a
     await h.settle(['/music/album/0.flac', '/music/album/1.flac'])
     assert.equal(h.pathRequests.length, beforePath, 'the 512 recovery never re-enters thumbnail_path')
     assert.equal(h.coverPixelRequests.length, 1, 'the 512 recovery uses schedulePlaylistCoverPixels')
-    assert.equal(h.coverPixelRequests[0].input.maxEdge, 512, 'the recovery preserves the failing edge')
+    // The recovery edge must equal the failed publication's edge (plan §5.4 L4): a hero tier
+    // that failed must NOT be silently retried at a lower tier.
+    assert.equal(h.coverPixelRequests[0].input.maxEdge, heroEdge, 'the recovery preserves the failing edge')
     assert.equal(h.coverPixelRequests[0].input.filePath, '/music/album/0.jpg',
       'the validated cover-file identity is preserved')
   } finally { h.unmount() }

@@ -142,14 +142,17 @@ test('a payload one byte over the per-tier cap is rejected', async () => {
   }
 })
 
-test('a request at a deferred tier is rejected even with a plausible payload', async () => {
-  // 2048 is not a path tier; the wrapper's own acceptance check must refuse it.
+test('a request at the newly enabled 2048 tier is accepted', async () => {
+  // 2048 became a path tier once the WV2 measurement showed WebView bitmaps live in GPU memory
+  // rather than the JS heap. This asserts the acceptance path end to end; the rejection path is
+  // still covered by the 768 case below.
   for (const loader of ['track', 'folder', 'playlist']) {
     const h = await harness(pathResponse(2048, 512, 900_000))
     const input = loader === 'track' ? trackInput(2048)
       : loader === 'folder' ? folderInput(2048) : playlistInput(2048)
-    await assert.rejects(h[loader](input), /metadata is inconsistent/,
-      `${loader} must refuse the deferred 2048 tier`)
+    const result = await h[loader](input)
+    assert(result, `${loader} must accept the 2048 tier`)
+    assert.notEqual(result.status, 'rejected', `${loader} must not report 2048 as rejected`)
   }
 })
 

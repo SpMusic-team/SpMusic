@@ -220,16 +220,18 @@ export function PlaylistAddDialog({ selection, request: initialRequest, containe
 }
 
 
-export function PlaylistDeleteDialog({ open, container, mode: deleteMode, canRemoveFromList: deleteCanRemoveFromList, canDeleteFiles = true, busy: deleteBusy, error: deleteError, onCancel, onModeChange, onConfirm }: {
-  open: boolean; container?: RefObject<HTMLElement | null>; mode: 'list' | 'files'; canRemoveFromList: boolean; canDeleteFiles?: boolean; busy: boolean; error: string | null
+export function PlaylistDeleteDialog({ open, container, target, mode: deleteMode, canRemoveFromList: deleteCanRemoveFromList, canDeleteFiles = true, busy: deleteBusy, error: deleteError, onCancel, onModeChange, onConfirm }: {
+  open: boolean; container?: RefObject<HTMLElement | null>; target?: 'playlists'; mode: 'list' | 'files'; canRemoveFromList: boolean; canDeleteFiles?: boolean; busy: boolean; error: string | null
   onCancel: () => void; onModeChange: (mode: 'list' | 'files') => void; onConfirm: () => void
 }) {
   const Popup = container ? DialogPrimitive.Popup : StandalonePopup
   return <Dialog open={open} onOpenChange={next => { if (!next && !deleteBusy) onCancel() }}>
       <OptionalPortal container={container}>
       <Popup className="playlist-selection-delete-dialog" data-slot="dialog-content" hidden={!open}>
-        <DialogTitle className="playlist-selection-delete-title">{deleteMode === 'files' ? '确定删除歌曲文件？' : '确定删除多个条目？'}</DialogTitle>
-        <DialogDescription className="playlist-selection-delete-description">{deleteMode === 'files'
+        <DialogTitle className="playlist-selection-delete-title">{deleteMode === 'files' ? target === 'playlists' ? '确定删除播放列表文件？' : '确定删除歌曲文件？' : '确定删除多个条目？'}</DialogTitle>
+        <DialogDescription className="playlist-selection-delete-description">{target === 'playlists'
+          ? deleteMode === 'files' ? '选中的播放列表将会删除，其文件将移至回收站。歌曲将会保留' : '选中的播放列表将会删除，歌曲和播放列表文件将会保留'
+          : deleteMode === 'files'
           ? '歌曲文件将移至回收站，并从所有列表中移除'
           : deleteCanRemoveFromList ? canDeleteFiles ? '列表条目将被删除，歌曲文件将保留' : '只移除流列表中的地址，其他播放列表中的引用将保留' : '文件夹扫描视图不支持仅移除列表条目，可选择删除文件'}</DialogDescription>
         {deleteError ? <p className="playlist-selection-error" role="alert">{deleteError}</p> : null}

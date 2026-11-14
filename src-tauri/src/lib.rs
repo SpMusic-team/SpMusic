@@ -345,6 +345,22 @@ async fn library_reorder_playlist_tracks(
 }
 
 #[tauri::command]
+async fn library_delete_playlists(
+    input: library_playlists::DeletePlaylistsInput,
+    app: tauri::AppHandle,
+) -> Result<library_playlists::DeletePlaylistsResult, LibraryError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<LibraryPlaylistRegistry>().delete_playlists(input)
+    })
+    .await
+    .map_err(|error| {
+        LibraryError::storage(format!(
+            "播放列表删除任务意外中断，结果未知，请检查列表文件：{error}"
+        ))
+    })?
+}
+
+#[tauri::command]
 async fn library_delete_tracks(
     input: library_deletion::DeleteTracksInput,
     app: tauri::AppHandle,
@@ -930,6 +946,7 @@ pub fn run() {
             library_replace_folders,
             library_list_folder_directories,
             library_get_playlists,
+            library_delete_playlists,
             library_delete_tracks,
             library_add_playlist_tracks,
             library_reorder_playlist_tracks,

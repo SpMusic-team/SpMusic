@@ -92,8 +92,10 @@ export function useLibraryDockBinding(routeKey: string, binding: LibraryDockBind
   const openTarget = useCallback((scope: string) => selectionRef.current?.onOpenPlaylistTarget?.(scope), [])
   const deleteSongs = useCallback<PlaylistDeleteAction>((snapshot, mode) => {
     const action = selectionRef.current?.onDelete
-    const currentScope = selectionRef.current?.onPrepareDelete?.()?.scope
-    return action && currentScope === snapshot.scope ? action(snapshot, mode) : Promise.resolve({ succeededKeys: [], failedKeys: [...snapshot.songKeys], errorMessage: '当前列表已关闭，请重新选择歌曲。' })
+    const current = selectionRef.current?.onPrepareDelete?.()
+    return action && current && current.scope === snapshot.scope && current.target === snapshot.target
+      ? action(snapshot, mode)
+      : Promise.resolve({ succeededKeys: [], failedKeys: [...snapshot.songKeys], errorMessage: '当前列表已关闭，请重新选择条目。' })
   }, [])
   const selectionActive = binding.selection?.active ?? false
   const selectionScope = binding.selection?.scope

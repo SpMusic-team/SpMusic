@@ -140,7 +140,13 @@ export function LibraryRootMenu({ categoryId, library, onSort, onListOptions, ro
       }
       if (action.label === '清空' && library.onClearMostPlayed) { setClearMost(true); return }
     }
-    if (action === settings && onListOptions) { setOpen(false); onListOptions(); return }
+    if (action === settings && onListOptions) {
+      trigger.current?.focus({ preventScroll: true })
+      setTransferring(true)
+      setOpen(false)
+      onListOptions()
+      return
+    }
     if (action === sort && onSort) { setOpen(false); onSort(); return }
     if (action === settings && categoryId === 'long-tracks' && library.onLongTracksMinDurationChange) {
       setDurationMinutes(String((library.longTracksMinDurationMs ?? DEFAULT_LONG_TRACKS_MIN_DURATION_MS) / 60000))

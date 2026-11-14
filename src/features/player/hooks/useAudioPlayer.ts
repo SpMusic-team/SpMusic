@@ -74,6 +74,7 @@ import type {
   PlaylistTrackMetadata,
   PlaylistTrackVisual,
   PlaylistDeleteAction,
+  PlaylistLibraryViewModel,
   PlaylistAddAction,
   PlaylistAddSnapshot,
   PlaylistAddRequest,
@@ -100,6 +101,7 @@ import {
   cancelLibraryCoverWarmup,
   clearLibraryFolders,
   deleteLibraryTracks,
+  deleteLibraryPlaylists,
   addLibraryPlaylistTracks,
   reorderLibraryPlaylistTracks,
   getLibraryFolders,
@@ -5472,9 +5474,91 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     }
   }, [commitReorderedPlaylist, findPlaylistForScope, selectableSourceTracks, selectedLibraryTracks, libraryRestorePending, playlistRestorePending, libraryStatus])
 
+  const deletePlaylists = useCallback<NonNullable<PlaylistLibraryViewModel['onDeletePlaylists']>>(async (scopes, mode) => {
+    const keys = [...new Set(scopes)]
+    const failed = (message: string) => ({ succeededKeys: [], failedKeys: keys, errorMessage: message })
+    if (!keys.length) return failed('请先选择播放列表。')
+    if (mode !== 'list' && mode !== 'files') return failed('不支持此删除方式。')
+    if (deletePendingRef.current || playlistSummaryDisposedRef.current || libraryImportPendingRef.current || librarySavePendingRef.current
+      || libraryRestorePending || playlistRestorePending || libraryStatus === 'clearing'
+      || sessionRestorePendingRef.current || audioSelectionInProgressRef.current || transportOperationInProgress()
+      || timelineInteractionRef.current === 'seeking') return failed('正在处理其他操作，请稍后重试。')
+    // Resolve only the frozen root selection. Neither track paths nor playback
+    // queue descriptors may cross the playlist-file deletion boundary.
+    const targets = keys.flatMap(scope => {
+      const source = sessionPlaylistDescriptorsRef.current.get(scope)
+      return source && !playbackQueueOrigin(source) && (source.sourceKind === 'custom' || source.sourceKind === 'm3u8')
+        ? [{ scope, source }] : []
+    })
+    if (!targets.length) return failed('所选播放列表已改变，请重新选择。')
+    deletePendingRef.current = true
+    setDeletePending(true)
+    descriptorMutationGenerationRef.current += 1
+    try {
+      const localScopes = targets.filter(({ scope, source }) => source.sourceKind === 'custom'
+        || mode === 'list' && !registeredM3uScopesRef.current.has(scope)).map(({ scope }) => scope)
+      const imported = targets.filter(({ scope, source }) => source.sourceKind === 'm3u8' && registeredM3uScopesRef.current.has(scope))
+      const succeeded = new Set(localScopes)
+      const messages: string[] = []
+      if (mode === 'files' && targets.some(({ scope, source }) => source.sourceKind === 'm3u8' && !registeredM3uScopesRef.current.has(scope))) {
+        messages.push('未导入的播放列表仅支持移除条目；如需删除源文件，请先导入播放列表。')
+      }
+      if (imported.length) {
+        try {
+          const result = await deleteLibraryPlaylists({ mode, sourcePaths: imported.map(({ source }) => source.sourcePath) })
+          const removed = new Set(result.removedPaths.map(normalizeAudioSourcePath))
+          for (const { scope, source } of imported) {
+            if (removed.has(normalizeAudioSourcePath(source.sourcePath))) succeeded.add(scope)
+          }
+          messages.push(...result.failures.map(item => item.message))
+          if (result.storageError) messages.push(`${result.recycledPaths.length ? '播放列表文件已移至回收站，但' : ''}播放列表保存失败：${result.storageError.message}`)
+        } catch (error) {
+          messages.push(error instanceof Error ? error.message : commandError(error).message)
+        }
+      }
+      if (playlistSummaryDisposedRef.current) return {
+        succeededKeys: [...succeeded], failedKeys: keys.filter(scope => !succeeded.has(scope)),
+        errorMessage: messages.length ? [...new Set(messages)].slice(0, 3).join('；') : undefined,
+      }
+      if (succeeded.size) {
+        for (const scope of succeeded) {
+          sessionPlaylistDescriptorsRef.current.delete(scope)
+          registeredM3uScopesRef.current.delete(scope)
+          // Deleting the run identity fences in-flight tag/cover-summary jobs.
+          playlistSummaryRunRef.current.delete(scope)
+        }
+        setSessionPlaylists(previous => previous.filter(source => !succeeded.has(playlistScope(source))))
+        playlistSummaryRowsRef.current = Object.fromEntries(Object.entries(playlistSummaryRowsRef.current).filter(([scope]) => !succeeded.has(scope)))
+        playlistSummaryStatusRef.current = Object.fromEntries(Object.entries(playlistSummaryStatusRef.current).filter(([scope]) => !succeeded.has(scope)))
+        setPlaylistTrackSummariesByScope(playlistSummaryRowsRef.current)
+        setPlaylistSummaryStatusByScope(playlistSummaryStatusRef.current)
+        const active = folderPlaylistRef.current
+        const origin = playbackQueueOrigin(active)
+        if (active && (succeeded.has(playlistScope(active)) || origin?.sourceScope && succeeded.has(origin.sourceScope))) {
+          // Continue the same audio/queue independently. A detached snapshot has
+          // no sourcePlaylist that could recreate the deleted list on restore.
+          const detached: PlaybackQueuePlaylist = {
+            ...active, sourceKind: 'custom', sourcePath: `queue:detached:${crypto.randomUUID()}`,
+            playbackQueue: { kind: 'all-songs' },
+          }
+          activatePlaylistScope(detached)
+          persistCurrentSession()
+        }
+      }
+      const succeededKeys = keys.filter(scope => succeeded.has(scope))
+      const failedKeys = keys.filter(scope => !succeeded.has(scope))
+      if (failedKeys.length && !messages.length) messages.push('部分播放列表未能删除，请重新选择后重试。')
+      return { succeededKeys, failedKeys, errorMessage: messages.length ? [...new Set(messages)].slice(0, 3).join('；') : undefined }
+    } finally {
+      deletePendingRef.current = false
+      if (!playlistSummaryDisposedRef.current) setDeletePending(false)
+    }
+  }, [activatePlaylistScope, persistCurrentSession, libraryRestorePending, playlistRestorePending, libraryStatus])
+
   const deleteSongs = useCallback<PlaylistDeleteAction>(async (snapshot, mode) => {
     const keys = [...new Set(snapshot.songKeys)]
     const failed = (message: string) => ({ succeededKeys: [], failedKeys: keys, errorMessage: message })
+    if (snapshot.target === 'playlists') return failed('播放列表条目不能通过歌曲删除操作移除。')
     if (!keys.length) return failed('请先选择歌曲。')
     if (deletePendingRef.current || libraryImportPendingRef.current || libraryRestorePending || playlistRestorePending || libraryStatus === 'clearing'
       || sessionRestorePendingRef.current || audioSelectionInProgressRef.current || transportOperationInProgress()
@@ -5665,6 +5749,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     addToPlaylist,
     removeFromPlaylist,
     deleteSongs,
+    deletePlaylists,
     deletePending: deletePending || libraryRestorePending || playlistRestorePending || libraryImportPending,
     clearSelectedLibraryFolders,
     activePlaylistScope: folderPlaylist ? playlistScope(folderPlaylist) : null,

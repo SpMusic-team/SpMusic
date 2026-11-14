@@ -729,6 +729,26 @@ export type LibraryDeleteTracksResult = {
   storageError: { code: string; message: string } | null
 }
 
+export type LibraryDeletePlaylistsResult = {
+  removedPaths: string[]
+  recycledPaths: string[]
+  failures: { sourcePath: string; code: string; message: string }[]
+  playlists: AudioFolderPlaylist[]
+  storageError: { code: string; message: string } | null
+}
+
+export async function deleteLibraryPlaylists(input: { mode: 'list' | 'files'; sourcePaths: string[] }): Promise<LibraryDeletePlaylistsResult> {
+  const result = await invoke<LibraryDeletePlaylistsResult>('library_delete_playlists', { input })
+  if (!result || !Array.isArray(result.removedPaths) || !result.removedPaths.every(path => typeof path === 'string')
+    || !Array.isArray(result.recycledPaths) || !result.recycledPaths.every(path => typeof path === 'string')
+    || !Array.isArray(result.failures) || result.failures.some(item => !item || typeof item.sourcePath !== 'string' || typeof item.code !== 'string' || typeof item.message !== 'string')
+    || !Array.isArray(result.playlists) || result.playlists.some(item => !item || item.sourceKind !== 'm3u8' || typeof item.sourcePath !== 'string' || !Array.isArray(item.tracks))
+    || result.storageError !== null && (!result.storageError || typeof result.storageError.code !== 'string' || typeof result.storageError.message !== 'string')) {
+    throw new Error('播放列表删除结果格式错误，请重新打开列表检查。')
+  }
+  return result
+}
+
 export type LibraryAddPlaylistTracksResult = {
   playlist: AudioFolderPlaylist
   addedPaths: string[]

@@ -821,6 +821,7 @@ export function PlayerShell() {
         onCreateAddPlaylist: createAddPlaylist,
         onDeleteSongs: player.deleteSongs,
         isDeletePending: player.deletePending,
+        onDeletePlaylists: player.deletePlaylists,
       },
       isOpenAudioDisabled: player.audioBusy || player.bookmarkRestoring
         || player.transportBusy

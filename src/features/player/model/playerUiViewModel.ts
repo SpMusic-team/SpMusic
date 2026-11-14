@@ -201,6 +201,8 @@ export type AllSongsItem = Readonly<{
 }>
 
 export type PlaylistDeleteSnapshot = Readonly<{
+  /** Root management uses playlist scopes as keys; undefined targets songs. */
+  target?: 'playlists'
   scope: string | null
   songKeys: readonly string[]
   canRemoveFromList: boolean
@@ -322,6 +324,7 @@ export type PlaylistLibraryViewModel = PlaylistAddCallbacks & {
   onCreatePlaylist?: (name: string, songKeys: readonly string[]) => string | null
   onDeleteSongs?: PlaylistDeleteAction
   isDeletePending?: boolean
+  onDeletePlaylists?: (scopes: readonly string[], mode: PlaylistDeleteMode) => Promise<PlaylistDeleteResult>
 }
 
 export type PlayerPlaylistViewModel = PlaylistAddCallbacks & {

@@ -12,7 +12,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     audio::{restore_playlist_track, AudioFolderPlaylist, AudioPlaylistSourceKind},
-    file_deletion::{path_key as deletion_path_key, DeleteFailure},
+    file_deletion::{
+        checked_regular_file, path_key as deletion_path_key, recycle_file, DeleteFailure,
+    },
     library_folders::{replace_file, LibraryError},
 };
 
@@ -28,6 +30,30 @@ pub struct ReorderPlaylistTracksInput {
     pub ordered_track_paths: Vec<String>,
 }
 
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum DeletePlaylistsMode {
+    List,
+    Files,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeletePlaylistsInput {
+    pub mode: DeletePlaylistsMode,
+    pub source_paths: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeletePlaylistsResult {
+    pub removed_paths: Vec<String>,
+    pub recycled_paths: Vec<String>,
+    pub failures: Vec<DeleteFailure>,
+    pub playlists: Vec<AudioFolderPlaylist>,
+    pub storage_error: Option<LibraryError>,
+}
+
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum PlaylistInsertPosition {
@@ -37,14 +63,14 @@ pub enum PlaylistInsertPosition {
     Random,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct StoredPlaylists {
     version: u8,
     playlists: Vec<StoredPlaylist>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct StoredPlaylist {
     source_kind: StoredSourceKind,
@@ -55,13 +81,13 @@ struct StoredPlaylist {
     tracks: Vec<StoredTrack>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 enum StoredSourceKind {
     #[serde(rename = "m3u8")]
     M3u8,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct StoredTrack {
     source_path: String,
@@ -117,6 +143,129 @@ impl LibraryPlaylistRegistry {
             stored.playlists.push(snapshot);
         }
         self.write(&stored)
+    }
+
+    /// Delete playlist identities, never their referenced songs. Keep the lock
+    /// across authorization, source recycling and commit so other registry
+    /// mutations cannot overwrite this transaction with a stale snapshot.
+    pub(crate) fn delete_playlists(
+        &self,
+        input: DeletePlaylistsInput,
+    ) -> Result<DeletePlaylistsResult, LibraryError> {
+        self.delete_playlists_with(input, recycle_file)
+    }
+
+    fn delete_playlists_with(
+        &self,
+        input: DeletePlaylistsInput,
+        mut recycle: impl FnMut(&Path) -> Result<(), String>,
+    ) -> Result<DeletePlaylistsResult, LibraryError> {
+        if input.source_paths.is_empty()
+            || input.source_paths.len() > 8192
+            || input.source_paths.iter().any(|path| !valid_path(path))
+        {
+            return Err(LibraryError::invalid(
+                "请选择 1 至 8192 个来源为规范绝对路径的播放列表",
+            ));
+        }
+        let _guard = self
+            .lock
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        // A corrupt registry must fail before any filesystem side effect.
+        let before = self.read()?;
+        let known: HashMap<_, _> = before
+            .playlists
+            .iter()
+            .map(|playlist| (deletion_path_key(&playlist.source_path), playlist))
+            .collect();
+        let mut seen = HashSet::new();
+        let mut removed_paths = Vec::new();
+        let mut recycled_paths = Vec::new();
+        let mut failures = Vec::new();
+        for requested in input.source_paths {
+            let key = deletion_path_key(&requested);
+            if !seen.insert(key.clone()) {
+                continue;
+            }
+            let Some(playlist) = known.get(&key) else {
+                failures.push(DeleteFailure::new(
+                    &requested,
+                    "UNKNOWN_PLAYLIST",
+                    "播放列表不属于已导入的列表",
+                ));
+                continue;
+            };
+            if input.mode == DeletePlaylistsMode::Files {
+                // Use the registry's accepted source, not a caller-supplied
+                // alias. The registry validator restricts it to M3U/M3U8.
+                let path = match checked_regular_file(Path::new(&playlist.source_path)) {
+                    Ok(path)
+                        if deletion_path_key(&path.to_string_lossy())
+                            == deletion_path_key(&playlist.source_path) =>
+                    {
+                        path
+                    }
+                    Ok(_) => {
+                        failures.push(DeleteFailure::new(
+                            &requested,
+                            "CHANGED_PATH",
+                            "播放列表文件路径已改变，请重新导入",
+                        ));
+                        continue;
+                    }
+                    Err(error) => {
+                        failures.push(DeleteFailure::new(
+                            &requested,
+                            "INVALID_FILE",
+                            format!("播放列表源文件不可用：{error}。可选择仅移除条目"),
+                        ));
+                        continue;
+                    }
+                };
+                if let Err(error) = recycle(&path) {
+                    failures.push(DeleteFailure::new(&requested, "TRASH_FAILED", error));
+                    continue;
+                }
+                recycled_paths.push(playlist.source_path.clone());
+            }
+            removed_paths.push(playlist.source_path.clone());
+        }
+        let removed_keys: HashSet<_> = removed_paths
+            .iter()
+            .map(|path| deletion_path_key(path))
+            .collect();
+        let mut stored = before.clone();
+        stored
+            .playlists
+            .retain(|playlist| !removed_keys.contains(&deletion_path_key(&playlist.source_path)));
+        let mut storage_error = None;
+        if !removed_paths.is_empty() {
+            if let Err(error) = self.write(&stored) {
+                if input.mode == DeletePlaylistsMode::List {
+                    return Err(error);
+                }
+                // Recycling cannot be rolled back. Report it separately from
+                // committed registry removal and retain every uncommitted row.
+                for path in &removed_paths {
+                    failures.push(DeleteFailure::new(path, error.code, error.message.clone()));
+                }
+                removed_paths.clear();
+                stored = before;
+                storage_error = Some(error);
+            }
+        }
+        Ok(DeletePlaylistsResult {
+            removed_paths,
+            recycled_paths,
+            failures,
+            playlists: stored
+                .playlists
+                .into_iter()
+                .map(StoredPlaylist::restore)
+                .collect(),
+            storage_error,
+        })
     }
 
     pub(crate) fn remove_tracks(
@@ -583,12 +732,14 @@ mod tests {
     };
 
     fn test_dir() -> PathBuf {
+        static NEXT_FIXTURE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let fixture = NEXT_FIXTURE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
         let root = std::env::temp_dir().join(format!(
-            "spmusic-library-playlists-{}-{nonce}",
+            "spmusic-library-playlists-{}-{nonce}-{fixture}",
             std::process::id()
         ));
         fs::create_dir_all(&root).unwrap();
@@ -617,6 +768,363 @@ mod tests {
                 .map(|index| playlist.tracks[*index].source_path.clone())
                 .collect(),
         }
+    }
+
+    fn delete_input(mode: DeletePlaylistsMode, paths: &[&str]) -> DeletePlaylistsInput {
+        DeletePlaylistsInput {
+            mode,
+            source_paths: paths.iter().map(|path| (*path).to_owned()).collect(),
+        }
+    }
+
+    #[test]
+    fn delete_playlists_list_persists_removal_and_preserves_source_and_songs() {
+        let root = test_dir();
+        let song = root.join("sentinel.mp3");
+        fs::write(&song, b"song must survive").unwrap();
+        let first = list(&root, "first", "sentinel.mp3\n");
+        let second = list(&root, "second", "sentinel.mp3\n");
+        let registry = LibraryPlaylistRegistry::new(&root);
+        registry.upsert(&first).unwrap();
+        registry.upsert(&second).unwrap();
+        let result = registry
+            .delete_playlists(delete_input(
+                DeletePlaylistsMode::List,
+                &[&first.source_path, &first.source_path],
+            ))
+            .unwrap();
+        assert_eq!(result.removed_paths, vec![first.source_path.clone()]);
+        assert!(result.recycled_paths.is_empty());
+        assert!(result.failures.is_empty());
+        assert!(result.storage_error.is_none());
+        assert_eq!(result.playlists.len(), 1);
+        assert_eq!(result.playlists[0].source_path, second.source_path);
+        assert_eq!(LibraryPlaylistRegistry::new(&root).get().unwrap().len(), 1);
+        assert!(Path::new(&first.source_path).is_file());
+        assert_eq!(fs::read(&song).unwrap(), b"song must survive");
+        // Removing the source externally does not prevent list-only removal.
+        fs::remove_file(&second.source_path).unwrap();
+        assert_eq!(
+            registry
+                .delete_playlists(delete_input(
+                    DeletePlaylistsMode::List,
+                    &[&second.source_path],
+                ))
+                .unwrap()
+                .removed_paths,
+            vec![second.source_path]
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn delete_playlists_rejects_arbitrary_paths_and_invalid_input_before_side_effects() {
+        let root = test_dir();
+        let playlist = list(&root, "registered", "sentinel.mp3\n");
+        let song = root.join("sentinel.mp3");
+        let unknown = root.join("unknown.m3u8");
+        fs::write(&song, b"song must survive").unwrap();
+        fs::write(&unknown, b"sentinel.mp3\n").unwrap();
+        let registry = LibraryPlaylistRegistry::new(&root);
+        registry.upsert(&playlist).unwrap();
+        let result = registry
+            .delete_playlists_with(
+                delete_input(
+                    DeletePlaylistsMode::Files,
+                    &[
+                        &song.to_string_lossy(),
+                        &unknown.to_string_lossy(),
+                        &root.to_string_lossy(),
+                    ],
+                ),
+                |_| panic!("unregistered path must never reach recycling"),
+            )
+            .unwrap();
+        assert!(result.removed_paths.is_empty());
+        assert_eq!(result.failures.len(), 3);
+        assert!(result
+            .failures
+            .iter()
+            .all(|failure| failure.code == "UNKNOWN_PLAYLIST"));
+        for paths in [
+            vec![],
+            vec!["relative.m3u8".to_string()],
+            vec![playlist.source_path.clone(); 8193],
+        ] {
+            assert!(registry
+                .delete_playlists_with(
+                    DeletePlaylistsInput {
+                        mode: DeletePlaylistsMode::Files,
+                        source_paths: paths,
+                    },
+                    |_| panic!("invalid batch must not recycle")
+                )
+                .is_err());
+        }
+        assert!(song.is_file() && unknown.is_file());
+        assert_eq!(registry.get().unwrap().len(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn delete_playlists_files_reports_partial_failure_and_preserves_failed_rows() {
+        let root = test_dir();
+        let first = list(&root, "first", "sentinel.mp3\n");
+        let second = list(&root, "second", "sentinel.mp3\n");
+        let song = root.join("sentinel.mp3");
+        fs::write(&song, b"song must survive").unwrap();
+        let registry = LibraryPlaylistRegistry::new(&root);
+        registry.upsert(&first).unwrap();
+        registry.upsert(&second).unwrap();
+        let mut calls = Vec::new();
+        let result = registry
+            .delete_playlists_with(
+                delete_input(
+                    DeletePlaylistsMode::Files,
+                    &[&first.source_path, &second.source_path, &first.source_path],
+                ),
+                |path| {
+                    calls.push(path.to_owned());
+                    if deletion_path_key(&path.to_string_lossy())
+                        == deletion_path_key(&second.source_path)
+                    {
+                        return Err("synthetic locked playlist".into());
+                    }
+                    fs::rename(path, root.join("recycled-first.m3u8"))
+                        .map_err(|error| error.to_string())
+                },
+            )
+            .unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(result.removed_paths, vec![first.source_path.clone()]);
+        assert_eq!(result.recycled_paths, vec![first.source_path.clone()]);
+        assert_eq!(result.failures.len(), 1);
+        assert_eq!(result.failures[0].source_path, second.source_path);
+        assert_eq!(result.failures[0].code, "TRASH_FAILED");
+        assert_eq!(result.playlists.len(), 1);
+        assert_eq!(registry.get().unwrap()[0].source_path, second.source_path);
+        assert!(!Path::new(&first.source_path).exists());
+        assert!(Path::new(&second.source_path).is_file());
+        assert_eq!(fs::read(song).unwrap(), b"song must survive");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn delete_playlists_files_rejects_missing_and_replaced_directory_sources() {
+        let root = test_dir();
+        let missing = list(&root, "missing", "one.mp3\n");
+        let directory = list(&root, "directory", "one.mp3\n");
+        let registry = LibraryPlaylistRegistry::new(&root);
+        registry.upsert(&missing).unwrap();
+        registry.upsert(&directory).unwrap();
+        fs::remove_file(&missing.source_path).unwrap();
+        fs::remove_file(&directory.source_path).unwrap();
+        fs::create_dir(&directory.source_path).unwrap();
+        let result = registry
+            .delete_playlists_with(
+                delete_input(
+                    DeletePlaylistsMode::Files,
+                    &[&missing.source_path, &directory.source_path],
+                ),
+                |_| panic!("invalid source must never reach recycling"),
+            )
+            .unwrap();
+        assert!(result.removed_paths.is_empty() && result.recycled_paths.is_empty());
+        assert_eq!(result.failures.len(), 2);
+        assert!(result
+            .failures
+            .iter()
+            .all(|failure| failure.code == "INVALID_FILE"));
+        assert_eq!(registry.get().unwrap().len(), 2);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn delete_playlists_lock_serializes_concurrent_relationship_mutation() {
+        use std::{sync::mpsc, thread};
+        let root = test_dir();
+        let playlist = list(&root, "concurrent", "one.mp3\n");
+        let registry = Arc::new(LibraryPlaylistRegistry::new(&root));
+        registry.upsert(&playlist).unwrap();
+        let (authorized_tx, authorized_rx) = mpsc::channel();
+        let (continue_tx, continue_rx) = mpsc::channel();
+        let (started_tx, started_rx) = mpsc::channel();
+        let deleting_registry = Arc::clone(&registry);
+        let deleting_source = playlist.source_path.clone();
+        let deletion = thread::spawn(move || {
+            deleting_registry.delete_playlists_with(
+                delete_input(DeletePlaylistsMode::Files, &[&deleting_source]),
+                |_| {
+                    authorized_tx.send(()).unwrap();
+                    continue_rx.recv().unwrap();
+                    Ok(())
+                },
+            )
+        });
+        authorized_rx.recv().unwrap();
+        let mutating_registry = Arc::clone(&registry);
+        let mutating_source = playlist.source_path.clone();
+        let track = root.join("two.mp3").to_string_lossy().into_owned();
+        let mutation = thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            mutating_registry.add_tracks(&mutating_source, &[track], PlaylistInsertPosition::End)
+        });
+        started_rx.recv().unwrap();
+        // Deletion still owns the registry lock. The later relationship edit
+        // must look up the committed state, never restore the removed row.
+        continue_tx.send(()).unwrap();
+        assert_eq!(
+            deletion.join().unwrap().unwrap().removed_paths,
+            vec![playlist.source_path]
+        );
+        assert!(mutation.join().unwrap().is_err());
+        assert!(registry.get().unwrap().is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn delete_playlists_corrupt_registry_fails_before_source_recycling() {
+        let root = test_dir();
+        let playlist = list(&root, "source", "one.mp3\n");
+        let registry = LibraryPlaylistRegistry::new(&root);
+        registry.upsert(&playlist).unwrap();
+        fs::write(&registry.path, b"not valid registry JSON").unwrap();
+        assert!(registry
+            .delete_playlists_with(
+                delete_input(DeletePlaylistsMode::Files, &[&playlist.source_path],),
+                |_| panic!("corrupt registry must fail before file operations")
+            )
+            .is_err());
+        assert!(Path::new(&playlist.source_path).is_file());
+        assert_eq!(
+            fs::read(&registry.path).unwrap(),
+            b"not valid registry JSON"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn delete_playlists_files_rejects_replaced_symlink_sources() {
+        let root = test_dir();
+        let playlist = list(&root, "symlink", "one.mp3\n");
+        let sentinel = root.join("sentinel.m3u8");
+        fs::write(&sentinel, b"must survive").unwrap();
+        let registry = LibraryPlaylistRegistry::new(&root);
+        registry.upsert(&playlist).unwrap();
+        fs::remove_file(&playlist.source_path).unwrap();
+        std::os::unix::fs::symlink(&sentinel, &playlist.source_path).unwrap();
+        let result = registry
+            .delete_playlists_with(
+                delete_input(DeletePlaylistsMode::Files, &[&playlist.source_path]),
+                |_| panic!("symlink must not reach recycling"),
+            )
+            .unwrap();
+        assert_eq!(result.failures[0].code, "INVALID_FILE");
+        assert_eq!(fs::read(&sentinel).unwrap(), b"must survive");
+        assert_eq!(registry.get().unwrap().len(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn delete_playlists_reports_recycling_even_when_registry_commit_fails() {
+        let root = test_dir();
+        let playlist = list(&root, "source", "sentinel.mp3\n");
+        let song = root.join("sentinel.mp3");
+        fs::write(&song, b"song must survive").unwrap();
+        let registry = LibraryPlaylistRegistry::new(&root);
+        registry.upsert(&playlist).unwrap();
+        let before = fs::read(&registry.path).unwrap();
+        // Block only the temporary commit file; the authoritative registry
+        // remains readable so the result must retain its original snapshot.
+        fs::create_dir(registry.path.with_extension("json.tmp")).unwrap();
+        assert!(registry
+            .delete_playlists(delete_input(
+                DeletePlaylistsMode::List,
+                &[&playlist.source_path],
+            ))
+            .is_err());
+        assert_eq!(fs::read(&registry.path).unwrap(), before);
+        assert!(Path::new(&playlist.source_path).is_file());
+        let result = registry
+            .delete_playlists_with(
+                delete_input(DeletePlaylistsMode::Files, &[&playlist.source_path]),
+                |path| {
+                    fs::rename(path, root.join("recycled.m3u8")).map_err(|error| error.to_string())
+                },
+            )
+            .unwrap();
+        assert!(result.removed_paths.is_empty());
+        assert_eq!(result.recycled_paths, vec![playlist.source_path.clone()]);
+        assert_eq!(result.failures[0].code, "LIBRARY_STORAGE_ERROR");
+        assert_eq!(result.playlists[0].source_path, playlist.source_path);
+        assert!(result.storage_error.is_some());
+        assert_eq!(fs::read(&registry.path).unwrap(), before);
+        assert_eq!(fs::read(song).unwrap(), b"song must survive");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn delete_playlists_windows_recycles_only_source_and_retains_locked_playlist() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let root = test_dir();
+        let m3u_source = root.join("recycle.m3u");
+        fs::write(&m3u_source, b"sentinel.mp3\n").unwrap();
+        let first = import_m3u8_playlist(&m3u_source).unwrap();
+        let locked = list(&root, "locked", "sentinel.mp3\n");
+        let song = root.join("sentinel.mp3");
+        fs::write(&song, b"song must survive").unwrap();
+        let registry = LibraryPlaylistRegistry::new(&root);
+        registry.upsert(&first).unwrap();
+        registry.upsert(&locked).unwrap();
+        let guard = OpenOptions::new()
+            .read(true)
+            .share_mode(0x1 | 0x2)
+            .open(&locked.source_path)
+            .unwrap();
+        let result = registry
+            .delete_playlists(delete_input(
+                DeletePlaylistsMode::Files,
+                &[&locked.source_path, &first.source_path],
+            ))
+            .unwrap();
+        assert_eq!(result.removed_paths, vec![first.source_path.clone()]);
+        assert_eq!(result.recycled_paths, vec![first.source_path.clone()]);
+        assert_eq!(result.failures[0].code, "TRASH_FAILED");
+        assert!(!Path::new(&first.source_path).exists());
+        assert!(Path::new(&locked.source_path).is_file());
+        assert_eq!(registry.get().unwrap()[0].source_path, locked.source_path);
+        assert_eq!(fs::read(song).unwrap(), b"song must survive");
+        drop(guard);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn delete_playlists_contract_serializes_side_effects_and_rejects_unknown_fields() {
+        let result = DeletePlaylistsResult {
+            removed_paths: vec![],
+            recycled_paths: vec!["fixture.m3u8".into()],
+            failures: vec![DeleteFailure::new(
+                "fixture.m3u8",
+                "LIBRARY_STORAGE_ERROR",
+                "cannot commit",
+            )],
+            playlists: vec![],
+            storage_error: Some(LibraryError::storage("cannot commit")),
+        };
+        let json = serde_json::to_value(result).unwrap();
+        assert_eq!(json["recycledPaths"][0], "fixture.m3u8");
+        assert_eq!(json["removedPaths"], serde_json::json!([]));
+        assert_eq!(json["failures"][0]["sourcePath"], "fixture.m3u8");
+        assert_eq!(json["storageError"]["code"], "LIBRARY_STORAGE_ERROR");
+        assert!(json.get("state").is_none());
+        assert!(
+            serde_json::from_value::<DeletePlaylistsInput>(serde_json::json!({
+                "mode":"files", "sourcePaths":[], "trackPaths":[],
+            }))
+            .is_err()
+        );
     }
 
     #[test]

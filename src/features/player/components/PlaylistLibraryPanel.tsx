@@ -1,3 +1,5 @@
+import { AllSongsListOptionsDialog } from './AllSongsListOptionsDialog'
+import { sortAllSongs, type AllSongsSort } from '../model/allSongsListOptions'
 import { highestRatedSongs } from '../model/highestRated'
 import type { RatingMode } from '../model/trackRating'
 import type { TrackRating } from '../model/playerTypes'
@@ -127,6 +129,14 @@ export function PlaylistLibraryPanel({ ratingMode = 'thumbs', ratingsByTrackId, 
   const library = playlist.library!
   const categoryId = library.route?.view === 'category' ? library.route.categoryId : 'playlists'
   const category = mediaLibraryCategories.find((item) => item.id === categoryId)!
+  const isAllSongs = categoryId === 'songs'
+  const [listOptionsOpen, setListOptionsOpen] = useState(false)
+  const [allSongsSort, setAllSongsSort] = useState<AllSongsSort>('title')
+  const [allSongsDescending, setAllSongsDescending] = useState(false)
+  const [allSongsTitleOnly, setAllSongsTitleOnly] = useState(false)
+  const [randomSeed, setRandomSeed] = useState(1)
+  const [sortPlayCounts, setSortPlayCounts] = useState<ReadonlyMap<string, number>>(new Map())
+  const listOptionsTrigger = useRef<HTMLElement | null>(null)
   const isLowest = categoryId === 'lowest-rated'
   const isHighest = categoryId === 'highest-rated'
   const isMost = categoryId === 'most-played'
@@ -176,7 +186,7 @@ export function PlaylistLibraryPanel({ ratingMode = 'thumbs', ratingsByTrackId, 
     gestureArea: 'panel',
     announce: (nextLayout) => `列表视图已切换为${nextLayout.label}`,
   })
-  const { layout: songsLayout, announcement: songsAnnouncement } = useCollectionLayout({
+  const { layout: songsLayout, announcement: songsAnnouncement, selectLevel: selectSongsLayout } = useCollectionLayout({
     panelRef: songsLayoutPanelRef, gridRef: songsListRef, layouts: PLAYLIST_SONG_LAYOUTS,
     storageKey: isStreams ? STREAMS_LAYOUT_STORAGE_KEY : ALL_SONGS_LAYOUT_STORAGE_KEY, defaultLevel: isStreams ? defaultStreamsLevel : defaultAllSongsLevel,
     selectors: ALL_SONGS_LAYOUT_SELECTORS, gestureArea: 'panel',
@@ -215,8 +225,13 @@ export function PlaylistLibraryPanel({ ratingMode = 'thumbs', ratingsByTrackId, 
     return ordered.length === songs.length ? ordered
       : [...songs].sort((left, right) => compareByQuickIndex(left.track.title, right.track.title))
   }, [isQueue, orderedSongKeys, sourceSongs, library.allSongsManualOrder, isStreams, isRecent, isLong])
-  const visibleSongs = useMemo(() => orderedSongs
-    .filter((item) => `${item.track.title} ${item.track.artist} ${item.track.album} ${isStreams ? item.sourcePath : ''}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())), [orderedSongs, query, isStreams])
+  const sortedAllSongs = useMemo(() => {
+    if (!isAllSongs) return orderedSongs
+    if (allSongsSort === 'title') return allSongsDescending ? [...orderedSongs].reverse() : orderedSongs
+    return sortAllSongs(orderedSongs, allSongsSort, allSongsDescending, ratingsByTrackId, sortPlayCounts, randomSeed)
+  }, [isAllSongs, orderedSongs, allSongsSort, allSongsDescending, ratingsByTrackId, sortPlayCounts, randomSeed])
+  const visibleSongs = useMemo(() => sortedAllSongs
+    .filter((item) => `${item.track.title} ${item.track.artist} ${item.track.album} ${isStreams ? item.sourcePath : ''}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())), [sortedAllSongs, query, isStreams])
   const displayedSongs = useMemo(() => {
     if (!reorderPreviewKeys) return visibleSongs
     const byKey = new Map(visibleSongs.map(item => [item.key, item]))
@@ -345,7 +360,7 @@ export function PlaylistLibraryPanel({ ratingMode = 'thumbs', ratingsByTrackId, 
   // not rescan the whole library.
   const selectedItems = visible.filter((item) => selected.has(item.scope))
   const playTarget = selectMode ? selectedItems[0] : visible[0]
-  const selectedSongs = useMemo(() => orderedSongs.filter((item) => selected.has(item.key) && item.available), [orderedSongs, selected])
+  const selectedSongs = useMemo(() => sortedAllSongs.filter((item) => selected.has(item.key) && item.available), [sortedAllSongs, selected])
   const playableSongs = useMemo(() => visibleSongs.filter((item) => item.available), [visibleSongs])
   const songPlayTarget = selectMode ? selectedSongs[0] : playableSongs[0]
   // An in-flight playback command locks interaction; it is not unavailability.
@@ -471,7 +486,10 @@ export function PlaylistLibraryPanel({ ratingMode = 'thumbs', ratingsByTrackId, 
   function toggleSelection() { setSelectMode(!selectMode); setSelected(new Set()) }
   function openCreatePlaylist() { setPlaylistName(''); setCreateError(''); setCreateOpen(true) }
   function renderMore(compact = false) {
-    if (!compact || isQueue || isLong || isMost || isHighest || isLowest || isStreams) return <LibraryRootMenu key={categoryId} categoryId={categoryId} library={library} rootToolbar={!compact} />
+    if (!compact || isQueue || isLong || isMost || isHighest || isLowest || isStreams) return <LibraryRootMenu key={categoryId} categoryId={categoryId} library={library} rootToolbar={!compact} onListOptions={isAllSongs ? () => {
+      listOptionsTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+      setListOptionsOpen(true)
+    } : undefined} />
     return <DropdownMenu>
       <DropdownMenuTrigger render={<Button className={compact ? 'playlist-hero-icon playlist-hero-more-button' : 'playlist-management-more'}
         variant={compact ? 'ghost' : 'outline'} size={compact ? 'icon' : 'default'} aria-label="更多列表操作">
@@ -524,9 +542,22 @@ export function PlaylistLibraryPanel({ ratingMode = 'thumbs', ratingsByTrackId, 
       onPlay: () => { if (selectedSongs.length && !playbackCommandLocked) playSongs() },
       onCreatePlaylist: openCreatePlaylist,
     } : categoryId === 'playlists' ? {
+      scope: 'playlists',
       active: selectMode, count: selected.size, total: visible.length,
       allSelected: visible.length > 0 && visible.every(item => selected.has(item.scope)), canSelectAll: visible.length > 0,
       canPlay: Boolean(playTarget), canCreatePlaylist: false,
+      canDelete: Boolean(library.onDeletePlaylists && selected.size && !playbackCommandLocked && !library.isDeletePending),
+      onPrepareDelete: () => library.onDeletePlaylists && selected.size ? {
+        target: 'playlists', scope: 'playlists', songKeys: Object.freeze([...selected]), canRemoveFromList: true,
+      } : undefined,
+      onDelete: library.onDeletePlaylists ? async (snapshot, mode) => {
+        if (snapshot.target !== 'playlists' || snapshot.scope !== 'playlists') return {
+          succeededKeys: [], failedKeys: [...snapshot.songKeys], errorMessage: '播放列表选择已改变，请重新选择。',
+        }
+        const result = await library.onDeletePlaylists!(snapshot.songKeys, mode)
+        setSelected(previous => new Set([...previous].filter(scope => !result.succeededKeys.includes(scope))))
+        return result
+      } : undefined,
       onAddToQueue: () => library.onAddCollectionsToQueue?.([...selected]) ?? false,
       onSelectAll: () => setSelected(new Set(visible.map(item => item.scope))),
       onClear: () => setSelected(new Set()), onExit: () => { setSelectMode(false); setSelected(new Set()) },
@@ -542,6 +573,10 @@ export function PlaylistLibraryPanel({ ratingMode = 'thumbs', ratingsByTrackId, 
         <PlaylistLibrarySidebar {...sidebarProps} overlay />
       </DialogContent>
     </Dialog>
+    {isAllSongs && <AllSongsListOptionsDialog open={listOptionsOpen} onOpenChange={setListOptionsOpen} finalFocus={listOptionsTrigger}
+      sort={allSongsSort} onSortChange={value => { setAllSongsSort(value); if (value === 'random') setRandomSeed(Math.floor(Math.random() * 0x7fffffff)); if (value === 'play-count') setSortPlayCounts(new Map(library.mostPlayedCounts)) }}
+      descending={allSongsDescending} onDescendingChange={setAllSongsDescending} titleOnly={allSongsTitleOnly} onTitleOnlyChange={setAllSongsTitleOnly}
+      layoutLevel={songsLayout.level} onLayoutChange={selectSongsLayout} />}
     <Dialog open={createOpen} onOpenChange={setCreateOpen}>
       <DialogContent>
         <form onSubmit={(event) => {
@@ -586,6 +621,7 @@ export function PlaylistLibraryPanel({ ratingMode = 'thumbs', ratingsByTrackId, 
       <span className="sr-only" role="status" aria-live="polite">{isSongs ? songsAnnouncement : announcement}</span>
       {isSongs ? (isStreams && library.streamsError ? <MotionEmpty className="playlist-management-empty" variants={navigationMotion.chrome} initial={false} animate="animate"><EmptyHeader><EmptyTitle>无法读取流列表</EmptyTitle><EmptyDescription>{library.streamsError}</EmptyDescription></EmptyHeader><Button onClick={library.onRefreshStreams} disabled={songsLoading}>重试</Button></MotionEmpty> : songsLoading ? <PlaylistMetadataLoading layout={songsLayout} trackCount={sourceSongs?.length ?? 0} /> : visibleSongs.length ? <div ref={songsSpaceRef} style={songsWindow.spaceStyle}><p className="sr-only" aria-live="polite">{songReorder.announcement}</p><motion.div ref={songsListRef} className="playlist-grid all-songs-list" aria-label={isStreams ? '流歌曲列表' : isRecent || isLong ? `${category.label}歌曲列表` : "全部歌曲列表"}
         onPointerDownCapture={songReorder.onPointerDownCapture} onClickCapture={songReorder.onClickCapture} onKeyDownCapture={songReorder.onKeyDownCapture}
+        data-title-only={isAllSongs && allSongsTitleOnly ? true : undefined} data-sort={isAllSongs ? allSongsSort : undefined}
         data-layout-level={songsLayout.level} data-layout-flow={songsLayout.flow} data-layout-columns={songsLayout.columns}
         data-content-window={songsWindow.enabled ? 'bounded' : 'full'} data-cover-motion={appearanceMotion.disabled ? 'off' : undefined}
         variants={songsLayout.flow === 'tile' ? undefined : navigationMotion.cover} initial={atomicOverview && songsLayout.flow !== 'tile' ? 'initial' : false} animate="animate" exit={atomicOverview && songsLayout.flow !== 'tile' ? 'exit' : 'animate'} transition={navigationMotion.transition}
@@ -661,6 +697,6 @@ export function PlaylistLibraryPanel({ ratingMode = 'thumbs', ratingsByTrackId, 
         selectMode={selectMode} onSelect={toggleSelection} selectDisabled={isSongs ? !sourceSongs?.length : !categoryItems.length}
         more={renderMore(true)} />
     </motion.div> : null}
-    {!isQueue && !isRecent && !isStreams && <CollectionQuickIndex panelRef={panelRef} names={quickIndexNames} label={isSongs ? '歌曲' : category.label} onJump={jumpToIndex} />}
+    {!isQueue && !isRecent && !isStreams && (!isAllSongs || allSongsSort === 'title' && !allSongsDescending) && <CollectionQuickIndex panelRef={panelRef} names={quickIndexNames} label={isSongs ? '歌曲' : category.label} onJump={jumpToIndex} />}
   </motion.div>
 }

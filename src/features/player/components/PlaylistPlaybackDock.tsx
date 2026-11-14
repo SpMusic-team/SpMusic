@@ -179,7 +179,7 @@ function SelectionPanel({ selection }: { selection: LibraryDockSelection }) {
     </div>
     {deleteError && !deleteSnapshot ? <p className="playlist-selection-error" role="alert">{deleteError}</p> : null}
     </div>}
-    <PlaylistDeleteDialog open={Boolean(deleteSnapshot) && present} container={panelRef} mode={deleteMode} canRemoveFromList={deleteCanRemoveFromList} canDeleteFiles={deleteSnapshot?.canDeleteFiles} busy={deleteBusy} error={deleteError}
+    <PlaylistDeleteDialog open={Boolean(deleteSnapshot) && present} container={panelRef} target={deleteSnapshot?.target} mode={deleteMode} canRemoveFromList={deleteCanRemoveFromList} canDeleteFiles={deleteSnapshot?.canDeleteFiles} busy={deleteBusy} error={deleteError}
       onCancel={() => { setDeleteSnapshot(null); setDeleteError(null) }} onModeChange={mode => { setDeleteMode(mode); setDeleteError(null) }} onConfirm={() => { void confirmDelete() }} />
     {addRequest ? <PlaylistAddDialog selection={selection} request={addRequest} container={panelRef} active={present}
       onCancel={() => setAddRequest(null)} onDone={(targetScope, outcome) => {

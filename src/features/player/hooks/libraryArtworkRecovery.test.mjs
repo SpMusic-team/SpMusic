@@ -65,6 +65,8 @@ async function harness(options = {}) {
   let heroPathGate = null
   let heroPathInFlight = false
   let releaseHeroGate = null
+  let pixelDecodeGate = null
+  let pixelDecodeUrl = null
 
   let sources = [{
     sourceKind: 'folder',
@@ -202,10 +204,12 @@ async function harness(options = {}) {
       urlSequence += 1
       return { src: `blob:library-${urlSequence}`, width: pixels.width, height: pixels.height, encodedBytes: pixels.width * pixels.height * 3 }
     },
-    // A path-lane image and a pixel image are both "already decoded" here: the
-    // decode itself is not what these tests observe.
-    isPlaylistCoverDecoded: () => true,
-    decodePlaylistCover: async () => {},
+    isPlaylistCoverDecoded: (image) =>
+      !(pixelDecodeGate && image.width === 512 && image.src.startsWith('blob:')),
+    decodePlaylistCover: (image) => {
+      pixelDecodeUrl = image.src
+      return pixelDecodeGate
+    },
     URL: {
       createObjectURL: () => { urlSequence += 1; return `blob:library-${urlSequence}` },
       revokeObjectURL: (url) => revoked.push(url),
@@ -515,6 +519,12 @@ async function harness(options = {}) {
     },
     /** Whether the held hero read is currently parked. */
     heroReadHeld: () => heroPathInFlight,
+    holdHeroPixelDecode: () => {
+      let release
+      pixelDecodeGate = new Promise((resolve) => { release = resolve })
+      return release
+    },
+    heroPixelDecodeUrl: () => pixelDecodeUrl,
     /** Release the held read. Safe to call more than once. */
     releaseHeroPath: () => {
       const release = releaseHeroGate
@@ -976,6 +986,53 @@ test('a hero reply that lands after the detail page changes is discarded', async
     h.releaseHeroPath?.()
     h.unmount()
   }
+})
+
+test('switching details releases the previously published hero blob', async () => {
+  const h = await harness()
+  try {
+    h.render(true, h.sources[0])
+    h.setPathEdge(1536, 'fallback')
+    await h.demandHero(['track-0', 'track-1'])
+    const oldUrl = h.hero()?.coverThumbnail?.src
+    assert.ok(oldUrl?.startsWith('blob:'))
+
+    h.render(true, h.sources[1])
+    assert.equal(h.hero(), undefined)
+    assert.ok(h.revoked.includes(oldUrl), 'the old detail drops its hero before the new read settles')
+  } finally { h.unmount() }
+})
+
+test('a hero pixel fallback finishing decode after navigation is revoked without publishing', async () => {
+  const h = await harness()
+  const releaseDecode = h.holdHeroPixelDecode()
+  try {
+    h.render(true, h.sources[0])
+    h.setPathEdge(1536, 'fallback')
+    await h.demandHero(['track-0', 'track-1'])
+    const staleUrl = h.heroPixelDecodeUrl()
+    assert.ok(staleUrl?.startsWith('blob:'))
+
+    h.render(true, h.sources[1])
+    releaseDecode()
+    await h.flush()
+    assert.equal(h.hero(), undefined)
+    assert.equal(h.revoked.filter((url) => url === staleUrl).length, 1)
+  } finally {
+    releaseDecode()
+    h.unmount()
+  }
+})
+
+test('an unavailable first row never starts a hero publication for the second row', async () => {
+  const h = await harness()
+  try {
+    h.sources[0].tracks[0].available = false
+    h.render(true, h.sources[0])
+    await h.demandHero(['track-0', 'track-1'])
+    assert.equal(h.pathRequests.some((request) => request.kind === 'cover'), false)
+    assert.equal(h.hero('track-1'), undefined)
+  } finally { h.unmount() }
 })
 
 test('withdrawing the hero tier releases the high-tier image', async () => {

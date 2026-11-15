@@ -205,6 +205,16 @@ function protectedArtworkPaths(runtime: Runtime): Set<string> {
   return paths
 }
 
+function libraryHeroSource(runtime: Runtime): PlaylistHeroSource | undefined {
+  const first = runtime.detail?.tracks[0]
+  const scope = runtime.detailScope
+  if (!first?.available || !scope) return undefined
+  const sourcePath = normalizeAudioSourcePath(first.sourcePath)
+  const artworkRevision = runtime.descriptors.get(sourcePath)?.artworkRevision
+  if (artworkRevision === undefined) return undefined
+  return { scope, trackId: first.id, sourcePath, artworkRevision }
+}
+
 async function dataUrlThumbnail(dataUrl: string, maxEdge: number): Promise<PlaylistCoverImage> {
   const bitmap = await createImageBitmap(await (await fetch(dataUrl)).blob())
   const canvas = document.createElement('canvas')
@@ -643,13 +653,10 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
         clearHero()
         return
       }
-      const first = detail.tracks.find((candidate) => candidate.available)
-      if (!first || !runtime.detailScope) return
-      const scope = runtime.detailScope
-      const normalizedSourcePath = normalizeAudioSourcePath(first.sourcePath)
-      const revision = runtime.descriptors.get(normalizedSourcePath)?.artworkRevision
-        ?? playlistArtworkRevision(detail)
-      const source: PlaylistHeroSource = { scope, trackId: first.id, sourcePath: normalizedSourcePath, artworkRevision: revision }
+      const first = detail.tracks[0]
+      const source = libraryHeroSource(runtime)
+      if (!first || !source) return
+      const { scope, sourcePath: normalizedSourcePath, artworkRevision: revision } = source
       const identity = heroDisplayIdentity(source)
       const current = runtime.hero
       const satisfied = Boolean(current.visual?.coverThumbnail)
@@ -707,7 +714,7 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
           }
           if (thumbnail && !isPlaylistCoverDecoded(thumbnail)) {
             await decodePlaylistCover(thumbnail)
-            if (!isCurrent()) { thumbnail = undefined; return }
+            if (!isCurrent()) return
           }
           if (!thumbnail) return
           const presentation = createCoverPresentation({
@@ -999,6 +1006,8 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
   useEffect(() => {
     const runtime = runtimeRef.current
     if (!runtime) return
+    const previousHero = libraryHeroSource(runtime)
+    const previousDetailScope = runtime.detailScope
     runtime.revision += 1
     runtime.descriptors = new Map()
     for (const source of sources) for (const descriptor of source.tracks) {
@@ -1060,9 +1069,10 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
     // the caller's demand object arrives. Entering or leaving a detail page is a
     // new hero problem: an identity whose epoch settled belongs to the previous
     // visit, so it must not gate the new one.
-    if (runtime.hero.source) {
-      const stillSameDetail = runtime.detail?.sourcePath === detail?.sourcePath
-      if (!stillSameDetail) runtime.clearHero()
+    const nextHero = libraryHeroSource(runtime)
+    if (previousDetailScope !== runtime.detailScope
+      || (previousHero && heroDisplayIdentity(previousHero)) !== (nextHero && heroDisplayIdentity(nextHero))) {
+      runtime.clearHero()
     }
     runtime.refresh()
     runtime.rows = new Map([...runtime.cache].map(([key, entry]) => [key, entry.row]))

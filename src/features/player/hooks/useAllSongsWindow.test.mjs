@@ -16,7 +16,7 @@ async function loadTestModule(url) {
 
 const readiness = await loadTestModule(new URL('../model/playlistCoverReadiness.ts', import.meta.url))
 
-async function harness(count = 100) {
+async function harness(count = 100, prepareItems = (items) => items) {
   const effects = []
   const previousEffects = []
   const refs = []
@@ -25,6 +25,7 @@ async function harness(count = 100) {
   const pending = []
   const revoked = []
   const pixelCalls = []
+  const pathCalls = []
   const decodePending = []
   let holdDecode = false
   let beginFailure = false
@@ -45,6 +46,7 @@ async function harness(count = 100) {
     key: `/music/${index}.flac`, sourcePath: `/music/${index}.flac`,
     trackId: `track-${index}`, available: true, track: {},
   }))
+  items = prepareItems(items)
   const nodes = new Map()
   const nodeFor = (item, index) => {
     let node = nodes.get(item.key)
@@ -63,6 +65,10 @@ async function harness(count = 100) {
   const orderPath = new URL('../model/playlistArtworkOrder.ts', import.meta.url)
   const orderExports = existsSync(orderPath) ? await loadTestModule(orderPath) : {}
   const coverEvents = new EventTarget()
+  const attemptThumbnailPath = async (input, options) => {
+    pathCalls.push({ input, options })
+    return { status: 'fallback' }
+  }
   globalThis.__allSongsWindowTest = {
     ...readiness,
     ...orderExports,
@@ -80,8 +86,8 @@ async function harness(count = 100) {
     useMemo: factory => factory(),
     useSyncExternalStore: () => {},
     isStreamSource: () => false,
-    attemptTrackThumbnailPath: async () => ({ status: 'fallback' }),
-    attemptFolderThumbnailPath: async () => ({ status: 'fallback' }),
+    attemptTrackThumbnailPath: attemptThumbnailPath,
+    attemptFolderThumbnailPath: attemptThumbnailPath,
     notePathLanePresentationFailure: () => {},
     requestAnimationFrame: callback => { const id = ++frameSequence; frames.set(id, callback); return id },
     cancelAnimationFrame: id => frames.delete(id),
@@ -154,7 +160,7 @@ async function harness(count = 100) {
   }
   const unmount = () => { for (const cleanup of cleanups) cleanup?.() }
   return {
-    get items() { return items }, store, calls, pending, revoked, pixelCalls, demand, scroll, panel, finish, drain, flush, unmount, render,
+    get items() { return items }, store, calls, pending, revoked, pathCalls, pixelCalls, demand, scroll, panel, finish, drain, flush, unmount, render,
     holdDecode: () => { holdDecode = true },
     failBegin: value => { beginFailure = value },
     releaseDecodeAt: async index => { const resolve=decodePending.splice(index,1)[0]; assert(resolve,'a decoder is pending'); resolve(); await flush() },
@@ -176,6 +182,35 @@ test('more than 60 demanded covers converge without evicting or reloading visibl
     assert.equal(h.pending.length, 0)
     assert(h.pixelCalls.every(({ input }) => input.maxEdge === 256))
   } finally { h.dispose() }
+})
+
+test('category high-tier paths opt out of size strikes and keep pixel fallback at 256', async () => {
+  const h = await harness(3, ([ordinary, track]) => [
+    ordinary,
+    { ...track, heroEdge: 1536 },
+    {
+      kind: 'folder', key: 'folder:hero', rootPath: '/root', directoryPath: '/root/music',
+      available: true, heroEdge: 1024,
+    },
+  ])
+  try {
+    const [ordinary, trackHero, folderHero] = h.items
+    await h.demand([0, 1, 2])
+    await h.drain()
+
+    const attempts = new Map(h.pathCalls.map(({ input, options }) => [
+      input.sourcePath ?? input.directoryPath, [input.maxEdge, options.optionalHeroRead],
+    ]))
+    assert.deepEqual(attempts.get(ordinary.sourcePath), [256, false])
+    assert.deepEqual(attempts.get(trackHero.sourcePath), [1536, true])
+    assert.deepEqual(attempts.get(folderHero.directoryPath), [1024, true])
+    assert.equal(h.pathCalls.length, 3, 'each settled result satisfies its original tier demand')
+    assert.equal(h.pixelCalls.length, 3, 'each path fallback reads pixels once')
+    assert.equal(h.pending.length, 0)
+    assert(h.pixelCalls.every(({ input }) => input.maxEdge === 256))
+  } finally {
+    h.dispose()
+  }
 })
 
 test('a new cover evicts an offscreen warm row before an older still-visible cover', async () => {

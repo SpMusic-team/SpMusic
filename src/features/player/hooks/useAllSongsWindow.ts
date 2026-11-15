@@ -75,6 +75,8 @@ export type CoverSourceLane = 'path' | 'pixels'
 export type PresentationState = 'pending' | 'presented' | 'recovering' | 'failed'
 
 type WindowRow = (Readonly<{ trackId: string; sourcePath: string; artworkRevision?: number }> | Readonly<{ kind: 'folder'; rootPath: string; directoryPath: string }> | Pick<TrackCandidatesCoverItem, 'kind' | 'candidates'>) & Readonly<{
+  /** Requested hero tier, including when the result is a 256px fallback. */
+  heroEdge?: HeroCoverEdge
   coverUrl?: string
   transientFailure?: boolean
   /** What the DOM should render for this row. Absent means "render the placeholder". */
@@ -105,9 +107,10 @@ function coverIdentity(item: AllSongsCoverItem | WindowRow, revision = true): st
 }
 
 function cacheDescriptor(item: AllSongsCoverItem): WindowRow {
-  if ('kind' in item && item.kind === 'track-candidates') return { kind: item.kind, candidates: item.candidates }
-  return 'kind' in item ? { kind: 'folder', rootPath: item.rootPath, directoryPath: item.directoryPath }
-    : { trackId: item.trackId, sourcePath: item.sourcePath, ...(item.artworkRevision === undefined ? {} : { artworkRevision: item.artworkRevision }) }
+  const tier = item.heroEdge === undefined ? {} : { heroEdge: item.heroEdge }
+  if ('kind' in item && item.kind === 'track-candidates') return { ...tier, kind: item.kind, candidates: item.candidates }
+  return 'kind' in item ? { ...tier, kind: 'folder', rootPath: item.rootPath, directoryPath: item.directoryPath }
+    : { ...tier, trackId: item.trackId, sourcePath: item.sourcePath, ...(item.artworkRevision === undefined ? {} : { artworkRevision: item.artworkRevision }) }
 }
 
 /**
@@ -726,10 +729,12 @@ export function useAllSongsWindow(items: readonly AllSongsCoverItem[], panelRef:
             if (!itemIsCurrent()) return
             // `isCurrent` states the positive contract: `true` means this row is
             // still the desired descriptor, so a prepared image may be published.
+            const pathEdge = heroPathEdge(item)
             const attemptOptions: AttemptOptions = {
               priority: coverPriority(item.key),
               signal: runtime.controller.signal,
               isCurrent: itemIsCurrent,
+              optionalHeroRead: pathEdge > 256,
             }
             const pixelOptions = { priority: attemptOptions.priority, signal: attemptOptions.signal, isCurrent: itemIsCurrent }
             let hasArtwork = false
@@ -745,7 +750,7 @@ export function useAllSongsWindow(items: readonly AllSongsCoverItem[], panelRef:
                 if (!itemIsCurrent()) return
                 if (!candidate.available || isStreamSource(candidate)) continue
                 const attempt = await attemptTrackThumbnailPath(
-                  { clientId, sourcePath: candidate.sourcePath, maxEdge: heroPathEdge(item), windowGeneration: coverGeneration },
+                  { clientId, sourcePath: candidate.sourcePath, maxEdge: pathEdge, windowGeneration: coverGeneration },
                   attemptOptions,
                 )
                 // A superseded candidate request ends this row without publishing
@@ -792,11 +797,11 @@ export function useAllSongsWindow(items: readonly AllSongsCoverItem[], panelRef:
             } else if ('kind' in item || !isStreamSource(item)) {
               const attempt = 'kind' in item
                 ? await attemptFolderThumbnailPath(
-                  { clientId, rootPath: item.rootPath, directoryPath: item.directoryPath, maxEdge: heroPathEdge(item), windowGeneration: coverGeneration },
+                  { clientId, rootPath: item.rootPath, directoryPath: item.directoryPath, maxEdge: pathEdge, windowGeneration: coverGeneration },
                   attemptOptions,
                 )
                 : await attemptTrackThumbnailPath(
-                  { clientId, sourcePath: item.sourcePath, maxEdge: heroPathEdge(item), windowGeneration: coverGeneration },
+                  { clientId, sourcePath: item.sourcePath, maxEdge: pathEdge, windowGeneration: coverGeneration },
                   attemptOptions,
                 )
               if (attempt.status === 'dropped') return

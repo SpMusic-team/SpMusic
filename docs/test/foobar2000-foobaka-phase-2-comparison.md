@@ -956,7 +956,19 @@ report: 8B 42 08 56 FF D0 8B 5D 08 8B C7 8D 4B 54 8D 70   ← 全等
 | `titleformat_help.html` 条目数 | 211 | 211 | **251** | 251 |
 | `license.html` 行数 | 38 | **40** | 40 | 40 |
 
-2.26 新增：`ALL` 特殊查询关键字、titleformat 8 函数（`$shortest` `$muldiv` `$rand` `$roman` `$rot13` `$crc32` `$hex` `$progress` `$crlf` `$channels`）、14 字段（`%directory%` `%path%` `%length_ex%` `%length_seconds_fp%` `%length_samples%` `%channel_mask%` `%bitspersample%` 等）。
+2.26 新增（**文档层面**）：`ALL` 关键字首次进入 `Query Syntax Help.html`（新增 `Special Keywords` 章节 + 锚点 `special_keywords`）、titleformat 8 函数（`$shortest` `$muldiv` `$rand` `$roman` `$rot13` `$crc32` `$hex` `$progress` `$crlf` `$channels`）、14 字段（`%directory%` `%path%` `%length_ex%` `%length_seconds_fp%` `%length_samples%` `%channel_mask%` `%bitspersample%` 等）。
+
+> ⚠ **必须区分「文档新增」与「实现新增」**：`ALL` 的实现**早在 2.24.6 就存在**。
+>
+> A′ 2.24.6 实测：
+> - `ALL\0` 串 file `0x29D820`（VA `0x0069E420`）
+> - 查询运算符分发表 `0x27BD40` 起，`ALL` 表项在 **`0x27BE0C`**
+> - 错误串 `Invalid ALL syntax`@`0x29DAD0`、`ALL not allowed here`@`0x29DAB8`
+> - `foo_ui_std.dll` 的 ReFacets 预设直接使用 `ALL SORT DESCENDING BY %play_count%`
+>
+> 另有 **`NONE`** 运算符：四版**全部实现**（2.24.6 表项 `0x27BE18`，串 file `0x29DB7C`，错误串 `Invalid NONE syntax`@`0x29DAA4`），但**四版文档全部没写**。
+>
+> **教训**：能力归属必须查二进制分发表，不能只读 changelog 或 help。
 
 2.25.11 新增：`license.html` 出现 `Libsmb2: SMB2/SMB3 network share client`，与主程序 `SMB2_STATUS_*` 串互相印证。**落地宿主未定位。**
 

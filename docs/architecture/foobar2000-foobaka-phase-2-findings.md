@@ -668,12 +668,47 @@ WSH 面板是 **Windows Script Host 家族**，本轮用独立的静态证据链
 | 能力 | 证据 |
 | --- | --- |
 | `LargeFieldsConfig-v2` | 主程序中新串 + 官网 URL；2.24.6/2.25.11 为 0 |
-| `ALL` 特殊查询关键字 | `Query Syntax Help.html` 新增 `Special Keywords` 章节与锚点 |
+| `ALL` 特殊查询关键字**进入文档** | `Query Syntax Help.html` 新增 `Special Keywords` 章节与锚点 |
 | titleformat 8 个函数 | `$shortest` `$muldiv` `$rand` `$roman` `$rot13` `$crc32` `$hex` `$progress` `$crlf` `$channels` |
 | titleformat 14 个字段 | `%directory%` `%path%` `%length_ex%` `%length_seconds_fp%` `%length_samples%` `%channel_mask%` `%bitspersample%` 等 |
 | libsmb2（SMB2/SMB3） | `license.html` 新增条目 + 主程序 `SMB2_STATUS_*` 串；**落地宿主未定位** |
 
-### 7.7 对「LargeFieldsConfig 写了但无效」的加强证据
+> **一处必须修正的说法**：本节原写「2.26 引入 `ALL` 特殊查询关键字」。**这不准确**——`ALL` 只是**文档在 2.26.2 才补上**，**实现早在 2.24.6 就存在**。
+>
+> 实测（A′ 2.24.6）：
+> - `ALL\0` 字符串位于 file `0x29D820`（VA `0x0069E420`）
+> - 查询运算符分发表 `0x27BD40` 起，`ALL` 表项在 **`0x27BE0C`**（`kw=0x0069E420, flags=0, h1=0x0058E630`）
+> - 配套错误串存在：`Invalid ALL syntax`@`0x29DAD0`、`ALL not allowed here`@`0x29DAB8`
+> - 官方组件自己就在用：`foo_ui_std.dll` 的 ReFacets 预设 `ALL SORT DESCENDING BY %play_count%`
+>
+> **另有一个四版全部实现、四版文档全部没写的运算符 `NONE`**：字符串 file `0x29DB7C`（VA `0x0069E77C`），表项 `0x27BE18`，配套错误串 `Invalid NONE syntax`@`0x29DAA4`。
+>
+> **教训**：文档的「新增」不等于实现的「新增」。判断能力归属必须查二进制分发表，不能只读 changelog/help。
+
+### 7.7 查询运算符分发表的结构
+
+A′ 2.24.6 的 `.rdata` `0x27BD40`–`0x27BE28` 是一张**定长表**，每项 16 字节，字段交错排布：
+
+```
+[+0x00] u32  关键字串 VA
+[+0x04] u32  flags（SORT 为 1，其余 0）
+[+0x08] u32  handler1（.text 中的处理函数）
+[+0x0C] u32  等价关键字串 VA（同义写法）
+```
+
+实测的等价对（`h2` 指向的同义关键字）：
+
+| 主关键字 | 等价写法 |
+| --- | --- |
+| `SORT` | `ORDER` |
+| `NOT` | `HAS` |
+| `EQUAL` | `GREATER` |
+| `PRESENT` | `BEFORE` |
+| `DURING` | `ALL` |
+
+> 表中「等价」列的配对是按表项 `h2` 字段机械读出的，**本轮未反汇编验证其运行时语义**（例如 `ORDER` 是否真是 `SORT` 的别名）。此列为**待验证**。
+
+### 7.8 对「LargeFieldsConfig 写了但无效」的加强证据
 
 首轮结论是「foobaka 的 `LargeFieldsConfig.txt` 被写了但内核不读，因为该机制 2.26 才有」。本轮补一条更硬的证据：**`LargeFieldsConfig` 这个标识符在 A′ 2.24.6 与 B 的内核里根本不存在**（全样本扫描 0 命中），只在 2.26.2/2.26.3/x64-2.26.3 中出现。
 

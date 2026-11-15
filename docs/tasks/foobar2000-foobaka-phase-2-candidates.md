@@ -38,8 +38,26 @@ source_documents:
 | **P2-B** | 错误提示的失败阶段分离 | **强** | 中 | 无 | 推荐 |
 | **P2-C** | 二进制差异的改动量判据 | **强** | 低（工具） | 无 | 推荐（研究侧） |
 | **P2-D** | 主题系统的配色先行层 | 中 | 中 | 无 | 有条件推荐 |
+| **P2-E** | `available` 接真值 + 离线宽限 | **强** | **低** | 无 | **推荐优先**（新增） |
+| **P2-F** | 时长缓存落盘 | **强** | **低** | 无 | **推荐优先**（新增） |
+| **P2-G** | 子目录读取失败不再静默 | **强** | 低 | 无 | **推荐**（新增） |
+| **P2-H** | 查询语法最小文法 | **强** | **高** | P2-J | 有条件推荐（新增） |
+| **P2-I** | 联动筛选（facet） | **强** | 中高 | P2-H | 有条件推荐（新增） |
+| **P2-J** | 统计字段接入曲目模型 | **强** | 中 | 无 | **P2-H 的前置**（新增） |
+| **P2-K** | 动态列表 | **强** | **高** | P2-H + P2-J | 最后做（新增） |
 | — | 重采样质量档位（P1-D 修订） | 强 | 高 | 决策 | 保持待决策 |
 | — | 三方对比基线纪律（流程） | 强 | 低 | 无 | 建议纳入流程 |
+
+> 新增的 P2-E ~ P2-K 全部来自本轮新完成的**两条逆向主线**：
+> [曲库机制](../architecture/foobar2000-library-mechanisms.md) 与
+> [检索机制](../architecture/foobar2000-search-mechanisms.md)。
+
+## 一之二、本轮对首轮的两处成本修正
+
+| 项 | 首轮估计 | 本轮实测 | 影响 |
+| --- | --- | --- | --- |
+| 「最近未播放」类查询条件 | 需**新增持久化层**（首轮说 `playCount`/`lastPlayed` 都缺） | **两者都已存在**（`mostPlayed.ts` 的 `spmusic.most-played.v1`），缺的是**接线** | 成本从「中高」降到「中」，可省一层数据采集 |
+| 增量新索引 | 「需新增」 | 判据 `len` + `modified` **已与 foobar2000 同构**（`duration_cache.rs` 的 `SourceIdentity`） | 只差「缓存内容从时长扩到标签摘要」+ 落盘 |
 
 ---
 
@@ -248,6 +266,381 @@ UI/UX（配色语义）+ Frontend（实现）+ Architecture（配置契约）。
 
 ---
 
+## P2-E｜`available` 接真值 + 离线宽限
+
+### 现状与问题（已独立复现）
+
+**（1）`available` 在扫描路径硬编码 `true`**
+
+`src-tauri/src/audio/playlist.rs:112` 与 `:299`：
+
+```rust
+available: true,
+```
+
+同文件 `:652` 的 `folder_track_ref(path, available)` **是接受 `available` 参数的**，`:653` 也会在真值时去 `fs::metadata`。所以**函数支持真实状态，但两个调用点传了常量**。
+
+**前端 `AlbumLibraryPanel` 已经在用这个字段做置灰/跳过** → 该字段恒真，离线曲目永不置灰。
+
+**（2）子目录读取失败静默**
+
+扫描循环内三处同样的模式：
+
+```rust
+Err(error) => {
+    tracing::warn!(path = %directory.display(), %error, "skipping unreadable library subdirectory");
+    continue;
+}
+```
+
+`read_dir` 打开失败、遍历条目失败、`symlink_metadata` 失败、`canonicalize` 失败——**全部只进日志**。
+
+**后果：整个子目录读不到时，这一子树的所有曲目直接消失，用户零提示。**
+
+**（3）没有离线宽限**
+
+foobar2000 实测有 **28.0000 天**宽限（`metadb_indexes.retention = 24,192,000,000,000` ticks），SpMusic 没有对应机制。
+
+### foobar2000 的做法（可直接借鉴）
+
+| 层 | 机制 |
+| --- | --- |
+| 数据层 | `lastseen` + mark & sweep GC，删除阈值 = `now − MAX(retention)` |
+| IO 错误分类 | `Drive not found` / `Device not ready` / `Disc not available` / `Network path not found` / `Drive locked by BitLocker` —— **五种都算"暂时"** |
+| 交互层 | `Scanning for dead items...` / `Remove dead items` / `Dead item: `（**失效判定交用户决策**） |
+
+### 最小实施方向
+
+1. `available` 改为真实 `fs::metadata(path).is_ok()`（改两个调用点）。
+2. 子目录失败**分类**并**上报**：区分「暂时不可达」与「确定不存在」，前者保留、后者可标记。
+3. 加一份 `library-entries.v1.json` 记 `firstMissingAt`，超过 N 天才移除——**这是 28 天宽限的最小实现**。
+
+### 验收
+
+| 检查 | 通过条件 |
+| --- | --- |
+| 拔出移动硬盘 | 曲目仍在列表，但置灰 |
+| 子目录权限被拒 | 用户能看到「N 个目录不可读」的提示 |
+| 超过宽限期 | 条目才被移除 |
+
+### 回滚
+
+`available` 是既有字段，回滚只需改回常量。宽限机制是新增配置文件，删掉即回到现状。
+
+### ⚠ 必须同批修复的耦合缺陷
+
+`useAudioPlayer.ts:4361`：
+
+```ts
+if (… || !target?.available) { clearPlaybackSession(); return }
+```
+
+**这条目前不会触发（因为 `available` 恒真）。一旦修好 `available`，它就会把"单曲离线"放大成"整个播放会话清空"。**
+
+**修 P2-E 时必须同时改这条逻辑**，否则引入回归。
+
+### 角色
+
+Rust/Tauri（扫描与状态）+ Frontend（提示与置灰）+ Test（拔盘/权限/超期三场景）。
+
+---
+
+## P2-F｜时长缓存落盘
+
+### 现状
+
+`src-tauri/src/audio/duration_cache.rs` 的判据设计**已经与 foobar2000 同构**：
+
+```rust
+pub(crate) struct SourceIdentity {
+    pub len: u64,
+    pub modified_nanos: i128,
+}
+```
+
+边界处理甚至比 foobar2000 更显式（5 个 `IdentityIssue` 变体：`StatFailed` / `EmptyFile` / `ModifiedUnavailable` / `BeforeEpoch` / `OutOfRange`）。其中 `EmptyFile` 拒绝缓存 0 字节文件的理由（避免冻结正在拷贝的文件）值得保留。
+
+**问题是 `DurationCache` 是纯内存结构**（`Inner` + `Mutex`），**没有任何落盘路径**。`app_paths.rs` 里只有 4 个 json 文件，没有标签/时长快照。
+
+### 影响
+
+每次重启都要重新探测全部曲目时长。
+
+### 最小实施方向
+
+把 `DurationCache` 的 `(path → {len, modified_nanos, duration})` 序列化落盘，启动时按 `SourceIdentity` 校验后复用。
+
+缓存上限已有（`MAX_ENTRIES = 20_000`、`MAX_PATH_BYTES = 8 MiB`），落盘沿用同一预算即可。
+
+### 验收
+
+| 检查 | 通过条件 |
+| --- | --- |
+| 冷启动→重启 | 时长直接命中，不进解码器 |
+| 改一个文件 | 只有该文件重新探测 |
+| 缓存损坏 | 丢弃重建，不崩溃 |
+
+### 回滚
+
+落盘是纯增量；删掉缓存文件即回到现状。
+
+### 角色
+
+Rust/Tauri。
+
+---
+
+## P2-G｜子目录读取失败不再静默
+
+> 与 P2-E 第 2 点重叠。此处单独立卡是因为它**可以独立于 `available` 先修**。
+
+### 现状
+
+三处 `tracing::warn` + `continue`（见 P2-E）。
+
+### 最小实施方向
+
+1. 把扫描期的失败收集成一个 `Vec<ScanIssue>`。
+2. 扫描结束后汇总，通过既有诊断通道上报（首轮 P0-A 的 `StartupDiagnostics` 模式可复用）。
+3. **不阻断扫描**，只让用户知道「少了多少、因为什么」。
+
+### 验收
+
+| 检查 | 通过条件 |
+| --- | --- |
+| 子目录权限被拒 | 提示可见，且说明原因 |
+| 网络共享断线 | 提示区分「暂时不可达」与「不存在」 |
+| 全部正常 | 不产生任何提示 |
+
+### 回滚
+
+纯增量输出。
+
+### 角色
+
+Rust/Tauri + Frontend（展示）+ Test。
+
+---
+
+## P2-J｜统计字段接入曲目模型
+
+> **这是 P2-H（查询语法）的前置**，也是本轮对首轮成本判断的主要修正点。
+
+### 现状
+
+| 数据 | 位置 | 是否进 `AllSongsItem` |
+| --- | --- | --- |
+| `rating` | `spmusic.track-ratings.v1`，键 `trackId` | ✗ |
+| `playCount` + `lastPlayedAt` | `spmusic.most-played.v1`（`mostPlayed.ts`） | ✗ |
+| 最近播放 | `spmusic.recently-played.v1` | ✗ |
+
+`AllSongsItem` 的 9 个字段里**没有任何统计数据**。
+
+### 为什么必须先做这个
+
+foobar2000 的 `metadb` 表**自带** `playCount`/`rating`/`lastPlayed`/`firstPlayed`/`dateAdded` **5 列**，所以查询语法天然能访问。
+
+SpMusic 把统计放在**独立的 localStorage 键**里，用 `sourcePath` join。即使实现了查询语法，`%playCount%` 这类字段**仍然查不到**。
+
+### 最小实施方向
+
+1. 在构建 `AllSongsItem` 时 join 一次 `mostPlayed` / `recentlyPlayed` / `trackRatings`，把统计作为**可选只读字段**挂上去。
+2. **不改变存储形态**（仍用现有 3 个 localStorage 键），只做读取侧合并。
+3. 明确 join 的匹配键：`normalizeAudioSourcePath`（与现有 `mostPlayed` 的键一致）。
+
+### 验收
+
+| 检查 | 通过条件 |
+| --- | --- |
+| 播放过的曲目 | `AllSongsItem` 上能读到 `playCount` 与 `lastPlayedAt` |
+| 未播放过的曲目 | 字段为 undefined，不伪造 0 |
+| 文件移动后 | 统计按既有语义断开关联（与现状一致，不引入新问题） |
+
+### 回滚
+
+只读 join，去掉即回到现状。
+
+### 角色
+
+Frontend + Architecture（字段契约）+ Test。
+
+---
+
+## P2-H｜查询语法最小文法
+
+### 现状
+
+`librarySearch.ts` 核心两行：
+
+```ts
+const needle = query.trim().toLocaleLowerCase()
+const matches = (...text) => text.some(v => String(v ?? '').toLowerCase().includes(needle))
+```
+
+**无词分割、无变音折叠、无通配、无布尔、无比较、无字段限定。**
+
+### foobar2000 的 5 条硬约束（必须遵守）
+
+| # | 约束 |
+| ---: | --- |
+| 1 | `<field>` 含 `#$%` → titleformat 通道；否则 metadata 通道 |
+| 2 | **`IS` 必须在单值层比较**，多值逐值、不拼接 |
+| 3 | `SORT BY` 必须在查询末尾 |
+| 4 | 关键字全大写，值不区分大小写 |
+| 5 | `* HAS` 复用简单搜索语义（含文件名与路径） |
+
+**第 2 条最容易做错**，也是「合作艺人出现在多个分类、结果只出现一次」的根本保证。
+
+### 最小文法（对齐实测分发表）
+
+```
+query := expr (SORT [ASC|DESC]ENDING BY pattern)?
+expr  := term ((AND|OR) term)* | NOT expr | '(' expr ')'
+term  := field (IS|HAS) str | '*' HAS str
+       | field (GREATER|LESS|EQUAL) number
+       | field (MISSING|PRESENT)
+       | time (BEFORE|AFTER|SINCE|DURING) time
+       | time DURING LAST number UNIT
+       | ALL | NONE
+```
+
+> `ALL` 与 `NONE` 在 foobar2000 **2.24.6 就已实现**（分发表 `0x27BE0C` / `0x27BE18`），不是 2.26 新能力。
+
+### 实施建议：先做第一步
+
+**第一步只做「已有字段的布尔组合 + 数值比较」**：
+`genre IS 摇滚 AND year GREATER 2020 AND rating GREATER 3`
+
+暂不做：时间比较（依赖 `firstPlayed`/`dateAdded`，SpMusic 缺）、`SORT BY`、通配。
+
+### 验收
+
+| 检查 | 通过条件 |
+| --- | --- |
+| 12–20 条真值表 | 全部准确命中 |
+| 多值艺人 | `artist IS name1` 命中双艺人曲目 |
+| 改一条标签 | 结果立即更新 |
+| 非法语法 | 有明确错误，不静默返回空 |
+
+### 回滚
+
+新语法作为可选入口；旧 `includes()` 路径保留。回滚只需关闭新入口。
+
+### 前置
+
+**P2-J（统计字段接入）**。没有它，「rating GREATER 3」写不出来。
+
+### 角色
+
+Architecture（文法契约）+ Frontend（解析与求值）+ Test（真值表）。
+
+---
+
+## P2-I｜联动筛选（facet）
+
+### 现状
+
+SpMusic 的 10 个搜索分类是**互相独立的平铺分类**，没有逐层收窄。
+
+### foobar2000 的做法（ReFacets，官方 DUI）
+
+三层结构：
+
+| 层 | 职责 |
+| --- | --- |
+| `reFacetsBase` | metadb 4 回调 + `grabTracks` 求值 + `makeVals` 生成取值行 + `splitValsAL` 多值拆分 |
+| `reFacetsInstance` | 面板容器（`setup_rebar` / `clearPanes` / `reloadSel`） |
+| `ap_refacets` | 与动态列表的桥（`criteriaChanged`） |
+
+联动状态 14 个键：`match` / `column` / `descending` / `ascending` / `sortColumn` / `filter` / `userFilter` / `facet` / `statsColumn` / `columnsOrder` / `source` / `search` / `toolbarLocked` / `multiFilters`。
+
+**多值拆分语法是 `%<field>%`**（未文档化的内部约定），实测用于 `%<genre>%` / `%<album artist>%`；`Artist` 刻意不加尖括号。
+
+**「合作艺人多分类出现、结果只一次」是三层语义叠加**，不是去重算法：
+1. `%<artist>%` 逐值展开
+2. `IS` 单值层比较
+3. 结果是集合，天然去重
+
+### 好消息：SpMusic 已有等价实现
+
+`splitArtists()` + `artistEntries()` + `uniqueArtistSongs()` 的三层组合，**结果语义已等价**。差异只在拆分词表与去重时机。
+
+### 最小实施方向
+
+1. 把现有 10 个平铺分类改造成**可叠加的 facet**（选中一个维度后，其余维度显示命中数）。
+2. 复用现有 `splitArtists` / `genreLibrary` 的拆分逻辑，不改拆分词表。
+3. 持久化 facet 状态（可参考 14 个键，但**不必全抄**）。
+
+### 验收
+
+| 检查 | 通过条件 |
+| --- | --- |
+| 流派→艺人收窄 | 点流派后剩余艺人只显示该流派下的 |
+| 合作艺人 | 出现在多个艺人类别下，但结果列表只出现一次 |
+| 返回 | 保留上级条件 |
+
+### 前置
+
+P2-H（需要结构化查询支撑叠加条件）。
+
+### 角色
+
+Architecture + Frontend + UI/UX + Test。
+
+---
+
+## P2-K｜动态列表
+
+### 现状：整层缺失
+
+`AudioFolderPlaylist`（`src-tauri/src/audio/types.rs:287-303`）只有 `tracks: Vec<AudioFolderTrackRef>` 静态数组。仓库全局 grep `autoplaylist|smartPlaylist|playlistQuery|dynamicPlaylist` → **0 命中**。
+
+### foobar2000 是四件套
+
+| 件 | 实现 |
+| --- | --- |
+| 条件模型 | `autoplaylist_client` 服务 + `clientData` blob |
+| 求值层 | `autoplaylist_instance_impl` + 独立 `autoplaylist worker` 线程 + `delay_action` debounce |
+| 锁定/所有权 | 4 个异常类（`not_owned` / `already_owned` / `lock_failure` / 基类） |
+| 持久化恢复 | `props.sqlite` 的 `props(key, data BLOB)` + `Could not restore autoplaylist` 路径 |
+
+**存条件不存结果**：
+- `playlist-<GUID>-props.sqlite` 存**定义**
+- `playlist-<GUID>.fplite` 存**求值后的快照**（缓存，可重建）
+
+### 为什么成本高
+
+`CreateAutoPlaylist` 三行 API 之所以极简，是因为**底层有这四件**。SpMusic 一件都没有。
+
+而且要接受**异步语义**：列表内容会异步到达，不能同步算完再渲染。这与现有静态列表模型是结构性差异。
+
+### 最小实施方向（若要做）
+
+1. 动态列表存 `{id, name, query, clientKind, clientData, cachedTracks}`。
+2. 求值走**独立 worker + debounce**，不阻塞 UI。
+3. 列表项标 `isDynamic`，UI 据此禁用编辑。
+4. 「转静态」= 求值一次取快照（对应 `DuplicatePlaylist` 语义）。
+5. 迁移：现有静态列表格式不动。
+
+### 验收
+
+| 检查 | 通过条件 |
+| --- | --- |
+| 曲库新增 | 动态列表自动包含新歌 |
+| 冻结列表 | 不受影响 |
+| 两者互转 | 可转换且顺序保留 |
+| 重启 | 定义恢复，结果重算 |
+
+### 前置
+
+**P2-H + P2-J**（规则依赖查询模型与统计字段）。
+
+### 角色
+
+Architecture + Rust/Tauri + Frontend + Test。
+
+---
+
 ## 二、流程建议：三方对比基线纪律
 
 本条不是代码候选，是研究/验证流程的纪律，建议写入后续任务的验收要求。
@@ -307,9 +700,36 @@ UI/UX（配色语义）+ Frontend（实现）+ Architecture（配置契约）。
 | --- | --- |
 | 五处首轮修正、汉化定量、`.fth`/`.fcl`、WSH 逆向 | [phase-2 findings](../architecture/foobar2000-foobaka-phase-2-findings.md) |
 | 全部测量数据与复跑命令 | [phase-2 comparison](../test/foobar2000-foobaka-phase-2-comparison.md) |
+| **曲库持久化 / 增量 / 离线宽限 / 迁移** | [library mechanisms](../architecture/foobar2000-library-mechanisms.md) |
+| **检索语法 / 联动筛选 / 动态列表** | [search mechanisms](../architecture/foobar2000-search-mechanisms.md) |
 | 首轮 15 项候选原始论证 | `c20ff0c:docs/architecture/foobaka-findings-backlog.md` |
 | 原始二进制数据 | `.rea-analysis/phase2/run-20261115-p2a/` |
+
+### 5.1 本轮新增候选的证据落点
+
+| 候选 | 主要证据 |
+| --- | --- |
+| P2-E `available` + 离线宽限 | `src-tauri/src/audio/playlist.rs:112,299`（硬编码）；`library-mechanisms` §3（28 天） |
+| P2-F 时长缓存落盘 | `src-tauri/src/audio/duration_cache.rs`（`SourceIdentity` 同构，纯内存） |
+| P2-G 子目录静默失败 | `playlist.rs` 扫描循环三处 `warn + continue` |
+| P2-J 统计字段接入 | `mostPlayed.ts` / `recentlyPlayed.ts`（数据已有）；`AllSongsItem` 9 字段无统计 |
+| P2-H 查询语法 | `librarySearch.ts`（两行 `includes()`）；`search-mechanisms` §二/§三 |
+| P2-I 联动筛选 | `search-mechanisms` §五（ReFacets 三层 + `%<field>%`） |
+| P2-K 动态列表 | `search-mechanisms` §六（四件套）；`types.rs:287-303`（静态数组） |
 
 ## 六、合规
 
 本文只记录功能级结论、证据位置与验收方法；不附第三方实现代码，不传播二进制、安装包或配置文件。
+
+## 七、本轮未能实证的关键缺口
+
+以下不是「没时间做」，而是**当前环境无法确证**，已在建议中避开强依赖：
+
+| 缺口 | 影响 | 怎么补 |
+| --- | --- | --- |
+| `retention` 28 天的**运行时**行为 | P2-E 的宽限值参考 | 外部机器复跑卡 E2-b（把 `lastseen` 设为 `now−29 天`） |
+| `autoplaylist` 条件 blob 的编码 | P2-K 的客户端数据格式 | 需动态观察或反汇编 |
+| `LargeFieldsConfig` v1/v2 真实边界 | P2-F 的字段分层 | 复跑卡 E3-b |
+| 播放统计 64bit 哈希算法 | 「文件移动后统计是否跟随」 | 复跑卡 E3-S5 |
+| `%<field>%` 精确语义 | P2-I 的多值拆分实现 | 需指令级反汇编 |
+| Columns UI Filter 级联链路 | 仅参考，不计入官方能力 | 需反汇编（第三方优先级低） |

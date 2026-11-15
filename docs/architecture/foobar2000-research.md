@@ -6,7 +6,7 @@ status: "draft"
 owner_agent: "Architecture Agent"
 version_scope: "long-term"
 created: "2026-11-10"
-updated: "2026-11-10"
+updated: "2026-11-15"
 source_documents:
   - "用户请求与本对话中的三轮 foobar2000 研究"
   - "https://www.foobar2000.org/SDK"
@@ -16,9 +16,16 @@ source_documents:
   - "docs/architecture/playlist-track-summaries.md"
   - "docs/test/list-load-performance-baseline-2026-11-02.md"
   - "docs/audio-compatibility/format-capability-matrix.md"
+  - "docs/architecture/foobar2000-foobaka-phase-2-findings.md"
 ---
 
 # foobar2000 公开资料研究与 SpMusic 借鉴方向
+
+> **本文是基于公开资料的第一轮研究。** 第二轮对实物的二进制级实测见 [foobar2000-foobaka-phase-2-findings.md](foobar2000-foobaka-phase-2-findings.md)，其中修正了本文引用的三处上游说法：
+>
+> 1. **`SoXR` 不存在于官方 2.24.6–2.26.3 构建**（三种写法 × 5 样本全 0 命中）。O3 的重采样参考对象应为 2.26 引入的 `ARDFTSRC` / `Speex`。
+> 2. **`LargeFieldsConfig` 确为 2.26 引入**（本文 L3 的说法正确），并已由二进制字符串证据加固：2.24.6 内核里根本没有该标识符。
+> 3. **O3 的「2.26 引入 Speex 和 ARDFTSRC」经实测为整体替换**：SSRC 与 RetroArch 在 2.26 被移除，属换血而非叠加。
 
 ## 范围与证据
 

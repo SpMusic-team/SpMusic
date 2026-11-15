@@ -80,7 +80,71 @@ type LaneScheduleOptions = { priority: PlaylistCoverPriority; signal?: AbortSign
  * purpose: an asset request still triggers the backend's decode + Lanczos3 + JPEG
  * encode on a cold cache, so it costs the same permits as a pixel request.
  */
-export const MAX_CONCURRENT = 4
+/** Default admit width when no capability report has arrived yet. */
+export const DEFAULT_MAX_CONCURRENT = 4
+
+/**
+ * Admit width: the value the scheduler is currently using.
+ *
+ * The width is adjustable at runtime, so it is a live binding rather than a frozen constant.
+ * Existing callers that only read it keep working, and the admission ceiling they observe is
+ * the one actually in force.
+ */
+export function maxConcurrentWidth(): number {
+  return maxConcurrent
+}
+
+/**
+ * Current admit width for native cover invokes.
+ *
+ * This used to be a fixed constant, which made the front end a hard ceiling regardless of what
+ * the backend was willing to accept. Measured: the backend reports its permit width through
+ * `queryPlaylistDecodePermitWidth`, and raising only the backend's cap from 4 to 8 changed
+ * nothing (2049 ms vs 2112 ms) because this constant still admitted 4. Following the reported
+ * width is what actually widened the pipeline.
+ *
+ * The default stays at the previous value so behaviour is unchanged until a report arrives.
+ */
+let maxConcurrent = DEFAULT_MAX_CONCURRENT
+
+/**
+ * Whether `setMaxConcurrent` has accepted a report yet.
+ *
+ * The first accepted report *replaces* the default rather than being clamped up from it. Without
+ * this, a host whose backend admits only 1 or 2 permits would keep the front end at the default
+ * of 4 and over-admit by 4x/2x -- the report exists precisely to prevent that. Later reports are
+ * still monotonic (they only widen), because a pool that already admitted work must not strand it
+ * behind a lower ceiling.
+ */
+let widthReported = false
+
+/**
+ * Replaces the admit width.
+ *
+ * Returns true when the width changed. The first valid report always applies, even when it is
+ * narrower than the default; subsequent reports only widen. Non-positive or non-integer reports
+ * are ignored, and no report may set the width below one slot.
+ */
+export function setMaxConcurrent(width: unknown): boolean {
+  if (typeof width !== 'number' || !Number.isInteger(width) || width < 1) return false
+  if (widthReported && width <= maxConcurrent) return false
+  const changed = width !== maxConcurrent
+  widthReported = true
+  maxConcurrent = width
+  if (changed) pump()
+  return changed
+}
+
+/** Current admit width, exposed for assertions and diagnostics. */
+export function currentMaxConcurrent(): number {
+  return maxConcurrent
+}
+
+/** Test-only: forget any accepted report so the first-report path can be re-exercised. */
+export function resetMaxConcurrentForTests(): void {
+  maxConcurrent = DEFAULT_MAX_CONCURRENT
+  widthReported = false
+}
 
 const pending: Job[] = []
 const jobs = new Map<string, Job>()
@@ -130,7 +194,7 @@ function pump() {
   // every call, so a freshly scheduled priority-0 job can overtake jobs already
   // waiting at priority 1 or 2 as soon as any slot frees up.
   pending.sort((left, right) => left.priority - right.priority || left.sequence - right.sequence)
-  while (activeCount < MAX_CONCURRENT && pending.length) {
+  while (activeCount < maxConcurrent && pending.length) {
     const job = pending.shift()!
     if (!currentConsumers(job).length) {
       if (jobs.get(job.key) === job) jobs.delete(job.key)

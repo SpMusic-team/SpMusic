@@ -379,7 +379,13 @@ async function harness(options = {}) {
     get appCopy() { return playerCopy.appCopy },
     STREAMS_SCOPE: 'streams',
     validStreamsPlaylist: () => null,
-    MAX_CONCURRENT: 4,
+    // The scheduler now reports its admit width at runtime instead of exporting a constant.
+    // Both must be configured: leaving them unbound makes the bind fall through to the inert
+    // async stub, and a Promise reaching the artwork budget arithmetic becomes NaN, which
+    // silently disables the resident-budget guard rather than failing loudly.
+    DEFAULT_MAX_CONCURRENT: 4,
+    maxConcurrentWidth: () => 4,
+    setMaxConcurrent: () => false,
     AUDIO_PLAYLIST_TRACK_SUMMARY_BATCH_LIMIT: 200,
     isAudioCoverPixelsError: () => false,
     isAudioCommandError: () => false,

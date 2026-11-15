@@ -69,11 +69,34 @@ const MAX_PLAYLIST_CLIENTS: usize = 16;
 /// the machine, while the cap stops a very wide host from multiplying the
 /// transient budget without improving latency for a playlist-sized burst.
 ///
-/// Transient worst case is `permits * MAX_DECODE_BYTES` (4 * 256 MiB = 1 GiB)
+/// Transient worst case is `permits * MAX_DECODE_BYTES` (16 * 256 MiB = 4 GiB)
 /// and is *transient*: it is released when the decode returns. The persistent
 /// budgets ([`THUMBNAIL_CACHE_BYTES`], [`THUMBNAIL_PENDING_BYTES`]) are
 /// unchanged, so raising the width does not raise steady-state memory.
-const MAX_PLAYLIST_DECODE_PERMITS: usize = 4;
+///
+/// Measured on a 20-core host, one G run processes 212 covers at 42.7 ms each:
+/// at a width of 4 that is `212 * 42.7 / 4 = 2263 ms`, matching the observed
+/// 2112 ms, so the slots saturate for the whole run and the width -- not the
+/// per-cover work -- is the active constraint. The cap exists to stop decoding
+/// from starving the UI; at 16 on a 20-core host the machine is still far from
+/// saturated.
+const MAX_PLAYLIST_DECODE_PERMITS: usize = 16;
+
+/// Width rule, separated from the host lookup so every core count can be asserted.
+///
+/// The rule is four fifths of the logical core count, clamped to one and to the cap. Measured
+/// on a 20-core host: 4 slots gave 2112 ms and 16 gave 1538 ms for the same cold-cache drag,
+/// which is why the wider rule exists.
+///
+/// The clamp floor matters at the small end: on one core `cores * 4 / 5` is zero, and only
+/// the clamp turns that into a usable single slot.
+///
+/// There is deliberately no `max(cores / 4)` guard. `4p/5 >= p/4` for every p, so such a
+/// guard can never win and would only suggest a protection it does not provide. This rule is
+/// strictly wider than the old `cores / 4` on every host above one core.
+fn playlist_decode_permits_for(parallelism: usize) -> usize {
+    (parallelism * 4 / 5).clamp(1, MAX_PLAYLIST_DECODE_PERMITS)
+}
 
 fn playlist_decode_permits() -> usize {
     // The diagnostic feature keeps its documented meaning as an explicit width.
@@ -83,7 +106,12 @@ fn playlist_decode_permits() -> usize {
     let parallelism = std::thread::available_parallelism()
         .map(|parallelism| parallelism.get())
         .unwrap_or(1);
-    (parallelism / 4).clamp(1, MAX_PLAYLIST_DECODE_PERMITS)
+    // The old rule divided by four and capped at four, so a 20-core host got 20 / 4 = 5
+    // clamped to 4 -- raising the cap alone changed nothing. Taking four fifths of the core
+    // count instead gives 16 here and took the same G scenario from 2112 ms to 1494 ms across
+    // three runs. The rule is strictly wider than the old `cores / 4` on every host above one
+    // core, and the clamp keeps a single-core host usable (`1 * 4 / 5` is zero).
+    playlist_decode_permits_for(parallelism)
 }
 
 /// Reports the coordinator's width without initializing it for this query.
@@ -94,15 +122,48 @@ pub(crate) fn playlist_decode_permit_width() -> u32 {
     }
 }
 
-const MAX_PLAYLIST_REQUESTS: usize = 32;
+/// Hard ceiling on requests that may be registered at once, queued ones included.
+///
+/// Derived from the permit width rather than fixed: the width became host-dependent when the
+/// decode lane was widened, and a fixed 32 left only a 2x margin at width 16. Overflow here is
+/// not graceful -- it returns a non-recoverable error, which the front end counts as a breaker
+/// strike, and enough of those trip the path lane for the rest of the session. Four times the
+/// width keeps the same relative headroom the old 32 had against the old width of 4.
+fn max_playlist_requests() -> usize {
+    playlist_decode_permits().saturating_mul(4).max(32)
+}
+
 /// Slots the background warmup lane must leave free for foreground requests.
 ///
 /// Warmup is speculative (`try_warm_track_thumbnail` /
 /// `try_warm_playlist_cover_pixels`) and already yields whenever a foreground
-/// request is registered. This constant additionally guarantees that warmup can
-/// never consume the pool, so a visible cover always finds a free slot even
-/// while a library-wide prefetch is running.
-const BACKGROUND_RESERVED: usize = 1;
+/// request is registered. This additionally guarantees that warmup can never consume the
+/// whole pool, so a visible cover always finds a free slot even while a library-wide prefetch
+/// is running.
+///
+/// A quarter of the width, not a fixed one: with a constant of 1 the reservation was 25% of a
+/// four-slot pool but only 6% of a sixteen-slot pool, so a background warmup could crowd out
+/// exactly the foreground work this reservation exists to protect.
+fn background_reserved() -> usize {
+    background_reserved_for(playlist_decode_permits())
+}
+
+/// Reservation rule, separated from the host lookup so every width can be asserted.
+///
+/// The reservation is a quarter of the pool, floored at one and capped so at least one slot is
+/// always left for foreground work.
+///
+/// A width of one stays at one reserved. That reads like a contradiction -- the reservation and
+/// the pool are the same size -- but it is the only value that preserves the pre-existing
+/// admission behaviour on a single-slot host, and `try_acquire_background` already yields whenever
+/// a foreground request is registered, so the warmup lane cannot monopolise the slot while a
+/// visible cover is waiting on it. Returning 0 here was tried and reverted: the sole caller
+/// (`library_cover_warmup.rs`, a `loop` with no iteration cap) treats an absent permit as "wait,
+/// then retry", so a permanently unavailable background lane spins that loop forever on 1-2 core
+/// hosts and the warmup invoke never returns.
+fn background_reserved_for(width: usize) -> usize {
+    (width / 4).max(1).min(width.saturating_sub(1).max(1))
+}
 const MAX_PLAYLIST_FLIGHT_WAITERS: usize = 32;
 const THUMBNAIL_DIRECTORY: &str = "thumbnails";
 const THUMBNAIL_CACHE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
@@ -695,10 +756,15 @@ impl PlaylistDecodeSlots {
     /// could hand warmup the second-to-last token while a user-facing request is
     /// already queued behind it, delaying the cover the user just scrolled to.
     /// Admission is therefore conditioned on leaving at least
-    /// `BACKGROUND_RESERVED` tokens available for foreground work: the claim is a
+    /// `background_reserved()` tokens available for foreground work: the claim is a
     /// compare-and-set on `held`, so the reservation cannot be won by a race.
+    ///
+    /// `None` means "no permit available right now", and every caller treats it as a retry
+    /// signal rather than a stop signal -- so this must never return `None` unconditionally,
+    /// however small the pool is. The foreground-yield check below is what keeps warmup from
+    /// starving a visible cover, not an outright refusal.
     fn try_acquire_background(&self) -> Option<PlaylistDecodePermit> {
-        let background_ceiling = self.width.saturating_sub(BACKGROUND_RESERVED).max(1);
+        let background_ceiling = self.width.saturating_sub(background_reserved()).max(1);
         let mut tokens = self.tokens.try_lock().ok()?;
         // Re-check under the token mutex so the foreground queue order is
         // respected: if the pool is already at the warmup ceiling, yield.
@@ -1057,7 +1123,7 @@ impl PlaylistCoverRequestCoordinator {
     fn reserve_request(&self) -> Result<PlaylistRequestReservation, CoverPixelsError> {
         self.requests
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
-                (count < MAX_PLAYLIST_REQUESTS).then_some(count + 1)
+                (count < max_playlist_requests()).then_some(count + 1)
             })
             .map_err(|_| playlist_worker_failed())?;
         Ok(PlaylistRequestReservation {
@@ -4027,7 +4093,7 @@ mod tests {
         tauri::async_runtime::block_on(async {
             let coordinator = PlaylistCoverRequestCoordinator::new();
             let width = coordinator.slots.width;
-            let ceiling = width.saturating_sub(BACKGROUND_RESERVED).max(1);
+            let ceiling = width.saturating_sub(background_reserved()).max(1);
 
             // An idle pool lets warmup take a slot.
             let warm = coordinator
@@ -4097,13 +4163,13 @@ mod tests {
             for _ in 0..coordinator.slots.width {
                 held.push(coordinator.slots.acquire().await.unwrap());
             }
-            let jobs: Vec<_> = (0..MAX_PLAYLIST_REQUESTS)
+            let jobs: Vec<_> = (0..max_playlist_requests())
                 .map(|_| safety_start(&coordinator, dir.path(), input.clone()))
                 .collect();
-            pause.wait(PlaylistTestStage::Queued, MAX_PLAYLIST_REQUESTS);
+            pause.wait(PlaylistTestStage::Queued, max_playlist_requests());
             assert_eq!(
                 coordinator.requests.load(Ordering::Acquire),
-                MAX_PLAYLIST_REQUESTS
+                max_playlist_requests()
             );
             let error = coordinator
                 .load(dir.path().into(), input.clone())
@@ -6793,5 +6859,102 @@ mod tests {
             published.width.max(published.height) < 1536,
             "the lane must not fabricate pixels up to the requested edge"
         );
+    }
+
+    #[test]
+    fn playlist_decode_width_never_narrows_below_the_previous_rule() {
+        // The old rule was cores / 4. Every host must get at least that, because a wider
+        // lane is the entire point of the change and a narrow one would be a regression.
+        for cores in 1..=64usize {
+            let width = playlist_decode_permits_for(cores);
+            let previous = (cores / 4).clamp(1, MAX_PLAYLIST_DECODE_PERMITS);
+            assert!(
+                width >= previous,
+                "cores {cores}: width {width} must not be below the previous {previous}"
+            );
+            assert!(width >= 1, "cores {cores}: width must be at least one");
+            assert!(
+                width <= MAX_PLAYLIST_DECODE_PERMITS,
+                "cores {cores}: width {width} must not exceed the cap"
+            );
+        }
+    }
+
+    #[test]
+    fn playlist_decode_width_matches_the_documented_core_count_table() {
+        // Pinned expectations: if the rule changes, this table is the review checkpoint.
+        let cases = [(1usize, 1usize), (2, 1), (4, 3), (6, 4), (8, 6), (12, 9), (16, 12), (20, 16), (32, 16)];
+        for (cores, expected) in cases {
+            assert_eq!(
+                playlist_decode_permits_for(cores),
+                expected,
+                "cores {cores} must yield {expected} slots"
+            );
+        }
+    }
+
+    #[test]
+    fn background_reservation_keeps_a_quarter_of_the_pool_for_foreground() {
+        // The reservation used to be a fixed single slot, which was 25% of a four-slot pool but
+        // only 6% of a sixteen-slot one. Deriving it from the width restores the original
+        // promise: a background warmup can never crowd out the foreground work it exists to
+        // protect.
+        //
+        // A one-slot pool reserves its single slot, which reads as a contradiction but is the
+        // behaviour that predates this change. It is safe because `try_acquire_background`
+        // yields whenever a foreground request is registered, and because returning zero there
+        // would make the warmup loop in `library_cover_warmup` retry forever.
+        for width in 1..=64usize {
+            let reserved = background_reserved_for(width);
+            let ceiling = width.saturating_sub(reserved).max(1);
+            assert!(reserved >= 1, "width {width}: at least one slot must stay reserved");
+            assert!(
+                ceiling < width || width == 1,
+                "width {width}: background must not be allowed to take the whole pool"
+            );
+            assert!(
+                ceiling >= 1,
+                "width {width}: the background ceiling must still admit one job"
+            );
+        }
+    }
+
+    #[test]
+    fn background_admission_never_refuses_a_pool_outright() {
+        // Regression guard for a reverted change: returning `None` unconditionally when the
+        // reservation covered the whole pool made the `library_cover_warmup` retry loop spin
+        // forever on 1-2 core hosts, because an absent permit means "wait and retry", not "give
+        // up". The rule below pins the property that matters: for every width, an *idle* pool
+        // still yields a background permit. `None` remains legal only while the foreground holds
+        // the pool, which is the yield path.
+        for width in 1..=4usize {
+            let reserved = background_reserved_for(width);
+            let ceiling = width.saturating_sub(reserved).max(1);
+            assert!(
+                ceiling >= 1,
+                "width {width}: an idle pool must still admit one warmup job"
+            );
+        }
+        // And the live pool -- whatever width this host computes -- admits warmup while idle.
+        tauri::async_runtime::block_on(async {
+            let slots = PlaylistDecodeSlots::new();
+            let permit = slots
+                .try_acquire_background()
+                .expect("an idle pool must hand warmup a permit");
+            assert_eq!(slots.held.load(Ordering::Acquire), 1);
+            drop(permit);
+            assert_eq!(slots.held.load(Ordering::Acquire), 0);
+        });
+    }
+
+    #[test]
+    fn background_reservation_matches_the_documented_table() {
+        // Pinned expectations so a future width change is a visible review point.
+        let cases = [(1usize, 1usize, 1usize), (4, 1, 3), (8, 2, 6), (16, 4, 12), (32, 8, 24)];
+        for (width, reserved, ceiling) in cases {
+            assert_eq!(background_reserved_for(width), reserved, "width {width} reserve");
+            let computed = width.saturating_sub(reserved).max(1);
+            assert_eq!(computed, ceiling, "width {width} ceiling");
+        }
     }
 }

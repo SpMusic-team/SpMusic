@@ -46,7 +46,7 @@ import { createPlaylistArtworkGrace } from '@/features/player/model/playlistArtw
 import { playlistCoverImageFromPixels } from '@/features/player/model/playlistCoverPixels'
 import { coverImageEventDetail, createCoverPresentation, createCoverRecoveryLedger, decodePlaylistCover, isCurrentCoverReport, isPlaylistCoverDecoded, nextCoverSessionGeneration, releasePlaylistCoverUrl, type CoverPresentation, type CoverRecoveryLedger } from '@/features/player/model/playlistCoverReadiness'
 import { createPlaylistArtworkStore, playlistArtworkKey } from '@/features/player/model/playlistArtworkStore'
-import { MAX_CONCURRENT, schedulePlaylistCoverPixels, scheduleTrackThumbnail } from '@/features/player/services/playlistCoverScheduler'
+import { DEFAULT_MAX_CONCURRENT, maxConcurrentWidth, setMaxConcurrent, schedulePlaylistCoverPixels, scheduleTrackThumbnail } from '@/features/player/services/playlistCoverScheduler'
 import {
   attemptPlaylistCoverThumbnailPath,
   attemptTrackThumbnailPath,
@@ -222,14 +222,58 @@ const HYDRATED_TRACK_CACHE_CAPACITY = 8
 // while the adjacent-track decoded covers behind it (the +/-3 prefetch window
 // in prefetchAdjacentPlaylistTracks) already keep track switches instant. The
 // two budgets are independent, so lowering this one does not affect switching.
-const PLAYLIST_ARTWORK_RESIDENT_BUDGET = 48 * 1024 * 1024
+// CANDIDATE-AG: 96 MiB, raised from 48.
+//
+// Measured on the real 1800-track playlist at a maximized window with a fully populated
+// thumbnail cache (1618 derived files covering 100% of the distinct covers; that probe ran with
+// a temporary transform-version bump that has since been reverted, so the cache is back on the
+// released key). A jarring scroll into
+// the middle left 112 covers visible; they took ~1800-2600 ms to appear, at a steady ~60 ms
+// per 2 covers, while every individual step was idle:
+//
+//   backend IPC, 32 concurrent ............ 14 ms total
+//   one asset fetch ....................... 1.9 ms
+//   peak concurrent asset fetches ......... 2   (average 0.14 -> idle 98.6% of the time)
+//   long tasks ............................ 0
+//   frames ................................ 357 fps
+//
+// The cause is this budget, not any of those. The ledger below
+// (committedBytes + reservedWarmBytes + bytes + inflightBudget > RESIDENT_BUDGET) left only
+// 815 KiB of headroom once the 112 visible rows each claimed ~285 KiB (a ~29 KiB JPEG plus
+// 256 KiB of RGBA), so 'budgetedIds' could admit just two more rows per demand pass -- exactly
+// the 2-per-60-ms rhythm that was measured. The row is not rejected forever; it waits for a
+// slot that only frees when some other row's lease expires, which is why it dribbles in.
+//
+// Raising the ceiling to 96 MiB keeps the guard meaningful (it still rejects an unbounded
+// viewport) while giving the visible set room to queue in one pass.
+const PLAYLIST_ARTWORK_RESIDENT_BUDGET = 96 * 1024 * 1024
+const PLAYLIST_VISUAL_ADMISSION_FLOOR = 2
 // In-flight RGBA reservations for the shared cover scheduler. The scheduler
 // admits up to MAX_CONCURRENT decodes, and the largest playlist edge it serves
 // is 512, so the reservation must cover every slot or the admission bound above
 // under-counts real transient memory. This hook's own hydration pump is capped
 // at 2 concurrent jobs, but the library hooks feeding the same scheduler are
 // not, so the width comes from the scheduler itself.
-const PLAYLIST_ARTWORK_INFLIGHT_BUDGET = MAX_CONCURRENT * 512 * 512 * 4
+// CANDIDATE-Z follow-up: reserve against the width the scheduler will actually use.
+//
+// This used to be a constant derived from MAX_CONCURRENT = 4, which was correct while the
+// admission width was fixed. The width is now reported by the backend (16 on this host), so
+// a 4-slot reserve under-counts in-flight pixels by 12 MiB and lets `budgetedIds` admit
+// roughly 48 extra rows before the resident budget rejects them -- rows that then occupy the
+// same lanes as the rows the user is actually looking at. Reading the live width keeps the
+// reserve honest, and it still evaluates to 4 MiB on a machine whose backend reports 4.
+function playlistArtworkInflightBudget(): number {
+  // The width crosses a module boundary, so it is coerced rather than trusted: a test double
+  // or a partially loaded scheduler that answers with a non-number would otherwise turn this
+  // budget into NaN, and NaN compares false against every threshold -- the resident-budget
+  // guard would then admit every row instead of rejecting the overflow, which is the opposite
+  // of its purpose. Falling back to the floor keeps the guard meaningful in that case.
+  const reported = maxConcurrentWidth()
+  const width = Number.isInteger(reported) && reported > 0
+    ? Math.max(DEFAULT_MAX_CONCURRENT, reported)
+    : DEFAULT_MAX_CONCURRENT
+  return width * 512 * 512 * 4
+}
 
 function playlistImageBytes(image: PlaylistCoverImage): number {
   return image.encodedBytes + image.width * image.height * 4
@@ -699,7 +743,11 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
   }, [])
   const playlistVisualHydrationQueueRef = useRef<PlaylistVisualHydrationJob[]>([])
   const playlistVisualHydrationActiveRef = useRef(0)
-  const playlistVisualAdmissionWidthRef = useRef(2)
+  // Hydration width. `null` means "no backend report yet", which is distinct from any numeric
+  // width: a report of 1 or 2 must be able to move the hook *down* from its starting point, and
+  // a numeric default would make the monotonic check below reject exactly those reports. See
+  // `PLAYLIST_VISUAL_ADMISSION_FLOOR` for the value used before a report arrives.
+  const playlistVisualAdmissionWidthRef = useRef<number | null>(null)
   const playlistVisualHydrationActiveJobsRef = useRef(new Map<string, PlaylistVisualHydrationJob>())
   const playlistVisualRequiredIdsRef = useRef<ReadonlySet<string>>(new Set())
   const playlistOptionalIdleRef = useRef<OptionalIdleHandle | null>(null)
@@ -2190,10 +2238,17 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     return request
   }, [commitPlaylistTrackMetadata])
 
+  // Resolves the hydration width, falling back to the pre-report floor. Kept as a function so
+  // the ref stays the single source of truth and `pump()` needs no dependency on it.
+  const playlistVisualAdmissionWidth = useCallback(
+    () => playlistVisualAdmissionWidthRef.current ?? PLAYLIST_VISUAL_ADMISSION_FLOOR,
+    [],
+  )
+
   const pumpPlaylistVisualHydration = useCallback(() => {
     function pump(): void {
       while (
-        playlistVisualHydrationActiveRef.current < playlistVisualAdmissionWidthRef.current
+        playlistVisualHydrationActiveRef.current < playlistVisualAdmissionWidth()
         && (playlistForcedRecoveryQueueRef.current.length > 0 || playlistVisualHydrationQueueRef.current.length > 0)
       ) {
         // A forced pixel recovery runs ahead of normal hydration: it was admitted
@@ -2520,15 +2575,24 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
           })
     }
     pump()
-  }, [playlistVisualPresentation, publishPlaylistVisuals])
+  }, [playlistVisualAdmissionWidth, playlistVisualPresentation, publishPlaylistVisuals])
 
   useEffect(() => {
     let cancelled = false
     // A missing or failed capability query leaves the existing width in force.
     void queryPlaylistDecodePermitWidth().then((width) => {
-      if (cancelled || typeof width !== 'number' || !Number.isInteger(width) || width < 3) return
-      if (playlistVisualAdmissionWidthRef.current === 3) return
-      playlistVisualAdmissionWidthRef.current = 3
+      // Only the type guards live here. The previous `width < 3` clause silently discarded the
+      // reports that matter at the small end: a host whose backend admits 1 or 2 permits would
+      // keep the hook at its starting width and over-admit by 4x/2x. The monotonic check below
+      // is what actually decides whether a report can move the width.
+      if (cancelled || typeof width !== 'number' || !Number.isInteger(width) || width < 1) return
+      const current = playlistVisualAdmissionWidthRef.current
+      if (current !== null && current >= width) return
+      playlistVisualAdmissionWidthRef.current = width
+      // Keep the shared scheduler at the same width as the hook. Leaving it at its own default
+      // would make the front end the ceiling again, which is exactly the bug this pair of
+      // changes exists to remove.
+      setMaxConcurrent(width)
       // Existing queued work can use the new slot before either active job completes.
       pumpPlaylistVisualHydration()
     }, () => {})
@@ -2658,21 +2722,21 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     // Reserve warm resources before optional cold prefetch. The final retain
     // below reconciles leases against the actual accepted worker demand.
     const reservedWarmIds = playlistArtworkGrace.retain(residents, requiredIds,
-      PLAYLIST_ARTWORK_RESIDENT_BUDGET - committedBytes - PLAYLIST_ARTWORK_INFLIGHT_BUDGET)
+      PLAYLIST_ARTWORK_RESIDENT_BUDGET - committedBytes - playlistArtworkInflightBudget())
     let reservedWarmBytes = residents.reduce((sum, resident) => sum + (reservedWarmIds.has(resident.id) ? resident.bytes : 0), 0)
     const budgetedIds = artworkDesiredIds.filter((id) => {
       if (requiredIds.has(id)) return true
       const current = playlistTrackVisualsRef.current[id]?.coverThumbnail
       const reservedBytes = reservedWarmIds.has(id) && current ? playlistImageBytes(current) : 0
       const bytes = Math.max(playlistArtworkBytes(targetEdgeFor(id)), current ? playlistImageBytes(current) : 0)
-      if (committedBytes + reservedWarmBytes + bytes - reservedBytes + PLAYLIST_ARTWORK_INFLIGHT_BUDGET > PLAYLIST_ARTWORK_RESIDENT_BUDGET) return false
+      if (committedBytes + reservedWarmBytes + bytes - reservedBytes + playlistArtworkInflightBudget() > PLAYLIST_ARTWORK_RESIDENT_BUDGET) return false
       reservedWarmBytes -= reservedBytes
       committedBytes += bytes
       return true
     })
     const desiredIds = new Set(budgetedIds)
     const warmIds = playlistArtworkGrace.retain(residents, desiredIds,
-      PLAYLIST_ARTWORK_RESIDENT_BUDGET - committedBytes - PLAYLIST_ARTWORK_INFLIGHT_BUDGET)
+      PLAYLIST_ARTWORK_RESIDENT_BUDGET - committedBytes - playlistArtworkInflightBudget())
     const residentIds = new Set([...desiredIds, ...warmIds])
     const windowKey = `${playlistScopeEpochRef.current}\u0000${scope}\u0000${keepPersistentArtwork}\u0000${[...visibleIds].join('\u0000')}\u0001${[...heldIds].join('\u0000')}\u0002${budgetedIds.map((id) => `${id}:${normalizeAudioSourcePath(descriptorsById.get(id)?.sourcePath ?? '')}`).join('\u0000')}\u0003${[...warmIds].join('\u0000')}`
     if (playlistVisualWindowKeyRef.current === windowKey) return

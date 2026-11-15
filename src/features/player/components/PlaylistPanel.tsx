@@ -862,7 +862,8 @@ export function PlaylistPanel({
         .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
       const orderedEntries = orderPlaylistArtworkRows(entries, direction)
       if (!layout.showArtwork) {
-        // Returning to artwork must republish even if geometry/IDs are equal to        // the last cover layout; the player may have expired its warm leases.
+        // Returning to artwork must republish even if geometry/IDs are equal to
+        // the last cover layout; the player may have expired its warm leases.
         artworkWindowKeyRef.current = ''
         const orderedIds = orderedEntries.map((entry) => entry.trackId)
         // The owner participates: a click hands the panel to a different artwork owner

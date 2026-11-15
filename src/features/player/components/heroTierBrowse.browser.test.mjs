@@ -138,18 +138,68 @@ test('BR4: the hero may take a high tier while every card stays at 256', async (
       .catch(() => {})
     const edges = await page.evaluate(() => window.edges)
     const heroHigh = edges.filter(e => (e.maxEdge ?? 0) > 512)
-    const cardEdges = edges.filter(e => e.command.includes('track_thumbnail') && (e.maxEdge ?? 0) <= 512)
 
     assert(heroHigh.length > 0,
       `the hero must reach a high tier at 2560px; saw ${JSON.stringify(edges.map(e => [e.command, e.maxEdge]))}`)
-    // The lane each request uses is asserted by crossBoundaryEdgeParity (whitelists) and
-    // playlistCoverPathLane (behaviour). Here the subject is the tier SPLIT between the hero and
-    // the rows, so both lanes are acceptable for the hero and neither may exceed 256 for a row.
-    // Ordinary rows keep their persisted thumbnail: this is the "one key ⇒ one edge" guarantee.
-    for (const request of cardEdges) {
+
+    // ── Assertion 1: the REQUEST side ────────────────────────────────────────────
+    //
+    // Every ordinary-row request must stay at 256. Note there is deliberately NO
+    // `maxEdge <= 512` pre-filter here: an earlier version filtered first and then
+    // asserted `<= 256`, so a 1536 row request was excluded from the very check meant
+    // to catch it. That was a circular assertion (see the plan's §2 finding log).
+    const rowRequests = edges.filter(e => e.command.includes('track_thumbnail'))
+    for (const request of rowRequests) {
       assert.ok((request.maxEdge ?? 0) <= 256,
-        `an ordinary row must stay at 256, got ${request.maxEdge}`)
+        `an ordinary row must request at most 256, got ${request.maxEdge} from ${request.command}`)
     }
+
+    // ── Assertion 2: the DISPLAY side ────────────────────────────────────────────
+    //
+    // The request log alone cannot prove this: the defect this test now guards was
+    // "requests split, display shared". The hero requested 1536 and the rows requested
+    // 256, yet the first row still RENDERED the hero's 1536 image because both read the
+    // same published record. Only the DOM shows that.
+    //
+    // Caveat, stated plainly: this fixture's two cover lanes return tiny placeholder
+    // images (pixel lane 80x50, path lane 1x1), so `naturalWidth` here CANNOT be used as
+    // the tier. What the DOM still proves is the property that actually mattered — that
+    // the hero and the first row do not render the SAME image. Tier coverage lives in
+    // the request-side assertion above plus the DOM probe that compares real tiers.
+    const display = await page.evaluate(() => {
+      const heroImage = document.querySelector('.playlist-hero-image')
+      const heroSrc = heroImage ? (heroImage.currentSrc || heroImage.src || '') : ''
+      const rows = [...document.querySelectorAll('.playlist-grid [data-playlist-track-id]')].map((card, index) => {
+        const img = card.querySelector('img')
+        return {
+          index,
+          id: card.dataset.playlistTrackId || null,
+          naturalWidth: img ? img.naturalWidth : null,
+          src: img ? (img.currentSrc || img.src || '') : '',
+        }
+      })
+      return { hero: { src: heroSrc, present: Boolean(heroImage) }, rows }
+    })
+
+    assert.ok(display.hero.present && display.hero.src, 'the hero image must be rendered')
+    assert.ok(display.rows.length > 0, 'the detail view must render rows')
+
+    // The decisive one: the hero and the first row must not share an image source.
+    // Sharing it is exactly how a high-tier hero used to bleed into the first row.
+    assert.notStrictEqual(
+      display.rows[0].src,
+      display.hero.src,
+      'the first row must not render the hero\'s image',
+    )
+    // And no row may share it, not just the first one.
+    for (const row of display.rows) {
+      assert.notStrictEqual(
+        row.src,
+        display.hero.src,
+        `row #${row.index} (${row.id}) must not render the hero's image`,
+      )
+    }
+
     assert.deepEqual(errors, [])
   } finally {
     await page.close()

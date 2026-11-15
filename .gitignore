@@ -54,3 +54,51 @@ dist-ssr
 
 # 临时构建产物与运行时诊断目录（含 LevelDB、数据库、日志），可重建，不入库
 .codex-tmp-folder-ui-dist/
+
+# ---------------------------------------------------------------------------
+# 逆向研究样本与解包产物
+#
+# 以下内容全部可从公开下载的安装包或原始 ZIP 重新生成，属于本地产物，
+# 不属于需要入库的文档证据。研究结论已沉淀在 docs/architecture/*.md 中，
+# 文档引用的原文片段是转述而非复制，因此不需要保留这些原始文件。
+#
+# 这段规则曾被一次 `git pull` 覆盖丢失（2026-11-15 重新加回），
+# 之后请勿在合并时整体覆盖 .gitignore，只做追加。
+# ---------------------------------------------------------------------------
+
+# 隔离运行的 foobaka 实例（约 467 MB / 1200 文件）
+.rea-analysis/foobaka-lab/
+
+# 官方 foobar2000 各版本解包目录（合计约 95 MB）
+.rea-analysis/foobar2000-*/
+
+# 官方安装器
+.rea-analysis/*.exe
+
+# 主题 JS 的 UTF-8 转码副本（源为第三方，可由原始文件重新转码）
+.rea-analysis/foobaka-themes-utf8/
+
+# 界面截图与像素对比图（派生产物）
+.rea-analysis/foobaka-shots/
+
+# 实验前后的 profile 备份（可重新运行实验生成）
+.rea-analysis/foobaka-orig-after-run-backup/
+.rea-analysis/foobaka-backup-*/
+
+# 接缝测试夹具（可由 flac.exe 重新生成）
+.rea-analysis/p1-seam-fixture/
+
+# 单次实验的时间戳、PID/HWND、IO 基线与注册表快照
+.rea-analysis/*-t0.txt
+.rea-analysis/lab-pid.txt
+.rea-analysis/lab-hwnd.txt
+.rea-analysis/io-baseline.json
+.rea-analysis/com-registry-backup.json
+
+# 通用兜底：.rea-analysis 下只保留 .md 研究证据，其余一律不入库。
+#
+# 用「先全排、再逐个放行」的写法，这样新增实验目录时不需要再加规则。
+# 注意：放行规则只放 .md，不要放行目录（如 !.rea-analysis/tools/），
+# 否则会把整个工具目录重新纳入跟踪。
+.rea-analysis/**
+!.rea-analysis/*.md

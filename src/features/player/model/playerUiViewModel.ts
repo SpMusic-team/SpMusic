@@ -370,10 +370,18 @@ export type PlaylistArtworkDemand = {
   coverCssPixels: number
   dpr: number
   /**
-   * Continuously measured tier for the first-track hero.
+   * Continuously measured tier for the hero, and the ONLY source of the hero
+   * lane's tier.
    *
-   * Supplied by the panel so the hero's tier follows the viewport. Absent means the caller does
-   * not measure, and the artwork hook falls back to its own one-shot measurement.
+   * The panel measures the hero's box and sends the result with this viewport
+   * report. A number above 256 starts (or re-tiers) the hero's own read; `undefined`
+   * is the withdrawal signal — `useHeroTier(enabled: false)` produces it when the
+   * panel leaves or goes offscreen — and it releases the high-tier image so the
+   * hero falls back to the row preview. Ordinary rows never consume this value:
+   * they are always read at 256.
+   *
+   * A caller that does not measure at all falls back to one-shot measurement
+   * (`selectHeroEdge()`) on its own side.
    */
   heroEdge?: number
 }

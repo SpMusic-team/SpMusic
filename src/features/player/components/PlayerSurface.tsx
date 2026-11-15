@@ -59,6 +59,16 @@ import {
   type TrackCardInteractionPhase,
 } from '@/features/player/model/trackCardGesture'
 import { selectPlayerViewTransitionOwnerIds } from '@/features/player/model/playerViewTransition'
+import {
+  commitHeroLease,
+  decideHeroLease,
+  heroLeaseNeedsCopy,
+  isSameHeroLease,
+  type HeroDisplayLease,
+  type HeroLeasePublication,
+} from '@/features/player/components/playlistHeroDisplayLease'
+import { releasePlaylistCoverUrl } from '@/features/player/model/playlistCoverReadiness'
+import type { PlaylistCoverImage } from '@/features/player/model/playerUiViewModel'
 
 // A resolved source-less stream uses the existing cover fallback. It can own
 // a drag pair without a canvas; pending or failed image requests cannot.
@@ -95,6 +105,111 @@ export type PlayerSurfaceProps = {
 
 type PlaylistWindowReport = NonNullable<ComponentProps<typeof PlaylistPanel>['onVisibleTrackIdsChange']>
 type PlaylistWindowOwners = { active: symbol | null; closing: symbol | null }
+
+/**
+ * The hero display hold: the last hero image an owner published, kept available
+ * so the display layer can bridge an owner handover (plan §3).
+ *
+ * `PlayerShell.tsx:843` swaps **both** the artwork owner and the demand callback
+ * when `isBrowsingActive` flips on a track click. The incoming owner starts with an
+ * empty hero slot, so the panel's `hero ?? row` fallback would drop the hero to the
+ * first row's 256px preview until that owner publishes its own high tier. The hold
+ * is what keeps the sharp image on screen across that window.
+ *
+ * It lives here, deliberately **outside** `PlaylistPanel` and outside its
+ * `key={playlist.deleteScope ?? …}`: that key does change on the
+ * `pageOrigin.kind !== 'playlist'` paths, and component state would be dropped with
+ * it. Holding it above the remount key removes that whole class of "remount loses
+ * the image" risk without touching any existing `deleteScope` consumer.
+ *
+ * It only ever describes the hero. It is never consulted for a row, holds no
+ * track-id index, and neither creates nor revokes a URL — the publishing owner
+ * keeps ownership throughout. Whether a held image may be shown is decided per
+ * render by the panel, which is the only place that knows the current hero key.
+ */
+function useHeroDisplayHold() {
+  const holdRef = useRef<HeroDisplayLease | undefined>(undefined)
+  const [hold, setHold] = useState<HeroDisplayLease | undefined>(undefined)
+  // URLs this hold owns privately, so a releasing owner cannot invalidate them.
+  // At most one is ever live: a new copy replaces the old one immediately below.
+  const copyRef = useRef<string | undefined>(undefined)
+  /**
+   * Remember a publication the current owner just made.
+   *
+   * Deliberately ignores `undefined`: an owner that has published nothing for the
+   * hero is either mid-handover (the window this hold exists for) or has nothing to
+   * show (in which case there is also nothing worth keeping). Clearing on it would
+   * defeat the whole mechanism, and the held image is dropped anyway once the panel
+   * reports a different hero key.
+   */
+  const record = useCallback((publication: HeroLeasePublication | undefined) => {
+    if (!publication) return
+    const next = commitHeroLease(decideHeroLease({
+      lease: undefined, publication, currentHeroKey: publication.heroKey,
+    }))
+    if (!next || isSameHeroLease(holdRef.current, next)) return
+    holdRef.current = next
+    setHold(next)
+    // A `blob:` image belongs to the owner that published it and is revoked when
+    // that owner releases it — measured: two frames of the held hero loading from a
+    // revoked URL during a handover. Take a private copy so the hold cannot outlive
+    // the bitmap it points at. Asset URLs need none (`heroLeaseNeedsCopy`).
+    if (heroLeaseNeedsCopy(next.image)) {
+      void snapshotHeroLeaseImage(next.image).then((copied) => {
+        if (!copied || holdRef.current?.image.src !== next.image.src) {
+          // Superseded (or the source was unreadable): nothing owns this copy.
+          releasePlaylistCoverUrl(copied?.src)
+          return
+        }
+        releasePlaylistCoverUrl(copyRef.current)
+        copyRef.current = copied.src
+        const upgraded = { ...next, image: copied }
+        holdRef.current = upgraded
+        setHold(upgraded)
+      })
+    } else {
+      // The image does not need a copy, so any previous one is now unreferenced.
+      releasePlaylistCoverUrl(copyRef.current)
+      copyRef.current = undefined
+    }
+  }, [])
+  // The copy belongs to the hold, so the hold is what releases it.
+  useEffect(() => () => {
+    releasePlaylistCoverUrl(copyRef.current)
+    copyRef.current = undefined
+  }, [])
+  return { hold, record }
+}
+
+/**
+ * Take a private copy of a cover image, so its URL outlives the owner that made it.
+ *
+ * Only used for `blob:` images (see `heroLeaseNeedsCopy`). The copy is re-encoded
+ * into a fresh object URL this hold owns, which means it is also this hold's job to
+ * release it — `useHeroDisplayHold` does that on replacement and unmount.
+ *
+ * Returns `undefined` when the source cannot be read; the caller then keeps the
+ * original image and simply accepts the (brief) window in which it may be revoked,
+ * which is no worse than not holding at all.
+ */
+async function snapshotHeroLeaseImage(
+  image: PlaylistCoverImage,
+): Promise<PlaylistCoverImage | undefined> {
+  try {
+    const response = await fetch(image.src)
+    if (!response.ok) return undefined
+    const blob = await response.blob()
+    if (!blob.size) return undefined
+    return {
+      src: URL.createObjectURL(blob),
+      width: image.width,
+      height: image.height,
+      encodedBytes: blob.size,
+    }
+  } catch {
+    return undefined
+  }
+}
 
 function OwnedPlaylistPanel({
   ownerStateRef,
@@ -673,6 +788,10 @@ export function PlayerSurface({
   const [allSongsCoverStore] = useState(createAllSongsCoverStore)
   useEffect(() => () => disposeAllSongsCoverStore(allSongsCoverStore), [allSongsCoverStore])
   const { playback, timeline, volume, queue, playlist, feedback } = viewModel
+  // The hero hold survives the panel's remount key on purpose: a track click can
+  // change `deleteScope` on the queue/all-songs paths, and an owner handover is
+  // exactly when the incoming owner has no hero image yet. See `useHeroDisplayHold`.
+  const { hold: heroHold, record: recordHeroPublication } = useHeroDisplayHold()
   const searchOpen = viewModel.search?.isOpen ?? false
   const searchChange = viewModel.search?.onOpenChange
   const searchReturnFocus = useRef<HTMLElement | null>(null)
@@ -3267,6 +3386,9 @@ export function PlayerSurface({
               onLibrarySidebarOpenChange={setCompactSidebarOpen}
               tracks={playlist.tracks}
               artworkSource={playlist.artworkSource}
+              artworkOwnerKey={playlist.artworkSource?.store}
+              heroLease={heroHold}
+              onHeroPublicationChange={recordHeroPublication}
               fallbackArtworkSource={playlist.fallbackArtworkSource}
               unavailableTrackIds={playlist.unavailableTrackIds}
               playlistName={playlist.playlistName}

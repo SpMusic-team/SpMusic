@@ -6,6 +6,9 @@ import { test } from 'node:test'
 const require = createRequire(import.meta.url)
 const ts = require('typescript')
 
+/** The fixture playlist the harness activates, for tests written outside it. */
+const sources0 = (h) => h.sources[0].tracks
+
 const HOOK = readFileSync(new URL('./useAudioPlayer.ts', import.meta.url), 'utf8')
 const READINESS = readFileSync(new URL('../model/playlistCoverReadiness.ts', import.meta.url), 'utf8')
 const PLAYER_COPY = readFileSync(new URL('../model/playerCopy.ts', import.meta.url), 'utf8')
@@ -181,6 +184,34 @@ async function harness(options = {}) {
     playlistScope: (value) => `${value?.sourceKind ?? 'folder'}\u0000${value?.sourcePath ?? ''}`,
     coverToneForTrackId: () => 'tone-1',
     playlistArtworkKey: (scope, id, sourcePath) => JSON.stringify([scope, id, String(sourcePath).replaceAll('\\', '/')]),
+    // Hero key helpers. Real semantics: the store's bind must recognise a hero
+    // key before the row branch, and an async default stub would be truthy for
+    // *every* key, sending every row to the hero lane.
+    heroPlaylistArtworkKey: (rowKey) => {
+      const tuple = JSON.parse(rowKey)
+      if (!Array.isArray(tuple) || tuple.length !== 3) throw new Error('heroPlaylistArtworkKey expects a 3-element row key')
+      return JSON.stringify([...tuple, 'hero'])
+    },
+    isHeroArtworkKey: (key) => {
+      const tuple = typeof key === 'string' ? JSON.parse(key) : key
+      return Array.isArray(tuple) && tuple.length === 4 && tuple[3] === 'hero'
+    },
+    heroSlotId: (trackId) => `${trackId}\u0000hero`,
+    isHeroSlotId: (key) => String(key).endsWith('\u0000hero'),
+    heroDisplayIdentity: (source) => JSON.stringify([
+      'playlist-hero', source.scope, source.trackId, source.sourcePath, source.artworkRevision,
+    ]),
+    // Real semantics: the revision is keyed on the descriptor array object.
+    playlistArtworkRevision: (() => {
+      const revisions = new WeakMap()
+      let next = 0
+      return (source) => {
+        const token = source.directoryPaths ?? source.tracks
+        let revision = revisions.get(token)
+        if (revision === undefined) { revision = ++next; revisions.set(token, revision) }
+        return revision
+      }
+    })(),
     playlistCoverImageFromPixels: (pixels) => {
       urlSequence += 1
       return { src: `blob:player-${urlSequence}`, width: pixels.width, height: pixels.height, encodedBytes: pixels.width * pixels.height * 3 }
@@ -724,7 +755,7 @@ async function harness(options = {}) {
     return api.playlistTrackVisuals
   }
   return {
-    module, api: () => api, render, flush, unmount,
+    module, api: () => api, render, flush, unmount, sources,
     trackPixelRequests, coverPixelRequests, pathRequests, probeRequests,
     visuals: () => api.playlistTrackVisuals,
     setPath: (value) => { configuredPath = value },
@@ -929,5 +960,94 @@ test('an artwork revision change publishes a new identity', async () => {
     // library owner covers.
     assert.equal(second.token.identity, first.token.identity)
     assert(second.token.publishGeneration >= first.token.publishGeneration)
+  } finally { h.unmount() }
+})
+
+// ---------------------------------------------------------------------------
+// Hero lane: the row table must never carry the hero's tier
+// ---------------------------------------------------------------------------
+
+test('with a measured hero tier every playlist row request stays at 256', async () => {
+  const h = await harness()
+  try {
+    // Ask for the fixture playlist WITH a measured hero tier, the way the panel
+    // does on a wide window. `heroEdge` is the only thing that starts a hero read.
+    const demandHeroTier = async (heroEdge) => {
+      h.api().setVisiblePlaylistTrackIds(sources0(h).map((track) => track.id), true, true, {
+        visibleIds: sources0(h).map((track) => track.id),
+        prefetchIds: [],
+        heldIds: [],
+        coverCssPixels: 128,
+        dpr: 1,
+        heroEdge,
+      })
+      for (let spin = 0; spin < 12; spin += 1) await h.flush()
+    }
+    await demandHeroTier(1536)
+    const heroPublication = h.api().playlistHeroPublication
+    assert(heroPublication, 'the hero lane published for a measured tier above 256')
+    assert(heroPublication.edge > 256, `the hero took a high tier, got ${heroPublication.edge}`)
+    assert.equal(heroPublication.image.width > 256 || heroPublication.image.height > 256, true,
+      'the hero image really is a high-tier resource')    // Every row request is at or below 256 — first row included.
+    for (const { input } of [...h.pathRequests.filter((request) => request.kind === 'track'),
+      ...h.trackPixelRequests]) {
+      assert.ok(input.maxEdge <= 256, `an ordinary row must stay at 256, got ${input.maxEdge}`)
+    }
+    // And the published row table itself never carries a bigger image.
+    for (const [id, visual] of Object.entries(h.visuals())) {
+      const image = visual?.coverThumbnail
+      if (!image) continue
+      assert.ok(Math.max(image.width, image.height) <= 256,
+        `row ${id} published ${image.width}x${image.height}`)
+    }
+  } finally { h.unmount() }
+})
+
+test('the hero publication is not reachable through playlistTrackVisuals or keyByTrackId', async () => {
+  const h = await harness()
+  try {
+    h.api().setVisiblePlaylistTrackIds(sources0(h).map((track) => track.id), true, true, {
+      visibleIds: sources0(h).map((track) => track.id),
+      prefetchIds: [], heldIds: [], coverCssPixels: 128, dpr: 1, heroEdge: 1536,
+    })
+    for (let spin = 0; spin < 12; spin += 1) await h.flush()
+    const hero = h.api().playlistHeroPublication
+    assert(hero, 'the hero published')
+    // The row table is keyed by trackId and must not contain the hero slot.
+    for (const [id, visual] of Object.entries(h.visuals())) {
+      assert.notEqual(id, 'track-0\u0000hero', 'the hero slot is not a row id')
+      assert.notEqual(visual?.presentation?.token.key, 'track-0\u0000hero',
+        'no row publication carries the hero token')
+    }
+    // Every key the panel can look up is a 3-tuple row key.
+    const map = h.api().playlistArtworkSource.keyByTrackId
+    for (const [trackId, key] of map) {
+      assert.equal(JSON.parse(key).length, 3, `keyByTrackId[${trackId}] is a row key`)
+    }
+    // The hero's own token names its slot, and its image is not any row's image.
+    assert.equal(hero.presentation.token.key, 'track-0\u0000hero')
+    const rowImage = h.api().playlistTrackVisuals['track-0']?.coverThumbnail
+    if (rowImage) assert.notEqual(rowImage.src, hero.image.src)
+  } finally { h.unmount() }
+})
+
+test('withdrawing the hero tier releases the high-tier publication', async () => {
+  const h = await harness()
+  try {
+    h.api().setVisiblePlaylistTrackIds(sources0(h).map((track) => track.id), true, true, {
+      visibleIds: sources0(h).map((track) => track.id),
+      prefetchIds: [], heldIds: [], coverCssPixels: 128, dpr: 1, heroEdge: 1536,
+    })
+    for (let spin = 0; spin < 12; spin += 1) await h.flush()
+    assert(h.api().playlistHeroPublication, 'the hero published')
+    // The panel leaving/offscreen sends `heroEdge: undefined`.
+    h.api().setVisiblePlaylistTrackIds(sources0(h).map((track) => track.id), true, true, {
+      visibleIds: sources0(h).map((track) => track.id),
+      prefetchIds: [], heldIds: [], coverCssPixels: 128, dpr: 1,
+    })
+    for (let spin = 0; spin < 12; spin += 1) await h.flush()
+    assert.equal(h.api().playlistHeroPublication, undefined, 'the withdrawn hero is released')
+    // The rows are independent of the hero and must survive its withdrawal.
+    assert(h.api().playlistTrackVisuals['track-1']?.coverThumbnail, 'the rows keep their preview')
   } finally { h.unmount() }
 })

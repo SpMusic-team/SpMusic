@@ -72,6 +72,12 @@ async function harness() {
   globalThis.__pathLaneTest = {
     urlOf,
     isStaleCoverPixelsError: (error) => Boolean(error && typeof error === 'object' && error.code === 'STALE_REQUEST'),
+    // Real semantics: the structured shape guard. It accepts any object carrying
+    // `code` and `message`, which is exactly what `audioCommands` exports, so the
+    // size-refusal test can prove the decision is made on the code and not on the
+    // message text.
+    isAudioCoverPixelsError: (error) => Boolean(error && typeof error === 'object'
+      && typeof error.code === 'string' && typeof error.message === 'string'),
     loadAudioTrackThumbnailPath: (input) => { requests.push({ kind: 'track', input }); return backends.shift()() },
     loadAudioFolderThumbnailPath: (input) => { requests.push({ kind: 'folder', input }); return backends.shift()() },
     loadAudioPlaylistCoverThumbnailPath: (input) => { requests.push({ kind: 'cover', input }); return backends.shift()() },
@@ -93,6 +99,7 @@ async function harness() {
   const prelude = `
     const audioThumbnailPathUrl = (thumbnail) => globalThis.__pathLaneTest.urlOf(thumbnail)
     const isStaleCoverPixelsError = (error) => globalThis.__pathLaneTest.isStaleCoverPixelsError(error)
+    const isAudioCoverPixelsError = (error) => globalThis.__pathLaneTest.isAudioCoverPixelsError(error)
     const loadAudioTrackThumbnailPath = (input) => globalThis.__pathLaneTest.loadAudioTrackThumbnailPath(input)
     const loadAudioFolderThumbnailPath = (input) => globalThis.__pathLaneTest.loadAudioFolderThumbnailPath(input)
     const loadAudioPlaylistCoverThumbnailPath = (input) => globalThis.__pathLaneTest.loadAudioPlaylistCoverThumbnailPath(input)
@@ -559,4 +566,133 @@ test('a disabled lane accounts a fallback without pretending a request failed', 
   assert.equal(stats.fallbacksFromBreaker, 1)
   assert.equal(stats.directFailures, h.module.PATH_LANE_FAILURE_THRESHOLD,
     'a request that was never made is not a request failure')
+})
+
+// ---------------------------------------------------------------------------
+// 7. Optional hero reads: a deterministic IMAGE_TOO_LARGE is not a channel defect.
+// ---------------------------------------------------------------------------
+
+/** A structured backend refusal, serialised the way `cover_pixels.rs` does. */
+const imageTooLarge = () => ({
+  code: 'IMAGE_TOO_LARGE',
+  message: 'encoded playlist thumbnail exceeds the per-edge byte cap',
+  recoverable: true,
+})
+
+test('an optional hero read that is refused as IMAGE_TOO_LARGE falls back locally', async () => {
+  const h = await harness()
+  const outcome = await h.module.runPreparedPathAttempt(
+    h.callFail(imageTooLarge()),
+    h.options({ optionalHeroRead: true }),
+  )
+  assert.equal(outcome.status, 'fallback', 'the caller still needs the pixel lane')
+  assert.equal(outcome.reason, 'too-large', 'the reason names the deterministic refusal')
+  assert.equal(h.images.length, 0, 'no predecode starts for a refused read')
+  const stats = h.module.pathLaneStats()
+  assert.equal(stats.directFailures, 0, 'a refused hero upgrade is not charged to the lane')
+  // The diagnostics counter is charged by the exported `attempt*Path` wrappers,
+  // which is where the fallback decision is counted; `runPreparedPathAttempt` is
+  // the classification half. Drive the wrapper to observe both.
+  h.failBackend(imageTooLarge())
+  const wrapped = await h.module.attemptPlaylistCoverThumbnailPath(
+    { clientId: 'c', filePath: '/music/a.jpg', maxEdge: 1536, windowGeneration: 1 },
+    h.options({ optionalHeroRead: true }),
+  )
+  assert.equal(wrapped.reason, 'too-large')
+  assert.equal(h.module.pathLaneStats().fallbacks, 1, 'the fallback decision is counted for diagnostics')
+  assert.equal(h.module.pathLaneStats().directFailures, 0, 'and it is still not a channel failure')
+})
+
+test('eight consecutive IMAGE_TOO_LARGE hero refusals leave the lane available for ordinary rows', async () => {
+  const h = await harness()
+  // The whole point: the playlist detail page can open many oversized covers in
+  // one session. If each refusal charged the shared streak, the eighth would close
+  // the lane every ordinary 256 row depends on.
+  for (let index = 0; index < h.module.PATH_LANE_FAILURE_THRESHOLD; index += 1) {
+    assert.equal(h.module.pathLaneAvailable(), true, `the lane is open before refusal ${index + 1}`)
+    const outcome = await h.module.runPreparedPathAttempt(
+      h.callFail(imageTooLarge()),
+      h.options({ optionalHeroRead: true }),
+    )
+    assert.equal(outcome.status, 'fallback')
+    assert.equal(outcome.reason, 'too-large')
+  }
+  assert.equal(h.module.pathLaneAvailable(), true,
+    'eight deterministic size refusals must not trip the shared breaker')
+  // And the ordinary 256 row read still works, which is the behaviour the breaker
+  // exists to protect.
+  h.respond(h.reference)
+  const row = h.module.attemptTrackThumbnailPath(
+    { clientId: 'c', sourcePath: '/music/a.flac', maxEdge: 256, windowGeneration: 1 }, h.options())
+  await h.driveDecode((image) => image.decode())
+  assert.equal((await row).status, 'ready', 'an ordinary row still reads through the path lane')
+})
+
+test('a non-hero read of the same refusal is still charged to the breaker', async () => {
+  const h = await harness()
+  // The exemption is scoped to `optionalHeroRead` and a structured size refusal.
+  // A required row read that reports IMAGE_TOO_LARGE is a real channel problem for
+  // that row and must keep its accounting, otherwise the breaker could never trip.
+  for (let index = 0; index < h.module.PATH_LANE_FAILURE_THRESHOLD; index += 1) {
+    const outcome = await h.module.runPreparedPathAttempt(h.callFail(imageTooLarge()), h.options())
+    assert.equal(outcome.status, 'fallback')
+    assert.equal(outcome.reason, 'command', 'without the flag the refusal is an ordinary command failure')
+  }
+  assert.equal(h.module.pathLaneAvailable(), false, 'the default path still trips the breaker at the threshold')
+})
+
+test('an optional hero read charges every other failure exactly as before', async () => {
+  const h = await harness()
+  // Only the deterministic size refusal is exempt: a genuinely broken lane must
+  // still close, even for hero reads, or the session would keep paying for it.
+  for (let index = 0; index < h.module.PATH_LANE_FAILURE_THRESHOLD; index += 1) {
+    const outcome = await h.module.runPreparedPathAttempt(
+      h.callFail(new Error(`disk failure ${index}`)),
+      h.options({ optionalHeroRead: true }),
+    )
+    assert.equal(outcome.status, 'fallback')
+    assert.equal(outcome.reason, 'command', 'a real failure keeps its own reason')
+  }
+  assert.equal(h.module.pathLaneAvailable(), false, 'a real repeated failure still closes the lane')
+})
+
+test('the size refusal is judged on the structured code, never the message text', async () => {
+  const h = await harness()
+  // Same message, different code: must NOT be treated as a size refusal.
+  const outcomeFromWrongCode = await h.module.runPreparedPathAttempt(
+    h.callFail({ code: 'INVALID_IMAGE', message: 'encoded playlist thumbnail exceeds the per-edge byte cap', recoverable: true }),
+    h.options({ optionalHeroRead: true }),
+  )
+  assert.equal(outcomeFromWrongCode.reason, 'command',
+    'a message that merely mentions the size cap is not the structured verdict')
+  // Right code, unrelated message: must be treated as a size refusal.
+  const outcomeFromRightCode = await h.module.runPreparedPathAttempt(
+    h.callFail({ code: 'IMAGE_TOO_LARGE', message: 'whatever the backend decided to say', recoverable: true }),
+    h.options({ optionalHeroRead: true }),
+  )
+  assert.equal(outcomeFromRightCode.reason, 'too-large', 'the code is what decides')
+  // A bare Error has no code at all and is therefore an ordinary failure.
+  const outcomeFromBareError = await h.module.runPreparedPathAttempt(
+    h.callFail(new Error('IMAGE_TOO_LARGE')),
+    h.options({ optionalHeroRead: true }),
+  )
+  assert.equal(outcomeFromBareError.reason, 'command', 'an unstructured throw is never a size verdict')
+})
+
+test('a stale or cancelled optional hero read is still dropped, not fallen back', async () => {
+  const h = await harness()
+  // The drop rules run before the size exemption: a superseded hero read must not
+  // reach the pixel lane at all.
+  const stale = await h.module.runPreparedPathAttempt(
+    h.callFail({ code: 'STALE_REQUEST', message: 'superseded' }),
+    h.options({ optionalHeroRead: true }),
+  )
+  assert.equal(stale.status, 'dropped')
+  let current = true
+  const cancelled = await h.module.runPreparedPathAttempt(
+    async () => { current = false; throw imageTooLarge() },
+    h.options({ optionalHeroRead: true, isCurrent: () => current }),
+  )
+  assert.equal(cancelled.status, 'dropped', 'a superseded read is dropped even when it was refused for size')
+  assert.equal(h.module.pathLaneAvailable(), true)
 })

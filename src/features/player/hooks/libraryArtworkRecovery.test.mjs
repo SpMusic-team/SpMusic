@@ -56,6 +56,15 @@ async function harness(options = {}) {
   const pathOutcomeFor = (maxEdge) => configuredPathByEdge.get(maxEdge) ?? configuredPath
   let configuredPixel = 'pixels'
   let configuredCover = 'ready'
+  /**
+   * Optional gate on the hero's cover path read.
+   *
+   * A late reply can only be observed if the reply is under the test's control:
+   * without this the read settles inside `settle()` and there is nothing late.
+   */
+  let heroPathGate = null
+  let heroPathInFlight = false
+  let releaseHeroGate = null
 
   let sources = [{
     sourceKind: 'folder',
@@ -65,6 +74,12 @@ async function harness(options = {}) {
       sourcePath: `/music/album/${index}.flac`,
       available: true,
     })),
+  }, {
+    // A second detail page, used to move the owner somewhere else while a reply
+    // for the first one is still in flight.
+    sourceKind: 'folder',
+    sourcePath: '/music/other',
+    tracks: [{ id: 'other-0', sourcePath: '/music/other/0.flac', available: true }],
   }]
   const descriptorFor = (index) => sources[0].tracks[index]
   /**
@@ -101,6 +116,11 @@ async function harness(options = {}) {
   }
 
   globalThis.__libraryArtworkTest = {
+  // Deterministic hero tier for these recovery tests: they assert that a failure is retried
+  // at the SAME edge, which must hold at any tier.
+  selectHeroEdge: () => 1536,
+  isHeroEdge: value => value === 1024 || value === 1536 || value === 2048,
+  HERO_MAX_EDGE: 1536,
     useState: (initial) => {
       const index = stateIndex++
       if (!(index in states)) states[index] = typeof initial === 'function' ? initial() : initial
@@ -134,6 +154,8 @@ async function harness(options = {}) {
     probeAudioPlaylistCover: async (sourcePath) => {
       probeRequests.push(sourcePath)
       const index = sources[0].tracks.findIndex((track) => track.sourcePath === sourcePath)
+      const otherIndex = sources[1].tracks.findIndex((track) => track.sourcePath === sourcePath)
+      if (otherIndex >= 0) return { id: `other-${otherIndex}`, sourcePath, coverArt: { filePath: `/music/other/${otherIndex}.jpg` } }
       if (configuredCover === 'missing') return { id: `track-${index}`, sourcePath, coverArt: null }
       return {
         id: `track-${index}`,
@@ -165,6 +187,11 @@ async function harness(options = {}) {
     },
     attemptPlaylistCoverThumbnailPath: async (input) => {
       pathRequests.push({ kind: 'cover', input })
+      if (heroPathGate) {
+        heroPathInFlight = true
+        await heroPathGate
+        heroPathInFlight = false
+      }
       if (pathOutcomeFor(input.maxEdge) === 'ready') {
         return { status: 'ready', image: { src: `asset://localhost/cache/cover-${pathRequests.length}.jpg`, width: input.maxEdge, height: input.maxEdge, encodedBytes: 24 }, attemptId: `cover-attempt-${pathRequests.length}` }
       }
@@ -248,6 +275,7 @@ async function harness(options = {}) {
       probeAudioPlaylistCover, scheduleTrackThumbnail, schedulePlaylistCoverPixels,
       attemptTrackThumbnailPath, attemptPlaylistCoverThumbnailPath,
       playlistCoverImageFromPixels, isPlaylistCoverDecoded, decodePlaylistCover,
+      selectHeroEdge, isHeroEdge, HERO_MAX_EDGE,
       URL, document, IntersectionObserver, ResizeObserver, MutationObserver } = globalThis.__libraryArtworkTest
     const window = globalThis.__libraryArtworkTest
     const createImageBitmap = () => globalThis.__libraryArtworkTest.createImageBitmap()
@@ -314,6 +342,23 @@ async function harness(options = {}) {
       }
     }
     const playlistArtworkKey = (scope, id, sourcePath) => JSON.stringify([scope, id, sourcePath.replaceAll('\\\\', '/')])
+    // Hero key helpers: real semantics, inlined because the module has no imports
+    // left. The hero publication is read through the store under this key, which
+    // is exactly how the panel reads it.
+    const heroPlaylistArtworkKey = (rowKey) => {
+      const tuple = JSON.parse(rowKey)
+      if (!Array.isArray(tuple) || tuple.length !== 3) throw new Error('heroPlaylistArtworkKey expects a 3-element row key')
+      return JSON.stringify([...tuple, 'hero'])
+    }
+    const isHeroArtworkKey = (key) => {
+      const tuple = typeof key === 'string' ? JSON.parse(key) : key
+      return Array.isArray(tuple) && tuple.length === 4 && tuple[3] === 'hero'
+    }
+    const heroSlotId = (trackId) => trackId + '\\u0000hero'
+    const isHeroSlotId = (key) => key.endsWith('\\u0000hero')
+    const heroDisplayIdentity = (source) => JSON.stringify([
+      'playlist-hero', source.scope, source.trackId, source.sourcePath, source.artworkRevision,
+    ])
   `
   const readinessImport = `import { coverImageEventDetail, createCoverPresentation, createCoverRecoveryLedger, ` +
     `isCurrentCoverReport, nextCoverSessionGeneration, releasePlaylistCoverUrl } from ${JSON.stringify(readinessUrl)};\n`
@@ -424,11 +469,59 @@ async function harness(options = {}) {
     api.setVisibleTrackIds('/music/album', trackIds, keepPersistentArtwork, true)
     await flush()
   }
+  /**
+   * Derive a hero key from a row key, exactly as the panel does.
+   *
+   * Kept in the harness scope (the prelude copy is what the hook module sees) so
+   * a test can name the same key the store uses without duplicating the rule.
+   */
+  const heroKeyOf = (rowKey) => {
+    const tuple = JSON.parse(rowKey)
+    assert.equal(tuple.length, 3, 'a row key is a 3-tuple')
+    return JSON.stringify([...tuple, 'hero'])
+  }
   return {
     module, get sources() { return sources }, descriptorFor, rescan, settle, demandHero,
     observers: () => observerCallback, mutationCallback: () => mutationCallback,
     pathRequests, trackPixelRequests, coverPixelRequests, probeRequests, revoked, show, flush, render, unmount,
     rows: () => states[0],
+    /**
+     * The hero publication, read through the store under its derived key.
+     *
+     * Hero artwork deliberately does NOT live in `rows`: that table is the
+     * ordinary-row projection and must never carry a tier above 256. Reading the
+     * slot the way the panel does (derive the hero key from the row key, then ask
+     * the store) is also what proves the key derivation works end to end.
+     */
+    hero: (trackId = 'track-0') => {
+      const store = api?.artworkSource?.store
+      const rowKey = api?.artworkSource?.keyByTrackId.get(trackId)
+      if (!store || !rowKey) return undefined
+      return store.getSnapshot(heroKeyOf(rowKey))
+    },
+    heroKey: (trackId = 'track-0') => {
+      const rowKey = api?.artworkSource?.keyByTrackId.get(trackId)
+      return rowKey ? heroKeyOf(rowKey) : undefined
+    },
+    rowKey: (trackId = 'track-0') => api?.artworkSource?.keyByTrackId.get(trackId),
+    /**
+     * Hold the next hero cover read open, so its reply can be released late.
+     *
+     * Without this a hero read always settles inside `settle()` and "a reply that
+     * arrives after the page changed" has no observable meaning.
+     */
+    holdHeroPath: () => {
+      heroPathGate = new Promise((resolve) => { releaseHeroGate = resolve })
+    },
+    /** Whether the held hero read is currently parked. */
+    heroReadHeld: () => heroPathInFlight,
+    /** Release the held read. Safe to call more than once. */
+    releaseHeroPath: () => {
+      const release = releaseHeroGate
+      releaseHeroGate = null
+      release?.()
+      return release
+    },
     setPath: (value) => { configuredPath = value },
     setPathEdge: (maxEdge, value) => { configuredPathByEdge.set(maxEdge, value) },
     setPixel: (value) => { configuredPixel = value },
@@ -527,60 +620,94 @@ test('a forced pixel command failure settles the row as a placeholder, never a b
 // The 512 hero lane — the C3 defect
 // ---------------------------------------------------------------------------
 
-test('a 512 hero whose presented image fails later forces the cover pixel lane at 512', async () => {
+test('a high-tier hero whose presented image fails later forces the cover pixel lane at the hero tier', async () => {
   const h = await harness()
   try {
-    // The hero is the first track of the detail view. Its 256 thumbnail is
-    // published first, then upgraded to 512, which is the branch under test.
+    // The hero is a SEPARATE publication from the first row. The first card shows
+    // the ordinary 256 row thumbnail; the hero upgrades independently.
     h.render(true, { sourcePath: '/music/album', tracks: h.sources[0].tracks })
     await h.settle(['/music/album/0.flac', '/music/album/1.flac'])
     await h.demandHero(['track-0', 'track-1'])
     await h.settle(['/music/album/0.flac', '/music/album/1.flac'])
-    const heroKey = '/music/album/0.flac'
-    const presentation = h.rows().get(heroKey)?.presentation
+    // The row lane never carries the hero tier — the first row included.
+    const rowRequests = h.pathRequests.filter((request) => request.kind === 'track')
+    assert(rowRequests.length > 0, 'the rows read through the track path helper')
+    for (const request of rowRequests) {
+      assert.equal(request.input.maxEdge, 256, 'an ordinary row (the first one included) stays at 256')
+    }
+    // The hero publication is read from the hero key, never from `rows`.
+    const presentation = h.hero('track-0')?.presentation
     assert(presentation, `the hero published a snapshot; path=${JSON.stringify(h.pathRequests.map((r) => [r.kind, r.input.maxEdge]))}`)
+    assert(h.hero('track-0')?.coverThumbnail, 'the hero carries its own image')
+    assert.notEqual(h.rows().get('/music/album/0.flac')?.presentation?.src, presentation.src,
+      'the row and the hero must not share one publication')
+    assert.equal(presentation.token.key, 'track-0\u0000hero', 'the hero publishes under its own slot id')
     const coverPathRequests = h.pathRequests.filter((request) => request.kind === 'cover')
     assert.equal(coverPathRequests.length, 1,
-      `the 512 hero used the cover path helper; path=${JSON.stringify(h.pathRequests.map((r) => [r.kind, r.input.maxEdge]))}`)
-    assert.equal(coverPathRequests[0].input.maxEdge, 512, 'the hero read the original 512 edge')
+      `the hero used the cover path helper; path=${JSON.stringify(h.pathRequests.map((r) => [r.kind, r.input.maxEdge]))}`)
+    const heroEdge = coverPathRequests[0].input.maxEdge
+    assert.ok(heroEdge >= 256, `the hero read through the path lane, got ${heroEdge}`)
 
-    // The element confirmed the image, so the upgrade is no longer "pending": a
-    // later failure is a failure of the current presentation, not a rollback. The
-    // hook retires a replacement only once the DOM shows it everywhere, so that
-    // state is modelled explicitly.
+    // A DOM failure of the PUBLISHED hero ends this identity's epoch. The single
+    // automatic fallback belongs to the read attempt (path lane → one ≤512 pixel
+    // read), which already happened, so this must settle rather than re-read: the
+    // hero falls back to the row preview and never leaves a broken element.
     h.setMountedImages([presentation.src])
     await h.loadPresentation(presentation)
     const beforePath = h.pathRequests.length
     await h.failPresentation(presentation)
     await h.settle(['/music/album/0.flac', '/music/album/1.flac'])
-    assert.equal(h.pathRequests.length, beforePath, 'the 512 recovery never re-enters thumbnail_path')
-    assert.equal(h.coverPixelRequests.length, 1, 'the 512 recovery uses schedulePlaylistCoverPixels')
-    assert.equal(h.coverPixelRequests[0].input.maxEdge, 512, 'the recovery preserves the failing edge')
-    assert.equal(h.coverPixelRequests[0].input.filePath, '/music/album/0.jpg',
-      'the validated cover-file identity is preserved')
+    assert.equal(h.hero('track-0'), undefined, 'the hero settles instead of re-reading')
+    assert.equal(h.pathRequests.length, beforePath,
+      'a hero DOM failure does not re-enter the cover thumbnail_path')
+    assert.equal(h.coverPixelRequests.length, 0,
+      'the fallback budget was already spent by the read attempt itself')
+    assert(h.rows().get('/music/album/0.flac')?.coverThumbnail,
+      'the hero falls back to the row preview, so the detail page is not blank')
   } finally { h.unmount() }
 })
 
-test('the 512 hero recovery still reads the probe for the cover file identity', async () => {
+test('a hero path-lane failure falls back to one ≤512 pixel read and never to a row tier', async () => {
+  const h = await harness()
+  try {
+    h.render(true, { sourcePath: '/music/album', tracks: h.sources[0].tracks })
+    await h.settle(['/music/album/0.flac', '/music/album/1.flac'])
+    // Force the cover path lane to fail while the row track lane stays healthy.
+    h.setPathEdge(1536, 'fallback')
+    await h.demandHero(['track-0', 'track-1'])
+    await h.settle(['/music/album/0.flac', '/music/album/1.flac'])
+    assert.equal(h.coverPixelRequests.length, 1,
+      `a failed hero path read falls back exactly once; cover=${JSON.stringify(h.coverPixelRequests.map((r) => r.input.maxEdge))}`)
+    // The playlist pixel lane stops at 512 (plan D2 / §4.3): the hero tier is a
+    // path-lane concept and must never be sent to the pixel command.
+    assert.ok(h.coverPixelRequests[0].input.maxEdge <= 512,
+      `the pixel fallback never exceeds 512, got ${h.coverPixelRequests[0].input.maxEdge}`)
+    assert.equal(h.coverPixelRequests[0].input.filePath, '/music/album/0.jpg')
+    assert(h.hero('track-0')?.coverThumbnail, 'the hero publishes the pixel fallback')
+  } finally { h.unmount() }
+})
+
+test('a hero failure never consumes an ordinary row recovery epoch', async () => {
   const h = await harness()
   try {
     h.render(true, { sourcePath: '/music/album', tracks: h.sources[0].tracks })
     await h.settle(['/music/album/0.flac', '/music/album/1.flac'])
     await h.demandHero(['track-0', 'track-1'])
     await h.settle(['/music/album/0.flac', '/music/album/1.flac'])
-    const presentation = h.rows().get('/music/album/0.flac')?.presentation
-    h.setMountedImages([presentation.src])
-    await h.loadPresentation(presentation)
-    const probesBefore = h.probeRequests.length
-    await h.failPresentation(presentation)
+    const hero = h.hero('track-0')
+    assert(hero?.presentation, 'the hero published')
+    // The hero element fails. That must settle the HERO slot and leave the row's
+    // single automatic recovery untouched: the row never asked for this image.
+    const rowQueriesBefore = h.pathRequests.filter((request) => request.kind === 'track').length
+    await h.failPresentation(hero.presentation)
     await h.settle(['/music/album/0.flac', '/music/album/1.flac'])
-    assert(h.probeRequests.length > probesBefore, 'the forced 512 job still probes the cover file')
-    assert.equal(h.coverPixelRequests.length, 1)
-    assert.equal(h.coverPixelRequests[0].input.filePath, '/music/album/0.jpg')
-    // The pixel command needs the file path, which only the probe can supply; what
-    // must never happen again is the path *thumbnail* command.
-    assert.equal(h.pathRequests.filter((request) => request.kind === 'cover').length, 1,
-      'only the original attempt used the cover path helper')
+    assert.equal(h.hero('track-0'), undefined, 'the hero falls back to the row preview, never a broken element')
+    // The row is still published, which is only possible if its epoch survived.
+    assert(h.rows().get('/music/album/0.flac')?.coverThumbnail, 'the row keeps its own preview')
+    assert.equal(h.pathRequests.filter((request) => request.kind === 'track').length, rowQueriesBefore,
+      'the hero failure triggers no new row read')
+    assert.equal(h.coverPixelRequests.length, 0,
+      'the row lane paid nothing for the hero failure')
   } finally { h.unmount() }
 })
 
@@ -742,5 +869,157 @@ test('an unmounted owner runs no recovery for a late report', async () => {
     }
     await h.flush()
     assert.equal(h.trackPixelRequests.length, before, 'an unmounted owner does nothing')
+  } finally { h.unmount() }
+})
+
+// ---------------------------------------------------------------------------
+// The row lane never carries the hero's tier — the invariant of this change
+// ---------------------------------------------------------------------------
+
+test('with a high-tier hero every ordinary row request stays at 256', async () => {
+  const h = await harness()
+  try {
+    h.render(true, { sourcePath: '/music/album', tracks: h.sources[0].tracks })
+    await h.settle(['/music/album/0.flac', '/music/album/1.flac'])
+    await h.demandHero(['track-0', 'track-1'])
+    await h.settle(['/music/album/0.flac', '/music/album/1.flac'])
+    // The hero took a high tier…
+    const coverRequests = h.pathRequests.filter((request) => request.kind === 'cover')
+    assert.equal(coverRequests.length, 1, 'the hero read through the cover lane')
+    assert.ok(coverRequests[0].input.maxEdge > 256,
+      `the hero asked for a high tier, got ${coverRequests[0].input.maxEdge}`)
+    // …and no row request ever exceeds 256. This is measured at the REQUEST side;
+    // the store-side assertion below is the other half.
+    const rowRequests = [...h.pathRequests.filter((request) => request.kind === 'track'),
+      ...h.trackPixelRequests]
+    assert(rowRequests.length > 0, 'the rows really were read')
+    for (const request of rowRequests) {
+      assert.ok(request.input.maxEdge <= 256,
+        `an ordinary row must stay at 256, got ${request.input.maxEdge}`)
+    }
+  } finally { h.unmount() }
+})
+
+test('no row publication carries an image longer than its 256 lane', async () => {
+  const h = await harness()
+  try {
+    h.render(true, { sourcePath: '/music/album', tracks: h.sources[0].tracks })
+    await h.settle(['/music/album/0.flac', '/music/album/1.flac'])
+    await h.demandHero(['track-0', 'track-1'])
+    await h.settle(['/music/album/0.flac', '/music/album/1.flac'])
+    assert(h.hero('track-0')?.coverThumbnail, 'the hero published its high-tier image')
+    // The core invariant, checked on the published rows themselves. Longest edge,
+    // not width: a 256-wide tier thumbnail of a wide source is 256x128 and a `width`
+    // -only check would be satisfied by accident.
+    for (const [path, row] of h.rows()) {
+      const image = row.coverThumbnail
+      if (!image) continue
+      assert.ok(Math.max(image.width, image.height) <= 256,
+        `row ${path} published a ${image.width}x${image.height} image`)
+    }
+    // The hero is NOT in the row table at all: it has its own record.
+    assert.equal(h.rows().has('/music/album/0.flac'), true, 'the first row is still published as a row')
+  } finally { h.unmount() }
+})
+
+test('the hero key is not reachable from the row key map', async () => {
+  const h = await harness()
+  try {
+    h.render(true, { sourcePath: '/music/album', tracks: h.sources[0].tracks })
+    await h.settle(['/music/album/0.flac', '/music/album/1.flac'])
+    await h.demandHero(['track-0', 'track-1'])
+    await h.settle(['/music/album/0.flac', '/music/album/1.flac'])
+    const map = h.module.useLibraryArtwork
+      ? null
+      : null
+    void map
+    // Every value in `keyByTrackId` must be a 3-tuple row key. A hero key in this
+    // map is exactly the leak this design removes, so it is asserted structurally.
+    const rowKeys = ['track-0', 'track-1'].map((id) => h.rowKey(id))
+    for (const key of rowKeys) {
+      assert(key, 'the track has a row key')
+      assert.equal(JSON.parse(key).length, 3, `keyByTrackId values are row keys, got ${key}`)
+    }
+    const heroKey = h.heroKey('track-0')
+    assert(heroKey)
+    assert.equal(JSON.parse(heroKey).length, 4, 'the hero key is a 4-tuple')
+    assert.notEqual(heroKey, h.rowKey('track-0'), 'and it is not the row key')
+    assert.equal(rowKeys.includes(heroKey), false, 'the hero key appears in no row entry')
+  } finally { h.unmount() }
+})
+
+// ---------------------------------------------------------------------------
+// Late replies and withdrawal
+// ---------------------------------------------------------------------------
+
+test('a hero reply that lands after the detail page changes is discarded', async () => {
+  // The cover path lane is held open so the reply can be released *after* the
+  // owner has already moved on, which is the only way to observe a late reply.
+  const h = await harness()
+  try {
+    h.render(true, { sourcePath: '/music/album', tracks: h.sources[0].tracks })
+    await h.settle(['/music/album/0.flac', '/music/album/1.flac'])
+    h.holdHeroPath()
+    await h.demandHero(['track-0', 'track-1'])
+    await h.flush()
+    assert.equal(h.heroReadHeld(), true, 'the hero read is parked')
+    // The owner moves to another detail page before the reply arrives. A different
+    // source list is what a real navigation produces.
+    h.render(true, { sourcePath: '/music/other', tracks: h.sources[1].tracks })
+    await h.flush()
+    h.releaseHeroPath()
+    await h.flush()
+    // The late reply describes the old detail's first track; it must not publish.
+    assert.equal(h.hero('track-0'), undefined,
+      'a hero reply for a detail page that is no longer shown is discarded')
+  } finally {
+    h.releaseHeroPath?.()
+    h.unmount()
+  }
+})
+
+test('withdrawing the hero tier releases the high-tier image', async () => {
+  const h = await harness()
+  try {
+    h.render(true, { sourcePath: '/music/album', tracks: h.sources[0].tracks })
+    await h.settle(['/music/album/0.flac', '/music/album/1.flac'])
+    await h.demandHero(['track-0', 'track-1'])
+    await h.settle(['/music/album/0.flac', '/music/album/1.flac'])
+    assert(h.hero('track-0')?.coverThumbnail, 'the hero is published')
+    // `keepPersistentArtwork: false` is what the panel reports when the hero is no
+    // longer pinned (panel leaving / offscreen). The hero slot must be released.
+    await h.demandHero(['track-0', 'track-1'], false)
+    await h.settle(['/music/album/0.flac', '/music/album/1.flac'])
+    assert.equal(h.hero('track-0'), undefined, 'the withdrawn hero is released')
+    // The rows are untouched by the withdrawal: they never depended on the hero.
+    assert(h.rows().get('/music/album/0.flac')?.coverThumbnail, 'the row keeps its preview')
+  } finally { h.unmount() }
+})
+
+test('a hero whose recovery settled is re-read after leaving and re-entering demand', async () => {
+  const h = await harness()
+  try {
+    h.render(true, { sourcePath: '/music/album', tracks: h.sources[0].tracks })
+    await h.settle(['/music/album/0.flac', '/music/album/1.flac'])
+    await h.demandHero(['track-0', 'track-1'])
+    await h.settle(['/music/album/0.flac', '/music/album/1.flac'])
+    const first = h.hero('track-0')
+    assert(first?.presentation, 'the hero published once')
+    // The hero element fails: this identity's epoch settles and the slot clears.
+    await h.failPresentation(first.presentation)
+    await h.settle(['/music/album/0.flac', '/music/album/1.flac'])
+    assert.equal(h.hero('track-0'), undefined, 'the failed hero settled')
+    // Leaving demand and coming back is a documented retry trigger. A settled
+    // verdict must NOT survive it, or one DOM failure would blacklist the identity
+    // for the whole session (resizing the hero away and back would never re-read).
+    await h.demandHero(['track-0', 'track-1'], false)
+    await h.settle(['/music/album/0.flac', '/music/album/1.flac'])
+    const coverReadsBefore = h.pathRequests.filter((request) => request.kind === 'cover').length
+    await h.demandHero(['track-0', 'track-1'])
+    await h.settle(['/music/album/0.flac', '/music/album/1.flac'])
+    const coverReadsAfter = h.pathRequests.filter((request) => request.kind === 'cover').length
+    assert(coverReadsAfter > coverReadsBefore,
+      `the returning hero is re-read; cover reads ${coverReadsBefore} -> ${coverReadsAfter}`)
+    assert(h.hero('track-0')?.coverThumbnail, 'and it publishes again')
   } finally { h.unmount() }
 })

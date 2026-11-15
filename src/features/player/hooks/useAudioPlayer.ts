@@ -45,13 +45,24 @@ import {
 import { createPlaylistArtworkGrace } from '@/features/player/model/playlistArtworkGrace'
 import { playlistCoverImageFromPixels } from '@/features/player/model/playlistCoverPixels'
 import { coverImageEventDetail, createCoverPresentation, createCoverRecoveryLedger, decodePlaylistCover, isCurrentCoverReport, isPlaylistCoverDecoded, nextCoverSessionGeneration, releasePlaylistCoverUrl, type CoverPresentation, type CoverRecoveryLedger } from '@/features/player/model/playlistCoverReadiness'
-import { createPlaylistArtworkStore, playlistArtworkKey } from '@/features/player/model/playlistArtworkStore'
+import {
+  createPlaylistArtworkStore,
+  heroDisplayIdentity,
+  heroPlaylistArtworkKey,
+  heroSlotId,
+  isHeroArtworkKey,
+  isHeroSlotId,
+  playlistArtworkKey,
+  type PlaylistHeroSource,
+} from '@/features/player/model/playlistArtworkStore'
+import { playlistArtworkRevision } from '@/features/player/model/playlistArtworkRevision'
 import { DEFAULT_MAX_CONCURRENT, maxConcurrentWidth, setMaxConcurrent, schedulePlaylistCoverPixels, scheduleTrackThumbnail } from '@/features/player/services/playlistCoverScheduler'
 import {
   attemptPlaylistCoverThumbnailPath,
   attemptTrackThumbnailPath,
   type AttemptOptions,
 } from '@/features/player/services/playlistCoverPathLane'
+import { HERO_MAX_EDGE, isHeroEdge, type HeroEdge } from '@/features/player/services/heroCoverEdge'
 import {
   chunkPlaylistSummaryPaths,
   pendingPlaylistTrackRow,
@@ -186,7 +197,7 @@ type PlaylistVisualHydrationJob = {
   trackId: string
   sourcePath: string
   normalizedSourcePath: string
-  maxEdge: 128 | 256 | 512
+  maxEdge: PlaylistArtworkEdge
   attempt: number
   optional: boolean
   /**
@@ -201,6 +212,52 @@ type PlaylistVisualHydrationJob = {
 
 type OptionalIdleHandle = { kind: 'idle' | 'timer'; id: number }
 
+/**
+ * Structural shape of one pending cover replacement, for the retirement loop.
+ *
+ * Only the URLs matter here: a replacement is released once every `<img>` showing
+ * it has loaded and no element still shows an older one. Rows and the hero keep
+ * their entries in separate maps so a hero key can never be resolved as a row.
+ */
+type CoverReplacementPending = {
+  previous: { coverThumbnail?: PlaylistCoverImage }
+  olderVisuals: ReadonlyArray<{ visual: { coverThumbnail?: PlaylistCoverImage } }>
+}
+
+/**
+ * One hero publication.
+ *
+ * Deliberately a distinct type from `PlaylistTrackVisual`, not an alias: it can
+ * then never be assigned into `Record<string, PlaylistTrackVisual>`, so the hero's
+ * high tier cannot travel into a row consumer by accident (plan §2, Q3 gate 1).
+ */
+type PlaylistHeroVisual = Readonly<{
+  /** Hero slot id (`heroSlotId`), never a real track id. */
+  id: string
+  coverTone?: PlaylistTrackVisual['coverTone']
+  hasLocalArtwork: boolean
+  coverThumbnail?: PlaylistCoverImage
+  /** Token of exactly the snapshot `coverThumbnail` came from. */
+  presentation?: CoverPresentation
+}>
+
+/**
+ * One hero read. Shaped like `PlaylistVisualHydrationJob` because it is cancelled
+ * by exactly the same three facts (generation, playlist epoch, scope) plus the
+ * hero's own resource identity.
+ */
+type PlaylistHeroJob = {
+  generation: number
+  playlistEpoch: number
+  backendGeneration: number
+  scope: string
+  trackId: string
+  sourcePath: string
+  normalizedSourcePath: string
+  artworkRevision: number
+  maxEdge: PlaylistArtworkEdge
+}
+
 function scheduleOptionalArtworkIdle(run: () => void): OptionalIdleHandle {
   if (typeof window.requestIdleCallback === 'function') {
     return { kind: 'idle', id: window.requestIdleCallback(run) }
@@ -214,6 +271,14 @@ function cancelOptionalArtworkIdle(handle: OptionalIdleHandle): void {
   if (handle.kind === 'idle' && typeof window.cancelIdleCallback === 'function') window.cancelIdleCallback(handle.id)
   else window.clearTimeout(handle.id)
 }
+
+/**
+ * Edge a playlist artwork job may run at.
+ *
+ * Rows stay at 256/512; the first-track hero may take a measured tier. Named so the several
+ * maps and refs that carry it cannot drift apart.
+ */
+type PlaylistArtworkEdge = 128 | 256 | 512 | HeroEdge
 
 const HYDRATED_TRACK_CACHE_CAPACITY = 8
 // Application-owned BMP URLs and in-flight RGBA buffers. Renderer/GPU memory
@@ -275,10 +340,33 @@ function playlistArtworkInflightBudget(): number {
   return width * 512 * 512 * 4
 }
 
+/**
+ * Clamp an edge to what the PIXEL commands accept (128/256/512).
+ *
+ * The path lane may run at a hero tier; the pixel lane did not widen, so a hero tier must
+ * step down here rather than be sent and rejected (plan §4.3). This is the "deliberate降档"
+ * the plan requires, applied at the one place the pixel command is invoked.
+ */
+function pixelEdgeWithin(edge: number): 128 | 256 | 512 {
+  if (edge <= 128) return 128
+  if (edge <= 256) return 256
+  return 512
+}
+
 function playlistImageBytes(image: PlaylistCoverImage): number {
   return image.encodedBytes + image.width * image.height * 4
 }
 
+/**
+ * Worst-case JS-side bytes for one cover at `edge`.
+ *
+ * 7 B/px = RGBA (4) + BMP object URL (3), i.e. the PIXEL lane's worst case. For a path-lane
+ * image (an `asset:` URL string, ~100 B) this over-estimates by orders of magnitude, but it
+ * is the correct ADMISSION bound: it must cover the worst channel or a pixel fallback would
+ * exceed the budget the moment it happens. Making it lane-aware would require threading
+ * lane information through the commit and preload paths, i.e. touching the visual ledger
+ * this budget protects (plan §7.3). Formula unchanged on purpose.
+ */
 function playlistArtworkBytes(edge: number): number {
   return edge * edge * 7 + 54
 }
@@ -674,10 +762,36 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
   const playlistTrackMetadataRef = useRef<Readonly<Record<string, PlaylistTrackMetadata>>>({})
   const playlistVisualWindowKeyRef = useRef<string | null>(null)
   const playlistTrackVisualsRef = useRef<Readonly<Record<string, PlaylistTrackVisual>>>({})
-  const playlistVisualEdgeRef = useRef(new Map<string, 128 | 256 | 512>())
+  const playlistVisualEdgeRef = useRef(new Map<string, PlaylistArtworkEdge>())
   const playlistVisualStaleIdsRef = useRef(new Set<string>())
   const currentArtworkRefreshRef = useRef(0)
   const playlistVisualSourceRef = useRef(new Map<string, string>())
+  /**
+   * The one hero publication this owner holds.
+   *
+   * A single slot, not a `Record`: one displayed detail page has exactly one
+   * hero, and a map would be indexable by track id, which is exactly the
+   * confusion this whole design removes. Rows never read it, and it never enters
+   * `playlistTrackVisualsRef`.
+   */
+  const playlistHeroVisualRef = useRef<PlaylistHeroVisual | undefined>(undefined)
+  /** Tier the current hero publication was produced at. */
+  const playlistHeroEdgeRef = useRef<PlaylistArtworkEdge | undefined>(undefined)
+  /** Resource the current hero publication describes. */
+  const playlistHeroSourceRef = useRef<PlaylistHeroSource | undefined>(undefined)
+  /** Monotonic hero request generation; the only basis for dropping a late reply. */
+  const playlistHeroGenerationRef = useRef(0)
+  /** In-flight hero job, so a demand pass cannot start the same read twice. */
+  const playlistHeroActiveJobRef = useRef<PlaylistHeroJob | undefined>(undefined)
+  /**
+   * Hero identities whose one automatic recovery already ended without a usable
+   * image, mapped to the identity it describes.
+   *
+   * Without it the next demand pass would immediately re-read the exact URL the
+   * DOM just rejected, which is the path → DOM-fail → path loop. The value is the
+   * identity, so a revision change or a different track re-admits naturally.
+   */
+  const playlistHeroSettledRef = useRef(new Map<string, string>())
   const [playlistArtworkStore] = useState(() => createPlaylistArtworkStore(() => undefined))
   // The bridge keeps only committed identity primitives. It does not retain a
   // mutable playback-source ref inside the externally subscribed reader.
@@ -691,7 +805,20 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     playlistArtworkStore.notifyAll()
   }, [folderPlaylist, presentationTrack?.id, playlistArtworkStore])
   useLayoutEffect(() => { playlistArtworkStore.bind((key) => {
-    const [scope, id, path] = JSON.parse(key) as [string, string, string]
+    // A 4th element is the lane marker. Reading the tuple rather than the string
+    // keeps the row branch below byte-for-byte what it was.
+    const tuple = JSON.parse(key) as [string, string, string, string?]
+    if (isHeroArtworkKey(tuple)) {
+      const hero = playlistHeroSourceRef.current
+      // The hero triple must equal the hero slot's own resource. The first three
+      // elements are derived from the row key, so this only fails when the hero
+      // publication describes a different playlist/track/path.
+      if (!hero || hero.scope !== tuple[0] || hero.trackId !== tuple[1] || hero.sourcePath !== tuple[2]) {
+        return undefined
+      }
+      return playlistHeroVisualRef.current
+    }
+    const [scope, id, path] = tuple
     if (artworkOwnerIdentityRef.current.scope !== scope || playlistVisualSourceRef.current.get(id) !== path) return undefined
     return playlistTrackVisualsRef.current[id]
   }) }, [playlistArtworkStore])
@@ -717,30 +844,77 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     }
   }, [playlistArtworkStore])
 
-  const playlistDesiredEdgeRef = useRef(new Map<string, 128 | 256 | 512>())
+  const playlistDesiredEdgeRef = useRef(new Map<string, PlaylistArtworkEdge>())
   /**
    * Build the immutable snapshot for one playlist track's artwork.
    *
    * The identity carries the normalized source path, which is also what the
    * hydration lane validates against, so a job that survives a scope change cannot
    * publish a token for a resource it no longer describes.
+   *
+   * `slot` and `identity` are parameters rather than derived inside: the row lane
+   * and the hero lane publish through this one function with their own slot id and
+   * identity, so neither can grow a second, subtly different presentation. The
+   * five-field token contract of `createCoverPresentation` is never bypassed.
    */
   const playlistVisualPresentation = useCallback((
-    trackId: string,
-    normalizedSourcePath: string,
+    slot: string,
+    identity: string,
     image: PlaylistCoverImage,
   ): CoverPresentation => {
-    const publishGeneration = (playlistVisualPublishRef.current.get(trackId) ?? 0) + 1
-    playlistVisualPublishRef.current.set(trackId, publishGeneration)
+    const publishGeneration = (playlistVisualPublishRef.current.get(slot) ?? 0) + 1
+    playlistVisualPublishRef.current.set(slot, publishGeneration)
     return createCoverPresentation({
-      key: trackId,
-      identity: JSON.stringify(['playlist', trackId, normalizedSourcePath]),
+      key: slot,
+      identity,
       sessionGeneration: playlistArtworkSessionRef.current,
       publishGeneration,
       src: image.src,
       image,
     })
   }, [])
+  /**
+   * Publish the hero slot.
+   *
+   * Deliberately does NOT call `publishPlaylistVisuals`: that would re-render the
+   * whole shell for one hero bitmap arriving, and it would pull the hero into the
+   * `first`/`current` shell snapshot that exists for the dock and queue. The store
+   * notification reaches only the hero subscription.
+   */
+  const publishPlaylistHero = useCallback((
+    visual: PlaylistHeroVisual | undefined,
+    edge: PlaylistArtworkEdge | undefined,
+    source: PlaylistHeroSource | undefined,
+  ) => {
+    playlistHeroVisualRef.current = visual
+    playlistHeroEdgeRef.current = edge
+    playlistHeroSourceRef.current = source
+    const key = source ? heroPlaylistArtworkKey(playlistArtworkKey(source.scope, source.trackId, source.sourcePath)) : undefined
+    if (key) playlistArtworkStore.notify([key])
+  }, [playlistArtworkStore])
+  /**
+   * Drop the hero publication and release what it owned.
+   *
+   * The URL must be released before the refs are cleared, and the old key must be
+   * notified afterwards: a subscriber still mounted on the old hero key has to
+   * observe `undefined` (and fall back to the row preview), not keep rendering a
+   * URL nobody owns any more.
+   */
+  const clearPlaylistHero = useCallback(() => {
+    const previous = playlistHeroVisualRef.current
+    const source = playlistHeroSourceRef.current
+    playlistHeroVisualRef.current = undefined
+    playlistHeroEdgeRef.current = undefined
+    playlistHeroSourceRef.current = undefined
+    // Invalidate any in-flight hero read: its reply must not publish.
+    playlistHeroGenerationRef.current += 1
+    playlistHeroActiveJobRef.current = undefined
+    if (previous?.coverThumbnail) releasePlaylistCoverUrl(previous.coverThumbnail.src)
+    if (source) {
+      playlistArtworkStore.notify([heroPlaylistArtworkKey(
+        playlistArtworkKey(source.scope, source.trackId, source.sourcePath))])
+    }
+  }, [playlistArtworkStore])
   const playlistVisualHydrationQueueRef = useRef<PlaylistVisualHydrationJob[]>([])
   const playlistVisualHydrationActiveRef = useRef(0)
   // Hydration width. `null` means "no backend report yet", which is distinct from any numeric
@@ -816,7 +990,16 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
    */
   const playlistArtworkRecoveryRef = useRef<CoverRecoveryLedger | null>(null)
   if (playlistArtworkRecoveryRef.current === null) playlistArtworkRecoveryRef.current = createCoverRecoveryLedger()
-  const playlistPendingReplacementRef = useRef(new Map<string, { trackId: string; previous: PlaylistTrackVisual; edge: 128 | 256 | 512; olderVisuals: Array<{ visual: PlaylistTrackVisual; edge: 128 | 256 | 512 }> }>())
+  const playlistPendingReplacementRef = useRef(new Map<string, { trackId: string; previous: PlaylistTrackVisual; edge: PlaylistArtworkEdge; olderVisuals: Array<{ visual: PlaylistTrackVisual; edge: PlaylistArtworkEdge }> }>())
+  /**
+   * Superseded hero URLs awaiting DOM confirmation, keyed by the replacement URL.
+   *
+   * A separate map from `playlistPendingReplacementRef` on purpose: that one is
+   * indexed by trackId and is the row table's retirement ledger. Sharing it would
+   * let a hero entry be resolved as a row replacement. The retirement rule itself
+   * is shared (`retireLoadedReplacement` takes the map).
+   */
+  const playlistHeroPendingReplacementRef = useRef(new Map<string, CoverReplacementPending>())
   const artworkPrimeDirectionRef = useRef<Direction>(1)
   const stagedTrackDetailsRef = useRef<{
     requestId: number
@@ -933,6 +1116,17 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       if (pending.previous.coverThumbnail) releasePlaylistCoverUrl(pending.previous.coverThumbnail.src)
     }
     playlistPendingReplacementRef.current.clear()
+    // The hero slot is released exactly like the row table: its URL is owned by
+    // this owner, so an unmount must not leave it to the WebView to reclaim.
+    for (const pending of playlistHeroPendingReplacementRef.current.values()) {
+      if (pending.previous.coverThumbnail) releasePlaylistCoverUrl(pending.previous.coverThumbnail.src)
+      for (const older of pending.olderVisuals) {
+        if (older.visual.coverThumbnail) releasePlaylistCoverUrl(older.visual.coverThumbnail.src)
+      }
+    }
+    playlistHeroPendingReplacementRef.current.clear()
+    playlistHeroSettledRef.current.clear()
+    clearPlaylistHero()
     void requestPlaylistCoverWindowGeneration().catch(() => undefined)
     releasePlaylistVisuals(playlistTrackVisualsRef.current)
     playlistTrackVisualsRef.current = {}
@@ -940,7 +1134,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     playlistVisualSourceRef.current.clear()
     playlistDesiredEdgeRef.current.clear()
     playlistArtworkStore.notifyAll()
-  }, [requestPlaylistCoverWindowGeneration, playlistArtworkGrace, playlistArtworkStore])
+  }, [requestPlaylistCoverWindowGeneration, playlistArtworkGrace, playlistArtworkStore, clearPlaylistHero])
 
   // Summary caches are owned by scope, so they are only released on disposal.
   // The mount body resets the guard: a StrictMode remount must not leave every
@@ -1007,14 +1201,38 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
   }, [audioState, folderPlaylist, queueOpen, volume, persistCurrentSession])
 
   useEffect(() => {
-    const checkpoint = window.setInterval(persistCurrentSession, 1000)
+    let checkpoint: number | null = null
     const flush = () => persistCurrentSession()
+    const startCheckpoint = () => {
+      if (checkpoint !== null) return
+      checkpoint = window.setInterval(persistCurrentSession, 1000)
+    }
+    const stopCheckpoint = () => {
+      if (checkpoint === null) return
+      window.clearInterval(checkpoint)
+      checkpoint = null
+    }
+    // A hidden page still runs timers, but nothing the user can see is moving.
+    // The session is flushed once on the transition so hiding the window cannot
+    // lose the latest position, then the periodic checkpoint stops until the
+    // page is visible again.
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        flush()
+        stopCheckpoint()
+      } else {
+        startCheckpoint()
+      }
+    }
+    if (!document.hidden) startCheckpoint()
     window.addEventListener('pagehide', flush)
     window.addEventListener('beforeunload', flush)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
     return () => {
-      window.clearInterval(checkpoint)
+      stopCheckpoint()
       window.removeEventListener('pagehide', flush)
       window.removeEventListener('beforeunload', flush)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
   }, [persistCurrentSession])
 
@@ -1976,6 +2194,18 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       if (pending.previous.coverThumbnail) releasePlaylistCoverUrl(pending.previous.coverThumbnail.src)
     }
     playlistPendingReplacementRef.current.clear()
+    // A scope change is a different detail page: the hero publication described
+    // the old scope's first track and must be released before the new demand pass
+    // runs, otherwise the panel would keep rendering an image nobody owns.
+    for (const pending of playlistHeroPendingReplacementRef.current.values()) {
+      if (pending.previous.coverThumbnail) releasePlaylistCoverUrl(pending.previous.coverThumbnail.src)
+      for (const older of pending.olderVisuals) {
+        if (older.visual.coverThumbnail) releasePlaylistCoverUrl(older.visual.coverThumbnail.src)
+      }
+    }
+    playlistHeroPendingReplacementRef.current.clear()
+    playlistHeroSettledRef.current.clear()
+    clearPlaylistHero()
     playlistScopeEpochRef.current += 1
     playlistVisualGenerationRef.current += 1
     playlistVisualDesiredIdsRef.current = new Set()
@@ -2018,7 +2248,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     setFolderPlaylist(playlist)
     // The real activation owns the duration source now.
     setPendingDurationPlaylist(null)
-  }, [applyFolderManualOrder, commitPlaylistSummaryStatus, ensurePlaylistCoverSession, ensurePlaylistSummaries, playlistArtworkGrace, publishPlaylistVisuals])
+  }, [applyFolderManualOrder, commitPlaylistSummaryStatus, ensurePlaylistCoverSession, ensurePlaylistSummaries, playlistArtworkGrace, publishPlaylistVisuals, clearPlaylistHero])
 
   const clearPresentationTrack = useCallback((nextContentState: Exclude<PlayerContentState, 'track'>) => {
     streamDetailsIdentityRef.current = null
@@ -2397,7 +2627,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
                   // failure (null, or a rejection) ends the epoch in `.finally`,
                   // which settles the row as a placeholder instead of a broken image.
                   const pixels = await schedulePlaylistCoverPixels({
-                    clientId: job.clientId, filePath: coverFilePath, maxEdge: edge,
+                    clientId: job.clientId, filePath: coverFilePath, maxEdge: pixelEdgeWithin(edge),
                     windowGeneration: job.backendGeneration,
                   }, attemptOptions)
                   if (!pixels || jobIsStale()) return
@@ -2418,7 +2648,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
                     coverThumbnail = attempt.image
                   } else {
                     const pixels = await schedulePlaylistCoverPixels({
-                      clientId: job.clientId, filePath: coverFilePath, maxEdge: edge,
+                      clientId: job.clientId, filePath: coverFilePath, maxEdge: pixelEdgeWithin(edge),
                       windowGeneration: job.backendGeneration,
                     }, attemptOptions)
                     if (!pixels || jobIsStale()) return
@@ -2436,7 +2666,10 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
               jobIsStale()
               || (playlistTrackVisualsRef.current[job.trackId]
                 && !playlistVisualStaleIdsRef.current.has(job.trackId)
-                && (playlistVisualEdgeRef.current.get(job.trackId) ?? 0) >= job.maxEdge)
+                // Exact match, not "at least": a measured tier must match the layout, so a hero
+                // at 1536 with a 1024 target is OUT of date and its replacement must publish.
+                // (This is the publish-site twin of the dispatch-site rule.)
+                && playlistVisualEdgeRef.current.get(job.trackId) === job.maxEdge)
             ) {
               if (coverThumbnail) releasePlaylistCoverUrl(coverThumbnail.src)
               return
@@ -2458,7 +2691,8 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
               // A component only ever receives the token of the image it renders.
               // Without that pairing its report would carry a bare URL, which the
               // owner cannot attribute to a publication.
-              ...(coverThumbnail ? { presentation: playlistVisualPresentation(job.trackId, job.normalizedSourcePath, coverThumbnail) } : {}),
+              ...(coverThumbnail ? { presentation: playlistVisualPresentation(job.trackId,
+                JSON.stringify(['playlist', job.trackId, job.normalizedSourcePath]), coverThumbnail) } : {}),
             }
             const nextVisuals = { ...playlistTrackVisualsRef.current, [job.trackId]: visual }
             playlistTrackVisualsRef.current = nextVisuals
@@ -2523,7 +2757,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
                 || !playlistVisualDesiredIdsRef.current.has(job.trackId)
                 || (playlistTrackVisualsRef.current[job.trackId]
                   && !playlistVisualStaleIdsRef.current.has(job.trackId)
-                  && (playlistVisualEdgeRef.current.get(job.trackId) ?? 0) >= job.maxEdge)
+                  && playlistVisualEdgeRef.current.get(job.trackId) === job.maxEdge)
               ) return
               if (playlistVisualHydrationActiveJobsRef.current.has(job.trackId)) return
               playlistVisualHydrationQueueRef.current.unshift({ ...job, attempt: job.attempt + 1 })
@@ -2599,6 +2833,123 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     return () => { cancelled = true }
   }, [pumpPlaylistVisualHydration])
 
+  /**
+   * Run one hero read and publish it into the hero slot.
+   *
+   * Structurally the same shape as the row hydration job, with three deliberate
+   * differences:
+   *
+   * - it owns a single slot, so there is no queue and no admission window;
+   * - its stale predicate is the hero's own (generation, epoch, scope, and the
+   *   first available track's identity + artwork revision);
+   * - it never touches `playlistTrackVisualsRef`, `playlistVisualEdgeRef` or
+   *   `playlistVisualSourceRef`. Those three refs are the row table, and the
+   *   invariant this whole change exists for is that no image above 256 can be
+   *   published into them.
+   *
+   * Failure handling is bounded: one pixel fallback at ≤512 (the playlist pixel
+   * lane never widened), then the slot settles and the hero renders the row
+   * preview. A late reply for a superseded identity releases its URL and returns
+   * without touching the slot.
+   */
+  const startPlaylistHeroJob = useCallback((job: PlaylistHeroJob) => {
+    playlistHeroGenerationRef.current += 1
+    const generation = playlistHeroGenerationRef.current
+    playlistHeroActiveJobRef.current = job
+    const heroJobIsStale = () => {
+      if (playlistHeroGenerationRef.current !== generation) return true
+      if (playlistVisualGenerationRef.current !== job.generation) return true
+      if (playlistScopeEpochRef.current !== job.playlistEpoch) return true
+      if (playlistScopeRef.current !== job.scope) return true
+      const owner = folderPlaylistRef.current
+      if (!owner || playlistScope(owner) !== job.scope) return true
+      if (playlistArtworkRevision(owner) !== job.artworkRevision) return true
+      const first = owner.tracks.find((candidate) => candidate.available)
+      return first?.id !== job.trackId
+        || normalizeAudioSourcePath(first.sourcePath) !== job.normalizedSourcePath
+    }
+    void (async () => {
+      let coverThumbnail: PlaylistCoverImage | undefined
+      const coverSource = await probeAudioPlaylistCover(job.sourcePath)
+      if (heroJobIsStale()) return
+      if (coverSource.id !== job.trackId
+        || normalizeAudioSourcePath(coverSource.sourcePath) !== job.normalizedSourcePath) return
+      const hasLocalArtwork = coverSource.coverArt !== null
+      const coverFilePath = coverSource.coverArt?.filePath
+      if (!coverFilePath) return
+      const isCurrent = () => !heroJobIsStale()
+      // The hero is an OPTIONAL upgrade over the row's 256 preview, so a
+      // deterministic "too large at this tier" refusal must fall back locally and
+      // must not charge the shared breaker (plan R1).
+      const attemptOptions: AttemptOptions = { priority: 0, isCurrent, optionalHeroRead: true }
+      const attempt = await attemptPlaylistCoverThumbnailPath({
+        clientId: playlistCoverClientIdRef.current!, filePath: coverFilePath, maxEdge: job.maxEdge,
+        windowGeneration: job.backendGeneration,
+      }, attemptOptions)
+      if (attempt.status === 'dropped') return
+      if (heroJobIsStale()) return
+      if (attempt.status === 'ready') {
+        coverThumbnail = attempt.image
+      } else if (attempt.status === 'missing') {
+        return
+      } else {
+        // Playlist pixel reads stop at 512 (plan D2 / §4.3): asking for the hero
+        // tier here would be an error, not a fallback.
+        const pixels = await schedulePlaylistCoverPixels({
+          clientId: playlistCoverClientIdRef.current!, filePath: coverFilePath,
+          maxEdge: pixelEdgeWithin(job.maxEdge), windowGeneration: job.backendGeneration,
+        }, attemptOptions)
+        if (!pixels || heroJobIsStale()) return
+        coverThumbnail = playlistCoverImageFromPixels(pixels)
+      }
+      if (coverThumbnail && !isPlaylistCoverDecoded(coverThumbnail)) {
+        try { await decodePlaylistCover(coverThumbnail) }
+        catch (error) { releasePlaylistCoverUrl(coverThumbnail.src); throw error }
+      }
+      if (heroJobIsStale()) {
+        if (coverThumbnail) releasePlaylistCoverUrl(coverThumbnail.src)
+        return
+      }
+      if (!coverThumbnail) return
+      const source: PlaylistHeroSource = {
+        scope: job.scope,
+        trackId: job.trackId,
+        sourcePath: job.normalizedSourcePath,
+        artworkRevision: job.artworkRevision,
+      }
+      const previous = playlistHeroVisualRef.current
+      const visual: PlaylistHeroVisual = {
+        id: heroSlotId(job.trackId),
+        coverTone: coverToneForTrackId(job.trackId),
+        hasLocalArtwork,
+        coverThumbnail,
+        // Same builder as the row lane; only the slot and the identity differ.
+        presentation: playlistVisualPresentation(heroSlotId(job.trackId), heroDisplayIdentity(source), coverThumbnail),
+      }
+      publishPlaylistHero(visual, job.maxEdge, source)
+      // A successful publication re-arms this identity: the verdict above only
+      // suppresses re-admission of a spent epoch.
+      playlistHeroSettledRef.current.delete(visual.id)
+      // The superseded hero URL retires exactly like a superseded row URL: once
+      // every `<img>` still showing it has loaded. Same helper, same map, so the
+      // release rule cannot drift between the two lanes.
+      if (previous?.coverThumbnail && previous.coverThumbnail.src !== coverThumbnail.src) {
+        playlistHeroPendingReplacementRef.current.set(coverThumbnail.src, {
+          previous: { coverThumbnail: previous.coverThumbnail },
+          olderVisuals: [],
+        })
+      }
+    })().catch(() => {
+      // One failed hero read ends in the row preview, never a broken element and
+      // never an unhandled rejection: the slot keeps whatever it had.
+      if (playlistHeroVisualRef.current === undefined) playlistHeroActiveJobRef.current = undefined
+    }).finally(() => {
+      if (playlistHeroActiveJobRef.current && playlistHeroGenerationRef.current === generation) {
+        playlistHeroActiveJobRef.current = undefined
+      }
+    })
+  }, [playlistVisualPresentation, publishPlaylistHero])
+
   const setVisiblePlaylistTrackIds = useCallback((
     trackIds: readonly string[],
     keepPersistentArtwork = true,
@@ -2667,24 +3018,42 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     const currentDemand = showArtwork ? playlistArtworkDemandRef.current : undefined
     const visibleIds = new Set(showArtwork ? currentDemand?.visibleIds ?? trackIds : [])
     const heldIds = new Set(showArtwork ? currentDemand?.heldIds ?? [] : [])
-    const visibleArtworkSettled = !libraryVisibleRef.current || [...visibleIds].every((id) => {
-      const descriptor = descriptorsById.get(id)
-      return !descriptor?.available || Boolean(playlistTrackVisualsRef.current[id])
-        || playlistVisualFailedRef.current.has(id)
-    })
     const heldOnly = (id: string) => heldIds.has(id) && !visibleIds.has(id) && id !== firstTrackId && id !== dockTrackId
-    const targetEdgeFor = (id: string): 256 | 512 => {
-      if (id === firstTrackId) {
-        const firstVisual = playlistTrackVisualsRef.current[id]
-        return firstVisual?.coverThumbnail && !playlistVisualStaleIdsRef.current.has(id) && visibleArtworkSettled ? 512 : 256
-      }
-      // List cards use the persisted 256px thumbnail regardless of display
-      // scaling; only the first-track hero needs the original 512px lane.
-      return 256
+    /**
+     * Tier a ROW is read at.
+     *
+     * Constant on purpose. The first track used to be promoted to a measured hero
+     * tier here, which made two jobs for one trackId compete for one publication
+     * record and left the ordinary first card rendering the hero's 1536 image.
+     * Rows — first row included — now always take the persisted 256px thumbnail;
+     * the hero's tier lives in its own record (plan §2, invariant).
+     *
+     * The function form is kept because the dispatch and publish guards compare
+     * against exactly this expression.
+     */
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const targetEdgeFor = (_id: string): 256 => 256
+    /**
+     * Tier the hero wants right now, or `undefined` for "no hero".
+     *
+     * Strictly demand-driven (plan B7): the panel measures continuously and sends
+     * the result with its viewport report, so a numeric `heroEdge > 256` is the
+     * only signal that a high tier is wanted, and its absence is the withdrawal
+     * signal `useHeroTier(enabled=false)` produces when the panel leaves or goes
+     * offscreen. There is deliberately no one-shot `selectHeroEdge()` fallback
+     * here — the active-playlist owner has no synchronous way to measure the hero,
+     * and guessing would start a read nobody asked for.
+     */
+    const wantedHeroEdge = (): PlaylistArtworkEdge | undefined => {
+      const measured = playlistArtworkDemandRef.current?.heroEdge
+      if (typeof measured !== 'number' || measured <= 256) return undefined
+      // Any valid hero tier, not just <=1536: hard-coding the old cap would truncate a
+      // 2048 request after that tier was enabled.
+      return isHeroEdge(measured) ? measured : HERO_MAX_EDGE
     }
     // Reserve all screen items before offering spare bytes to prefetch. A dense
     // viewport can exceed the nominal cache target, but it never loses eligibility.
-    const requiredBytes = artworkDesiredIds.reduce((total, id) => {
+    const requiredBytesForRows = artworkDesiredIds.reduce((total, id) => {
       if (!visibleIds.has(id) && !heldIds.has(id) && id !== firstTrackId && id !== dockTrackId) return total
       const targetEdge = targetEdgeFor(id)
       const current = playlistTrackVisualsRef.current[id]?.coverThumbnail
@@ -2695,6 +3064,27 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       return total + Math.max(playlistArtworkBytes(targetEdge), currentBytes)
         + (currentEdge < targetEdge ? currentBytes : 0)
     }, 0)
+    // The hero is a second, independently owned resident: one slot, charged once,
+    // at its own tier. It used to be folded into the first row's reservation, which
+    // is exactly why the first row is now billed at 256 like every other row.
+    // Neither budget constant moves (the reservation split is not a licence to
+    // enlarge 64 MiB, and the in-flight figure stays derived from 512 because the
+    // hero travels the path lane and falls back to pixels, not to its own tier).
+    // Hero demand does not depend on `showArtwork`.
+    //
+    // `showArtwork` describes the CARD lane: a text layout (level 6-9) renders rows
+    // without covers, so the card lane must stay off. The hero is not a card — it keeps
+    // its own publication and stays on screen at full width in those layouts. Tying the
+    // two together meant switching the song list to a text layout quietly dropped the
+    // detail hero to the 256 row preview and stopped issuing hero reads entirely.
+    //
+    // So the hero is driven by its own signal: the panel's measured tier (`demand.heroEdge`,
+    // withdrawn as `undefined` when the panel leaves or the hero scrolls offscreen) plus the
+    // persistent-artwork lease.
+    const heroDesired = keepPersistentArtwork && Boolean(playlist) && Boolean(demand?.heroEdge)
+    const heroEdge = heroDesired ? wantedHeroEdge() : undefined
+    const heroBytes = heroEdge !== undefined ? playlistArtworkBytes(heroEdge) : 0
+    const requiredBytes = requiredBytesForRows + heroBytes
     const oldReplacementBytes = [...playlistPendingReplacementRef.current.values()]
       .reduce((total, pending) => total
         + (pending.previous.coverThumbnail ? playlistImageBytes(pending.previous.coverThumbnail) : 0)
@@ -2738,9 +3128,27 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     const warmIds = playlistArtworkGrace.retain(residents, desiredIds,
       PLAYLIST_ARTWORK_RESIDENT_BUDGET - committedBytes - playlistArtworkInflightBudget())
     const residentIds = new Set([...desiredIds, ...warmIds])
-    const windowKey = `${playlistScopeEpochRef.current}\u0000${scope}\u0000${keepPersistentArtwork}\u0000${[...visibleIds].join('\u0000')}\u0001${[...heldIds].join('\u0000')}\u0002${budgetedIds.map((id) => `${id}:${normalizeAudioSourcePath(descriptorsById.get(id)?.sourcePath ?? '')}`).join('\u0000')}\u0003${[...warmIds].join('\u0000')}`
+    // The hero tier participates in the key: a viewport change moves only the tier, and without
+    // it here the early return below would skip the recompute entirely.
+    const heroTierForKey = playlistArtworkDemandRef.current?.heroEdge ?? 0
+    const windowKey = `${playlistScopeEpochRef.current}\u0000${scope}\u0000${keepPersistentArtwork}\u0000${heroTierForKey}\u0000${[...visibleIds].join('\u0000')}\u0001${[...heldIds].join('\u0000')}\u0002${budgetedIds.map((id) => `${id}:${normalizeAudioSourcePath(descriptorsById.get(id)?.sourcePath ?? '')}`).join('\u0000')}\u0003${[...warmIds].join('\u0000')}`
     if (playlistVisualWindowKeyRef.current === windowKey) return
     playlistVisualWindowKeyRef.current = windowKey
+    // Hero withdrawal. `heroEdge === undefined` means the hero is not on screen
+    // (panel left, went offscreen, or the tier collapsed to the row lane), and
+    // that is the documented signal to release the high-tier image and fall back
+    // to the row preview — the same moment the old code dropped the first track
+    // back to 256.
+    //
+    // Leaving demand is also the documented retry trigger, so a hero identity
+    // whose single recovery already settled loses that verdict here. Without it a
+    // DOM failure would blacklist the identity for the whole session: resizing the
+    // hero away and back would never re-read it, which is the permanent blacklist
+    // the ledger design explicitly forbids.
+    if (heroEdge === undefined) {
+      clearPlaylistHero()
+      playlistHeroSettledRef.current.clear()
+    }
     const generation = playlistVisualGenerationRef.current
     playlistDesiredEdgeRef.current = new Map(budgetedIds.map((id) => [id, targetEdgeFor(id)]))
     playlistVisualDesiredIdsRef.current = desiredIds
@@ -2790,6 +3198,27 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       return
     }
     const playlistEpoch = playlistScopeEpochRef.current
+    // The hero's own read. Same session, same scheduler, own slot: the tier it
+    // asks for never appears in a row job above, and its publication never lands
+    // in `playlistTrackVisualsRef`.
+    const heroDescriptor = playlist?.tracks.find((candidate) => candidate.available)
+    const heroSourcePath = heroDescriptor ? normalizeAudioSourcePath(heroDescriptor.sourcePath) : undefined
+    const heroRevision = playlist ? playlistArtworkRevision(playlist) : 0
+    const heroWanted = Boolean(heroEdge !== undefined
+      && playlist
+      && heroDescriptor
+      && heroSourcePath
+      // A hero identity whose one automatic recovery is spent must not be
+      // re-admitted by the next demand pass; only a new identity re-arms it.
+      && playlistHeroSettledRef.current.get(heroSlotId(heroDescriptor.id)) !== heroDisplayIdentity({
+        scope, trackId: heroDescriptor.id, sourcePath: heroSourcePath!, artworkRevision: heroRevision,
+      })
+      && (!playlistHeroVisualRef.current?.coverThumbnail
+        || playlistHeroEdgeRef.current !== heroEdge
+        || playlistHeroSourceRef.current?.scope !== scope
+        || playlistHeroSourceRef.current?.trackId !== heroDescriptor.id
+        || playlistHeroSourceRef.current?.sourcePath !== heroSourcePath
+        || playlistHeroSourceRef.current?.artworkRevision !== heroRevision))
     void backendWindowGeneration.then((backendGeneration) => {
       playlistCoverBackendGenerationRef.current = backendGeneration
       if (
@@ -2813,9 +3242,12 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
           // clear this.
           || playlistVisualTransientRef.current.get(descriptor.id) === normalizeAudioSourcePath(descriptor.sourcePath)
           || playlistVisualRetryTimersRef.current.has(descriptor.id)
+          // Exact match, not "at least": a measured tier must match the layout, so a hero
+          // at 1536 with a 1024 target is OUT of date and its replacement must publish.
+          // (This is the publish-site twin of the dispatch-site rule.)
           || (playlistTrackVisualsRef.current[descriptor.id]
             && !playlistVisualStaleIdsRef.current.has(descriptor.id)
-            && (playlistVisualEdgeRef.current.get(descriptor.id) ?? 0) >= targetEdgeFor(descriptor.id))
+            && playlistVisualEdgeRef.current.get(descriptor.id) === targetEdgeFor(descriptor.id))
           || (activeJob?.generation === generation
             && activeJob.normalizedSourcePath === normalizeAudioSourcePath(descriptor.sourcePath))
         ) continue
@@ -2835,6 +3267,22 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       }
       playlistVisualHydrationQueueRef.current = jobs
       pumpPlaylistVisualHydration()
+      if (heroWanted && heroDescriptor && heroSourcePath) {
+        // Re-check after the await: the demand may have been withdrawn while the
+        // backend session was being created.
+        if (playlistScopeEpochRef.current !== playlistEpoch || playlistScopeRef.current !== scope) return
+        startPlaylistHeroJob({
+          generation: playlistVisualGenerationRef.current,
+          playlistEpoch,
+          backendGeneration,
+          scope,
+          trackId: heroDescriptor.id,
+          sourcePath: heroDescriptor.sourcePath,
+          normalizedSourcePath: heroSourcePath,
+          artworkRevision: heroRevision,
+          maxEdge: heroEdge!,
+        })
+      }
     }).catch(() => {
       if (playlistScopeEpochRef.current !== playlistEpoch || playlistCoverSessionFailuresRef.current >= 2) return
       playlistCoverSessionFailuresRef.current += 1
@@ -2845,7 +3293,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
         refreshPlaylistVisualDemandRef.current()
       }, 500 * playlistCoverSessionFailuresRef.current)
     })
-  }, [pumpPlaylistVisualHydration, ensurePlaylistCoverSession, playlistArtworkGrace, publishPlaylistVisuals])
+  }, [pumpPlaylistVisualHydration, ensurePlaylistCoverSession, playlistArtworkGrace, publishPlaylistVisuals, startPlaylistHeroJob, clearPlaylistHero])
 
   useEffect(() => {
     refreshPlaylistVisualDemandRef.current = () => setVisiblePlaylistTrackIds(
@@ -2874,8 +3322,16 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
   }, [sourceArtworkAllowed])
 
   useEffect(() => {
-    const retireLoadedReplacement = (src: string) => {
-      const pending = playlistPendingReplacementRef.current.get(src)
+    /**
+     * Retire a superseded URL once every consumer has loaded its replacement.
+     *
+     * Parameterized over the pending map because both lanes obey the same rule:
+     * a row replacement and a hero replacement are only released when nothing is
+     * still painting the older image. One implementation, so the rule cannot
+     * drift between the two lanes.
+     */
+    const retireLoadedReplacement = (src: string, pendingMap: Map<string, CoverReplacementPending>) => {
+      const pending = pendingMap.get(src)
       if (!pending) return
       const consumers = [...document.querySelectorAll<HTMLImageElement>('img')]
         .filter((image) => image.src === src)
@@ -2883,7 +3339,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       const oldUrls = [pending.previous.coverThumbnail?.src, ...pending.olderVisuals.map((older) => older.visual.coverThumbnail?.src)]
         .filter((url): url is string => Boolean(url) && url !== src)
       if ([...document.querySelectorAll<HTMLImageElement>('img')].some((image) => oldUrls.includes(image.src))) return
-      playlistPendingReplacementRef.current.delete(src)
+      pendingMap.delete(src)
       if (pending.previous.coverThumbnail?.src !== src && pending.previous.coverThumbnail) releasePlaylistCoverUrl(pending.previous.coverThumbnail.src)
       for (const older of pending.olderVisuals) {
         if (older.visual.coverThumbnail) releasePlaylistCoverUrl(older.visual.coverThumbnail.src)
@@ -2897,10 +3353,16 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       // never forget the epoch. A DOM load is evidence about this moment only; the
       // managed JPEG can still be evicted and the element can still fail later.
       if (detail.token) playlistArtworkRecoveryRef.current?.loaded(detail.token.key)
-      retireLoadedReplacement(detail.url)
+      retireLoadedReplacement(detail.url, playlistPendingReplacementRef.current)
+      retireLoadedReplacement(detail.url, playlistHeroPendingReplacementRef.current)
     }
     const observer = new MutationObserver(() => {
-      for (const src of playlistPendingReplacementRef.current.keys()) retireLoadedReplacement(src)
+      for (const src of playlistPendingReplacementRef.current.keys()) {
+        retireLoadedReplacement(src, playlistPendingReplacementRef.current)
+      }
+      for (const src of playlistHeroPendingReplacementRef.current.keys()) {
+        retireLoadedReplacement(src, playlistHeroPendingReplacementRef.current)
+      }
     })
     observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['src'] })
     /** Full identity of one track's published playlist artwork. */
@@ -2916,7 +3378,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
      * that already failed. The job below carries `forcePixels`, so the hydration
      * lane reads pixels directly at the edge that failed.
      */
-    const queueForcedPixels = (trackId: string, edge: 128 | 256 | 512) => {
+    const queueForcedPixels = (trackId: string, edge: PlaylistArtworkEdge) => {
       const descriptor = folderPlaylistRef.current?.tracks.find((track) => track.id === trackId)
       if (!descriptor?.available) return
       const playlistEpoch = playlistScopeEpochRef.current
@@ -2975,6 +3437,32 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       // element's late error evict a healthy replacement.
       if (!token) return
       if (token.sessionGeneration !== playlistArtworkSessionRef.current) return
+      // A hero report and a row report must never be attributed to each other.
+      // The hero owns a slot id that is not a track id, so this branch is a
+      // structural separation, not a heuristic (plan R9): a hero element failing
+      // must not consume a ROW's single recovery epoch.
+      if (isHeroSlotId(token.key)) {
+        const hero = playlistHeroVisualRef.current
+        const heroSource = playlistHeroSourceRef.current
+        if (!hero?.coverThumbnail || !heroSource) return
+        if (token.key !== hero.id) return
+        if (!isCurrentCoverReport({
+          presentation: hero.presentation,
+          identity: heroDisplayIdentity(heroSource),
+          sessionGeneration: playlistArtworkSessionRef.current,
+        }, { token, actualUrl: detail.actualUrl, outcome: 'failed' })) return
+        // The hero read already spent its one fallback inside the attempt chain
+        // (path lane → one ≤512 pixel read). A DOM failure of the published hero
+        // therefore ends this identity's epoch: settle it, drop the publication so
+        // the hero renders the row preview, and never leave a broken element.
+        const heroRecovery = playlistArtworkRecoveryRef.current!
+        heroRecovery.claim(hero.id, token.identity, token.publishGeneration, src)
+        heroRecovery.settle(hero.id)
+        playlistHeroSettledRef.current.set(hero.id, heroDisplayIdentity(heroSource))
+        releasePlaylistCoverUrl(src)
+        clearPlaylistHero()
+        return
+      }
       const trackId = token.key
       const visual = playlistTrackVisualsRef.current[trackId]
       if (!visual?.coverThumbnail) return
@@ -3009,7 +3497,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       // A 512 hero failure stays 512; a list card stays 256. Recovery never
       // "upgrades" or "downgrades" the request behind the user's back.
       const failedEdge = playlistVisualEdgeRef.current.get(trackId) ?? 256
-      const edge: 128 | 256 | 512 = failedEdge <= 256 ? 256 : failedEdge
+      const edge: PlaylistArtworkEdge = failedEdge <= 256 ? 256 : failedEdge
       // The claim holds `queued`; it becomes `running` only when the job is admitted
       // inside the hydration pump, so a job dropped before admission does not burn
       // the epoch. Anything other than `spent` is a queued or in-flight epoch.
@@ -3033,7 +3521,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       window.removeEventListener('spmusic:playlist-cover-image-load', onImageLoad)
       window.removeEventListener('spmusic:playlist-cover-image-error', onImageError)
     }
-  }, [pumpPlaylistVisualHydration, publishPlaylistVisuals])
+  }, [pumpPlaylistVisualHydration, publishPlaylistVisuals, clearPlaylistHero])
 
   useEffect(() => {
     if (
@@ -5830,6 +6318,28 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     playlistTrackMetadata,
     get playlistTrackVisuals() { return playlistTrackVisualsRef.current },
     playlistArtworkSource,
+    /**
+     * The current hero publication, as a read-only handle.
+     *
+     * Deliberately NOT a second row source: it exposes the display identity, the
+     * tier and the published snapshot so a *display* layer can decide whether an
+     * image it is already showing still describes the detail page on screen
+     * (scheme §3's sticky hold across an owner handover). It is not indexed by
+     * track id and cannot be written from outside this hook.
+     */
+    get playlistHeroPublication() {
+      const visual = playlistHeroVisualRef.current
+      const source = playlistHeroSourceRef.current
+      const edge = playlistHeroEdgeRef.current
+      if (!visual?.coverThumbnail || !source) return undefined
+      return {
+        identity: heroDisplayIdentity(source),
+        edge,
+        image: visual.coverThumbnail,
+        presentation: visual.presentation,
+        source,
+      }
+    },
     playlistTrackSummariesByScope,
     playlistSummaryStatusByScope,
     ensurePlaylistSummaries,

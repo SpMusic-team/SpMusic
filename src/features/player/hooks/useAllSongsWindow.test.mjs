@@ -56,6 +56,10 @@ async function harness(count = 100) {
     compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
   }).outputText).toString('base64')}`) : {}
   globalThis.__allSongsWindowTest = {
+    // Real selector logic (pure: clientWidth × DPR, ceil to bucket). Returning a hero tier
+    // here proves the ordinary 256 lane is chosen by the call sites, not by the selector
+    // happening to agree.
+    selectHeroEdge: () => 1536,
     ...orderExports,
     useRef: value => refs[refIndex++] ?? (refs[refIndex - 1] = { current: value }),
     useEffect: (effect, deps) => {
@@ -100,7 +104,7 @@ async function harness(count = 100) {
     compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
   }).outputText
   const imports = compiled.match(/^import .+;$/gm)
-  assert.equal(imports.length, source.includes('orderPlaylistArtworkRows') ? 6 : 5, 'all runtime boundaries are explicitly supplied, including the real ordering helper')
+  assert.equal(imports.length, source.includes('orderPlaylistArtworkRows') ? 8 : 7, 'all runtime boundaries are explicitly supplied, including the real ordering helper')
   const bindings = Object.keys(globalThis.__allSongsWindowTest).join(', ')
   const patched = `const { ${bindings} } = globalThis.__allSongsWindowTest;\n${compiled.replace(/^import .+;$/gm, '')}\n//# sourceURL=useAllSongsWindow.test-module.mjs`
   const module = await import(`data:text/javascript;base64,${Buffer.from(patched).toString('base64')}#${Math.random()}`)

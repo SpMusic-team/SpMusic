@@ -64,7 +64,7 @@ flowchart LR
 ```
 
 1. [PlaylistPanel.tsx](../../src/features/player/components/PlaylistPanel.tsx) 挂载全部筛选后的卡片，滚动、`ResizeObserver`、窗口尺寸与 DPR 变化时，在动画帧里计算真实可见、附近一屏和转场保留集合；播放栏遮挡会缩小真实可见范围。当前几何计算仍遍历全量挂载卡片。
-2. [useAudioPlayer.ts](../../src/features/player/hooks/useAudioPlayer.ts) 优先处理真实可见、首曲、播放栏和转场保留需求，余量才供预取；根据封面 CSS 尺寸和 DPR 选择 128/256/512px。48 MiB 是应用侧受管预算而非硬性进程上限，且与"当前曲目前后各 3 首"的解码封面预热窗口无关。元数据补水与封面补水各有有限任务数，过期结果不会写入新列表。列表行文本另有独立的只读标签摘要通道（见下方第 6 条），它只以 scope 键缓存、不写补水状态。
+2. [useAudioPlayer.ts](../../src/features/player/hooks/useAudioPlayer.ts) 优先处理真实可见、首曲、播放栏和转场保留需求，余量才供预取；根据封面 CSS 尺寸和 DPR 选择 128/256/512px；**首曲 hero 例外**：按 hero 的实测布局宽 `ceil(clientWidth × DPR)` 选 1024/1536 档（`services/heroCoverEdge.ts`），且只有 path 通道接受这类档位。64 MiB 是应用侧受管预算而非硬性进程上限（hero 提档后由 48 提升，推导见 `hero-cover-sharpness-plan.md` §7.2），且与"当前曲目前后各 3 首"的解码封面预热窗口无关。元数据补水与封面补水各有有限任务数，过期结果不会写入新列表。列表行文本另有独立的只读标签摘要通道（见下方第 6 条），它只以 scope 键缓存、不写补水状态。
 3. [audioCommands.ts](../../src/features/player/services/audioCommands.ts) 的列表输入为 `clientId`、原图 `filePath`、`maxEdge` 和 `windowGeneration`。Rust 的**路径通道**允许列表档位 128/256/512/1024/1536px（`ALLOWED_PATH_MAX_EDGES`），用于 hero 大图；**像素通道**仍只允许 128/256/512px，因为该通道把 RGBA 解码进受管预算。2048 暂缓，播放器大图命令有独立请求身份和档位。列表会话代次在列表资源会话失效时更新，不随每次普通滚动递增。
 4. [cover_pixels.rs](../../src-tauri/src/audio/cover_pixels.rs) 校验原图在应用缓存 `audio/covers` 内、不是符号链接且是普通文件；限制原图字节、尺寸和解码量。当前每次未被前端驻留资源满足的请求都读取原图、完整解码、按 Lanczos3 缩放，并返回 SPXR v1 RGBA 像素。列表请求共享串行解码门，和播放器大图解码门隔离。
 5. 前端将 RGBA 转成未压缩 BMP Blob URL 给 `<img>`。升级换图时保留旧 URL 及更早回退链，等使用者真正加载新图后才撤销；失败恢复不能把仍在使用的旧图登记为自身的待撤销 URL。Object URL 释放和 WebView 原生图片内存需分别观察。

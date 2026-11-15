@@ -156,10 +156,14 @@ export type AudioThumbnailPath = {
  * back a file on disk, so a 1536 hero costs a bigger JPEG, not a resident RGBA buffer.
  * The backend whitelist is `ALLOWED_PATH_MAX_EDGES` in `cover_pixels.rs`.
  *
- * 2048 is intentionally absent — the architecture plan defers it until a WebView
- * bit-residency measurement exists.
+ * 2048 is ACCEPTED here, but no UI owner requests it: the hero selector's buckets stop at
+ * 1536 (`HERO_EDGE_BUCKETS` in `heroCoverEdge.ts`) and `heroPathEdge` forwards only 1024 and
+ * 1536. The channel keeps 2048 so the protocol can serve it once a narrower investigation
+ * explains the renderer growth measured at that tier; the deliberate asymmetry between
+ * "what the channel accepts" and "what the UI selects" is asserted in
+ * `crossBoundaryEdgeParity.test.mjs`. Both halves must move together.
  */
-export type AudioThumbnailPathMaxEdge = 128 | 256 | 512 | 1024 | 1536
+export type AudioThumbnailPathMaxEdge = 128 | 256 | 512 | 1024 | 1536 | 2048
 
 export type AudioLoadTrackThumbnailPathInput = {
   clientId: string
@@ -591,7 +595,7 @@ export async function queryPlaylistDecodePermitWidth(): Promise<unknown> {
 //   `thumbnail_path_max_bytes_for_edge` -> thumbnailPathMaxBytesForEdge
 //
 // The pixel lane keeps its own older bounds below; do not merge the two.
-const THUMBNAIL_PATH_ALLOWED_EDGES: readonly AudioThumbnailPathMaxEdge[] = [128, 256, 512, 1024, 1536]
+const THUMBNAIL_PATH_ALLOWED_EDGES: readonly AudioThumbnailPathMaxEdge[] = [128, 256, 512, 1024, 1536, 2048]
 const THUMBNAIL_PATH_MIN_BYTES = 1024 * 1024
 const THUMBNAIL_PATH_MAX_BYTES_CEILING = 16 * 1024 * 1024
 

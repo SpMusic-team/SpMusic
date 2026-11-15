@@ -2,11 +2,11 @@
 doc_id: "ARCH-COVER-SHARPNESS"
 title: "封面清晰度对比：SpMusic 播放列表头图 vs Poweramp"
 doc_type: "architecture"
-status: "draft"
+status: "superseded"
 owner_agent: "Architecture Agent"
 version_scope: "project"
 created: "2026-11-06"
-updated: "2026-11-06"
+updated: "2026-11-12"
 source_documents:
   - "user request: 播放列表头图模糊，Poweramp 同位置清晰，调查原因"
   - "src-tauri/src/audio/cover_pixels.rs（解码与上限常量）"
@@ -16,7 +16,16 @@ source_documents:
   - "src/features/player/services/audioCommands.ts（三通道 maxEdge 类型）"
   - ".rea-analysis/Poweramp-v3.apk（头图实现，smali + 资源实证）"
   - "docs/architecture/playlist-artwork-loading.md（既有封面加载契约，本文不重复）"
+  - "docs/architecture/hero-cover-sharpness-plan.md（后续实施计划，本文已被其取代）"
 ---
+
+> **本文状态：已被取代（superseded，2026-11-12）。**
+>
+> 后续实施计划见 [hero-cover-sharpness-plan.md](./hero-cover-sharpness-plan.md)。本文保留为**结论演进记录**，不要据此实施：
+> 其中 `path:line` 引用已大面积漂移，且 §4.1 建议的 `selectHeroEdge()` 已在
+> `src/features/player/services/heroCoverEdge.ts` 实现。
+>
+> 特别地，§2.1 关于「曾误判 Poweramp 无全宽头图」的更正说明仍有阅读价值，故不删除本文。
 
 # 封面清晰度对比：SpMusic 播放列表头图 vs Poweramp
 

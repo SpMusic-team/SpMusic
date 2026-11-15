@@ -75,7 +75,19 @@ try {
   }
   const thumbnailCalls = await page.evaluate(() => window.calls.filter(call => call.command === 'audio_load_track_thumbnail'))
   const heroCalls = await page.evaluate(() => window.calls.filter(call => call.command === 'audio_load_playlist_cover_pixels'))
-  assert(heroCalls.some(call => call.input.maxEdge === 512), 'first-track hero keeps 512px artwork')
+  // The hero's tier is derived from the hero box and DPR, so assert the RELATIONSHIP instead of
+  // a literal: this page runs at 1600x1000 @ deviceScaleFactor 2, where the hero box (about
+  // 1600-370 = 1230 CSS px) needs ceil(1230*2/1024)*1024 -> 1536 physical px.
+  const heroTier = await page.evaluate(() => {
+    const box = document.querySelector('.playlist-hero-artwork')
+    const dpr = Math.max(1, window.devicePixelRatio || 1)
+    const physical = Math.ceil((box ? box.clientWidth : 0) * dpr)
+    return physical <= 1024 ? 1024 : 1536
+  })
+  assert(
+    heroCalls.some(call => call.input.maxEdge === heroTier),
+    `first-track hero requests the measured tier (${heroTier}); got ${JSON.stringify(heroCalls.map(c => c.input.maxEdge))}`,
+  )
   assert(thumbnailCalls.some(call => call.input.sourcePath !== '/audio/a/0.flac'), 'scrolled cards request thumbnails')
   assert(thumbnailCalls.every(call => call.input.sourcePath === '/audio/a/0.flac' || call.input.maxEdge === 256), 'high-DPR playlist cards use persisted 256px thumbnails')
   assert.deepEqual(errors, [])

@@ -2,6 +2,7 @@ import { markPlaylistCoverDecoded } from '../model/playlistCoverReadiness'
 import type { PlaylistCoverImage } from '../model/playerUiViewModel'
 import {
   audioThumbnailPathUrl,
+  isAudioCoverPixelsError,
   isStaleCoverPixelsError,
   loadAudioFolderThumbnailPath,
   loadAudioPlaylistCoverThumbnailPath,
@@ -195,10 +196,36 @@ export type AttemptOptions = {
   signal?: AbortSignal
   /** `true` while the requesting row/job is still valid and may publish. */
   isCurrent: () => boolean
+  /**
+   * This attempt is an *optional* high-tier hero read.
+   *
+   * A hero read is a quality upgrade over an image the row lane already
+   * published, so a deterministic refusal of that upgrade is not evidence that
+   * the channel is broken. When this is set, a structured `IMAGE_TOO_LARGE`
+   * falls back locally instead of charging the shared breaker: eight oversized
+   * hero covers in one session must not close the lane the ordinary 256 rows
+   * depend on. Every other failure is charged exactly as before.
+   *
+   * Defaults to `false`, so no existing caller changes behaviour and the
+   * "eight consecutive failures close the lane" contract still holds.
+   */
+  optionalHeroRead?: boolean
 }
 
 /** Why the pixel lane is now being used. Reported for diagnostics and tests. */
-export type PathLaneFallbackReason = 'disabled' | 'command' | 'prepare' | 'decode' | 'timeout'
+export type PathLaneFallbackReason = 'disabled' | 'command' | 'prepare' | 'decode' | 'timeout' | 'too-large'
+
+/**
+ * Whether the backend refused the requested edge because the image is too large.
+ *
+ * A structured verdict only: `CoverPixelsErrorCode::ImageTooLarge` serializes as
+ * `IMAGE_TOO_LARGE` (`cover_pixels.rs`), and `isAudioCoverPixelsError` is the
+ * existing shape guard. Matching the message string would be wrong — the message
+ * is human text and can be reworded, translated or wrapped.
+ */
+function isImageTooLargeError(error: unknown): boolean {
+  return isAudioCoverPixelsError(error) && error.code === 'IMAGE_TOO_LARGE'
+}
 
 /**
  * The result of one complete path attempt.
@@ -321,6 +348,11 @@ export async function runPreparedPathAttempt(
     // A superseded request is a controlled abort, not a channel defect.
     if (isStaleCoverPixelsError(error)) return { status: 'dropped' }
     if (abandoned(options)) return { status: 'dropped' }
+    // An optional hero upgrade that the backend deterministically refused for
+    // size says nothing about the channel: it must fall back locally, without
+    // advancing the shared streak. Ordered before `notePathLaneFailure` because
+    // the breaker is charged there and a caller cannot undo it.
+    if (options.optionalHeroRead && isImageTooLargeError(error)) return { status: 'fallback', reason: 'too-large' }
     notePathLaneFailure(error)
     return { status: 'fallback', reason: 'command' }
   }

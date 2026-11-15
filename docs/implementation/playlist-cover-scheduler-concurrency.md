@@ -77,12 +77,16 @@ assert.equal(h.maximumActive, 1)
 2. 单次解码在 Lanczos3 缩放阶段已吃满一个核，4 路在飞足以填满解码槽位且不会在小机器上超额订阅。
 3. 常驻封面内存由 `useLibraryArtwork` / `useAllSongsWindow` 的字节预算独立约束，宽度不改变稳态内存；只放大暂存在飞像素缓冲（上界 4 × 512 × 512 × 4 B = 4 MiB）。
 
+> **2026-11-12 修订（hero 清晰度方案落地）**：数值不变（仍是 4 MiB）。hero 高档位走路径通道（返回文件路径，不占 JS 像素缓冲），其像素回落按 §4.3 显式降到 512；本 hook 自己的作业由 `activeBytes` 按 `job.maxEdge² × 4` 逐作业计费，因此 512 仍是「可能真实分配 RGBA 的最大宽度」。
+
 本模块同时管辖 `scheduleTrackThumbnail` 与 `schedulePlaylistCoverPixels` 两条 lane，所以上界是全进程封面像素请求的统一上界。
 
 ## 修改文件
 
 - `src/features/player/services/playlistCoverScheduler.ts`：`active` → `activeCount`，新增导出常量 `MAX_CONCURRENT`，`pump()` 改为多槽投放并保持每次重排优先级。
 - `src/features/player/hooks/useAudioPlayer.ts`：`PLAYLIST_ARTWORK_INFLIGHT_BUDGET` 由 `2 * 512 * 512 * 4` 改为 `MAX_CONCURRENT * 512 * 512 * 4`，并从调度器导入常量。
+
+> **2026-11-12 修订（hero 清晰度方案落地）**：本次 hero 方案**明确不再调整**该常量：若按 hero 档位（1536）放大预留，会变成 36 MiB 并使 warm 预算转负（-3.75 MiB），反而拒绝所有可选预取。此条为防后人再次误放宽。
 - `src/features/player/services/playlistCoverScheduler.test.mjs`：重写为并发证明测试（13 例）。
 - `src/features/player/components/allSongsCoverCache.browser.test.mjs`：`maxActive === 1` → 有界区间断言。
 - `src/features/player/components/playlistCoverPreload.browser.test.mjs`：3 处串行断言改为有界断言，并同步在飞内存预留。

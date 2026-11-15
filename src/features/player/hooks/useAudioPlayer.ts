@@ -62,7 +62,7 @@ import {
   attemptTrackThumbnailPath,
   type AttemptOptions,
 } from '@/features/player/services/playlistCoverPathLane'
-import { HERO_MAX_EDGE, isHeroEdge, type HeroEdge } from '@/features/player/services/heroCoverEdge'
+import { isHeroEdge, type HeroEdge } from '@/features/player/services/heroCoverEdge'
 import {
   chunkPlaylistSummaryPaths,
   pendingPlaylistTrackRow,
@@ -2861,11 +2861,12 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       if (playlistVisualGenerationRef.current !== job.generation) return true
       if (playlistScopeEpochRef.current !== job.playlistEpoch) return true
       if (playlistScopeRef.current !== job.scope) return true
+      if (!keepPersistentPlaylistArtworkRef.current || playlistArtworkDemandRef.current?.heroEdge !== job.maxEdge) return true
       const owner = folderPlaylistRef.current
       if (!owner || playlistScope(owner) !== job.scope) return true
       if (playlistArtworkRevision(owner) !== job.artworkRevision) return true
-      const first = owner.tracks.find((candidate) => candidate.available)
-      return first?.id !== job.trackId
+      const first = owner.tracks[0]
+      return !first?.available || first.id !== job.trackId
         || normalizeAudioSourcePath(first.sourcePath) !== job.normalizedSourcePath
     }
     void (async () => {
@@ -2942,7 +2943,6 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     })().catch(() => {
       // One failed hero read ends in the row preview, never a broken element and
       // never an unhandled rejection: the slot keeps whatever it had.
-      if (playlistHeroVisualRef.current === undefined) playlistHeroActiveJobRef.current = undefined
     }).finally(() => {
       if (playlistHeroActiveJobRef.current && playlistHeroGenerationRef.current === generation) {
         playlistHeroActiveJobRef.current = undefined
@@ -3047,9 +3047,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     const wantedHeroEdge = (): PlaylistArtworkEdge | undefined => {
       const measured = playlistArtworkDemandRef.current?.heroEdge
       if (typeof measured !== 'number' || measured <= 256) return undefined
-      // Any valid hero tier, not just <=1536: hard-coding the old cap would truncate a
-      // 2048 request after that tier was enabled.
-      return isHeroEdge(measured) ? measured : HERO_MAX_EDGE
+      return isHeroEdge(measured) ? measured : undefined
     }
     // Reserve all screen items before offering spare bytes to prefetch. A dense
     // viewport can exceed the nominal cache target, but it never loses eligibility.
@@ -3064,12 +3062,8 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       return total + Math.max(playlistArtworkBytes(targetEdge), currentBytes)
         + (currentEdge < targetEdge ? currentBytes : 0)
     }, 0)
-    // The hero is a second, independently owned resident: one slot, charged once,
-    // at its own tier. It used to be folded into the first row's reservation, which
-    // is exactly why the first row is now billed at 256 like every other row.
-    // Neither budget constant moves (the reservation split is not a licence to
-    // enlarge 64 MiB, and the in-flight figure stays derived from 512 because the
-    // hero travels the path lane and falls back to pixels, not to its own tier).
+    // The hero owns a separate resident slot so the first row is billed at 256.
+    // The shared scheduler's in-flight pixel reservation still uses the 512 cap.
     // Hero demand does not depend on `showArtwork`.
     //
     // `showArtwork` describes the CARD lane: a text layout (level 6-9) renders rows
@@ -3081,8 +3075,11 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     // So the hero is driven by its own signal: the panel's measured tier (`demand.heroEdge`,
     // withdrawn as `undefined` when the panel leaves or the hero scrolls offscreen) plus the
     // persistent-artwork lease.
-    const heroDesired = keepPersistentArtwork && Boolean(playlist) && Boolean(demand?.heroEdge)
+    const heroDescriptor = playlist?.tracks[0]
+    const heroDesired = keepPersistentArtwork && heroDescriptor?.available && Boolean(demand?.heroEdge)
     const heroEdge = heroDesired ? wantedHeroEdge() : undefined
+    const heroSourcePath = heroDescriptor && normalizeAudioSourcePath(heroDescriptor.sourcePath)
+    const heroRevision = playlist ? playlistArtworkRevision(playlist) : 0
     const heroBytes = heroEdge !== undefined ? playlistArtworkBytes(heroEdge) : 0
     const requiredBytes = requiredBytesForRows + heroBytes
     const oldReplacementBytes = [...playlistPendingReplacementRef.current.values()]
@@ -3130,8 +3127,8 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     const residentIds = new Set([...desiredIds, ...warmIds])
     // The hero tier participates in the key: a viewport change moves only the tier, and without
     // it here the early return below would skip the recompute entirely.
-    const heroTierForKey = playlistArtworkDemandRef.current?.heroEdge ?? 0
-    const windowKey = `${playlistScopeEpochRef.current}\u0000${scope}\u0000${keepPersistentArtwork}\u0000${heroTierForKey}\u0000${[...visibleIds].join('\u0000')}\u0001${[...heldIds].join('\u0000')}\u0002${budgetedIds.map((id) => `${id}:${normalizeAudioSourcePath(descriptorsById.get(id)?.sourcePath ?? '')}`).join('\u0000')}\u0003${[...warmIds].join('\u0000')}`
+    const heroKey = heroEdge === undefined ? '' : JSON.stringify([heroEdge, heroDescriptor?.id, heroSourcePath, heroRevision])
+    const windowKey = `${playlistScopeEpochRef.current}\u0000${scope}\u0000${keepPersistentArtwork}\u0000${heroKey}\u0000${[...visibleIds].join('\u0000')}\u0001${[...heldIds].join('\u0000')}\u0002${budgetedIds.map((id) => `${id}:${normalizeAudioSourcePath(descriptorsById.get(id)?.sourcePath ?? '')}`).join('\u0000')}\u0003${[...warmIds].join('\u0000')}`
     if (playlistVisualWindowKeyRef.current === windowKey) return
     playlistVisualWindowKeyRef.current = windowKey
     // Hero withdrawal. `heroEdge === undefined` means the hero is not on screen
@@ -3201,9 +3198,6 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     // The hero's own read. Same session, same scheduler, own slot: the tier it
     // asks for never appears in a row job above, and its publication never lands
     // in `playlistTrackVisualsRef`.
-    const heroDescriptor = playlist?.tracks.find((candidate) => candidate.available)
-    const heroSourcePath = heroDescriptor ? normalizeAudioSourcePath(heroDescriptor.sourcePath) : undefined
-    const heroRevision = playlist ? playlistArtworkRevision(playlist) : 0
     const heroWanted = Boolean(heroEdge !== undefined
       && playlist
       && heroDescriptor
@@ -3211,7 +3205,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       // A hero identity whose one automatic recovery is spent must not be
       // re-admitted by the next demand pass; only a new identity re-arms it.
       && playlistHeroSettledRef.current.get(heroSlotId(heroDescriptor.id)) !== heroDisplayIdentity({
-        scope, trackId: heroDescriptor.id, sourcePath: heroSourcePath!, artworkRevision: heroRevision,
+        scope, trackId: heroDescriptor.id, sourcePath: heroSourcePath, artworkRevision: heroRevision,
       })
       && (!playlistHeroVisualRef.current?.coverThumbnail
         || playlistHeroEdgeRef.current !== heroEdge
@@ -3220,12 +3214,13 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
         || playlistHeroSourceRef.current?.sourcePath !== heroSourcePath
         || playlistHeroSourceRef.current?.artworkRevision !== heroRevision))
     void backendWindowGeneration.then((backendGeneration) => {
-      playlistCoverBackendGenerationRef.current = backendGeneration
       if (
         playlistVisualGenerationRef.current !== generation
         || playlistScopeEpochRef.current !== playlistEpoch
         || playlistScopeRef.current !== scope
+        || playlistVisualWindowKeyRef.current !== windowKey
       ) return
+      playlistCoverBackendGenerationRef.current = backendGeneration
       const jobs: PlaylistVisualHydrationJob[] = []
       for (const trackId of budgetedIds) {
         const descriptor = descriptorsById.get(trackId)
@@ -3267,12 +3262,17 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
       }
       playlistVisualHydrationQueueRef.current = jobs
       pumpPlaylistVisualHydration()
-      if (heroWanted && heroDescriptor && heroSourcePath) {
-        // Re-check after the await: the demand may have been withdrawn while the
-        // backend session was being created.
-        if (playlistScopeEpochRef.current !== playlistEpoch || playlistScopeRef.current !== scope) return
+      if (heroWanted && heroDescriptor && heroSourcePath && heroEdge !== undefined) {
+        const activeHero = playlistHeroActiveJobRef.current
+        if (activeHero?.generation === generation
+          && activeHero.playlistEpoch === playlistEpoch
+          && activeHero.scope === scope
+          && activeHero.trackId === heroDescriptor.id
+          && activeHero.normalizedSourcePath === heroSourcePath
+          && activeHero.artworkRevision === heroRevision
+          && activeHero.maxEdge === heroEdge) return
         startPlaylistHeroJob({
-          generation: playlistVisualGenerationRef.current,
+          generation,
           playlistEpoch,
           backendGeneration,
           scope,
@@ -3280,7 +3280,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
           sourcePath: heroDescriptor.sourcePath,
           normalizedSourcePath: heroSourcePath,
           artworkRevision: heroRevision,
-          maxEdge: heroEdge!,
+          maxEdge: heroEdge,
         })
       }
     }).catch(() => {

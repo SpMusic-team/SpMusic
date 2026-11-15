@@ -52,7 +52,7 @@ function runtimeBindings(source) {
 }
 
 async function harness(options = {}) {
-  const { trackCount = 3, pixel = 'pixels', path = 'ready', queryPermitWidth, holdPath } = options
+  const { trackCount = 3, pixel = 'pixels', path = 'ready', queryPermitWidth, holdPath, beginCoverWindow, firstAvailable = true } = options
   const frames = new Map()
   let frameSequence = 0
   const effects = []
@@ -93,7 +93,7 @@ async function harness(options = {}) {
       id: `track-${index}`,
       sourcePath: `/music/album/${index}.flac`,
       fileName: `${index}.flac`,
-      available: true,
+      available: index > 0 || firstAvailable,
       trackId: `track-${index}`,
       durationMs: 1000,
       title: `Track ${index}`,
@@ -218,7 +218,7 @@ async function harness(options = {}) {
     },
     isPlaylistCoverDecoded: () => true,
     decodePlaylistCover: async () => {},
-    beginAudioPlaylistCoverWindow: async () => 5,
+    beginAudioPlaylistCoverWindow: beginCoverWindow ?? (async () => 5),
     queryPlaylistDecodePermitWidth: queryPermitWidth ?? (async () => 2),
     getLibraryFolders: async () => {
       libraryCalls += 1
@@ -647,7 +647,7 @@ async function harness(options = {}) {
     render()
     await flush()
   }
-  const selected = await api.selectSessionPlaylistTrack(scope, 'track-0')
+  const selected = await api.selectSessionPlaylistTrack(scope, firstAvailable ? 'track-0' : 'track-1')
   await flush()
   for (let round = 0; round < 20 && !api.activePlaylistScope; round += 1) {
     render()
@@ -1056,4 +1056,49 @@ test('withdrawing the hero tier releases the high-tier publication', async () =>
     // The rows are independent of the hero and must survive its withdrawal.
     assert(h.api().playlistTrackVisuals['track-1']?.coverThumbnail, 'the rows keep their preview')
   } finally { h.unmount() }
+})
+
+test('a delayed cover session starts only the latest hero demand', async () => {
+  for (const lastEdge of [1024, undefined]) {
+    let resolveWindow
+    const windowGeneration = new Promise((resolve) => { resolveWindow = resolve })
+    const h = await harness({ beginCoverWindow: () => windowGeneration })
+    try {
+      assert(h.activated, 'the playlist can activate while the cover window is pending')
+      const trackIds = sources0(h).map((track) => track.id)
+      const demand = (visibleIds, heroEdge) => h.api().setVisiblePlaylistTrackIds(visibleIds, true, true, {
+        visibleIds, prefetchIds: [], heldIds: [], coverCssPixels: 128, dpr: 1, heroEdge,
+      })
+      demand(trackIds, 1536)
+      demand(trackIds.slice(1), 1536)
+      demand(trackIds, lastEdge)
+      assert.equal(h.pathRequests.length, 0)
+      resolveWindow(5)
+      await h.flush()
+      assert.deepEqual(
+        h.pathRequests.filter(({ kind }) => kind === 'cover').map(({ input }) => input.maxEdge),
+        lastEdge === undefined ? [] : [lastEdge],
+      )
+      assert.equal(h.api().playlistHeroPublication?.edge, lastEdge)
+    } finally {
+      resolveWindow(5)
+      h.unmount()
+    }
+  }
+})
+
+test('an unavailable first row never starts a hero read for a later row', async () => {
+  const h = await harness({ firstAvailable: false })
+  try {
+    assert(h.activated, 'the available second track activates the fixture playlist')
+    const visibleIds = sources0(h).map((track) => track.id)
+    h.api().setVisiblePlaylistTrackIds(visibleIds, true, true, {
+      visibleIds, prefetchIds: [], heldIds: [], coverCssPixels: 128, dpr: 1, heroEdge: 1536,
+    })
+    await h.flush()
+    assert.equal(h.api().playlistHeroPublication, undefined)
+    assert.deepEqual(h.pathRequests.filter(({ kind }) => kind === 'cover'), [])
+  } finally {
+    h.unmount()
+  }
 })

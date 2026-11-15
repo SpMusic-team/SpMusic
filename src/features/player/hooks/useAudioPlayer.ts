@@ -3013,7 +3013,18 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
     // Neither budget constant moves (the reservation split is not a licence to
     // enlarge 64 MiB, and the in-flight figure stays derived from 512 because the
     // hero travels the path lane and falls back to pixels, not to its own tier).
-    const heroDesired = keepPersistentArtwork && showArtwork && Boolean(playlist)
+    // Hero demand does not depend on `showArtwork`.
+    //
+    // `showArtwork` describes the CARD lane: a text layout (level 6-9) renders rows
+    // without covers, so the card lane must stay off. The hero is not a card — it keeps
+    // its own publication and stays on screen at full width in those layouts. Tying the
+    // two together meant switching the song list to a text layout quietly dropped the
+    // detail hero to the 256 row preview and stopped issuing hero reads entirely.
+    //
+    // So the hero is driven by its own signal: the panel's measured tier (`demand.heroEdge`,
+    // withdrawn as `undefined` when the panel leaves or the hero scrolls offscreen) plus the
+    // persistent-artwork lease.
+    const heroDesired = keepPersistentArtwork && Boolean(playlist) && Boolean(demand?.heroEdge)
     const heroEdge = heroDesired ? wantedHeroEdge() : undefined
     const heroBytes = heroEdge !== undefined ? playlistArtworkBytes(heroEdge) : 0
     const requiredBytes = requiredBytesForRows + heroBytes

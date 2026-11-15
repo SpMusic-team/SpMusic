@@ -862,14 +862,29 @@ export function PlaylistPanel({
         .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
       const orderedEntries = orderPlaylistArtworkRows(entries, direction)
       if (!layout.showArtwork) {
-        // Returning to artwork must republish even if geometry/IDs are equal to
-        // the last cover layout; the player may have expired its warm leases.
+        // Returning to artwork must republish even if geometry/IDs are equal to        // the last cover layout; the player may have expired its warm leases.
         artworkWindowKeyRef.current = ''
         const orderedIds = orderedEntries.map((entry) => entry.trackId)
-        const windowKey = orderedIds.join('\u0000')
+        // The owner participates: a click hands the panel to a different artwork owner
+        // without changing a single id, and that new owner must still receive the hero
+        // tier or its hero lane never starts.
+        const windowKey = `${artworkOwnerId}\u0000${heroTier ?? 0}\u0000${orderedIds.join('\u0000')}`
         if (metadataWindowKeyRef.current === windowKey) return
         metadataWindowKeyRef.current = windowKey
-        onVisibleTrackIdsChange(orderedIds, true, false)
+        // A text layout renders no cards, so `showArtwork` is false — but the hero is not a
+        // card: it keeps its own publication and must keep its measured tier. Omitting the
+        // demand here used to mean "no hero wanted", which cleared the hero lane and left
+        // the detail hero on the 256 row preview for as long as the text layout was active.
+        // `coverCssPixels`/`dpr` describe the absent cards, so they are reported as the
+        // resting values; only `heroEdge` is meaningful in this layout.
+        onVisibleTrackIdsChange(orderedIds, true, false, {
+          visibleIds: orderedIds,
+          prefetchIds: [],
+          heldIds: [],
+          coverCssPixels: 128,
+          dpr: window.devicePixelRatio || 1,
+          heroEdge: heroTier,
+        })
         return
       }
       // Geometry is recalculated on scroll as well as layout changes: the

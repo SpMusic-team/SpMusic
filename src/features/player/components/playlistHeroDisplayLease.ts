@@ -45,6 +45,7 @@ import type { CoverPresentation } from '@/features/player/model/playlistCoverRea
 
 /** 一条头图发布中，显示层需要保留的最少字段。 */
 export type HeroLeasePublication = Readonly<{
+  owner?: unknown
   /** 该发布所在的 hero 键（由行键派生）。 */
   heroKey: string
   /** `heroDisplayIdentity` 五元组字符串。诊断与代次判定用。 */
@@ -57,6 +58,7 @@ export type HeroLeasePublication = Readonly<{
 
 /** 租约持有的显示快照。 */
 export type HeroDisplayLease = Readonly<{
+  owner?: unknown
   heroKey: string
   identity: string
   image: PlaylistCoverImage
@@ -72,6 +74,7 @@ export type HeroLeaseDecision = Readonly<{
 
 function asLease(publication: HeroLeasePublication): HeroDisplayLease {
   return {
+    owner: publication.owner,
     heroKey: publication.heroKey,
     identity: publication.identity,
     image: publication.image,
@@ -91,8 +94,7 @@ function asLease(publication: HeroLeasePublication): HeroDisplayLease {
  *    租约（交接窗口内，两者是同一张封面资源）。
  * 3. **其余** → 无头图。真的切到别的歌单时，旧图必须立刻消失。
  *
- * `currentHeroKey === undefined` 表示「面板此刻还没有可用首曲」，不是「换了详情页」：
- * 此时不做切换判断（保持租约），否则每次重挂载都会白丢一张好图。
+ * 没有当前键或当前 owner 时，不能确认租约仍适用于当前详情。
  *
  * 纯函数：不读写 ref、不触发渲染、不释放 URL。所有状态迁移留在调用点，因此每种
  * 迁移都能用 `node --test` 直接断言，无需浏览器。
@@ -104,11 +106,12 @@ export function decideHeroLease(input: {
   publication: HeroLeasePublication | undefined
   /** 面板按首曲行键派生出的 hero 键。 */
   currentHeroKey: string | undefined
+  currentOwner?: unknown
 }): HeroLeaseDecision {
-  const { lease, publication, currentHeroKey } = input
+  const { lease, publication, currentHeroKey, currentOwner } = input
   if (publication) return { render: asLease(publication), fromOwner: true }
   if (!lease) return { render: undefined, fromOwner: false }
-  if (currentHeroKey !== undefined && lease.heroKey !== currentHeroKey) {
+  if (!currentHeroKey || lease.heroKey !== currentHeroKey || !currentOwner || lease.owner === currentOwner) {
     return { render: undefined, fromOwner: false }
   }
   return { render: lease, fromOwner: false }
@@ -139,7 +142,7 @@ export function isSameHeroLease(
 ): boolean {
   if (left === right) return true
   if (!left || !right) return false
-  if (left.heroKey !== right.heroKey) return false
+  if (left.heroKey !== right.heroKey || left.owner !== right.owner) return false
   if (left.identity !== right.identity) return false
   if (left.image.src !== right.image.src) return false
   // The token is what makes a later DOM report attributable, so a new publication

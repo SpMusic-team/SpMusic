@@ -35,7 +35,7 @@ import type { PlayerPlaybackViewModel, PlayerTimelineViewModel, PlayerPlaylistVi
 import { heroPlaylistArtworkKey, isHeroArtworkKey, type PlaylistArtworkSnapshot, type PlaylistArtworkSource } from '@/features/player/model/playlistArtworkStore'
 import type { PlaylistCoverImage as PlaylistCoverImageResource } from '@/features/player/model/playerUiViewModel'
 import type { CoverPresentation } from '@/features/player/model/playlistCoverReadiness'
-import type { HeroDisplayLease, HeroLeasePublication } from '@/features/player/components/playlistHeroDisplayLease'
+import { decideHeroLease, type HeroDisplayLease, type HeroLeasePublication } from '@/features/player/components/playlistHeroDisplayLease'
 
 type PlaylistPanelProps = {
   deleteScope?: string | null
@@ -102,7 +102,8 @@ type PlaylistPanelProps = {
    * and to know when the current owner has published and the hold may end. Never
    * called with a row fallback snapshot.
    */
-  onHeroPublicationChange?: (publication: HeroLeasePublication | undefined) => void
+  onHeroPublicationChange?: (publication: HeroLeasePublication | undefined, owner: unknown, heroKey: string | undefined) => void
+  onHeroPublicationError?: (publication: HeroDisplayLease) => void
   onEntrySettled?: () => void
   playback: PlayerPlaybackViewModel
   timeline: PlayerTimelineViewModel
@@ -128,6 +129,7 @@ type HeroArtworkSnapshot = Readonly<{
   heroLane: boolean
   /** Hero key derived from the first row's key. */
   heroKey: string | undefined
+  missing?: boolean
   /**
    * The owner's hero publication, and only that.
    *
@@ -216,6 +218,7 @@ function useHeroArtwork(
     const publication: HeroLeasePublication | undefined = hero?.coverThumbnail && hero.presentation && heroKey
       ? {
           heroKey,
+          owner: source?.store,
           identity: hero.presentation.token.identity,
           image: hero.coverThumbnail,
           presentation: hero.presentation,
@@ -227,8 +230,8 @@ function useHeroArtwork(
     if (row?.coverThumbnail) {
       return { image: row.coverThumbnail, presentation: row.presentation, heroLane: false, heroKey, publication: undefined }
     }
-    return { ...NO_HERO_ARTWORK, heroKey }
-  }, [hero, row, heroKey])
+    return { ...NO_HERO_ARTWORK, heroKey, missing: hero?.hasLocalArtwork === false || row?.hasLocalArtwork === false }
+  }, [hero, row, heroKey, source?.store])
 }
 
 /**
@@ -239,18 +242,14 @@ function useHeroArtwork(
  * image is only ever shown for the key it was published under, which is why the hold
  * cannot leak into another playlist — or into a row, since rows never read this.
  *
- * `currentHeroKey === undefined` means the panel has no first track *at this instant*,
- * not that the page changed: that is exactly what a handover looks like for the frame
- * or two before the incoming owner has rows. Dropping the hold there is what produced
- * a single 256px frame in the middle of the transition, so it must stay.
+ * A concrete matching key and a different owner establish an active handover.
  */
 function useApplicableHeroHold(
   hold: HeroDisplayLease | undefined,
   currentHeroKey: string | undefined,
+  owner: unknown,
 ): HeroDisplayLease | undefined {
-  return useMemo(() => (
-    hold && (currentHeroKey === undefined || hold.heroKey === currentHeroKey) ? hold : undefined
-  ), [hold, currentHeroKey])
+  return decideHeroLease({ lease: hold, publication: undefined, currentHeroKey, currentOwner: owner }).render
 }
 
 // Intrinsic line-count shapes cover both tile and extended metadata layouts.
@@ -453,6 +452,7 @@ export function PlaylistPanel({
   heroLease,
   artworkOwnerKey,
   onHeroPublicationChange,
+  onHeroPublicationError,
   onEntrySettled,
   playback,
   timeline,
@@ -1010,16 +1010,18 @@ export function PlaylistPanel({
   // the first row's visual. `firstTrack` is only the *identity* of the track whose
   // cover the hero shows; its `coverThumbnail` is the ordinary row image and is
   // never rendered at hero size (plan §2, invariant: no row record exceeds 256).
-  const heroArtwork = useHeroArtwork(artworkSource, firstTrack?.id)
+  const heroTrackId = firstTrack && !unavailable.has(firstTrack.id) ? firstTrack.id : undefined
+  const heroArtwork = useHeroArtwork(artworkSource, heroTrackId)
   // Hand the current owner's hero publication up to the display layer, which owns
   // the sticky hold across an owner handover (plan §3). Reported only when it is
   // really a hero publication: a row fallback carries the row's token and must
   // never be held as if the hero had published it.
   const heroPublication = heroArtwork.publication
-  useEffect(() => {
-    onHeroPublicationChange?.(heroPublication)
-  }, [heroPublication, onHeroPublicationChange])
-  useLayoutEffect(() => () => onHeroPublicationChange?.(undefined), [onHeroPublicationChange])
+  const currentHeroKey = heroArtwork.missing ? undefined : heroArtwork.heroKey
+  const heroOwner = artworkSource?.store
+  useLayoutEffect(() => {
+    if (isPresent) onHeroPublicationChange?.(currentHeroKey ? heroPublication : undefined, heroOwner, currentHeroKey)
+  }, [currentHeroKey, heroOwner, heroPublication, isPresent, onHeroPublicationChange])
   // What the hero actually renders.
   //
   // Precedence is: the owner's own hero publication, then a hold from a previous
@@ -1029,9 +1031,13 @@ export function PlaylistPanel({
   // handover, because the incoming owner publishes rows long before its hero tier
   // arrives. Only the hold's own hero key may be substituted, and only when it
   // describes the page on screen.
-  const heldHero = useApplicableHeroHold(heroLease, heroArtwork.heroKey)
+  const heldHero = useApplicableHeroHold(heroLease, currentHeroKey, heroOwner)
   const heroImage = heroArtwork.heroLane ? heroArtwork.image : (heldHero ?? heroArtwork).image
-  const heroPresentation = heroArtwork.heroLane ? heroArtwork.presentation : (heldHero ?? heroArtwork).presentation
+  const heroPresentation = heroArtwork.heroLane ? heroArtwork.presentation : heldHero ? undefined : heroArtwork.presentation
+  const handleHeroPublicationError = () => {
+    const failed = heroArtwork.heroLane ? heroPublication : heldHero
+    if (failed) onHeroPublicationError?.(failed)
+  }
   // The hero and menu covers are the only surfaces that render `firstTrack`'s
   // snapshot directly instead of reading a card's artwork store, so they have to
   // hand the element the owner's published token themselves.
@@ -1126,7 +1132,7 @@ export function PlaylistPanel({
           searchOpen={searchOpen} onSearch={handleSearchToggle}
           selectMode={selectMode} onSelect={handleSelectModeToggle}
           more={<PlaylistHeroMoreMenu title={playlistName ?? appCopy.playlistPage.title} count={tracks.length} totalClock={totalClock} durationDetail={totalDurationDetail}
-            artwork={heroImage ? <PlaylistCoverImage image={heroImage} presentation={heroPresentation} />
+            artwork={heroImage ? <PlaylistCoverImage image={heroImage} presentation={heroPresentation} onError={handleHeroPublicationError} />
               : firstTrackCoverSource ? <img src={firstTrackCoverSource} alt="" decoding="async" onError={handleHeroCoverError} /> : null} />}
         />
       </motion.div>
@@ -1190,7 +1196,7 @@ export function PlaylistPanel({
         titleLayoutId={sharedScope ? `playlist-library-name:${sharedScope}` : undefined}
         transition={returnTransition}
         artwork={heroImage ? <PlaylistCoverImage className="playlist-hero-image" image={heroImage}
-          presentation={heroPresentation} />
+          presentation={heroPresentation} onError={handleHeroPublicationError} />
           : firstTrackCoverSource ? <img className="playlist-hero-image" src={firstTrackCoverSource} alt="" aria-hidden="true" decoding="async" onError={handleHeroCoverError} /> : null}
         category={<Button type="button" className="playlist-hero-category" size="sm" variant="ghost" aria-current="page"
           aria-label={library ? "返回播放列表管理" : undefined} onClick={library?.onOpen ?? (() => panelRef.current?.focus({ preventScroll: true }))}>

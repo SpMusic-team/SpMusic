@@ -67,7 +67,12 @@ import {
   type HeroDisplayLease,
   type HeroLeasePublication,
 } from '@/features/player/components/playlistHeroDisplayLease'
-import { releasePlaylistCoverUrl } from '@/features/player/model/playlistCoverReadiness'
+import {
+  COVER_IMAGE_ERROR_EVENT,
+  coverImageEventDetail,
+  isCurrentCoverReport,
+  releasePlaylistCoverUrl,
+} from '@/features/player/model/playlistCoverReadiness'
 import type { PlaylistCoverImage } from '@/features/player/model/playerUiViewModel'
 
 // A resolved source-less stream uses the existing cover fallback. It can own
@@ -123,9 +128,8 @@ type PlaylistWindowOwners = { active: symbol | null; closing: symbol | null }
  * the image" risk without touching any existing `deleteScope` consumer.
  *
  * It only ever describes the hero. It is never consulted for a row, holds no
- * track-id index, and neither creates nor revokes a URL — the publishing owner
- * keeps ownership throughout. Whether a held image may be shown is decided per
- * render by the panel, which is the only place that knows the current hero key.
+ * track-id index, and privately copies revocable blob URLs. The panel uses the
+ * current hero key and owner to decide when the hold is eligible for display.
  */
 function useHeroDisplayHold() {
   const holdRef = useRef<HeroDisplayLease | undefined>(undefined)
@@ -133,52 +137,83 @@ function useHeroDisplayHold() {
   // URLs this hold owns privately, so a releasing owner cannot invalidate them.
   // At most one is ever live: a new copy replaces the old one immediately below.
   const copyRef = useRef<string | undefined>(undefined)
+  const pendingCopyRef = useRef<HeroDisplayLease | undefined>(undefined)
+  const clear = useCallback(() => {
+    holdRef.current = undefined
+    pendingCopyRef.current = undefined
+    releasePlaylistCoverUrl(copyRef.current)
+    copyRef.current = undefined
+    setHold(undefined)
+  }, [])
   /**
    * Remember a publication the current owner just made.
    *
-   * Deliberately ignores `undefined`: an owner that has published nothing for the
-   * hero is either mid-handover (the window this hold exists for) or has nothing to
-   * show (in which case there is also nothing worth keeping). Clearing on it would
-   * defeat the whole mechanism, and the held image is dropped anyway once the panel
-   * reports a different hero key.
+   * An empty publication can bridge only a change of owner for the same key.
    */
-  const record = useCallback((publication: HeroLeasePublication | undefined) => {
-    if (!publication) return
+  const record = useCallback((publication: HeroLeasePublication | undefined, owner: unknown, heroKey: string | undefined) => {
+    if (!publication) {
+      const previous = holdRef.current
+      if (previous && (!heroKey || previous.heroKey !== heroKey || previous.owner === owner)) clear()
+      return
+    }
     const next = commitHeroLease(decideHeroLease({
       lease: undefined, publication, currentHeroKey: publication.heroKey,
     }))
     if (!next || isSameHeroLease(holdRef.current, next)) return
     holdRef.current = next
-    setHold(next)
+    pendingCopyRef.current = undefined
+    releasePlaylistCoverUrl(copyRef.current)
+    copyRef.current = undefined
     // A `blob:` image belongs to the owner that published it and is revoked when
     // that owner releases it — measured: two frames of the held hero loading from a
     // revoked URL during a handover. Take a private copy so the hold cannot outlive
     // the bitmap it points at. Asset URLs need none (`heroLeaseNeedsCopy`).
     if (heroLeaseNeedsCopy(next.image)) {
+      setHold(undefined)
+      pendingCopyRef.current = next
       void snapshotHeroLeaseImage(next.image).then((copied) => {
-        if (!copied || holdRef.current?.image.src !== next.image.src) {
+        if (!copied || pendingCopyRef.current !== next) {
           // Superseded (or the source was unreadable): nothing owns this copy.
           releasePlaylistCoverUrl(copied?.src)
           return
         }
-        releasePlaylistCoverUrl(copyRef.current)
+        pendingCopyRef.current = undefined
         copyRef.current = copied.src
-        const upgraded = { ...next, image: copied }
-        holdRef.current = upgraded
-        setHold(upgraded)
+        setHold({ ...next, image: copied })
       })
     } else {
-      // The image does not need a copy, so any previous one is now unreferenced.
-      releasePlaylistCoverUrl(copyRef.current)
-      copyRef.current = undefined
+      setHold(next)
     }
-  }, [])
+  }, [clear])
+  const invalidate = useCallback((publication: HeroDisplayLease) => {
+    const previous = holdRef.current
+    if (isSameHeroLease(previous, publication) || isSameHeroLease(pendingCopyRef.current, publication)
+      || (previous?.owner === publication.owner && previous?.identity === publication.identity
+        && copyRef.current === publication.image.src)) clear()
+  }, [clear])
+  useLayoutEffect(() => {
+    const handleError = (event: Event) => {
+      const held = holdRef.current
+      const presentation = held?.presentation
+      const report = coverImageEventDetail(event)
+      if (!held || !presentation || !report?.token) return
+      if (isCurrentCoverReport({
+        presentation,
+        identity: held.identity,
+        sessionGeneration: presentation.token.sessionGeneration,
+      }, { token: report.token, actualUrl: report.actualUrl, outcome: 'failed' })) clear()
+    }
+    window.addEventListener(COVER_IMAGE_ERROR_EVENT, handleError)
+    return () => window.removeEventListener(COVER_IMAGE_ERROR_EVENT, handleError)
+  }, [clear])
   // The copy belongs to the hold, so the hold is what releases it.
-  useEffect(() => () => {
+  useLayoutEffect(() => () => {
+    holdRef.current = undefined
+    pendingCopyRef.current = undefined
     releasePlaylistCoverUrl(copyRef.current)
     copyRef.current = undefined
   }, [])
-  return { hold, record }
+  return { hold, record, clear, invalidate }
 }
 
 /**
@@ -188,9 +223,7 @@ function useHeroDisplayHold() {
  * into a fresh object URL this hold owns, which means it is also this hold's job to
  * release it — `useHeroDisplayHold` does that on replacement and unmount.
  *
- * Returns `undefined` when the source cannot be read; the caller then keeps the
- * original image and simply accepts the (brief) window in which it may be revoked,
- * which is no worse than not holding at all.
+ * Returns `undefined` when the source cannot be read.
  */
 async function snapshotHeroLeaseImage(
   image: PlaylistCoverImage,
@@ -791,7 +824,10 @@ export function PlayerSurface({
   // The hero hold survives the panel's remount key on purpose: a track click can
   // change `deleteScope` on the queue/all-songs paths, and an owner handover is
   // exactly when the incoming owner has no hero image yet. See `useHeroDisplayHold`.
-  const { hold: heroHold, record: recordHeroPublication } = useHeroDisplayHold()
+  const { hold: heroHold, record: recordHeroPublication, clear: clearHeroPublication, invalidate: invalidateHeroPublication } = useHeroDisplayHold()
+  useLayoutEffect(() => {
+    if (!playlist.isOpen || playlist.library?.isOpen) clearHeroPublication()
+  }, [playlist.isOpen, playlist.library?.isOpen, clearHeroPublication])
   const searchOpen = viewModel.search?.isOpen ?? false
   const searchChange = viewModel.search?.onOpenChange
   const searchReturnFocus = useRef<HTMLElement | null>(null)
@@ -3389,6 +3425,7 @@ export function PlayerSurface({
               artworkOwnerKey={playlist.artworkSource?.store}
               heroLease={heroHold}
               onHeroPublicationChange={recordHeroPublication}
+              onHeroPublicationError={invalidateHeroPublication}
               fallbackArtworkSource={playlist.fallbackArtworkSource}
               unavailableTrackIds={playlist.unavailableTrackIds}
               playlistName={playlist.playlistName}

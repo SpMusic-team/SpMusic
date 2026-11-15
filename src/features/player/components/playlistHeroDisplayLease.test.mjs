@@ -44,8 +44,11 @@ const presentation = (src, publishGeneration = 1) => ({
   token: { key: 'a-0\u0000hero', identity: 'id', sessionGeneration: 1, publishGeneration, url: src },
 })
 const heroKey = (scope, id) => JSON.stringify([scope, id, `/audio/${scope}/${id}.flac`, 'hero'])
+const outgoingOwner = {}
+const incomingOwner = {}
 
 const publication = (overrides = {}) => ({
+  owner: outgoingOwner,
   heroKey: heroKey('m3u8\u0000/lists/a.m3u8', 'a-0'),
   identity: JSON.stringify(['playlist-hero', 'm3u8\u0000/lists/a.m3u8', 'a-0', '/audio/a/0.flac', 1]),
   edge: 1536,
@@ -68,7 +71,7 @@ describe('the hold only ever shows the page it was published for', () => {
   it('keeps the held image while the same page has no publication yet (the handover window)', () => {
     const p = publication()
     const lease = leaseOf(p)
-    const decision = decideHeroLease({ lease, publication: undefined, currentHeroKey: p.heroKey })
+    const decision = decideHeroLease({ lease, publication: undefined, currentHeroKey: p.heroKey, currentOwner: incomingOwner })
     assert.equal(decision.fromOwner, false, 'a hold is never attributed to the owner')
     assert.equal(decision.render, lease, 'the exact held snapshot is handed back')
   })
@@ -76,16 +79,22 @@ describe('the hold only ever shows the page it was published for', () => {
   it('drops the held image as soon as the page is a different one', () => {
     const lease = leaseOf(publication())
     const otherKey = heroKey('m3u8\u0000/lists/b.m3u8', 'b-0')
-    const decision = decideHeroLease({ lease, publication: undefined, currentHeroKey: otherKey })
+    const decision = decideHeroLease({ lease, publication: undefined, currentHeroKey: otherKey, currentOwner: incomingOwner })
     assert.equal(decision.render, undefined, 'a hold must never leak into another playlist')
   })
 
-  it('keeps holding through the frames where the panel has no first track yet', () => {
-    // `undefined` means "cannot tell yet" (rows not mounted), not "different page".
-    // Dropping it here produced a single 256px frame mid-handover in measurement.
+  it('drops a held image when no current first track confirms that it belongs here', () => {
     const lease = leaseOf(publication())
-    const decision = decideHeroLease({ lease, publication: undefined, currentHeroKey: undefined })
-    assert.equal(decision.render, lease)
+    const decision = decideHeroLease({ lease, publication: undefined, currentHeroKey: undefined, currentOwner: incomingOwner })
+    assert.equal(decision.render, undefined)
+  })
+
+  it('does not bring back a withdrawn or failed publication from the same owner', () => {
+    const p = publication()
+    const decision = decideHeroLease({
+      lease: leaseOf(p), publication: undefined, currentHeroKey: p.heroKey, currentOwner: outgoingOwner,
+    })
+    assert.equal(decision.render, undefined)
   })
 
   it('prefers the owner over a stale hold even when the identities differ', () => {
@@ -167,7 +176,7 @@ describe('the production wiring keeps the invariant visible', () => {
   it('the hold lives outside the panel remount key', () => {
     // The key is on `<OwnedPlaylistPanel ...>`; the hold hook must be called by
     // `PlayerSurface` itself, not inside the keyed subtree.
-    assert.match(surface, /const \{ hold: heroHold, record: recordHeroPublication \} = useHeroDisplayHold\(\)/)
+    assert.match(surface, /const \{ hold: heroHold, record: recordHeroPublication, [^\n]*\} = useHeroDisplayHold\(\)/)
     const keyed = surface.match(/key=\{playlist\.deleteScope[^\n]*\n/)
     assert.ok(keyed, 'the remount key still exists and was not removed')
     assert.doesNotMatch(panel, /useHeroDisplayHold/, 'the panel must not own the hold across its own remount')

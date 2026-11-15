@@ -7,6 +7,15 @@ const require = createRequire(import.meta.url)
 const ts = require('typescript')
 const source = readFileSync(new URL('./useAllSongsWindow.ts', import.meta.url), 'utf8')
 
+async function loadTestModule(url) {
+  const { outputText } = ts.transpileModule(readFileSync(url, 'utf8'), {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+  })
+  return import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`)
+}
+
+const readiness = await loadTestModule(new URL('../model/playlistCoverReadiness.ts', import.meta.url))
+
 async function harness(count = 100) {
   const effects = []
   const previousEffects = []
@@ -52,15 +61,12 @@ async function harness(count = 100) {
     return node
   }
   const orderPath = new URL('../model/playlistArtworkOrder.ts', import.meta.url)
-  const orderExports = existsSync(orderPath) ? await import(`data:text/javascript;base64,${Buffer.from(ts.transpileModule(readFileSync(orderPath, 'utf8'), {
-    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
-  }).outputText).toString('base64')}`) : {}
+  const orderExports = existsSync(orderPath) ? await loadTestModule(orderPath) : {}
+  const coverEvents = new EventTarget()
   globalThis.__allSongsWindowTest = {
-    // Real selector logic (pure: clientWidth × DPR, ceil to bucket). Returning a hero tier
-    // here proves the ordinary 256 lane is chosen by the call sites, not by the selector
-    // happening to agree.
-    selectHeroEdge: () => 1536,
+    ...readiness,
     ...orderExports,
+    window: coverEvents,
     useRef: value => refs[refIndex++] ?? (refs[refIndex - 1] = { current: value }),
     useEffect: (effect, deps) => {
       const index = effectIndex++
@@ -73,6 +79,10 @@ async function harness(count = 100) {
     useCallback: callback => callback,
     useMemo: factory => factory(),
     useSyncExternalStore: () => {},
+    isStreamSource: () => false,
+    attemptTrackThumbnailPath: async () => ({ status: 'fallback' }),
+    attemptFolderThumbnailPath: async () => ({ status: 'fallback' }),
+    notePathLanePresentationFailure: () => {},
     requestAnimationFrame: callback => { const id = ++frameSequence; frames.set(id, callback); return id },
     cancelAnimationFrame: id => frames.delete(id),
     beginAudioPlaylistCoverWindow: async () => { if (beginFailure) throw new Error('window unavailable'); return 1 },
@@ -90,7 +100,7 @@ async function harness(count = 100) {
     decodePlaylistCover: async () => {
       if (holdDecode) await new Promise(resolve => decodePending.push(resolve))
     },
-    URL: { revokeObjectURL: url => revoked.push(url) },
+    releasePlaylistCoverUrl: url => { if (url?.startsWith('blob:')) revoked.push(url) },
     IntersectionObserver: class {
       constructor(callback) { observer = callback }
       observe() {}

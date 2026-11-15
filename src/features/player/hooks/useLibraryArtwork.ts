@@ -63,7 +63,7 @@ function toPlaylistCoverEdge(edge: number): PlaylistCoverEdge {
  * Edge a detail/row cover may be read at.
  *
  * Rows and prefetch entries stay at 256; the hero may be promoted to a measured tier. The
- * union is named so the three maps below cannot drift apart (plan 搂5.3 T7).
+ * union is named so the three maps below cannot drift apart (plan §5.3 T7).
  */
 type PlaylistCoverEdge = 128 | 256 | 512 | HeroEdge
 type CacheEntry = { row: ArtworkRow; edge: number; trackId: string; artworkRevision: number }
@@ -769,7 +769,7 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
     //
     // The hero is seeded at its MEASURED tier rather than a fixed 512: this is the second
     // admission level, and its target value is the plan's only intended mechanism change
-    // (plan 搂5.4 L1, 搂2.1).
+    // (plan §5.4 L1, §2.1).
     const first = detail?.tracks[0]
     if (first?.available && first.id !== warmTrackId) {
       runtime.detailPaths.set(normalizeAudioSourcePath(first.sourcePath), selectHeroEdge())

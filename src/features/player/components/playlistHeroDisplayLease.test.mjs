@@ -33,7 +33,7 @@ async function loadLeaseModule() {
   return import(`data:text/javascript;base64,${Buffer.from(transpiled).toString('base64')}`)
 }
 
-const { decideHeroLease, commitHeroLease, isSameHeroLease, heroLeaseNeedsCopy } = await loadLeaseModule()
+const { decideHeroLease, commitHeroLease, isSameHeroLease, isStaleHeroPublication, heroLeaseNeedsCopy } = await loadLeaseModule()
 
 const surface = readFileSync(join(here, 'PlayerSurface.tsx'), 'utf8')
 const panel = readFileSync(join(here, 'PlaylistPanel.tsx'), 'utf8')
@@ -137,6 +137,20 @@ describe('the hold only ever shows the page it was published for', () => {
 })
 
 describe('committed lease state', () => {
+  it('does not re-label the previous owner publication after a source rescan', () => {
+    const before = publication({ displayRevision: 7 })
+    const oldSnapshotWithNewRevision = leaseOf({ ...before, displayRevision: 8 })
+    assert.equal(isStaleHeroPublication(leaseOf(before), oldSnapshotWithNewRevision), true)
+
+    const newSnapshot = leaseOf({
+      ...before,
+      displayRevision: 8,
+      presentation: presentation(before.image.src, 2),
+    })
+    assert.equal(isStaleHeroPublication(leaseOf(before), newSnapshot), false)
+    assert.equal(isStaleHeroPublication(leaseOf(before), leaseOf(before)), false)
+  })
+
   it('is cleared when nothing may be rendered, so a stale image cannot be reused', () => {
     const lease = leaseOf(publication())
     const dropped = commitHeroLease(decideHeroLease({

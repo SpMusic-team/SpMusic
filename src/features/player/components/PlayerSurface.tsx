@@ -65,6 +65,7 @@ import {
   heroLeaseMatchesDisplay,
   heroLeaseNeedsCopy,
   isSameHeroLease,
+  isStaleHeroPublication,
   type HeroDisplayLease,
   type HeroLeasePublication,
 } from '@/features/player/components/playlistHeroDisplayLease'
@@ -139,6 +140,7 @@ function useHeroDisplayHold(
   displayRevision: number | undefined,
 ) {
   const holdRef = useRef<HeroDisplayLease | undefined>(undefined)
+  const lastPublicationRef = useRef<HeroDisplayLease | undefined>(undefined)
   const [hold, setHold] = useState<HeroDisplayLease | undefined>(undefined)
   const [resuming, setResuming] = useState(false)
   const [previousRoute, setPreviousRoute] = useState(route)
@@ -176,7 +178,15 @@ function useHeroDisplayHold(
     const next = commitHeroLease(decideHeroLease({
       lease: undefined, publication: { ...publication, displayRevision }, currentHeroKey: publication.heroKey,
     }))
-    if (!next || isSameHeroLease(holdRef.current, next)) return
+    if (!next) return
+    if (isStaleHeroPublication(lastPublicationRef.current, next)) {
+      // A source rescan reaches the panel before the owner clears its old
+      // snapshot. Keep remembering its original revision even after clearing.
+      if (holdRef.current) clear()
+      return
+    }
+    lastPublicationRef.current = next
+    if (isSameHeroLease(holdRef.current, next)) return
     holdRef.current = next
     pendingCopyRef.current = undefined
     releasePlaylistCoverUrl(copyRef.current)
@@ -233,6 +243,7 @@ function useHeroDisplayHold(
   // The copy belongs to the hold, so the hold is what releases it.
   useLayoutEffect(() => () => {
     holdRef.current = undefined
+    lastPublicationRef.current = undefined
     pendingCopyRef.current = undefined
     releasePlaylistCoverUrl(copyRef.current)
     copyRef.current = undefined

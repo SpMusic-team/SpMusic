@@ -154,15 +154,30 @@ export function isSameHeroLease(
   left: HeroDisplayLease | undefined,
   right: HeroDisplayLease | undefined,
 ): boolean {
+  return left?.displayRevision === right?.displayRevision && isSameHeroPublication(left, right)
+}
+
+function isSameHeroPublication(
+  left: HeroDisplayLease | undefined,
+  right: HeroDisplayLease | undefined,
+): boolean {
   if (left === right) return true
   if (!left || !right) return false
   if (left.heroKey !== right.heroKey || left.owner !== right.owner) return false
-  if (left.identity !== right.identity || left.displayRevision !== right.displayRevision) return false
+  if (left.identity !== right.identity) return false
   if (left.image.src !== right.image.src) return false
   // The token is what makes a later DOM report attributable, so a new publication
   // of the same URL is still a different thing to remember.
   return left.presentation?.token.sessionGeneration === right.presentation?.token.sessionGeneration
     && left.presentation?.token.publishGeneration === right.presentation?.token.publishGeneration
+}
+
+/** The old owner snapshot can still be visible until its rescan effect runs. */
+export function isStaleHeroPublication(
+  last: HeroDisplayLease | undefined,
+  next: HeroDisplayLease,
+): boolean {
+  return last?.displayRevision !== next.displayRevision && isSameHeroPublication(last, next)
 }
 
 /**

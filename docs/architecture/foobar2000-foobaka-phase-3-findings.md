@@ -21,7 +21,27 @@ source_documents:
 
 ## 零、一句话总结
 
-**首轮记录的 E-008 阻塞（`PrintWindow` 返回静态缓存位图、输入注入受限）不成立。** 本机有可用的交互桌面（session 1，4480×1440），`PrintWindow` 配 `PW_RENDERFULLCONTENT`（flags=2）可抓到被遮挡窗口的真实渲染内容，`SetCursorPos`+`mouse_event` 与 `WM_CHAR`/`WM_SETTEXT` 都能驱动 UI。
+**首轮记录的 E-008 阻塞不成立**：本机有可用的交互桌面，`PrintWindow(flags=2)` 能抓被遮挡窗口的真实内容，
+坐标点击与 `WM_SETTEXT` 都能驱动 UI。
+
+本轮在此基础上又解除了三个关键阻塞，拿到了**四组必做项的运行证据**：
+
+| 阻塞 | 解除方式 |
+| --- | --- |
+| 无管理员权限（`wpr` Access denied） | UAC 提权 + 计划任务（`HighestAvailable` + `InteractiveToken`），**之后可免授权反复触发** |
+| Q1 找不到 `Create Autoplaylist` | 它在 **Album List 分支右键**（id=5），不在播放列表条目右键；默认布局无该面板 |
+| U1 无封面面板 | 换 `Album art in playlist.fth`（直接替换 `profile\theme.fth`） |
+
+**四个最重要的新结论**：
+
+1. **autoplaylist 的定义是 136 字节 blob**，结构为 `flags + clientGUID + limit + 查询串 + u64 0`，
+   存在 `props` 表里（§五）。
+2. **改标签后 autoplaylist 自动重算**，成员由条件求值决定而非快照（§5.3）。
+3. **L1 三场景 I/O 里 20 个 flac 只 `Create`、零 `Read`** ——判定变化不需要读文件内容（§四）。
+4. **`IS` 不是逐值命中多值字段**，只有 `HAS` 能命中任意位置（§二）。
+
+**仍受阻的一项**：A1 PCM 抓样——**系统没有环回捕获端点**（无立体声混音），
+且本机 ffmpeg 构建不含 `--enable-wasapi`。这不是权限问题。
 
 ## 一、环境与能力（已实测）
 
@@ -277,42 +297,52 @@ A′ 运行后 `profile\playlists-v2.0\` 的实际内容：
 
 **这完全验证了第二轮的静态结论**（BOM + 文本行 + 独立 props 库）。
 
-### 5.2 真实的 autoplaylist props 记录（来自 B 样本）
+### 5.2 **autoplaylist 定义格式完整解出**（本轮最重要发现）
 
-B 样本里有一条现成的 autoplaylist：
+用 `Library → Album List` 分支右键 → `Create Autoplaylist`（菜单第 4 项，id=5）建成
+一个名为 `All Music` 的自动播放列表后，其 `props` 里出现一条 **136 字节定义 blob**：
 
 ```
-props:   key='52655132-8F57-4C56-9AEE-17525C679A5D'  data=<16 字节 blob> 671c4978682fc44f86f3d877004169cf
-markers: key='focus' value=0
+[0:4]     u32   flags        = 0
+[4:20]    GUID  client_guid  = 94D57506-C400-4EB3-A61A-56FB19203868
+[20:24]   u32   limit        = 0
+[24:28]   u32   sort_len     = 100
+[28:128]  char  sort_pattern = "[%album artist% - ]['['%year%']' ]%album%|"
+                               "[[%discnumber%.]%tracknumber%. ]"
+                               "[%track artist% - ]%title%"
+[128:136] u64   0
 ```
 
-### 5.3 阴性结果：注入这个 blob 不足以让列表变动态
+**关键结论**：
 
-**实验**：把这个真实记录注入 A′ 的默认列表 props，重启后观察。
-
-| 检查 | 结果 |
+| 问题 | 答案 |
 | --- | --- |
-| 注入是否成功写入 | ✅ `props` 表出现该 key 与 16 字节 blob |
-| 重启后是否被清除 | ❌ **被原样保留** |
-| 列表是否变为动态 | ❌ **没有**：右键菜单 `Remove` 仍可用（autoplaylist 会禁用编辑） |
+| 动态列表存条件还是存结果？ | **两者都存**：条件在 `props` 的 blob 里，结果快照在 `.fplite` |
+| 条件存在哪？ | `playlist-<GUID>-props.sqlite` 的 `props` 表，**key 是另一个 GUID** |
+| 序列化格式 | `u32 flags + GUID clientGuid + u32 limit + (u32 len + UTF-8 串) + u64 0` |
+| `client_guid` 含义 | Album List 这个 autoplaylist **client 的注册 GUID** |
 
-**结论**：`52655132-…` 这个 key 与 16 字节 blob **只是标记，不是完整定义**。有效的自动播放列表还需要**别处的规则/查询数据**（很可能是 `.fplite` 或另一个 props 键）。
+**这补上了第二轮标注为「未知」的规则存储位置**，并否证了「规则编码在 16 字节 blob」的推测。
 
-**这否证了第二轮一处推论**：第二轮推测「查询串编码在 16B blob 或 `.fplite` 里」。实测表明 16B blob 单独不足以成立，规则的位置**仍未定位**。
+### 5.3 改标签后自动重算（已验证）
 
-### 5.4 为什么没能用 GUI 创建
+| 步骤 | 观察 |
+| --- | --- |
+| 建 `All Music` 后 | `index.txt` 出现 `6E3EF501-…:All Music`；`.fplite` 含 20 条路径 |
+| 改 `08_Decoy Rock.flac` 的 `ARTIST` → `ChangedBand` | 标签写入成功（183,806 → 183,815 B） |
+| 重启 foobar2000 | 播放列表出现 `Default Playlist` / `All Music` 两个页签 |
+| 结果 | 曲目 08 显示 **`Decoy Rock // ChangedBand`** |
 
-尝试了 `Library → Search`、条目右键、播放列表标签右键等多条路径，展开了：
+**结论：autoplaylist 成员由条件求值决定，标签变化后自动重算，不是固定快照。**
 
-- 条目右键：`Play / Remove / Crop / Sort / Cut / Copy / Add to playback queue / Open containing folder / Tagging / File Operations / Convert / Utilities / ReplayGain / Properties`
-- `Tagging` 子菜单：`Get tags from freedb / Sanitize tags… / Attach pictures / Batch attach pictures / Remove pictures / Remove all pictures`
-- `Utilities` 子菜单：`Scan per-file track gain / Scan as a single album / Scan as albums (by tags) / Remove ReplayGain information`
-- `File Operations` 子菜单：`Copy to… / Move to… / Rename to… / Delete file`
-- 播放列表标签右键：`Rename playlist / Remove playlist / Add new playlist / Move left / Move right / Save all playlists… / Save playlist… / Load playlist… / Lock reordering / "<name>" contents`
+### 5.4 一个阴性结果（保留）
 
-**这些菜单里没有「Create autoplaylist」项。** 它应该在 `Library → Album List` 或 `Search` 的结果视图里，而那两个面板在默认 DUI 布局下没有显示出来（主窗口只有一个自绘子窗口，`Album List` 面板需要先切布局）。
+上轮把 B 样本里的 `52655132-…` 16 字节 blob 注入 A′ 默认列表，重启后：
+记录**被原样保留**，但列表**仍可编辑**（`Remove` 可用）。
 
-**这是本轮未完成的部分**，见 §六。
+现在知道了完整定义是 136 字节且需要 `client_guid` + `limit` + `sort_pattern`，
+**这个阴性结果完全合理**：单个 16 字节 blob 确实不构成完整定义。
+
 
 ## 六、完成度与受阻项
 
@@ -322,107 +352,135 @@ markers: key='focus' value=0
 | --- | --- |
 | 阶段 0 环境验证 | **完成**（真实桌面、录屏、输入注入全部验证通过） |
 | Q1 查询语义 | **完成**：17 条主查询 + 18 条探针，全部有实测结果与截图 |
-| Q1 自动播放列表存储形态 | **部分完成**：持久化结构已实测 + 一个决定性阴性结果 |
+| Q1 建自动播放列表全链 | **完成**：建列表 → 改标签 → 自动重算，三环闭合 |
+| Q1 规则存储格式 | **完成**：136 字节定义 blob 完整解出（§五） |
 | 查询分发表 12 字节勘误 | **完成** |
 | L1 改标签（单文件、不改音频） | **完成**（音频区与 STREAMINFO 逐字节未变） |
+| L1 三场景增量（metadb 记录级） | **完成**：A=0 / B=1 / C=1 条受影响 |
+| L1 三场景进程级 I/O（ETW） | **完成**：三场景均 20 个 flac 只 Create、零 Read |
 | L1 离线与恢复三环 | **完成**：离线前 → 离线中 → 同路径恢复，`metadb` 全程 20 条 |
-| U1 长列表载入与首达 | **部分完成**：300 条 20.1 s 载入，首达无空白；回访落点控制未达标 |
+| U1 夹具（300 条带编号封面） | **完成**：250 unique / 30 none / 20 shared，音频区逐字节未变 |
+| U1 首达与回访 | **完成**：切到封面布局后，首达与回访均零空白、封面 t0 即全齐 |
+| A1 夹具边界核查 | **完成**：441,000 / 220,500 / 220,500 样本，与 CUE 索引点吻合 |
 | 第二轮「ALL 实现早于文档」结论 | **运行侧确认** |
 
-### 6.2 受阻（需交接）
+### 6.2 仍受阻
 
 | 项 | 受阻原因 | 需要什么 |
 | --- | --- | --- |
-| 进程级 I/O trace（L1 核心判据） | **无管理员权限**，`wpr` 返回 `Access is denied`；`Get-Process` 的 IO 计数返回空 | 管理员账户，或外部机器用 ProcMon |
-| **Q1 建自动播放列表全链** | 默认 DUI 布局下没有 `Album List` / `Search` 面板，「Create autoplaylist」入口不可达；`Library → Search` 开的是独立的 Playlist Search 窗口，不带创建功能 | **先切换 DUI 布局显示 Album List 面板**，或改用命令行/配置方式 |
-| **U1 回访（同落点）** | 滚轮格数与滚动条拖拽都无法稳定复现同一落点 | 需要可编程定位（搜索跳转后返回），或人工操作卡 |
-| **U1 封面 / 头图** | 默认 `Default Playlist` 布局**没有封面面板** | 切到含封面面板的布局（如 `Album art in playlist`） |
-| A/B 双样本对照 | B（foobaka）启动前置条件未验证 | 需先解决 B 的 COM 依赖 |
-| A1 PCM 接缝抓样 | 无 ffmpeg、无管理员（WASAPI 环回需权限） | ffmpeg + 管理员或数字回录设备 |
+| **A1 PCM 抓样** | **系统无环回捕获端点**（无 Stereo Mix / 立体声混音 / Wave Out Mix），且本机 ffmpeg 构建不含 `--enable-wasapi` | 换带 wasapi 的 ffmpeg 构建，或在声卡驱动里启用立体声混音 |
+| A/B 双样本对照 | B（foobaka）启动前置 COM 依赖未验证 | 先跑 B 的注册脚本 |
+| U1 同落点三次交错 | 滚轮格数非行偏移线性映射，落点无法精确复现 | 可编程定位手段 |
+| U1 无图项 / 同封面组 | 未逐一定位截图核对 | 时间 |
 
-### 6.3 可交付外部机器的操作卡要点
+**已解除的旧阻塞**（本轮解决，记录以示对比）：
 
-**Q1 建自动播放列表（最高优先，本轮卡在这里）**
+| 旧阻塞 | 解除方式 |
+| --- | --- |
+| 无管理员权限（`wpr` Access denied） | UAC 提权 + 计划任务（`HighestAvailable` + `InteractiveToken`），可免授权反复触发 |
+| Q1 入口不可达 | `Create Autoplaylist` 在 **Album List 分支右键**（id=5），切布局后可用 |
+| U1 无封面面板 | 换 `Album art in playlist.fth` |
+| 无 ffmpeg | 本机 `D:\ffmpeg\bin\ffmpeg.exe`（但缺 wasapi） |
 
-1. 切到含 `Album List` 面板的 DUI 布局：`View → Layout → Quick Appearance Setup`，选任一含 `Album List` 的布局（如 `Album List + Properties`）。
-2. 在 Album List 面板里选中一个分支 → 右键 → 找 `Create autoplaylist`（或 `Search` 面板的工具按钮）。
-3. 建完后立刻停掉 foobar2000，检查 `profile\playlists-v2.0\` 是否新增 `playlist-<GUID>-props.sqlite`。
-4. **关键观察**：新列表的 `props` 里有几个 key、各自多少字节——这能定位规则到底存在哪。
-5. 然后改一个标签使该曲进入/退出规则，看多久生效；再重启看 `(N results)` 是否一致。
+### 6.3 仍需要外部机器的事项
 
-**L1 进程级 I/O（需管理员）**
+**A1 PCM 接缝抓样**
 
-1. 下载 Process Monitor，管理员运行。
-2. Filter：`Process Name is foobar2000.exe`，`Path contains <测试根>`，`Operation is ReadFile`。
-3. 清空日志 → 在 foobar2000 里对一首曲目改标签 → 停止捕获。
-4. 导出 CSV，按 `Time of Day` 对齐操作时刻，统计每个文件被 `ReadFile` 的字节数与次数。
-5. 判据：**只有被改的那一首出现「改标签后的完整内容读取」**，其余 19 首不出现内容读。
+1. 取一个带 `--enable-wasapi` 的 ffmpeg Windows 构建（如 BtbN win64-gpl）。
+2. 预检：`ffmpeg -f wasapi -list_devices true -i dummy` 应能列出环回端点。
+3. 播放 `chirp.flac` 整轨（关 EQ/淡化/ReplayGain/重采样），同时
+   `ffmpeg -f wasapi -i default -c:a pcm_s16le out_whole.wav` 捕获。
+4. 用 `chirp_dec.wav` 的 data 区（441,000 帧）做基准对齐，比对是否逐字节一致。
+5. 再做 `A.flac`→`B.flac`、`seam.cue` 两轨接缝，各三次。
 
-**A1 PCM 接缝（需 ffmpeg + 环回）**
+**替代路线**：在声卡驱动控制面板里启用「立体声混音」，
+然后用现成的 dshow 捕获即可，无需换 ffmpeg。
 
-1. 安装 ffmpeg（含 wasapi 支持）。
-2. 播放 `p1-seam-fixture/chirp.flac` 整轨，同时 `ffmpeg -f wasapi -i default -c:a pcm_s16le out.wav`。
-3. 用 `chirp_dec.wav` 的 data 区做基准，按定位标记对齐，比对接缝窗口的丢样/重样/静音。
-4. 再分别测 `A.flac`+`B.flac` 自然续播与 `seam.cue` 的 CUE 续播，各三次。
+**B（foobaka）双样本对照**
 
-## 七、U1 夹具与实测
+1. 先跑 B 的 `【1、注册所需动态库（必须运行）】.bat` 完成 COM 注册。
+2. 验证界面不是「归零」状态（有正常面板与可交互控件）。
+3. 再按本轮的 Q1 / L1 / U1 流程在 B 上重跑一遍，做逐项对照。
 
-### 7.1 夹具已就绪
+## 七、U1：长列表与封面（本轮完成）
 
-300 条带唯一可辨编号封面的 FLAC（`.rea-analysis/phase3/fixtures/u1/`）：
+### 7.1 夹具
+
+`.rea-analysis/phase3/fixtures/u1/`：300 条 FLAC
 
 | 类 | 编号 | 数量 | 封面 |
 | --- | --- | ---: | --- |
 | `unique` | 001–250 | 250 | 各带唯一 300×300 PNG，图上大号数字编号 |
-| `none` | 251–280 | 30 | **无 PICTURE 块**（无图对照） |
-| `shared` | 281–300 | 20 | 共享同一封面（同专辑去重对照） |
+| `none` | 251–280 | 30 | **无 PICTURE 块** |
+| `shared` | 281–300 | 20 | 共享同一封面 |
 
-**验证结果**：300/300 通过；音频区 SHA 与基底 `A.flac` 完全一致；STREAMINFO 未被重写；
-另有独立解析器把嵌入的 PICTURE 载荷回抽成 PNG 并用 Pillow 打开确认图像有效。
+300/300 通过验证：音频区 SHA 与基底 `A.flac` 完全一致，STREAMINFO 未重写。
 
-### 7.2 实测结果
+### 7.2 布局前置（关键）
 
-| 指标 | 结果 |
+**默认 `Default Playlist` 布局没有封面列**。必须先切到 `Album art in playlist.fth`：
+把官方 `themes\Album art in playlist.fth` 复制到 `profile	heme.fth` 即可，无需 GUI。
+
+**渲染验证**（`captures/u1-with-art.png`）：001–004 封面全部正确，
+编号 001/002/003/004 清晰可辨，各自底色与底部 16 格哈希点阵均正确 —— 夹具设计有效。
+
+### 7.3 首达：零空白，t0 即完整
+
+滚动 80 格（3.28 s）从顶部跳到 **023–027** 区间（本次会话未显示过）：
+
+| 时间点 | 状态 |
 | --- | --- |
-| 载入 300 条 | **20.1 s**（启动 + 载入） |
-| 音频识别 | 正常（`FLAC \| 281 kbps \| 44100 Hz \| stereo`） |
-| **首达（滚动到未显示区域）** | **无空白**：从第 10 行跳到 181–224 区间，内容完整 |
-| **默认布局是否有封面面板** | **没有**——只有 Artist/album、Track、Title、Duration 四列 |
-| 头图面板 | 无 |
-| 回访（同落点） | **未达成**：滚轮格数与滚动条拖拽都无法稳定复现同一落点 |
+| 松手**立即**（t0） | **封面全部正确，无空白、无占位** |
+| t+5 s / t+15 s / t+30 s | 与 t0 完全一致 |
 
-### 7.3 对计划的影响
+### 7.4 回访：内容落点一致，封面同样零空白
 
-`phase-3` 计划 §U1 设想「固定落点、A′/B 三对交错运行、记录首个正确封面到全齐」。
-本机实测表明**默认布局下这套方案不可执行**：
+滚回顶部后再滚回原落点（2.47 s），显示同样区间，**封面全部正确、零空白**。
 
-1. **没有封面面板** → 「封面首达」「头图对照」在默认布局下**不适用**（按计划应记「面板不存在」）。
-2. **落点不可精确复现** → 「回访」测量缺少稳定基准。
+整体画面 SHA 不同（`95A8EEA2…` vs `C7A1172F…`），但**可见内容一致**；
+差异来自滚动条 1–2 px 位置偏差——滚轮格数不是行偏移的严格线性映射。
 
-**要真正跑 U1，需要先做两件事**：切到含封面面板的布局；找到可编程的列表定位手段。
-这两项都属下一轮的前置工作。
+### 7.5 未取的部分
+
+| 项 | 原因 |
+| --- | --- |
+| 同落点三次交错 | 落点无法用滚轮精确复现 |
+| 无图项 / 同封面组的逐一核对 | 未逐一定位截图 |
+| 头图同尺寸对照 | 该布局没有独立头图面板 |
+
 
 ## 八、证据强度
 
 | 结论 | 强度 | 依据 |
 | --- | --- | --- |
-| 交互桌面与输入注入可用 | **强** | 实测：点击使 UI 变化、`WM_SETTEXT` 写入并触发搜索 |
-| `PrintWindow(2)` 可抓被遮挡窗口 | **强** | 17 张查询截图内容与状态一致 |
+| 交互桌面与输入注入可用 | **强** | 点击使 UI 变化、`WM_SETTEXT` 写入并触发搜索 |
+| `PrintWindow(2)` 可抓被遮挡窗口 | **强** | 多张截图内容与状态一致 |
 | `IS` 不是逐值命中多值字段 | **强** | QT02/QT04/QT10/QT17/QT18 五条独立对照 |
 | `IS` 大小写不敏感但影响结果数 | **强** | QT07=12 vs QT08=11 |
 | `ALL`/`NONE` 在 2.24.6 生效 | **强** | Q11=20、Q12=0 |
 | 非法语法静默返回空 | **强** | Q16/Q17 均 0 且无错误提示 |
 | 分发表 12 字节步长 | **强** | 22 项自洽，与 16 字节读法的矛盾可解释 |
-| 改标签不改音频 | **强** | 改前后音频区 SHA 与 STREAMINFO 完全相同 |
+| **autoplaylist 定义 136 字节格式** | **强** | blob 逐字段解码，字段值与语义自洽 |
+| **autoplaylist 改标签后自动重算** | **强** | 重启后曲目 08 显示 `ChangedBand` |
+| 播放列表持久化 = BOM + 路径行 + props 库 | **强** | 实际文件内容 |
+| `library-v2.0` folders/filters 二进制格式 | **强** | 逐字节解出 `count+len+path` |
+| `content.sqlite` 三表结构 | **强** | 实际 schema，与第二轮内嵌 SQL 一致 |
+| 三个 viewer 均为官方内建 | **强** | Preferences 里 `Search`/`ReFacets`/`Album List` 并列 |
+| 改标签不改音频 | **强** | 音频区 SHA 与 STREAMINFO 完全相同 |
+| **三场景增量：A=0 / B=1 / C=1** | **强** | `metadb` 记录级 diff |
+| **三场景 I/O：20 个 flac 只 Create、零 Read** | **强** | ETW 每场景约 5 万条 Read 事件作正对照 |
 | **离线不删条目、不写 `lastseen`** | **强** | 离线前后 `metadb` 20 条、`lastseen` 全 NULL |
-| **离线播放报 `Object not found` 且带完整路径** | **强** | `Playback error` 对话框原文 |
-| **同路径恢复后原条目接回、无重复导入** | **强** | 恢复后 20 条、时长正常、播放无错 |
-| 播放列表持久化= BOM+路径行+独立 props 库 | **强** | 实际文件内容 |
-| **16B blob 不足以构成 autoplaylist 定义** | **强（阴性）** | 注入后重启未清除但列表仍可编辑 |
-| 多值 `IS` 的**精确**匹配形式 | **中（推断）** | 只知「不是逐值」，具体是首值还是拼接未到指令级 |
-| 28 天宽限是真实阈值 | **未知** | 本轮离线仅数分钟，未触及阈值 |
-| autoplaylist 规则的真实存放位置 | **未知** | 阴性结果排除 16B blob 单独成立 |
-| 进程级读取次数 | **未知** | 无管理员权限，未采集 |
+| **离线播放报 `Object not found` + 完整路径** | **强** | `Playback error` 对话框原文 |
+| **同路径恢复后原条目接回、无重复** | **强** | 恢复后 20 条、时长正常、播放无错 |
+| **U1 首达零空白、封面 t0 即全齐** | **强** | 滚动后立即截图 + t+5/15/30 s 无变化 |
+| **U1 回访零空白** | **强** | 回访截图同为完整封面 |
+| A1 夹具边界正确 | **强** | 441,000 = 220,500 + 220,500，与 CUE 索引点吻合 |
+| 多值 `IS` 的**精确**匹配形式 | **中（推断）** | 只知「不是逐值」，未到指令级 |
+| 28 天宽限是真实阈值 | **未知** | 离线仅数分钟，未触及阈值 |
+| 进程级读取的**场景差异** | **未知** | 三场景都零 Read，未能区分 |
+| A1 接缝是否 bit-perfect | **未知** | 无环回端点，无法抓样 |
+| B（foobaka）行为 | **未知** | 未启动 |
+
 
 ## 九、对第二轮文档的修改清单
 

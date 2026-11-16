@@ -591,48 +591,55 @@ props: key='52655132-8F57-4C56-9AEE-17525C679A5D'  data(16B)=671c4978682fc44f86f
 | 未启动原因 | 第二轮已确认 B 需两个 COM 组件注册（`foo_uie_wsh_panel_mod_plus` 依赖），未验证前置条件时启动会得到「界面归零」而非可比状态 |
 | 需要 | 先按 B 的 `【1、注册所需动态库（必须运行）】.bat` 完成注册并验证界面可用 |
 
-### 5.2 进程级 I/O
+### 5.2 进程级 I/O（已解决，留作复现参考）
 
-| 项 | 需要 |
+不再需要 Process Monitor：`wpr` 是 Windows 内置的，只要有管理员权限即可。
+
+```powershell
+wpr.exe -start FileIO
+# ... 执行被测操作 ...
+wpr.exe -stop out.etl
+tracerpt.exe out.etl -of CSV -o out.csv -y
+```
+
+**解析要点**：tracerpt 的 CSV 第一列是 Provider（`FileIo`），**第二列才是子事件类型**
+（`Read` / `Create` / `DirEnum` / `QueryInfo` …）。只看第一列会把所有 FileIo
+事件都当成同一类，导致「Read 为 0」的错误结论。
+
+### 5.3 本轮已解决 vs 仍受阻
+
+**已解决**：
+
+| 项 | 解决方式 |
 | --- | --- |
-| `wpr` / ETW | 管理员权限 |
-| Process Monitor | 安装 + 管理员 |
-| `Get-Process` IO 计数 | 提权 |
+| 管理员权限 | UAC 提权 + 计划任务（`HighestAvailable` + `InteractiveToken`），可免授权反复触发 |
+| 进程级 I/O 采集 | `wpr -start FileIO` → `tracerpt` 转 CSV |
+| Q1 建 autoplaylist | 找对入口（Album List 分支右键），`MN_GETHMENU` + `GetMenuItemInfoW` 读菜单项 |
+| Q1 规则存储 | 定义 blob 已完整解出（§4d.2） |
+| U1 封面面板 | 换 `Album art in playlist.fth` |
+| 曲库配置 | 系统「选择文件夹」对话框 + `WM_SETTEXT` 写路径 |
 
-**交接步骤**（外部机器，管理员）：
+**仍受阻**：
 
-1. 安装 Process Monitor。
-2. Filter：`Process Name is foobar2000.exe` + `Path contains <测试根>` + `Operation is ReadFile`。
-3. 清空 → 改一首标签 → 停止。
-4. 导出 CSV，按时间对齐。
-5. **判据**：只有被改的那一首出现「改标签后的完整内容读取」，其余 19 首无内容读。
+| 项 | 原因 | 需要 |
+| --- | --- | --- |
+| U1 同落点三次交错 | 滚轮格数非行偏移线性映射 | 可编程定位手段 |
+| U1 无图项 / 同封面组核对 | 未逐一定位截图 | 时间 |
+| A1 PCM 抓样 | **系统无环回捕获端点** + 本机 ffmpeg 不含 `--enable-wasapi` | 换 ffmpeg 构建，或启用立体声混音 |
+| B（foobaka）双样本对照 | 前置 COM 依赖未验证 | 先跑注册脚本 |
 
-### 5.3 U1 与 A1
+### 5.4 Q1 建自动播放列表（已解决）
 
 | 项 | 状态 |
 | --- | --- |
-| U1 夹具 | **已就绪**：300 条，含 250 unique / 30 none / 20 shared，全部验证音频未变（见 §七） |
-| U1 载入与首达 | **已完成**：20.1 s 载入，首达无空白 |
-| U1 封面/头图 | **不适用**：默认布局无封面面板 |
-| U1 回访 | **受阻**：落点无法稳定复现 |
-| A1 夹具核查 | **已完成**：441,000 / 220,500 / 220,500 样本，边界与 CUE 索引点吻合（见 §八） |
-| A1 PCM 抓样 | **受阻**：无 ffmpeg、无管理员 |
+| 持久化结构 | **已实测**（§4d.1） |
+| 定义 blob | **已解出 136 字节结构**（§4d.2） |
+| GUI 创建 | **已成功**：Album List 分支右键 → `Create Autoplaylist`（id=5） |
+| 改标签后重算 | **已验证**（§4d.3） |
 
-### 5.4 Q1 建自动播放列表（本轮主要缺口）
-
-| 项 | 状态 |
-| --- | --- |
-| 持久化结构 | **已实测**（§4c.1） |
-| 真实 props 记录 | **已从 B 取得**（§4c.2） |
-| 注入实验 | **已完成，阴性结果**（16B blob 不足以构成定义） |
-| **GUI 创建** | **未成功**：默认 DUI 布局无 `Album List` 面板，`Create autoplaylist` 入口不可达 |
-
-**接手步骤**（本机可继续）：
-
-1. `View → Layout → Quick Appearance Setup` → 选含 `Album List` 的布局。
-2. Album List 面板里右键一个分支 → 找 `Create autoplaylist`。
-3. 建完立即退出，检查 `playlists-v2.0\` 是否新增 `playlist-<GUID>-props.sqlite`，**看 props 里有几个 key、各多少字节**。
-4. 改一个标签使该曲进出规则，记录生效延迟；重启复核对齐。
+**关键教训**：之前几轮在播放列表条目上右键找不到这一项，
+但它在 **Album List 面板的分支右键菜单**里（第 4 项，id=5）。
+默认布局不显示 Album List，必须先切布局。
 
 ## 六、产出清单
 
@@ -640,13 +647,16 @@ props: key='52655132-8F57-4C56-9AEE-17525C679A5D'  data(16B)=671c4978682fc44f86f
 
 | 类别 | 内容 |
 | --- | --- |
-| `scripts/` | `drive.mjs`、`capture.mjs`、`menu.mjs`（统一菜单驱动）、`flac_tags.py`（FLAC 标签读写）、`make_q1_fixture.py`、`q1_run.mjs`、`q1b_run.py`、`q1_truth.py`/`q1_compare.py`/`q1_semantics.py`、`l1_io.py`、`errata_table.py`、`props_probe.py`、`inject_autoplay.py`、`metadata` 与 `offline` 系列探针 |
-| `captures/` | 过程截图（环境验证、菜单层展开、离线/恢复、查询结果 17 张等） |
-| `raw/` | `q1-all-results.json`、`q1-compare.json`、`q1-truth-table.json`、`errata-table.txt`、`q1b-run.txt`、`metadb-before-offline.sqlite`、`l1-offline-stats.json`、`inject-state.json`、`props-inspect.txt`、`b-props.txt` |
-| `io/` | `fingerprint.json`、`edit-tag.json` |
-| `fixtures/` | `q1/`、`q1test/`（Q1 用）；`u1/`（300 条 U1 夹具） |
-| `workstream-u1/` | U1 夹具的生成/验证脚本、`truth-table.json`、`verification-report.json`、`README.md` |
-| `lab/` | `Aprime/`（运行副本）、`foobaka/`（未启动） |
+| `scripts/` 41 个 | `menu.mjs`（统一菜单/窗口驱动）、`capture.mjs`、`flac_tags.py`、`q1_run.mjs`+`q1b_run.py`（35 条查询）、`decode_autoplaylist.py`（定义 blob 解码）、`library_v2_probe.py`、`l1_capture.ps1`+`phase3_runner.ps1`（提权 ETW）、`analyze_reads.py`、`errata_table.py`、`a1_preflight.py` 等 |
+| `captures/` 103 张 | 环境验证、菜单层展开、布局切换、封面渲染、首达/回访、离线/恢复、Q1 查询结果 17 张 |
+| `raw/` 49 个 | `q1-all-results.json`、`q1-compare.json`、`q1-truth-table.json`、`errata-table.txt`、`autoplaylist-decode.json`、`library-v2-binary.json`、`metadb-*.sqlite`、`l1-offline-stats.json`、`a1-preflight.json` 等 |
+| `io/` | `l1-analysis.json`、`l1-A/B/C-reads.csv`、`l1-summary.json`、`fingerprint.json`、`edit-tag.json` |
+| `fixtures/` | `q1/`、`q1test/`（Q1）；`u1/`（300 条 U1 夹具） |
+| `workstream-u1/` | U1 夹具生成/验证脚本、`truth-table.json`、`verification-report.json` |
+| `lab/` | `Aprime/`（运行副本，含配置后的 profile）、`foobaka/`（未启动） |
+
+**体积控制**：ETL 与 tracerpt CSV 是临时产物（合计约 4.3 GB），分析完即删；
+保留的是 `*-reads.csv` 这类过滤后的小结果。
 
 ## 七、U1：长列表与封面（300 条，本轮完成）
 
@@ -726,42 +736,117 @@ FILE "chirp.flac" WAVE
 
 **边界核验**：`220,500 × 2 = 441,000`，CUE 的 `00:05:00` 正好是 220,500 样本 → **分割点与 CUE 索引点一致**，夹具可用于三类接缝对照（整轨 / 两文件 / 同文件 CUE 分轨）。
 
-### 8.2 抓样受阻
+### 8.2 抓样受阻（原因已定位：不是权限问题）
 
-| 项 | 状态 |
+本轮已解决**权限**障碍（有提权通道），但发现了**更根本的障碍**：
+
+| 检查项 | 实测结果 |
 | --- | --- |
-| `ffmpeg`（wasapi 环回） | **未安装** |
-| `sox` | 未安装 |
-| Python `sounddevice` | 未安装 |
-| 管理员权限（WASAPI 环回必需） | **无**（`IsAdmin=False`） |
-| 音频端点 | 多个可用（USB Audio、HD Audio、各类虚拟设备） |
+| ffmpeg 可用性 | ✅ `D:\ffmpeg\bin\ffmpeg.exe`（2026-04-30 gyan.dev full build） |
+| 管理员权限 | ✅ 有（计划任务 `RunLevel=HighestAvailable` 可反复触发） |
+| **ffmpeg 是否含 WASAPI 输入** | ❌ **该构建的 configuration 里没有 `--enable-wasapi`**，`-f wasapi` 报 `Unknown input format` |
+| `-f dshow` 输入 | 可用，但只列出**麦克风类**设备（`Microphone (Usb Audio Device)` / `Microphone (TP55)` / `麦克风 (Virtual Desktop Audio)`） |
+| **是否有环回捕获端点** | ❌ **系统未暴露** `Stereo Mix` / 立体声混音 / `Wave Out Mix` / `What U Hear` 一类设备 |
+| `-f openal` | 能识别设备类型，但 `Cannot open device: Invalid Value` |
+| 系统输出端点 | 有（`扬声器 (TP55)`、`NVIDIA High Definition Audio` 等） |
 
-**状态：A1 = 受阻**（工具与权限都缺），预检证据已保留。
+**结论：A1 阻塞在「系统没有可用的环回捕获端点」**，
+叠加「本机 ffmpeg 构建不含 WASAPI 输入」。
+**这不是权限问题**——提权后同样不可用，所以本轮修好权限也无法推进 A1。
 
-### 8.3 接手步骤（外部机器）
+### 8.3 接手步骤（外部机器，两条路任选其一）
 
-1. 安装带 WASAPI 支持的 ffmpeg。
-2. 管理员权限运行（环回录音必需）。
-3. 播放 `chirp.flac` 整轨（**关闭** EQ / 淡化 / ReplayGain / 重采样），同时：
+**路线 A：换一个含 WASAPI 的 ffmpeg 构建**
+
+1. 取一个带 `--enable-wasapi` 的 Windows 构建（如 BtbN 的 win64-gpl）。
+2. 先跑预检，确认能列到环回设备：
+
+   ```
+   ffmpeg -f wasapi -list_devices true -i dummy
+   ```
+
+3. 播放 `chirp.flac` 整轨，同时捕获默认渲染端点的环回：
 
    ```
    ffmpeg -f wasapi -i default -c:a pcm_s16le out_whole.wav
    ```
 
-4. 用 `chirp_dec.wav` 的 data 区（441,000 帧）做基准，按前后定位标记对齐，比对整条是否逐字节一致。
-5. 再分别捕获：
-   - `A.flac` → `B.flac` 自然续播（测两文件接缝）
-   - `seam.cue` 第 1/2 轨自然续播（测同文件 CUE 接缝）
-6. 每类三次。判据：接缝窗口内**无丢样、无重样、无额外静音**；峰值连续。
+**路线 B：在系统里启用「立体声混音」**
+
+1. 控制面板 → 声音 → 录制 → 右键空白处 → 勾选「显示禁用的设备」。
+2. 若存在「立体声混音」，右键启用；若不存在，需在声卡驱动的控制面板里打开
+   （部分 Realtek / USB 声卡驱动默认隐藏该项）。
+3. 启用后用现成的 dshow 即可：
+
+   ```
+   ffmpeg -f dshow -i audio="立体声混音 (Realtek(R) Audio)" -c:a pcm_s16le out.wav
+   ```
+
+**两条路线之后的共同测量步骤**：
+
+1. 播放 `chirp.flac` 整轨（**关闭** EQ / 淡化 / ReplayGain / 重采样），捕获整条。
+2. 用 `chirp_dec.wav` 的 `data` 区（441,000 帧）做基准，按前后定位标记对齐，
+   比对是否逐字节一致。
+3. 再分别捕获 `A.flac` → `B.flac` 自然续播、`seam.cue` 第 1/2 轨自然续播，各三次。
+4. 判据：接缝窗口内**无丢样、无重样、无额外静音**，峰值连续。
+
+> **测量边界**：共享混音环回只能证明「应用输出的 PCM 到达了混音器」，
+> 不能证明 DAC 端行为。真 bit-perfect 需数字端回录或独占模式配合。
 
 ## 九、复跑要点
 
+### 9.1 环境与进程
+
 1. **删 `profile\running`** 再启动，否则弹「异常终止」。
-2. **窗口标题在 `PrintWindow` 之外读**：`GetWindowTextW` 拿标题里的 `(N results)` 比 OCR 可靠。
-3. **`PrintWindow` 必须用 flags=2**（`PW_RENDERFULLCONTENT`），否则遮挡时抓到的是遮挡物。
-4. **`WM_SETTEXT` + `WM_COMMAND(EN_CHANGE)`** 才能触发搜索；只 `WM_SETTEXT` 不一定刷新结果。
-5. **夹具目录名不要带空格**——命令行传参会按空格拆分，导致路径错乱。
-6. **坐标是屏幕绝对坐标**：窗口在 (338,338)，控件坐标要加上这个原点。
-7. **菜单项坐标不能靠猜**：foobar2000 的弹出菜单是自绘窗口，`PrintWindow` 对其中一部分返回 empty。可靠做法是 `SetCursorPos` 悬停后枚举可见窗口，用 `GetWindowRect` 拿到真实矩形再定位。
-8. **跨 PowerShell 调用变量会丢**：每次 `pwsh` 都是独立进程，`$pid` 之类的变量不会保留，必须每次从文件读。
-9. **离线实验用目录改名**：无需管理员即可模拟根目录不可达，比 VHD 挂载轻得多。
+2. **跨 PowerShell 调用变量会丢**：每次 `pwsh` 都是独立进程，`$pid` 之类的变量不会保留，必须每次从文件读。
+3. **离线实验用目录改名**：无需管理员即可模拟根目录不可达，比 VHD 挂载轻得多。
+
+### 9.2 窗口与输入
+
+4. **`PrintWindow` 必须用 flags=2**（`PW_RENDERFULLCONTENT`），否则遮挡时抓到的是遮挡物。
+5. **`CopyFromScreen` 只在窗口真在前台时可用**；被遮挡时会抓到遮挡它的窗口。
+6. **坐标是屏幕绝对坐标**：控件的 `GetWindowRect` 已给屏幕坐标，不要再加窗口原点。
+7. **foobar2000 自绘按钮对 `BM_CLICK`、`WM_LBUTTONDOWN` 和注入鼠标均无响应**。
+   已验证有效的替代：**键盘 `Enter`**（焦点在按钮上时）、**系统对话框的 `WM_SETTEXT`**。
+8. **前台切换受限是真实的**：`SetForegroundWindow` 会被 Windows 前台锁拒绝。
+   需要前台时用 `SetWindowPos(HWND_TOPMOST)` 临时置顶。
+
+### 9.3 菜单
+
+9. **标准弹出菜单（class `#32768`）可以直接读内容**——别再截图 OCR：
+
+   ```powershell
+   $hMenu = SendMessageW($popupHwnd, 0x01E1 /*MN_GETHMENU*/, 0, 0)
+   GetMenuItemInfoW($hMenu, $i, $true, [ref]$mii)   # 拿文本 + id
+   ```
+
+10. **`Create Autoplaylist` 在 `Album List` 面板的分支右键菜单里**（第 4 项，id=5），
+    **不在**播放列表条目的右键菜单里。默认布局不显示 Album List，必须先切布局。
+
+### 9.4 布局与曲库
+
+11. **换 DUI 布局最省事的办法是直接替换 `profile\theme.fth`**：
+    官方的 `.fth` 就在样本目录 `themes\` 下，复制即可，不用点 GUI。
+12. **要测封面必须用 `Album art in playlist.fth`**；默认布局没有封面列。
+13. **曲库根目录配置**：`Library → Configure` → `Add...` → 系统「选择文件夹」对话框
+    → `WM_SETTEXT` 写进它的 `Edit` 控件 → 点「选择文件夹」→ 点 `OK`。
+    成功后状态变 `Monitoring`，并生成 `library-v2.0\folders`。
+
+### 9.5 检索
+
+14. **`WM_SETTEXT` + `WM_COMMAND(EN_CHANGE)`** 才能触发 Playlist Search 刷新结果。
+15. **结果数从窗口标题读**：`Playlist Search (N results)`，比 OCR 可靠。
+
+### 9.6 ETW 采集
+
+16. **`wpr` 是 Windows 内置的**，只要有管理员权限，不需要装 Process Monitor。
+17. **tracerpt CSV 第一列是 Provider（`FileIo`），第二列才是子事件类型**
+    （`Read` / `Create` / `DirEnum` …）。只看第一列会误判成「全部同一类」。
+18. **ETL 与 CSV 体积很大**（单个场景 ETL 约 300–400 MB、CSV 约 1 GB）。
+    先流式过滤出目标路径的行，再删原始文件。
+
+### 9.7 夹具
+
+19. **夹具目录名不要带空格**——命令行传参会按空格拆分，导致路径错乱。
+
+

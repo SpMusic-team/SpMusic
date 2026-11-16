@@ -97,6 +97,19 @@ describe('the hold only ever shows the page it was published for', () => {
     assert.equal(decision.render, undefined)
   })
 
+  it('resumes the same revision with the same owner after leaving for Now Playing', () => {
+    const p = publication({ displayRevision: 7 })
+    const lease = leaseOf(p)
+    const context = {
+      lease, publication: undefined, currentHeroKey: p.heroKey,
+      currentOwner: outgoingOwner, currentDisplayRevision: 7, resuming: true,
+    }
+    assert.equal(decideHeroLease(context).render, lease)
+    assert.equal(decideHeroLease({ ...context, currentDisplayRevision: 8 }).render, undefined)
+    assert.equal(decideHeroLease({ ...context, currentHeroKey: undefined }).render, undefined)
+    assert.equal(decideHeroLease({ ...context, resuming: false }).render, undefined)
+  })
+
   it('prefers the owner over a stale hold even when the identities differ', () => {
     const lease = leaseOf(publication())
     const next = publication({
@@ -176,7 +189,7 @@ describe('the production wiring keeps the invariant visible', () => {
   it('the hold lives outside the panel remount key', () => {
     // The key is on `<OwnedPlaylistPanel ...>`; the hold hook must be called by
     // `PlayerSurface` itself, not inside the keyed subtree.
-    assert.match(surface, /const \{ hold: heroHold, record: recordHeroPublication, [^\n]*\} = useHeroDisplayHold\(\)/)
+    assert.match(surface, /const \{ hold: heroHold, record: recordHeroPublication, [^\n]*\} =\s*useHeroDisplayHold\(/)
     const keyed = surface.match(/key=\{playlist\.deleteScope[^\n]*\n/)
     assert.ok(keyed, 'the remount key still exists and was not removed')
     assert.doesNotMatch(panel, /useHeroDisplayHold/, 'the panel must not own the hold across its own remount')

@@ -72,12 +72,12 @@ type PlaylistPanelProps = {
    * A hero image the display layer is still allowed to show, from a publication
    * that an earlier owner made for this same detail page.
    *
-   * Supplied only while an owner handover is in flight (`PlayerSurface` holds it
-   * outside this component's remount key, so a `deleteScope` change cannot drop
-   * it). `undefined` means "show whatever the current owner published", which is
-   * the normal steady state.
+   * `PlayerSurface` retains one image across remounts. The panel may use it
+   * while switching artwork owners or resuming the same detail from Now Playing.
    */
   heroLease?: HeroDisplayLease
+  heroDisplayRevision?: number
+  heroResuming?: boolean
   /**
    * Identity of the artwork owner currently supplying `artworkSource`.
    *
@@ -237,19 +237,20 @@ function useHeroArtwork(
 /**
  * Whether a held hero image may still be rendered for the page on screen.
  *
- * The hero key is the whole test: it is derived from the first row's key, so two
- * owners describing the same detail page produce the same one (plan R6). A held
- * image is only ever shown for the key it was published under, which is why the hold
- * cannot leak into another playlist — or into a row, since rows never read this.
- *
- * A concrete matching key and a different owner establish an active handover.
+ * The first row's hero key and the displayed source revision must still match.
+ * The same owner may reuse its hold during an explicit return from Now Playing.
  */
 function useApplicableHeroHold(
   hold: HeroDisplayLease | undefined,
   currentHeroKey: string | undefined,
   owner: unknown,
+  displayRevision: number | undefined,
+  resuming: boolean,
 ): HeroDisplayLease | undefined {
-  return decideHeroLease({ lease: hold, publication: undefined, currentHeroKey, currentOwner: owner }).render
+  return decideHeroLease({
+    lease: hold, publication: undefined, currentHeroKey, currentOwner: owner,
+    currentDisplayRevision: displayRevision, resuming,
+  }).render
 }
 
 // Intrinsic line-count shapes cover both tile and extended metadata layouts.
@@ -450,6 +451,8 @@ export function PlaylistPanel({
   artworkSource,
   fallbackArtworkSource,
   heroLease,
+  heroDisplayRevision,
+  heroResuming = false,
   artworkOwnerKey,
   onHeroPublicationChange,
   onHeroPublicationError,
@@ -480,8 +483,9 @@ export function PlaylistPanel({
   // happened to measure when it first seeded its detail paths, so shrinking the window (or
   // dragging to a smaller display) keeps requesting the larger image indefinitely.
   //
-  // Gated on presence so an exiting panel stops asking for a high tier.
-  const heroTier = useHeroTier(isPresent && !heroOffscreen)
+  // The single hero stays warm while scrolling within this detail. Only an
+  // exiting panel withdraws demand.
+  const heroTier = useHeroTier(isPresent)
   const onEntrySettledRef = useRef(onEntrySettled)
   useLayoutEffect(() => { onEntrySettledRef.current = onEntrySettled }, [onEntrySettled])
   const entryMotionSettledRef = useRef(false)
@@ -1031,7 +1035,7 @@ export function PlaylistPanel({
   // handover, because the incoming owner publishes rows long before its hero tier
   // arrives. Only the hold's own hero key may be substituted, and only when it
   // describes the page on screen.
-  const heldHero = useApplicableHeroHold(heroLease, currentHeroKey, heroOwner)
+  const heldHero = useApplicableHeroHold(heroLease, currentHeroKey, heroOwner, heroDisplayRevision, heroResuming)
   const heroImage = heroArtwork.heroLane ? heroArtwork.image : (heldHero ?? heroArtwork).image
   const heroPresentation = heroArtwork.heroLane ? heroArtwork.presentation : heldHero ? undefined : heroArtwork.presentation
   const handleHeroPublicationError = () => {

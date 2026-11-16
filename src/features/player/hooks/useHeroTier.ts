@@ -59,9 +59,8 @@ function subscribeHeroMeasurement(onChange: () => void): () => void {
  * The hero tier for the current layout, or `undefined` when the hero should stay on the cheap
  * lane.
  *
- * `enabled: false` is used for "no hero", "hero offscreen" and "panel leaving": those states
- * must drop the item back to the ordinary 256 row rather than keep a high-tier request alive
- * (plan §7.4 (c)).
+ * Owners decide when to withdraw demand. Playlist details retain one hero
+ * while scrolling and withdraw when the panel leaves.
  */
 export function useHeroTier(enabled: boolean): HeroEdge | undefined {
   return useSyncExternalStore(

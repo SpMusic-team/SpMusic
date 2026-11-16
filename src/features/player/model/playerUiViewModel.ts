@@ -335,6 +335,7 @@ export type PlayerPlaylistViewModel = PlaylistAddCallbacks & {
   isDeletePending?: boolean
   artworkSource?: PlaylistArtworkSource
   fallbackArtworkSource?: PlaylistArtworkSource
+  heroDisplayRevision?: number
   entryPosition?: Readonly<{ requestId: number; target: 'top' | 'current-track' }>
   library?: PlaylistLibraryViewModel
   playbackDockTrack?: PlaylistTrackItemViewModel

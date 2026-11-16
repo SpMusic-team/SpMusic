@@ -50,6 +50,7 @@ export type HeroLeasePublication = Readonly<{
   heroKey: string
   /** `heroDisplayIdentity` 五元组字符串。诊断与代次判定用。 */
   identity: string
+  displayRevision?: number
   /** 该发布实际产出的档位。 */
   edge?: number
   image: PlaylistCoverImage
@@ -61,6 +62,7 @@ export type HeroDisplayLease = Readonly<{
   owner?: unknown
   heroKey: string
   identity: string
+  displayRevision?: number
   image: PlaylistCoverImage
   presentation?: CoverPresentation
 }>
@@ -77,6 +79,7 @@ function asLease(publication: HeroLeasePublication): HeroDisplayLease {
     owner: publication.owner,
     heroKey: publication.heroKey,
     identity: publication.identity,
+    displayRevision: publication.displayRevision,
     image: publication.image,
     ...(publication.presentation ? { presentation: publication.presentation } : {}),
   }
@@ -107,14 +110,25 @@ export function decideHeroLease(input: {
   /** 面板按首曲行键派生出的 hero 键。 */
   currentHeroKey: string | undefined
   currentOwner?: unknown
+  currentDisplayRevision?: number
+  resuming?: boolean
 }): HeroLeaseDecision {
-  const { lease, publication, currentHeroKey, currentOwner } = input
+  const { lease, publication, currentHeroKey, currentOwner, currentDisplayRevision, resuming } = input
   if (publication) return { render: asLease(publication), fromOwner: true }
   if (!lease) return { render: undefined, fromOwner: false }
-  if (!currentHeroKey || lease.heroKey !== currentHeroKey || !currentOwner || lease.owner === currentOwner) {
+  if (!heroLeaseMatchesDisplay(lease, currentHeroKey, currentDisplayRevision)
+    || !currentOwner || (!resuming && lease.owner === currentOwner)) {
     return { render: undefined, fromOwner: false }
   }
   return { render: lease, fromOwner: false }
+}
+
+export function heroLeaseMatchesDisplay(
+  lease: HeroDisplayLease,
+  heroKey: string | undefined,
+  displayRevision: number | undefined,
+): boolean {
+  return Boolean(heroKey && lease.heroKey === heroKey && lease.displayRevision === displayRevision)
 }
 
 /**
@@ -143,7 +157,7 @@ export function isSameHeroLease(
   if (left === right) return true
   if (!left || !right) return false
   if (left.heroKey !== right.heroKey || left.owner !== right.owner) return false
-  if (left.identity !== right.identity) return false
+  if (left.identity !== right.identity || left.displayRevision !== right.displayRevision) return false
   if (left.image.src !== right.image.src) return false
   // The token is what makes a later DOM report attributable, so a new publication
   // of the same URL is still a different thing to remember.

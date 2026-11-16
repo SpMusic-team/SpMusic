@@ -721,8 +721,9 @@ export function PlayerShell() {
           const artwork = first ? libraryArtwork.get(normalizeAudioSourcePath(first.sourcePath)) : undefined
           return {
           scope, name: playlistDisplayName(item), trackCount: item.tracks.length, sourceKind: item.sourceKind,
-          coverSourcePath: scope === player.activePlaylistScope && firstRow?.coverThumbnail ? undefined : first?.sourcePath,
-          coverTrack: firstRow ? { ...firstRow, ...artwork, coverThumbnail: firstRow.coverThumbnail ?? artwork?.coverThumbnail } : undefined,
+          // The library owns sidebar previews across active-playlist changes.
+          coverSourcePath: first?.sourcePath,
+          coverTrack: firstRow ? { ...firstRow, ...artwork, coverThumbnail: artwork?.coverThumbnail ?? firstRow.coverThumbnail } : undefined,
           totalClock: formatPlaylistDurationLabel(
             playlistDurations.get(playlistScope(item))!,
             item.tracks.length,
@@ -842,6 +843,9 @@ export function PlayerShell() {
       tracks: browsedTracks,
       artworkSource: isBrowsingActive ? player.playlistArtworkSource : libraryArtworkSource,
       fallbackArtworkSource: isBrowsingActive ? libraryArtworkSource : undefined,
+      heroDisplayRevision: browsedPlaylist
+        ? playlistArtworkRevision(browsedPlaylist)
+        : player.playlistDurationTracks && playlistArtworkRevision({ tracks: player.playlistDurationTracks }),
       unavailableTrackIds: browsedUnavailableIds,
       playlistName: browsedPlaylist ? playlistDisplayName(browsedPlaylist) : isBrowsingActive ? player.playlistName : '未选择文件夹',
       metadataStatus: playlistRowsReady ? 'ready' : 'loading',

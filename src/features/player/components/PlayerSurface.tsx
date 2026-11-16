@@ -62,11 +62,13 @@ import { selectPlayerViewTransitionOwnerIds } from '@/features/player/model/play
 import {
   commitHeroLease,
   decideHeroLease,
+  heroLeaseMatchesDisplay,
   heroLeaseNeedsCopy,
   isSameHeroLease,
   type HeroDisplayLease,
   type HeroLeasePublication,
 } from '@/features/player/components/playlistHeroDisplayLease'
+import { heroPlaylistArtworkKey, isHeroArtworkKey } from '@/features/player/model/playlistArtworkStore'
 import {
   COVER_IMAGE_ERROR_EVENT,
   coverImageEventDetail,
@@ -127,13 +129,24 @@ type PlaylistWindowOwners = { active: symbol | null; closing: symbol | null }
  * it. Holding it above the remount key removes that whole class of "remount loses
  * the image" risk without touching any existing `deleteScope` consumer.
  *
- * It only ever describes the hero. It is never consulted for a row, holds no
- * track-id index, and privately copies revocable blob URLs. The panel uses the
- * current hero key and owner to decide when the hold is eligible for display.
+ * It holds one hero. The same detail can resume it after Now Playing closes.
+ * A key or revision change drops it, and the hold privately copies revocable
+ * blob URLs so the former artwork owner's cleanup cannot invalidate it.
  */
-function useHeroDisplayHold() {
+function useHeroDisplayHold(
+  route: 'detail' | 'player' | 'library',
+  currentHeroKey: string | undefined,
+  displayRevision: number | undefined,
+) {
   const holdRef = useRef<HeroDisplayLease | undefined>(undefined)
   const [hold, setHold] = useState<HeroDisplayLease | undefined>(undefined)
+  const [resuming, setResuming] = useState(false)
+  const [previousRoute, setPreviousRoute] = useState(route)
+  if (previousRoute !== route) {
+    setPreviousRoute(route)
+    if (route === 'player') setResuming(previousRoute === 'detail')
+    else if (route === 'library') setResuming(false)
+  }
   // URLs this hold owns privately, so a releasing owner cannot invalidate them.
   // At most one is ever live: a new copy replaces the old one immediately below.
   const copyRef = useRef<string | undefined>(undefined)
@@ -144,6 +157,7 @@ function useHeroDisplayHold() {
     releasePlaylistCoverUrl(copyRef.current)
     copyRef.current = undefined
     setHold(undefined)
+    setResuming(false)
   }, [])
   /**
    * Remember a publication the current owner just made.
@@ -151,13 +165,16 @@ function useHeroDisplayHold() {
    * An empty publication can bridge only a change of owner for the same key.
    */
   const record = useCallback((publication: HeroLeasePublication | undefined, owner: unknown, heroKey: string | undefined) => {
+    if (route !== 'detail' || (heroKey && heroKey !== currentHeroKey)) return
     if (!publication) {
       const previous = holdRef.current
-      if (previous && (!heroKey || previous.heroKey !== heroKey || previous.owner === owner)) clear()
+      if (previous && (!heroLeaseMatchesDisplay(previous, heroKey, displayRevision)
+        || (!resuming && previous.owner === owner))) clear()
       return
     }
+    setResuming(false)
     const next = commitHeroLease(decideHeroLease({
-      lease: undefined, publication, currentHeroKey: publication.heroKey,
+      lease: undefined, publication: { ...publication, displayRevision }, currentHeroKey: publication.heroKey,
     }))
     if (!next || isSameHeroLease(holdRef.current, next)) return
     holdRef.current = next
@@ -184,13 +201,20 @@ function useHeroDisplayHold() {
     } else {
       setHold(next)
     }
-  }, [clear])
+  }, [clear, currentHeroKey, displayRevision, resuming, route])
+  useLayoutEffect(() => {
+    const previous = holdRef.current
+    if (!previous) return
+    if (route === 'library' || !heroLeaseMatchesDisplay(previous, currentHeroKey, displayRevision)) {
+      clear()
+    }
+  }, [clear, currentHeroKey, displayRevision, route])
   const invalidate = useCallback((publication: HeroDisplayLease) => {
     const previous = holdRef.current
-    if (isSameHeroLease(previous, publication) || isSameHeroLease(pendingCopyRef.current, publication)
+    if (isSameHeroLease(previous, { ...publication, displayRevision }) || isSameHeroLease(pendingCopyRef.current, { ...publication, displayRevision })
       || (previous?.owner === publication.owner && previous?.identity === publication.identity
         && copyRef.current === publication.image.src)) clear()
-  }, [clear])
+  }, [clear, displayRevision])
   useLayoutEffect(() => {
     const handleError = (event: Event) => {
       const held = holdRef.current
@@ -213,7 +237,7 @@ function useHeroDisplayHold() {
     releasePlaylistCoverUrl(copyRef.current)
     copyRef.current = undefined
   }, [])
-  return { hold, record, clear, invalidate }
+  return { hold, record, resuming, invalidate }
 }
 
 /**
@@ -824,10 +848,16 @@ export function PlayerSurface({
   // The hero hold survives the panel's remount key on purpose: a track click can
   // change `deleteScope` on the queue/all-songs paths, and an owner handover is
   // exactly when the incoming owner has no hero image yet. See `useHeroDisplayHold`.
-  const { hold: heroHold, record: recordHeroPublication, clear: clearHeroPublication, invalidate: invalidateHeroPublication } = useHeroDisplayHold()
-  useLayoutEffect(() => {
-    if (!playlist.isOpen || playlist.library?.isOpen) clearHeroPublication()
-  }, [playlist.isOpen, playlist.library?.isOpen, clearHeroPublication])
+  const firstHeroTrack = playlist.tracks[0]
+  const heroRowKey = firstHeroTrack && !playlist.unavailableTrackIds?.has(firstHeroTrack.id)
+    ? playlist.artworkSource?.keyByTrackId.get(firstHeroTrack.id)
+    : undefined
+  const currentHeroKey = heroRowKey
+    ? (isHeroArtworkKey(heroRowKey) ? heroRowKey : heroPlaylistArtworkKey(heroRowKey))
+    : undefined
+  const heroRoute = playlist.library?.isOpen ? 'library' : playlist.isOpen ? 'detail' : 'player'
+  const { hold: heroHold, record: recordHeroPublication, resuming: heroResuming, invalidate: invalidateHeroPublication } =
+    useHeroDisplayHold(heroRoute, currentHeroKey, playlist.heroDisplayRevision)
   const searchOpen = viewModel.search?.isOpen ?? false
   const searchChange = viewModel.search?.onOpenChange
   const searchReturnFocus = useRef<HTMLElement | null>(null)
@@ -3424,6 +3454,8 @@ export function PlayerSurface({
               artworkSource={playlist.artworkSource}
               artworkOwnerKey={playlist.artworkSource?.store}
               heroLease={heroHold}
+              heroDisplayRevision={playlist.heroDisplayRevision}
+              heroResuming={heroResuming}
               onHeroPublicationChange={recordHeroPublication}
               onHeroPublicationError={invalidateHeroPublication}
               fallbackArtworkSource={playlist.fallbackArtworkSource}

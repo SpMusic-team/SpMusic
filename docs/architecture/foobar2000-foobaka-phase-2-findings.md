@@ -685,28 +685,14 @@ WSH 面板是 **Windows Script Host 家族**，本轮用独立的静态证据链
 >
 > **教训**：文档的「新增」不等于实现的「新增」。判断能力归属必须查二进制分发表，不能只读 changelog/help。
 
-### 7.7 查询运算符分发表的结构
+### 7.7 查询运算符分发表的结构（第三轮已勘误）
 
-A′ 2.24.6 的 `.rdata` `0x27BD40`–`0x27BE28` 是一张**定长表**，每项 16 字节，字段交错排布：
+> **勘误（2026-11-17）**：本节初版按 **16 字节**步长解读，把下一项起始 dword 误当本项的 `+0x0C` 字段，据此推出的「等价关键字」列**全部作废**。
+> 实测 `0x27BE18 - 0x27BE0C = 12 字节`，正确步长是 **12**。详见 [第三轮 findings](foobar2000-foobaka-phase-3-findings.md) §三，以及修正后的 [search-mechanisms](foobar2000-search-mechanisms.md) §一。
 
-```
-[+0x00] u32  关键字串 VA
-[+0x04] u32  flags（SORT 为 1，其余 0）
-[+0x08] u32  handler1（.text 中的处理函数）
-[+0x0C] u32  等价关键字串 VA（同义写法）
-```
+A′ 2.24.6 的 `.rdata` `0x27BD3C` 起是一条定长表，每项 **12 字节**，第一个 dword 是关键字串 VA。按 12 字节重列共 **22 项**（`SORT` `ORDER` `OR` `AND` `NOT` `HAS` `IS` `IST` `EQUAL` `GREATER` `LESS` `MISSING` `PRESENT` `BEFORE` `AFTER` `SINCE` `DURING` `ALL` `NONE` `%first_played%` `%last_played%` `%added_timestamp%`）。
 
-实测的等价对（`h2` 指向的同义关键字）：
-
-| 主关键字 | 等价写法 |
-| --- | --- |
-| `SORT` | `ORDER` |
-| `NOT` | `HAS` |
-| `EQUAL` | `GREATER` |
-| `PRESENT` | `BEFORE` |
-| `DURING` | `ALL` |
-
-> 表中「等价」列的配对是按表项 `h2` 字段机械读出的，**本轮未反汇编验证其运行时语义**（例如 `ORDER` 是否真是 `SORT` 的别名）。此列为**待验证**。
+> 末尾三项是**时间表达式字段名**而非运算符，说明这条表可能是混合分派表；该边界仍是推断。
 
 ### 7.8 对「LargeFieldsConfig 写了但无效」的加强证据
 

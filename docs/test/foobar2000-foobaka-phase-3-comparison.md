@@ -464,6 +464,74 @@ Unable to open item for playback (Object not found):
 | 错误在交互层显式呈现 | `Object not found` + 完整路径 |
 | **28 天宽限是否为真实阈值** | **仍未验证**（离线仅数分钟） |
 
+### 4d.2 **autoplaylist 定义 blob 完整解出（本轮最重要发现）**
+
+成功用 GUI 创建了 autoplaylist「All Music」（`Library → Album List` 右键 → `Create Autoplaylist`，
+菜单项 id=5）。其 `props` 里有一条 **136 字节的定义 blob**，结构解析如下：
+
+```
+[0:4]    u32   flags        = 0
+[4:20]   GUID  client_guid  = 94D57506-C400-4EB3-A61A-56FB19203868
+[20:24]  u32   limit        = 0
+[24:28]  u32   sort_len     = 100
+[28:128] char  sort_pattern = "[%album artist% - ]['['%year%']' ]%album%|"
+                              "[[%discnumber%.]%tracknumber%. ]"
+                              "[%track artist% - ]%title%"
+[128:136] u64  0
+```
+
+**这意味着**：
+
+| 问题 | 答案 |
+| --- | --- |
+| 动态列表存条件还是存结果？ | **存条件**（`sort_pattern` 就在 props 里）+ 结果快照（`.fplite`） |
+| 条件存在哪？ | `playlist-<GUID>-props.sqlite` 的 `props` 表，key 是另一个 GUID |
+| 格式 | `flags + clientGUID + limit + 长度前缀字符串 + 尾部 8 字节 0` |
+| `client_guid` 是什么 | `94D57506-…`，即 **Album List 这个 autoplaylist client 的注册 GUID** |
+
+**这否证了第二轮"规则编码在 16B blob 里"的推测**，也补上了第二轮标注为"未知"的这一项。
+
+### 4d.3 Q1 核心验证：改标签后 autoplaylist 自动更新
+
+| 步骤 | 观察 |
+| --- | --- |
+| 建立 `All Music` 后 | `index.txt` 出现 `6E3EF501-…:All Music`；`.fplite` 含 20 条路径 |
+| 修改 `08_Decoy Rock.flac` 的 `ARTIST` → `ChangedBand` | 标签写入成功（183,806 → 183,815 B） |
+| 重启 foobar2000 | 播放列表标签栏出现 **`Default Playlist` / `All Music`** 两个页签 |
+| 结果 | 曲目 08 显示为 **`Decoy Rock // ChangedBand`**——**标签改动已反映到列表** |
+
+**结论**：autoplaylist 的成员由**条件求值**决定，标签变化后会自动重算，
+不是固定快照。这与第二轮从 `criteriaChanged` / `metadb` 回调推出的静态结论一致。
+
+### 4d.4 GUI 创建 autoplaylist 的实际路径（此前搞错的地方）
+
+之前几轮尝试失败的根因：**在播放列表条目上右键没有这一项**。
+
+正确路径是 **`Library → Album List` 面板里对分支右键**，菜单实测为 15 项：
+
+| # | id | 文本 |
+| ---: | ---: | --- |
+| 0 | 1 | `&Send to Current Playlist` |
+| 1 | 2 | `&Add to Current Playlist` |
+| 2 | 3 | `Send to &New Playlist` |
+| **3** | **5** | **`&Create Autoplaylist`** |
+| 4 | 4 | `C&opy` |
+| 6 | 6 | `Add &to playback queue` |
+| 7 | 7 | `Open containing &folder` |
+| 8–12 | — | 子菜单：`Tagging` / `File Operations` / `Convert` / `Utilities` / `ReplayGain` |
+| 14 | 39 | `&Properties` |
+
+**方法**：用 `SendMessageW(popup, MN_GETHMENU=0x01E1, …)` 拿到 `HMENU`，
+再用 `GetMenuItemInfoW` 逐项读出文本与 id。这比截图 OCR 可靠得多，
+**也适用于任何 `#32768` 标准弹出菜单**。
+
+### 4d.5 阴性结果的修正
+
+上一轮记录「注入 16B blob 后列表仍可编辑 → 16B blob 不足」。
+本轮找到了真正的定义结构（136 B），**上轮的阴性结果依然成立**——
+因为那个 16B blob（`52655132-…`）是**另一个 client** 的标记，
+而且单靠一个 16B blob 确实不构成完整定义（缺 `limit`、`sort_pattern`）。
+
 ## 四之四、Q1 补充：自动播放列表存储形态与一个阴性结果
 
 ### 4d.1 持久化结构（实测）

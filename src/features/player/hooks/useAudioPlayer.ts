@@ -2491,6 +2491,15 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
   )
 
   const pumpPlaylistVisualHydration = useCallback(() => {
+    function startHeroIfReady(): void {
+      const startHero = playlistHeroPendingStartRef.current
+      if (!startHero || playlistHeroActiveJobRef.current || playlistHeroPendingReplacementRef.current.size > 0
+        || playlistForcedRecoveryQueueRef.current.length > 0
+        || playlistVisualHydrationQueueRef.current.some((job) => !job.optional || playlistVisualRequiredIdsRef.current.has(job.trackId))
+        || [...playlistVisualHydrationActiveJobsRef.current.values()].some((job) => playlistVisualRequiredIdsRef.current.has(job.trackId))) return
+      playlistHeroPendingStartRef.current = undefined
+      startHero()
+    }
     function pump(): void {
       while (
         playlistVisualHydrationActiveRef.current < playlistVisualAdmissionWidth()
@@ -2504,6 +2513,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
         const urgentIndex = playlistVisualHydrationQueueRef.current.findIndex((candidate) =>
           !candidate.optional || playlistVisualRequiredIdsRef.current.has(candidate.trackId))
         if (urgentIndex < 0) {
+          startHeroIfReady()
           // Nearby viewport overscan is bounded navigation demand. Waiting for
           // idle between its covers leaves the next rows cold during a drag.
           // Only optional warming of the whole playback source needs idle.
@@ -2531,14 +2541,7 @@ export function useAudioPlayer(libraryVisible = true, backgroundArtworkAllowed =
         if (!job) break
         startJob(job)
       }
-      const startHero = playlistHeroPendingStartRef.current
-      if (startHero && !playlistHeroActiveJobRef.current && playlistHeroPendingReplacementRef.current.size === 0
-        && playlistForcedRecoveryQueueRef.current.length === 0
-        && !playlistVisualHydrationQueueRef.current.some((job) => !job.optional || playlistVisualRequiredIdsRef.current.has(job.trackId))
-        && ![...playlistVisualHydrationActiveJobsRef.current.values()].some((job) => playlistVisualRequiredIdsRef.current.has(job.trackId))) {
-        playlistHeroPendingStartRef.current = undefined
-        startHero()
-      }
+      startHeroIfReady()
     }
     function startJob(job: PlaylistVisualHydrationJob): void {
         playlistVisualHydrationActiveRef.current += 1

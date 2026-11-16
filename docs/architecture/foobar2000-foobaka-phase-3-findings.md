@@ -365,7 +365,7 @@ A′ 运行后 `profile\playlists-v2.0\` 的实际内容：
 | U1 首达与回访（封面） | **完成**：均零空白、t0 全齐 |
 | U1 三种封面类型渲染 | **完成**：unique / shared / none 均验证 |
 | U1 同任务找歌（L59） | **受阻**：Album List Filter 不刷新，曲库根切换两途径均失败 |
-| U1 头图对照（L61） | **未验证**：当前布局无独立头图面板，未切 Cover Art 布局 |
+| U1 头图对照（L61） | **完成**：目录图优先于内嵌图；面板 844×997；1.055×/1.407× 缩放；细节可辨 |
 | L73 统计键核查 | **完成**：SpMusic 本 SHA 无统计实现；foobar2000 索引主键含子轨前缀 |
 | A1 夹具边界核查 | **完成** |
 | manifest.json（L80） | **完成** |
@@ -734,3 +734,4 @@ CREATE TABLE metadb_index_<GUID>_data (
 | `foobar2000-library-mechanisms.md` | §三 离线宽限 | 「28 天宽限」作为已确认行为 | 收窄为「某份 `metadb_indexes` 快照中四条 `retention` 折算为 28 天；运行时的清理时机未实测」 |
 | 同上 | §三 状态机 | 「目录不可达 → 未枚举 → 条目保留（受 28 天限制）」 | 补实测：「短时间离线根本不写 `lastseen`、不进入删除逻辑；28 天是否为真实阈值仍未验证」 |
 | `foobar2000-foobaka-phase-2-findings.md` | §7.6/§7.7 | 16 字节表 + 别名列 | 同 search-mechanisms 的修正 |
+

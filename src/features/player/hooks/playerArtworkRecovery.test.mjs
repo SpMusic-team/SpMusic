@@ -303,7 +303,7 @@ async function harness(options = {}) {
     },
     attemptTrackThumbnailPath: async (input) => {
       pathRequests.push({ kind: 'track', input })
-      if (holdPath) await holdPath()
+      if (holdPath) await holdPath(input)
       if (configuredPath === 'ready') {
         return { status: 'ready', image: { src: `asset://localhost/cache/player-track-${pathRequests.length}.jpg`, width: 256, height: 256, encodedBytes: 12 }, attemptId: `attempt-${pathRequests.length}` }
       }
@@ -312,7 +312,7 @@ async function harness(options = {}) {
     },
     attemptPlaylistCoverThumbnailPath: async (input) => {
       pathRequests.push({ kind: 'cover', input })
-      if (holdPath) await holdPath()
+      if (holdPath) await holdPath(input)
       if (configuredPath === 'ready') {
         return { status: 'ready', image: { src: `asset://localhost/cache/player-cover-${pathRequests.length}.jpg`, width: input.maxEdge, height: input.maxEdge, encodedBytes: 24 }, attemptId: `cover-attempt-${pathRequests.length}` }
       }
@@ -417,6 +417,7 @@ async function harness(options = {}) {
     DEFAULT_MAX_CONCURRENT: 4,
     maxConcurrentWidth: () => 4,
     setMaxConcurrent: () => false,
+    thumbnailPathMaxBytesForEdge: (edge) => Math.min(16 * 1024 * 1024, Math.max(1024 * 1024, edge * edge / 2)),
     AUDIO_PLAYLIST_TRACK_SUMMARY_BATCH_LIMIT: 200,
     isAudioCoverPixelsError: () => false,
     isAudioCommandError: () => false,
@@ -1099,6 +1100,36 @@ test('an unavailable first row never starts a hero read for a later row', async 
     assert.equal(h.api().playlistHeroPublication, undefined)
     assert.deepEqual(h.pathRequests.filter(({ kind }) => kind === 'cover'), [])
   } finally {
+    h.unmount()
+  }
+})
+
+test('an optional active hero waits for the outstanding visible row reads', async () => {
+  let resolveWindow
+  let releaseRows
+  const windowGeneration = new Promise((resolve) => { resolveWindow = resolve })
+  const rowGate = new Promise((resolve) => { releaseRows = resolve })
+  const h = await harness({
+    beginCoverWindow: () => windowGeneration,
+    holdPath: (input) => input.maxEdge === 256 ? rowGate : undefined,
+  })
+  try {
+    const visibleIds = sources0(h).map((track) => track.id)
+    h.api().setVisiblePlaylistTrackIds(visibleIds, true, true, {
+      visibleIds, prefetchIds: [], heldIds: [], coverCssPixels: 128, dpr: 1, heroEdge: 1536,
+    })
+    resolveWindow(5)
+    await h.flush()
+    assert(h.pathRequests.some(({ kind }) => kind === 'track'), 'visible row reads began')
+    assert.deepEqual(h.pathRequests.filter(({ kind }) => kind === 'cover'), [])
+
+    releaseRows()
+    await h.flush()
+    assert.deepEqual(h.pathRequests.filter(({ kind }) => kind === 'cover').map(({ input }) => input.maxEdge), [1536])
+    assert.equal(h.api().playlistHeroPublication?.edge, 1536)
+  } finally {
+    resolveWindow(5)
+    releaseRows()
     h.unmount()
   }
 })

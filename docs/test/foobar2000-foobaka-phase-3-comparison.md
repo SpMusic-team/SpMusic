@@ -240,6 +240,124 @@ source_documents:
 
 脚本支持 `touch-one`（只改 mtime 不改内容），可在有 I/O 采集能力时用来验证「mtime 变了是否触发重读」。**本轮未跑完整判据**（缺进程级 I/O）。
 
+## 四之二、L1 离线与恢复三环（本轮新增）
+
+### 4b.1 实验设计
+
+无管理员权限，VHD 挂载不可用。改用**同路径目录改名**模拟根目录不可达：
+
+```
+fixtures/q1test  →  改名为  →  fixtures/q1test_OFFLINE
+```
+
+三阶段取证：离线前 → 离线中启动并尝试播放 → 同路径改回后重启。
+
+### 4b.2 阶段一：离线前基线
+
+| 指标 | 值 |
+| --- | ---: |
+| `metadb` 记录数 | 20 |
+| `lastseen` 非空数 | 0 |
+| `info` 非空数 | 20 |
+
+备份：`raw/metadb-before-offline.sqlite`、`raw/*.fplite`。
+
+### 4b.3 阶段二：离线中
+
+**界面表现**：根目录路径已不存在，但启动后播放列表**仍显示全部 20 条**，标题/艺术家/专辑/时长全部正常，**无任何离线标记**，无错误弹窗。
+
+**数据层**：
+
+| 指标 | 值 |
+| --- | ---: |
+| `metadb` 记录数 | **20**（未变） |
+| `lastseen` 非空数 | **0**（未写） |
+
+**点击播放**：弹出 `Playback error`，内容为逐项列出：
+
+```
+Unable to open item for playback (Object not found):
+"D:\SpMusic\.rea-analysis\phase3\fixtures\q1test\03_Third Rock.flac"
+Unable to open item for playback (Object not found):
+"D:\SpMusic\.rea-analysis\phase3\fixtures\q1test\04_Multi Artist A.flac"
+（其余条目同格式）
+```
+
+截图：`captures/offline-boot.png`、`captures/offline-error.png`。
+
+### 4b.4 阶段三：同路径恢复
+
+目录改回原名后重启：
+
+| 检查 | 结果 |
+| --- | --- |
+| 播放列表条数 | **20**（全部接回） |
+| 时长显示 | 正常（`0:05`） |
+| 是否有重复条目 | **无** |
+| 播放测试 | **无错误弹窗** |
+| `metadb` 记录数 | 20 → 20 |
+| `info` 非空数 | 20 → 20 |
+
+截图：`captures/after-restore.png`、`captures/after-restore-play.png`。
+
+### 4b.5 结论
+
+| 结论 | 依据 |
+| --- | --- |
+| 目录不可达不删条目 | `metadb` 20 条前后不变 |
+| 短时间离线不写 `lastseen` | 三阶段全程 NULL |
+| 恢复按路径接回、不重新导入 | 同路径改名改回后直接命中，无重复 |
+| 错误在交互层显式呈现 | `Object not found` + 完整路径 |
+| **28 天宽限是否为真实阈值** | **仍未验证**（离线仅数分钟） |
+
+## 四之三、Q1 补充：自动播放列表存储形态与一个阴性结果
+
+### 4c.1 持久化结构（实测）
+
+A′ 运行后 `profile\playlists-v2.0\`：
+
+| 文件 | 内容 |
+| --- | --- |
+| `index.txt` | `EF BB BF` + `1513D360-…:Default Playlist\r\n` |
+| `playlist-<GUID>.fplite` | `EF BB BF` + 每行一个**相对路径** |
+| `playlist-<GUID>-props.sqlite` | `props(key TEXT UNIQUE PK, data BLOB)`、`markers(key TEXT UNIQUE PK, value INTEGER)` |
+
+与第二轮静态结论一致。
+
+### 4c.2 阴性结果：注入 16B blob 不足以构成 autoplaylist
+
+**输入**：从 B 样本取真实记录
+
+```
+props: key='52655132-8F57-4C56-9AEE-17525C679A5D'  data(16B)=671c4978682fc44f86f3d877004169cf
+```
+
+**操作**：注入 A′ 默认列表的 props → 重启（两次，一次验证识别、一次验证是否被清理）。
+
+| 检查 | 结果 |
+| --- | --- |
+| 注入写入成功 | ✅ |
+| 重启后是否被清除 | ❌ 原样保留 |
+| 列表是否变为动态 | ❌ 右键 `Remove` 仍可用（autoplaylist 会禁用编辑） |
+
+**结论**：该 key + 16B blob **只是标记**，完整定义还缺别处的数据。第二轮「查询串编码在 16B blob 或 `.fplite` 里」的推测**被否证**。
+
+### 4c.3 GUI 菜单探测记录（供后续接手）
+
+逐层展开并截图存档，**均未发现 `Create autoplaylist`**：
+
+| 入口 | 子项 |
+| --- | --- |
+| 条目右键 | `Play / Remove / Crop / Sort / Cut / Copy / Add to playback queue / Open containing folder / Tagging / File Operations / Convert / Utilities / ReplayGain / Properties` |
+| `Tagging` | `Get tags from freedb / Sanitize tags… / Attach pictures / Batch attach pictures / Remove pictures / Remove all pictures` |
+| `Utilities` | `Scan per-file track gain / Scan as a single album / Scan as albums (by tags) / Remove ReplayGain information` |
+| `File Operations` | `Copy to… / Move to… / Rename to… / Delete file` |
+| 播放列表标签右键 | `Rename playlist / Remove playlist / Add new playlist / Move left / Move right / Save all playlists… / Save playlist… / Load playlist… / Lock reordering / "<name>" contents` |
+
+截图：`captures/ctx-full.png`、`captures/sub-tagging.png`、`captures/submenu-utilities.png`、`captures/sub-item.png`、`captures/ctx-playlisttab.png`、`captures/submenu-contents.png`。
+
+**推断**：`Create autoplaylist` 在 `Album List` 面板的分支右键里，而该面板在默认 DUI 布局下未显示。
+
 ## 五、受阻项与交接
 
 ### 5.1 B（foobaka）未启动
@@ -269,10 +387,27 @@ source_documents:
 
 ### 5.3 U1 与 A1
 
-| 项 | 受阻原因 |
+| 项 | 状态 |
 | --- | --- |
-| U1 长列表首达/回访/头图 | 需 300 条带编号封面夹具 + 逐帧录像分析；本轮未构造 |
-| A1 PCM 接缝抓样 | 无 ffmpeg；WASAPI 环回需管理员或专用设备 |
+| U1 夹具 | **已就绪**：300 条，含 250 unique / 30 none / 20 shared，全部验证音频未变（见 §六） |
+| U1 实测 | **未做**：需长时录屏 + 逐帧分析 |
+| A1 PCM 接缝抓样 | **未做**：无 ffmpeg；WASAPI 环回需管理员或专用设备 |
+
+### 5.4 Q1 建自动播放列表（本轮主要缺口）
+
+| 项 | 状态 |
+| --- | --- |
+| 持久化结构 | **已实测**（§4c.1） |
+| 真实 props 记录 | **已从 B 取得**（§4c.2） |
+| 注入实验 | **已完成，阴性结果**（16B blob 不足以构成定义） |
+| **GUI 创建** | **未成功**：默认 DUI 布局无 `Album List` 面板，`Create autoplaylist` 入口不可达 |
+
+**接手步骤**（本机可继续）：
+
+1. `View → Layout → Quick Appearance Setup` → 选含 `Album List` 的布局。
+2. Album List 面板里右键一个分支 → 找 `Create autoplaylist`。
+3. 建完立即退出，检查 `playlists-v2.0\` 是否新增 `playlist-<GUID>-props.sqlite`，**看 props 里有几个 key、各多少字节**。
+4. 改一个标签使该曲进出规则，记录生效延迟；重启复核对齐。
 
 ## 六、产出清单
 
@@ -280,18 +415,79 @@ source_documents:
 
 | 类别 | 内容 |
 | --- | --- |
-| `scripts/` | `drive.mjs`（输入注入）、`capture.mjs`（PrintWindow 捕获）、`flac_tags.py`（FLAC 标签读写）、`make_q1_fixture.py`（夹具生成）、`q1_run.mjs`（17 条主查询）、`q1b_run.py`（18 条探针）、`q1_truth.py`/`q1_compare.py`/`q1_semantics.py`（分析）、`l1_io.py`（指纹与增量）、`errata_table.py`（12 字节重表） |
-| `captures/` | 27 张过程截图 + `q1/` 17 张查询结果 + `q1b/` 探针数据 |
-| `raw/` | `q1-all-results.json`、`q1-compare.json`、`q1-truth-table.json`、`errata-table.txt`、`q1b-run.txt` |
+| `scripts/` | `drive.mjs`、`capture.mjs`、`menu.mjs`（统一菜单驱动）、`flac_tags.py`（FLAC 标签读写）、`make_q1_fixture.py`、`q1_run.mjs`、`q1b_run.py`、`q1_truth.py`/`q1_compare.py`/`q1_semantics.py`、`l1_io.py`、`errata_table.py`、`props_probe.py`、`inject_autoplay.py`、`metadata` 与 `offline` 系列探针 |
+| `captures/` | 过程截图（环境验证、菜单层展开、离线/恢复、查询结果 17 张等） |
+| `raw/` | `q1-all-results.json`、`q1-compare.json`、`q1-truth-table.json`、`errata-table.txt`、`q1b-run.txt`、`metadb-before-offline.sqlite`、`l1-offline-stats.json`、`inject-state.json`、`props-inspect.txt`、`b-props.txt` |
 | `io/` | `fingerprint.json`、`edit-tag.json` |
-| `fixtures/` | `q1/`（原名版）、`q1test/`（去空格版，实际使用） |
+| `fixtures/` | `q1/`、`q1test/`（Q1 用）；`u1/`（300 条 U1 夹具） |
+| `workstream-u1/` | U1 夹具的生成/验证脚本、`truth-table.json`、`verification-report.json`、`README.md` |
 | `lab/` | `Aprime/`（运行副本）、`foobaka/`（未启动） |
 
-## 七、复跑要点
+## 七、U1：长列表（300 条，本轮新增实测）
+
+### 7.1 夹具与载入
+
+`.rea-analysis/phase3/fixtures/u1/`：300 条 FLAC，含 250 unique / 30 none / 20 shared 覆盖。
+以目录为参数启动 A′，**启动 + 载入 300 条耗时 20.1 s**。
+
+验证：状态栏显示 `FLAC | 281 kbps | 44100 Hz | stereo`，说明音频正常识别。
+
+### 7.2 一个关键前置发现：默认 DUI 布局不显示封面
+
+默认 `Default Playlist` 布局只有 `Artist/album`、`Track ...`、`Title / track artist`、`Dura...` 四列，
+**没有封面面板**。
+
+> 这意味着 phase-2 计划设想的「长列表首达封面计时」在**默认布局下不可测**。
+> 要测封面必须先切到含封面面板的布局（如 `Album art in playlist`）。
+> 按计划 §U1「没有等价面板时附入口核查，配对指标记为不适用」，此处应记为**布局不适用**。
+
+### 7.3 首达（滚动到本次会话未显示区域）
+
+**方法**：在列表区滚轮 60 格（实测耗时 4.87 s）。
+
+**结果**：视图从第 10 行跳到第 **181–224** 行区间，**内容完整、无空白行、无占位符**，
+所有行的 Artist/album、Track、Title 均已渲染。
+
+截图：`captures/u1-loaded.png`（顶部）、`captures/u1-scrolled.png`（首达落点）。
+
+**这是 A′ 在本机 300 条列表上的首达基线**：**无空白暴露**。
+
+### 7.4 回访：落点控制未达标
+
+**问题**：两次「回到顶部再滚回同一落点」得到的画面**不一致**。
+
+| 尝试 | 方法 | 结果 |
+| --- | --- | --- |
+| 1 | 滚轮 ±60 格 | 落点不同（哈希 `E7FE…` vs `A9F5…`） |
+| 2 | 滚动条拖拽到固定像素 | 落点仍不同（`CD02…` vs `44E1…`） |
+
+**原因**（推断）：滚轮格数与行偏移不是严格线性关系；滚动条拖拽的**起点**取决于当前拇指位置，
+两次拖拽起点不同 → 终点行不同。
+
+**因此 U1 的「回访」三对交错测量本轮未达成**。需要更可靠的定位方式（如
+`ScrollIntoView` 等价手段、或按名称搜索定位后返回），而 foobar2000 的默认列表没有暴露这种接口。
+
+**状态：回访指标 = 受阻（落点控制未解决）**，不是「不适用」。
+
+### 7.5 U1 结论
+
+| 指标 | 状态 |
+| --- | --- |
+| 长列表可载入（300 条） | ✅ 20.1 s |
+| 首达无空白 | ✅ 实测无空白 |
+| 封面面板 | ❌ **默认布局无此面板**（记为不适用） |
+| 头图同尺寸对照 | ❌ 同上（无头图面板） |
+| 真回访（同落点） | ❌ **落点控制未达标** |
+| 错图/无图对照 | ❌ 未做（需封面面板） |
+
+## 八、复跑要点
 
 1. **删 `profile\running`** 再启动，否则弹「异常终止」。
 2. **窗口标题在 `PrintWindow` 之外读**：`GetWindowTextW` 拿标题里的 `(N results)` 比 OCR 可靠。
-3. **`PrintWindow` 必须用 flags=2**。
+3. **`PrintWindow` 必须用 flags=2**（`PW_RENDERFULLCONTENT`），否则遮挡时抓到的是遮挡物。
 4. **`WM_SETTEXT` + `WM_COMMAND(EN_CHANGE)`** 才能触发搜索；只 `WM_SETTEXT` 不一定刷新结果。
 5. **夹具目录名不要带空格**——命令行传参会按空格拆分，导致路径错乱。
 6. **坐标是屏幕绝对坐标**：窗口在 (338,338)，控件坐标要加上这个原点。
+7. **菜单项坐标不能靠猜**：foobar2000 的弹出菜单是自绘窗口，`PrintWindow` 对其中一部分返回 empty。可靠做法是 `SetCursorPos` 悬停后枚举可见窗口，用 `GetWindowRect` 拿到真实矩形再定位。
+8. **跨 PowerShell 调用变量会丢**：每次 `pwsh` 都是独立进程，`$pid` 之类的变量不会保留，必须每次从文件读。
+9. **离线实验用目录改名**：无需管理员即可模拟根目录不可达，比 VHD 挂载轻得多。

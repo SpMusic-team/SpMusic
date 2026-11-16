@@ -582,14 +582,50 @@ props: key='52655132-8F57-4C56-9AEE-17525C679A5D'  data(16B)=671c4978682fc44f86f
 
 ## 五、受阻项与交接
 
-### 5.1 B（foobaka）未启动
+### 5.1 B（foobaka）：启动成功但界面无法渲染（本轮已试到极限）
 
-| 项 | 状态 |
+**本轮实际做的事**：
+
+| 步骤 | 结果 |
 | --- | --- |
-| 副本已就绪 | `.rea-analysis/phase3/lab/foobaka/`（1,195 文件，466.6 MB） |
-| 核心 exe SHA | `BC262A0A…`（与原件一致） |
-| 未启动原因 | 第二轮已确认 B 需两个 COM 组件注册（`foo_uie_wsh_panel_mod_plus` 依赖），未验证前置条件时启动会得到「界面归零」而非可比状态 |
-| 需要 | 先按 B 的 `【1、注册所需动态库（必须运行）】.bat` 完成注册并验证界面可用 |
+| 清理 `profile\running` 标记 | 完成 |
+| 首次启动 | 进程存活，但主窗口 **1248×162、标题为空、画面全白** |
+| 提权执行 B 的注册脚本（`regsvr32 dynwrapx.dll` + `regsvr32 AutoItX3.dll`） | **成功**（`elevated=True`，两个 DLL 都执行） |
+| 注册后再次启动 | **仍是 1248×162、标题为空、画面全白** |
+| 进程状态 | **存活**，133 个线程，`Responding=True` |
+
+**结论：不是崩溃，也不是缺 DLL 注册，而是布局渲染失败。**
+
+**根因（已定位）**：B 使用 **Columns UI**（`user-components\foo_ui_columns`），
+其 `theme.fth` 是 **1398 字节的二进制格式**，
+内容包含「播放列表标签」「播放列表视图」等自定义面板定义，
+**与 DUI 的 `.fth` 完全不兼容**。
+
+B 还加载了 **30 个 user-components**：
+
+```
+foo_cad_plus, foo_dsd_converter, foo_dsd_processor, foo_hdcd,
+foo_input_dvda/exe/ffmpeg/monkey/ncm/sacd/shorten/tak/tta/zxtune,
+foo_midi, foo_mpv, foo_out_asio, foo_out_asio+dsd, foo_out_upnp,
+foo_scheduler, foo_ui_columns, foo_ui_hacks, foo_uie_eslyric,
+foo_uie_panel_splitter, foo_uie_wsh_panel_mod_plus, foo_upnp, ...
+```
+
+其中 `foo_uie_panel_splitter` + `foo_ui_columns` + `foo_uie_wsh_panel_mod_plus`
+共同构成布局骨架。任何一个组件在**这台机器**上初始化失败，
+Columns UI 就渲染不出面板——而它不像 DUI 那样有回退布局。
+
+**这不是权限问题，也不是注册问题**，用提权跑注册脚本已经排除了这一层。
+
+**要继续推进 B，需要的是**：
+
+1. 在**有完整桌面交互**的环境里手工启动 B，看是否有组件加载失败的弹窗
+   （本机的自动化注入对 B 无效，因为主窗口没有可交互控件）。
+2. 或改用 B 的 `profile` 备份里**已知能用**的配置组合。
+3. 或退一步：**放弃 B 的 UI 对照**，只做**数据层对照**
+   （B 的 `metadb.sqlite` / `playlists-v2.0` / `library-v2.0` 结构已经可直接对比，
+   不需要 UI 起来）。这一条本轮已验证可行——B 的 autoplaylist props 就是从它的
+   磁盘文件里直接读出来的（§4d.2 的 `52655132-…`）。
 
 ### 5.2 进程级 I/O（已解决，留作复现参考）
 

@@ -265,7 +265,9 @@ impl LibraryFolderRegistry {
                 )));
             }
         };
-        let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|error| {
+        // Some Windows editors add a UTF-8 BOM when saving the registry.
+        let json = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes);
+        let value: serde_json::Value = serde_json::from_slice(json).map_err(|error| {
             LibraryError::storage(format!("Saved library folders are invalid: {error}"))
         })?;
         let settings = match value.get("version").and_then(serde_json::Value::as_u64) {
@@ -595,33 +597,78 @@ mod tests {
     }
 
     #[test]
-    fn migrates_v1_offline_roots_and_writes_v2_without_changing_storage_path() {
+    fn reads_bom_prefixed_v2_and_saves_with_the_stored_revision() {
         let root = test_dir();
         let registry = LibraryFolderRegistry::new(&root);
-        let missing = root.join("offline").to_string_lossy().into_owned();
-        fs::write(
-            &registry.path,
-            serde_json::to_vec(&LegacyStoredFolders {
-                version: 1,
-                folders: vec![missing.clone()],
+        let settings = LibraryFolderSettings {
+            revision: 13,
+            roots: vec![RootSelection {
+                path: root.to_string_lossy().into_owned(),
+                selected: true,
+                directory_rules: vec![DirectorySelectionRule {
+                    relative_path: "excluded".into(),
+                    selected: false,
+                }],
+            }],
+        };
+        let mut bytes = b"\xEF\xBB\xBF".to_vec();
+        bytes.extend(
+            serde_json::to_vec(&StoredFolders {
+                version: REGISTRY_VERSION,
+                revision: settings.revision,
+                roots: settings.roots.clone(),
             })
             .unwrap(),
-        )
-        .unwrap();
-        let settings = registry.get().unwrap();
-        assert_eq!(settings.revision, 0);
-        assert_eq!(settings.roots[0].path, missing);
-        assert!(settings.roots[0].selected);
-        assert!(settings.roots[0].directory_rules.is_empty());
-        let mut input = replacement(&settings);
+        );
+        fs::write(&registry.path, &bytes).unwrap();
+
+        let loaded = registry.get().unwrap();
+        assert_eq!(loaded, settings);
+        assert_eq!(fs::read(&registry.path).unwrap(), bytes);
+        let mut input = replacement(&loaded);
         input.roots[0].selected = false;
-        assert_eq!(registry.replace(input).unwrap().revision, 1);
-        let stored: serde_json::Value =
-            serde_json::from_slice(&fs::read(&registry.path).unwrap()).unwrap();
-        assert_eq!(stored["version"], 2);
-        assert_eq!(stored["roots"][0]["selected"], false);
-        assert!(stored.get("folders").is_none());
+        let saved = registry.replace(input).unwrap();
+        assert_eq!(saved.revision, 14);
+        assert!(!saved.roots[0].selected);
+        assert_eq!(
+            saved.roots[0].directory_rules,
+            settings.roots[0].directory_rules
+        );
+        assert!(fs::read(&registry.path).unwrap().starts_with(b"{"));
+        assert_eq!(registry.get().unwrap(), saved);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn migrates_v1_offline_roots_and_writes_v2_without_changing_storage_path() {
+        for prefix in [b"".as_slice(), b"\xEF\xBB\xBF"] {
+            let root = test_dir();
+            let registry = LibraryFolderRegistry::new(&root);
+            let missing = root.join("offline").to_string_lossy().into_owned();
+            let mut bytes = prefix.to_vec();
+            bytes.extend(
+                serde_json::to_vec(&LegacyStoredFolders {
+                    version: 1,
+                    folders: vec![missing.clone()],
+                })
+                .unwrap(),
+            );
+            fs::write(&registry.path, bytes).unwrap();
+            let settings = registry.get().unwrap();
+            assert_eq!(settings.revision, 0);
+            assert_eq!(settings.roots[0].path, missing);
+            assert!(settings.roots[0].selected);
+            assert!(settings.roots[0].directory_rules.is_empty());
+            let mut input = replacement(&settings);
+            input.roots[0].selected = false;
+            assert_eq!(registry.replace(input).unwrap().revision, 1);
+            let stored: serde_json::Value =
+                serde_json::from_slice(&fs::read(&registry.path).unwrap()).unwrap();
+            assert_eq!(stored["version"], 2);
+            assert_eq!(stored["roots"][0]["selected"], false);
+            assert!(stored.get("folders").is_none());
+            fs::remove_dir_all(root).unwrap();
+        }
     }
 
     #[test]

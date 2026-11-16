@@ -156,8 +156,10 @@ async function harness(options = {}) {
     probeAudioPlaylistCover: async (sourcePath) => {
       probeRequests.push(sourcePath)
       const index = sources[0].tracks.findIndex((track) => track.sourcePath === sourcePath)
-      const otherIndex = sources[1].tracks.findIndex((track) => track.sourcePath === sourcePath)
-      if (otherIndex >= 0) return { id: `other-${otherIndex}`, sourcePath, coverArt: { filePath: `/music/other/${otherIndex}.jpg` } }
+      const otherIndex = sources[1]?.tracks.findIndex((track) => track.sourcePath === sourcePath) ?? -1
+      if (index === -1 && otherIndex >= 0) {
+        return { id: sources[1].tracks[otherIndex].id, sourcePath, coverArt: { filePath: `/music/other/${otherIndex}.jpg` } }
+      }
       if (configuredCover === 'missing') return { id: `track-${index}`, sourcePath, coverArt: null }
       return {
         id: `track-${index}`,
@@ -469,8 +471,9 @@ async function harness(options = {}) {
    * `setVisibleTrackIds` is the real entry point: it decides the 512 edge for the
    * pinned first track, which is what the 512 branch of the pump reads.
    */
-  const demandHero = async (trackIds, keepPersistentArtwork = true) => {
-    api.setVisibleTrackIds('/music/album', trackIds, keepPersistentArtwork, true)
+  const demandHero = async (trackIds, keepPersistentArtwork = true, heroEdge) => {
+    api.setVisibleTrackIds('/music/album', trackIds, keepPersistentArtwork, true,
+      heroEdge === undefined ? undefined : { heroEdge })
     await flush()
   }
   /**
@@ -958,6 +961,20 @@ test('the hero key is not reachable from the row key map', async () => {
   } finally { h.unmount() }
 })
 
+test('a shared track uses the displayed detail scope for its hero key', async () => {
+  const h = await harness()
+  try {
+    const [detail, other] = h.sources
+    other.tracks.push(detail.tracks[0])
+    h.render(true, detail)
+    await h.demandHero(['track-0', 'track-1'])
+
+    assert.equal(JSON.parse(h.heroKey())[0], 'folder\u0000/music/album')
+    assert.equal(h.hero()?.coverThumbnail?.width, 1536)
+    assert.equal(JSON.parse(h.rowKey('other-0'))[0], 'folder\u0000/music/other')
+  } finally { h.unmount() }
+})
+
 // ---------------------------------------------------------------------------
 // Late replies and withdrawal
 // ---------------------------------------------------------------------------
@@ -1033,6 +1050,47 @@ test('an unavailable first row never starts a hero publication for the second ro
     assert.equal(h.pathRequests.some((request) => request.kind === 'cover'), false)
     assert.equal(h.hero('track-1'), undefined)
   } finally { h.unmount() }
+})
+
+test('a changed hero tier discards the in-flight result and requests the latest tier', async () => {
+  const h = await harness()
+  try {
+    h.render(true, h.sources[0])
+    h.holdHeroPath()
+    await h.demandHero(['track-0', 'track-1'], true, 1536)
+    assert.equal(h.heroReadHeld(), true)
+    await h.demandHero(['track-0', 'track-1'], true, 1024)
+
+    h.releaseHeroPath()
+    await h.flush()
+    assert.deepEqual(h.pathRequests.filter((request) => request.kind === 'cover')
+      .map((request) => request.input.maxEdge), [1536, 1024])
+    assert.equal(h.hero()?.coverThumbnail?.width, 1024)
+  } finally {
+    h.releaseHeroPath()
+    h.unmount()
+  }
+})
+
+test('withdrawing demand releases the previous hero while its replacement is in flight', async () => {
+  const h = await harness()
+  try {
+    h.render(true, h.sources[0])
+    await h.demandHero(['track-0', 'track-1'], true, 1536)
+    assert.equal(h.hero()?.coverThumbnail?.width, 1536)
+    h.holdHeroPath()
+    await h.demandHero(['track-0', 'track-1'], true, 1024)
+    assert.equal(h.heroReadHeld(), true)
+
+    await h.demandHero(['track-0', 'track-1'], false)
+    assert.equal(h.hero(), undefined)
+    h.releaseHeroPath()
+    await h.flush()
+    assert.equal(h.hero(), undefined)
+  } finally {
+    h.releaseHeroPath()
+    h.unmount()
+  }
 })
 
 test('withdrawing the hero tier releases the high-tier image', async () => {

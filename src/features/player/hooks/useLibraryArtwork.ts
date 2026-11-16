@@ -275,10 +275,26 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
       else if (runtime.consumerPins.delete(path) && runtime.mounted) runtime.refresh()
     }
   }) }, [artworkStore])
-  const artworkSource = useMemo(() => ({ store: artworkStore,
-    keyByTrackId: new Map(sources.flatMap(source => source.tracks.map(item => [item.id,
-      playlistArtworkKey(`${source.sourceKind}\u0000${normalizeAudioSourcePath(source.sourcePath)}`, item.id, item.sourcePath)] as const))),
-  }), [sources, artworkStore])
+  const detailScope = useMemo(() => {
+    if (!detail) return undefined
+    const path = normalizeAudioSourcePath(detail.sourcePath)
+    const sourceKind = detail.sourceKind
+      ?? sources.find((source) => normalizeAudioSourcePath(source.sourcePath) === path)?.sourceKind
+      ?? 'folder'
+    return `${sourceKind}\u0000${path}`
+  }, [sources, detail])
+  const artworkSource = useMemo(() => {
+    const keyByTrackId = new Map(sources.flatMap(source => source.tracks.map(item => [item.id,
+      playlistArtworkKey(`${source.sourceKind}\u0000${normalizeAudioSourcePath(source.sourcePath)}`, item.id, item.sourcePath)] as const)))
+    // A track may occur in several playlists. Consumers in the displayed
+    // detail need that playlist's key, which is also where its hero publishes.
+    if (detail && detailScope) {
+      for (const item of detail.tracks) {
+        keyByTrackId.set(item.id, playlistArtworkKey(detailScope, item.id, item.sourcePath))
+      }
+    }
+    return { store: artworkStore, keyByTrackId }
+  }, [sources, detail, detailScope, artworkStore])
 
 
   useEffect(() => {
@@ -638,11 +654,10 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
      * harmless.
      */
     const startHeroJob = () => {
-      if (!runtime.mounted || !runtime.visible) return
-      if (runtime.heroActive) return
+      if (!runtime.mounted) return
       const detail = runtime.detail
       const edge = runtime.heroDesiredEdge
-      if (!detail || edge === undefined) {
+      if (!runtime.visible || !detail || edge === undefined) {
         // The demand withdrew: release the high-tier image and fall back to the
         // row preview. Same moment the old code dropped the first row to 256.
         //
@@ -653,6 +668,7 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
         clearHero()
         return
       }
+      if (runtime.heroActive) return
       const first = detail.tracks[0]
       const source = libraryHeroSource(runtime)
       if (!first || !source) return
@@ -675,6 +691,7 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
       const isCurrent = () => runtime.mounted && runtime.visible
         && runtime.heroGeneration === generation
         && runtime.detailScope === scope
+        && runtime.heroDesiredEdge === edge
         && runtime.descriptors.get(normalizedSourcePath)?.artworkRevision === revision
       void (async () => {
         let thumbnail: PlaylistCoverImage | undefined
@@ -746,7 +763,10 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
           if (isCurrent()) runtime.hero.settledIdentity = identity
         } finally {
           if (thumbnail) releasePlaylistCoverUrl(thumbnail.src)
-          if (runtime.heroGeneration === generation) runtime.heroActive = false
+          if (runtime.heroGeneration === generation) {
+            runtime.heroActive = false
+            if (runtime.heroDesiredEdge !== edge) startHeroJob()
+          }
         }
       })()
     }
@@ -1045,15 +1065,7 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
       runtime.detailVisiblePaths.clear()
     }
     runtime.detail = detail
-    // The detail's scope, resolved from the source list the row keys are built
-    // from. Falling back to the detail object itself covers a projection that
-    // still carries its own identity.
-    const matchedSource = detail
-      ? sources.find((source) => normalizeAudioSourcePath(source.sourcePath) === normalizeAudioSourcePath(detail.sourcePath))
-      : undefined
-    runtime.detailScope = detail
-      ? `${matchedSource?.sourceKind ?? detail.sourceKind ?? 'folder'}\u0000${normalizeAudioSourcePath(detail.sourcePath)}`
-      : undefined
+    runtime.detailScope = detailScope
     const detailPaths = new Set(detail?.tracks.map((descriptor) => normalizeAudioSourcePath(descriptor.sourcePath)))
     for (const key of runtime.detailPaths.keys()) if (!detailPaths.has(key)) runtime.detailPaths.delete(key)
     for (const key of runtime.detailVisiblePaths) if (!detailPaths.has(key)) runtime.detailVisiblePaths.delete(key)
@@ -1078,7 +1090,7 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
     runtime.rows = new Map([...runtime.cache].map(([key, entry]) => [key, entry.row]))
     artworkStore.notifyAll()
     setRows(runtime.rows)
-  }, [sources, detail, warmTrackId, artworkStore])
+  }, [sources, detail, detailScope, warmTrackId, artworkStore])
 
   useEffect(() => {
     const runtime = runtimeRef.current

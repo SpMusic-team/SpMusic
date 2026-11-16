@@ -32,11 +32,15 @@ source_documents:
 | 目录不可达会立刻删条目吗？ | **不会**——按 SQL 语义与某份快照的 `retention`（折算 28 天）推断有宽限期，**运行行为未实测** |
 | 有换盘重定位能力吗？ | **没有** |
 
-## 一、持久化形态：三层，职责切得很干净
+## 一、持久化形态：四层，职责切得很干净
+
+> **第三轮补充（运行实测）**：配置曲库根目录后，foobar2000 **新建了 `profile\library-v2.0\`**，
+> 内含 `folders` / `filters` / `<16HEX GUID>\content.sqlite`。此前该目录不存在。详见 §1.4、§1.5。
 
 | 层 | 位置 | 职责 |
 | --- | --- | --- |
 | 元数据权威库 | `profile\metadb.sqlite` | 曲目身份 + 标签缓存 + 统计 |
+| **曲库根配置** | `profile\library-v2.0\folders` | **根目录清单（二进制）** |
 | 目录树快照 | `profile\library-v2.0\<16HEX>\content.sqlite` | watcher 的目录状态 |
 | 组件索引 | `profile\index-data\<GUID>` | 各插件自己的索引 |
 
@@ -88,6 +92,62 @@ CREATE TABLE IF NOT EXISTS metadb (
 | `playCount`/`rating`/`dateAdded`/`firstPlayed`/`lastPlayed` | 列存在 | 本样本**全部 NULL**（该库从未播放过） |
 
 > `playCount` 等 5 列存在但为空，说明**主程序内建了这些字段但本样本没产生数据**。这修正了「播放统计由组件提供」的说法——主表结构里就有。
+
+### 1.4 `library-v2.0` 的实测格式（第三轮新增）
+
+**`folders`（34 B，二进制）**：
+
+```
+u32  count = 1
+u32  len   = 22
+char[len]  path = "..\..\fixtures\q1test\"   （UTF-8，相对 profile 目录）
+```
+
+实测 hex：`01000000 16000000 2e2e5c2e2e5c66697874757265735c7131746573745c 00000000`
+
+**`filters`（14 B，二进制）**：同样的 `count + len + bytes` 结构，内容为 `\0*.CUE`。
+
+**`<16HEX GUID>\content.sqlite`**：GUID 目录名由根路径派生（本例 `37D881695A4EBC4D`）。
+表结构与第二轮从主程序内嵌 SQL 推出的**完全一致**：
+
+```sql
+CREATE TABLE media (name TEXT UNIQUE PRIMARY KEY, fileId INTEGER)
+CREATE TABLE files (id INTEGER PRIMARY KEY, parentId INTEGER, name TEXT, attribs INTEGER, timestamp INTEGER)
+CREATE INDEX media_fileID ON media (fileId)
+CREATE INDEX files_parentId ON files (parentId)
+CREATE INDEX files_name2 ON files (name, parentId)
+CREATE TABLE config (key TEXT UNIQUE PRIMARY KEY, value TEXT)
+```
+
+**这从运行侧验证了第二轮 §8 的静态推断**（`media` / `files` / `config` 三表 + 三个索引）。
+
+### 1.5 Media Library 的三个 viewer 与配置流程（运行实测）
+
+`Library → Configure` 打开的 `Preferences: Media Library` 里，
+`Installed media library viewers` 列表实测为**三项**：
+
+| viewer | 初始状态 |
+| --- | --- |
+| `Search` | 未激活 |
+| `ReFacets` | 未激活 |
+| `Album List` | 未激活 |
+
+**这直接验证了第二轮「ReFacets 是官方 DUI 内建能力」的结论**——它就列在官方组件库里，
+与 `Search` / `Album List` 并列，不是第三方组件。
+
+**配置流程（实测可行）**：
+
+1. `Music folders` → `Add...` → 弹出**系统「选择文件夹」对话框**（`#32770`）
+2. 在该对话框的 `Edit` 控件里 `WM_SETTEXT` 写入路径 → 点「选择文件夹」按钮
+3. Music folders 状态从 `Pending` → **`Monitoring`**（曲库生效）
+4. 点 `OK` 应用 → 生成 `library-v2.0\folders` 并开始扫描
+
+**运行后 Album List 立即工作**：左侧显示 `All Music (7)` 并按 `DecoyBand` / `SpmQ3` 分组，
+20 条曲目全部入库，Properties 面板同步显示选中曲目的完整元数据。
+
+**踩坑记录（重要）**：`Add...` / `Activate` 这些 **foobar2000 自绘按钮对 `BM_CLICK`
+与注入的鼠标事件均无响应**；只有**键盘 Enter**（焦点在按钮上时）与
+**系统对话框的 `WM_SETTEXT`** 有效。这一条对后续任何 DUI 自动化都适用。
 
 ## 二、增量核对：`size` + `mtime`，单曲是最小单位
 

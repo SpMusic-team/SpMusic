@@ -781,23 +781,41 @@ FILE "chirp.flac" WAVE
 
 **边界核验**：`220,500 × 2 = 441,000`，CUE 的 `00:05:00` 正好是 220,500 样本 → **分割点与 CUE 索引点一致**，夹具可用于三类接缝对照（整轨 / 两文件 / 同文件 CUE 分轨）。
 
-### 8.2 抓样受阻（原因已定位：不是权限问题）
+### 8.2 抓样受阻（两个障碍都已排除到底）
 
-本轮已解决**权限**障碍（有提权通道），但发现了**更根本的障碍**：
+本轮已解决**权限**障碍（有提权通道），但发现**两个更根本的障碍**，都试到了尽头：
 
-| 检查项 | 实测结果 |
+**障碍一：两个 ffmpeg 构建都不含 WASAPI 输入**
+
+| 构建 | 版本 | configuration 含 wasapi |
+| --- | --- | --- |
+| `D:\ffmpeg\bin\ffmpeg.exe` | 2026-04-30 gyan.dev full build（224 MB） | ❌ |
+| B 自带 `foobaka-FFmpeg64\ffmpeg.exe` | N-105893 (2022) 精简版 | ❌ |
+
+`-f wasapi` 直接报 `Unknown input format: 'wasapi'`。
+
+**障碍二：系统没有环回捕获端点**
+
+`-f dshow` 能工作，但只列出**麦克风类**输入：
+
+```
+"麦克风 (Virtual Desktop Audio)"  (audio)
+"Microphone (Usb Audio Device)"   (audio)
+"Microphone (TP55)"               (audio)
+```
+
+**没有** `Stereo Mix` / 立体声混音 / `Wave Out Mix` / `What U Hear`。
+
+其它尝试：
+
+| 尝试 | 结果 |
 | --- | --- |
-| ffmpeg 可用性 | ✅ `D:\ffmpeg\bin\ffmpeg.exe`（2026-04-30 gyan.dev full build） |
-| 管理员权限 | ✅ 有（计划任务 `RunLevel=HighestAvailable` 可反复触发） |
-| **ffmpeg 是否含 WASAPI 输入** | ❌ **该构建的 configuration 里没有 `--enable-wasapi`**，`-f wasapi` 报 `Unknown input format` |
-| `-f dshow` 输入 | 可用，但只列出**麦克风类**设备（`Microphone (Usb Audio Device)` / `Microphone (TP55)` / `麦克风 (Virtual Desktop Audio)`） |
-| **是否有环回捕获端点** | ❌ **系统未暴露** `Stereo Mix` / 立体声混音 / `Wave Out Mix` / `What U Hear` 一类设备 |
-| `-f openal` | 能识别设备类型，但 `Cannot open device: Invalid Value` |
-| 系统输出端点 | 有（`扬声器 (TP55)`、`NVIDIA High Definition Audio` 等） |
+| `-f dshow -i audio="扬声器 (TP55)"` | `Could not find audio only device`（dshow 不把渲染端点当输入） |
+| `-f openal -i default` | `Cannot open device: Invalid Value` |
+| 系统输出端点 | 有（`扬声器 (TP55)`、`NVIDIA High Definition Audio`），但无法回录 |
 
-**结论：A1 阻塞在「系统没有可用的环回捕获端点」**，
-叠加「本机 ffmpeg 构建不含 WASAPI 输入」。
-**这不是权限问题**——提权后同样不可用，所以本轮修好权限也无法推进 A1。
+**结论：A1 在本机不可完成。** 这不是权限问题——提权后同样不可用。
+缺的是**环回捕获端点**这个硬件/驱动层能力，以及一个带 wasapi 的 ffmpeg。
 
 ### 8.3 接手步骤（外部机器，两条路任选其一）
 

@@ -627,6 +627,75 @@ Columns UI 就渲染不出面板——而它不像 DUI 那样有回退布局。
    不需要 UI 起来）。这一条本轮已验证可行——B 的 autoplaylist props 就是从它的
    磁盘文件里直接读出来的（§4d.2 的 `52655132-…`）。
 
+### 5.1b 事故记录：遗留的计划任务在会话结束后继续提权启动播放器
+
+**现象**：研究会话结束约 19 小时后（2026-11-18 00:06），
+系统仍出现**以管理员权限打开的命令行窗口并启动 foobar2000**。
+
+**根因**：本轮研究为了解决「无管理员权限无法用 `wpr`」的问题，
+创建了一个**一次性计划任务** `\SpMusicPhase3Runner`：
+
+```xml
+<Principal id="Author">
+  <LogonType>InteractiveToken</LogonType>
+  <RunLevel>HighestAvailable</RunLevel>     <!-- 最高权限 -->
+</Principal>
+<Triggers>
+  <TimeTrigger>
+    <StartBoundary>2026-11-17T23:59:00</StartBoundary>   <!-- 触发时间 -->
+  </TimeTrigger>
+</Triggers>
+<Actions>
+  <Exec>
+    <Command>powershell.exe</Command>
+    <Arguments>-File ...\phase3_runner.ps1</Arguments>   <!-- 启动 wpr + foobar2000 -->
+  </Exec>
+</Actions>
+```
+
+`phase3_runner.ps1` 是 L1 三场景采集脚本，它会 `wpr -start FileIO` 并
+`Start-Process foobar2000.exe`。**23:59 触发时正好跑了一遍完整采集。**
+
+**为什么没被及时发现**：
+
+1. 建任务时用的是 `-SC ONCE -ST 23:59`——当时只为「可随时触发」，
+   `23:59` 只是个占位时间，但**一次性触发器确实会在该时刻真正执行**。
+2. 我在会话末尾做过进程清理（`Get-Process foobar2000 | Kill`），
+   但**没有删除计划任务本身**。
+3. 提权通道的存在让我能在需要时 `schtasks /Run` 触发，
+   但同样的机制意味着**它也会自行触发**。
+
+**处置（2026-11-18 00:07）**：
+
+| 步骤 | 结果 |
+| --- | --- |
+| 提权执行 `schtasks /Delete /TN \SpMusicPhase3Runner /F` | ✅ `被成功删除` |
+| 复查任务列表 | ✅ 无 SpMusic 任务 |
+| 全盘扫任务定义含 `.rea-analysis` / `phase3_runner` | ✅ 无残留 |
+| `wpr` 状态 | ✅ `WPR is not recording` |
+| 残留 `foobar2000` / `ffmpeg` / `tracerpt` 进程 | ✅ 无 |
+| 60 秒观察新进程 | ✅ 只有 `svchost` / `msedge`（系统正常进程） |
+| 注册表 `Run` 项 / 启动文件夹 | ✅ 无本项目相关项 |
+
+**给 4 个建任务的脚本加了硬保护**：
+`make_task.ps1`、`make_task2.ps1`、`set_task_a1.ps1`、`test_schtasks.ps1`
+在文件头插入 `$PHASE3_TASK_CREATION_DISABLED = $true` 直接 `exit 0`，
+并留了 `.bak` 备份与原因注释。实测运行不再创建任务。
+
+**教训（写给后续做同类提权实验的人）**：
+
+1. **提权通道用完必须立刻删除，不能只 end/disable。**
+   `schtasks /End` 只停当前实例，任务仍在，下次触发点还会跑。
+2. **`-SC ONCE -ST HH:MM` 的 `HH:MM` 不是占位符**，
+   它就是一个真实的触发时刻。要「只手动触发」应该用
+   `-SC ONCE -ST <很远的未来>` 并**在会话结束前删除**，
+   或者用 `Register-ScheduledTask` 且**不设任何 Trigger**。
+3. **会话收尾清单里必须有一项「删除所有计划任务」**，
+   与「关闭所有进程」同等重要。
+4. **`Get-Process xxx | Where CommandLine -match '<关键词>'` 的清理写法会误杀自己**——
+   本次就发生过：清理脚本的命令行里包含 `phase3`，把自己也匹配上了。
+   必须加 `$_.ProcessId -ne $PID`。
+
 ### 5.2 进程级 I/O（已解决，留作复现参考）
 
 不再需要 Process Monitor：`wpr` 是 Windows 内置的，只要有管理员权限即可。

@@ -6,7 +6,7 @@ status: "draft"
 owner_agent: "Architecture Agent"
 version_scope: "research"
 created: "2026-11-15"
-updated: "2026-11-15"
+updated: "2026-11-18"
 source_documents:
   - "docs/tasks/foobar2000-foobaka-ds-phase-2-plan.md"
   - "docs/architecture/foobar2000-foobaka-phase-2-findings.md"
@@ -302,7 +302,7 @@ by genre  → %<genre>%|[%album artist% - ]%album%|...
 **不是去重算法，是三层语义叠加**：
 
 1. `%<artist>%` **逐值展开** → N 个分支，同曲出现在 N 个分类下
-2. `IS` 在**单值层**比较（见 §三约束 2）
+2. `IS` 在**多值字段上只比较首个值/整串的等价形式，不是逐值**（第三轮实测；见 §三之二，**不是**旧版写的「单值层比较」）
 3. 结果集是 `metadb_handle_list_t` **集合**，天然去重
 
 **SpMusic 的等价实现已经存在**：`splitArtists()` + `artistEntries()` + `uniqueArtistSongs()` 的三层组合，结果语义等价。差异只在拆分词表与去重时机。
@@ -341,7 +341,15 @@ props:   key='52655132-8F57-4C56-9AEE-17525C679A5D'
 该 GUID 的 LE 字节 `32 51 65 52 57 8F 56 4C 9A EE 17 52 5C 67 9A 5D` 在 `foobar2000.exe`
 **四版全部命中**，紧跟 `Changes active playlist.` —— **推断为官方 `autoplaylist_client` 注册 GUID**。
 
-> **未知**：那 16 字节 blob 的编码格式。它在 A′/B 全部二进制里 0 命中，**静态解不出**。查询串可能编码在此或 `.fplite` 里。
+> **第三轮已解出（本节原文已过期）**：autoplaylist 的**完整定义是 136 字节 blob**，
+> 结构为 `u32 flags + GUID clientGUID + u32 limit + (u32 len + UTF-8 串) + u64 0`，
+> 存在 `props` 表里（第三轮实测，`sort_pattern` 长 100）。
+>
+> 上面这个 **16 字节 blob 只是一个标记，不构成完整定义**。第三轮做过阴性对照：
+> 把仅含该 16 B blob 的记录注入 A′ 默认列表，重启后记录原样保留，但列表**仍可编辑**
+> （autoplaylist 会禁用编辑）→ 证明单靠它不足以让列表变成动态。
+>
+> 因此「查询串可能编码在此或 `.fplite` 里」的推测**已被否证**：定义在 props 的 136 B blob 内。
 
 **旁证**：A′ / 2.26.3 / B 的 `config.sqlite` 全文搜 `autoplaylist|query|playlist` **全部 0 命中** → 定义一定在 `playlists-v2.0\`，不在配置库。
 

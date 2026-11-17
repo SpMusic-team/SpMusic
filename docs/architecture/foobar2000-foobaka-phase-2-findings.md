@@ -6,7 +6,7 @@ status: "draft"
 owner_agent: "Architecture Agent"
 version_scope: "research"
 created: "2026-11-15"
-updated: "2026-11-15"
+updated: "2026-11-18"
 source_documents:
   - "docs/tasks/foobar2000-foobaka-ds-phase-2-plan.md"
   - "docs/architecture/foobar2000-research.md"
@@ -22,6 +22,17 @@ source_documents:
 本轮只做研究与文档，**不产出产品代码改动**。全部数字来自本机样本的只读静态分析，原始数据存放在 `.rea-analysis/phase2/run-20261115-p2a/`（已 gitignore）。
 
 样本在使用前后 SHA-256 与大小一致，未被修改；全程未运行任何 foobar2000 程序。
+
+> **2026-11-18 勘误指引**：本文已有若干条目被第三轮运行期实测修正或证伪，
+> 权威结论以 [foobar2000-foobaka-phase-3-findings.md](foobar2000-foobaka-phase-3-findings.md) 为准。
+> 已知需要按第三轮阅读本文的地方：
+>
+> | 本文位置 | 本文表述 | 第三轮结论 |
+> | --- | --- | --- |
+> | §7.6 / §7.7 查询分发表 | 每项 16 字节，附「等价关键字」列 | **每项 12 字节**；该列**全部作废** |
+> | §7.7 `IS` 语义 | 多值逐值展开 | **不是逐值**：多值第二个值不被 `IS` 命中 |
+> | §7.6 `ALL` 版本 | 「2.26 引入 `ALL`」 | 实现**早在 2.24.6**，仅文档 2.26.2 才补 |
+> | §7.6 titleformat 函数 | 标题写「8 个函数」 | 实际列举 **10** 个 |
 
 ## 零、本轮对首轮结论的五处修正
 

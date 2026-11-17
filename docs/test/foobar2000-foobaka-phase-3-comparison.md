@@ -6,7 +6,7 @@ status: "draft"
 owner_agent: "Test Agent"
 version_scope: "research"
 created: "2026-11-17"
-updated: "2026-11-17"
+updated: "2026-11-18"
 source_documents:
   - "docs/tasks/foobar2000-foobaka-ds-phase-3-plan.md"
   - "docs/architecture/foobar2000-foobaka-phase-3-findings.md"
@@ -27,7 +27,7 @@ source_documents:
 | 权限 | **非管理员**（`IsAdmin=False`） |
 | 样本 | A′ 官方 foobar2000 2.24.6 x86 |
 | 运行副本 | `.rea-analysis/phase3/lab/Aprime/`（从原件复制，核心 exe SHA-256 一致） |
-| B（foobaka） | **未启动**（前置条件未验证，见 §五） |
+| B（foobaka） | **已启动，界面无法渲染**（主窗口 1248×162、标题为空、画面全白；注册脚本已提权执行成功，问题在 Columns UI 布局渲染，见 §五） |
 
 **纪律**：所有写操作限于 `.rea-analysis/phase3/`；原始样本目录未被修改；运行副本的核心 exe 哈希与原件一致。
 
@@ -238,7 +238,11 @@ source_documents:
 
 ### 4.3 mtime-only 场景
 
-脚本支持 `touch-one`（只改 mtime 不改内容），可在有 I/O 采集能力时用来验证「mtime 变了是否触发重读」。**本轮未跑完整判据**（缺进程级 I/O）。
+脚本支持 `touch-one`（只改 mtime 不改内容），用来验证「mtime 变了是否触发重读」。
+
+> **补记**：本条写作时尚未取得进程级 I/O 采集能力；该能力在后续经提权通道补做成功，
+> 见 §四之二。但 §四之二的结论是「三场景都零 Read」，**仍然无法区分 mtime-only 是否触发重读**——
+> 所以本条「未跑完整判据」在**判据层面依然成立**，只是原因从「缺少采集能力」变成了「采集能力有了但分辨率不够」。
 
 ## 四之一、L1 三场景增量对照（metadb 记录级，本轮完成）
 
@@ -731,7 +735,7 @@ tracerpt.exe out.etl -of CSV -o out.csv -y
 | U1 同落点三次交错 | 滚轮格数非行偏移线性映射 | 可编程定位手段 |
 | U1 无图项 / 同封面组核对 | 未逐一定位截图 | 时间 |
 | A1 PCM 抓样 | **系统无环回捕获端点** + 本机 ffmpeg 不含 `--enable-wasapi` | 换 ffmpeg 构建，或启用立体声混音 |
-| B（foobaka）双样本对照 | 前置 COM 依赖未验证 | 先跑注册脚本 |
+| B（foobaka）双样本对照 | **Columns UI 布局渲染失败**（1248×162、标题空、全白）；注册脚本已提权执行成功，权限与注册均已排除 | 完整交互桌面下手工启动看组件报错，或改用可用 profile 备份，或只做数据层对照 |
 
 ### 5.4 Q1 建自动播放列表（已解决）
 

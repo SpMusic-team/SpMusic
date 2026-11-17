@@ -6,7 +6,7 @@ status: "draft"
 owner_agent: "Architecture Agent"
 version_scope: "research"
 created: "2026-11-15"
-updated: "2026-11-15"
+updated: "2026-11-18"
 source_documents:
   - "docs/tasks/foobar2000-foobaka-ds-phase-2-plan.md"
   - "docs/architecture/foobar2000-foobaka-phase-2-findings.md"
@@ -314,7 +314,7 @@ Unable to open item for playback (Object not found):
 
 | 层 | 行为 |
 | --- | --- |
-| 数据层 | **不标记离线**，靠 28 天宽限自动过期 |
+| 数据层 | **不标记离线、不删条目、不写 `lastseen`**。短时间离线**压根不进入删除路径**（第三轮实测）；「靠 28 天宽限自动过期」是旧表述，宽限期是否 28 天**仍未验证** |
 | 交互层 | 现场 `stat` 失败 + 用户主动跑 `Scanning for dead items...` / `Remove dead items` |
 
 **（2）`lastseen` 是「预留但未启用」的列。**
@@ -449,7 +449,8 @@ file://…\t原因\tFILETIME
 | 增量判据 = `size` + `mtime` | **强** | SQL 字面量 + API 导入 |
 | 无 `FindFirstFileExW` / `GetFileInformationByHandleEx` | **强** | 四版本导入表复现 |
 | 单曲是最小重读单位 | **强** | 单行 UPDATE + 逐条状态机 |
-| **28 天宽限** | **强** | `retention` 实测 4 处 24,192,000,000,000 ticks |
+| **`retention` 字段值 = 24,192,000,000,000 ticks（折 28 天）** | **强** | 某份快照实测 4 处 |
+| **28 天宽限作为生产行为** | **未知** | **未实测**：离线仅数分钟，未触及阈值；且 `retention` 存在负值未初始化行 |
 | 删除阈值来自 `MAX(retention)` | **强** | `SELECT MAX(retention)` 字面量 |
 | 恢复按路径不按大小/时间 | **强** | 主键是 `name` |
 | 无换盘重定位 | **强** | 全程序无 `relocate`/`remap` 命中 |
@@ -458,7 +459,7 @@ file://…\t原因\tFILETIME
 | `lastseen` 实际写入时机 | **未知** | 本库全 NULL |
 | `C653739F` 哈希算法 | **未知** | 影响"移动后统计是否跟随" |
 | `LargeFieldsConfig` v1/v2 真实边界 | **未知** | 需动态验证 |
-| 28 天宽限的**运行时**验证 | **未做** | 需外部机器（复跑卡 E2-b） |
+| 28 天宽限的**运行时**验证 | **未做** | 需外部机器（复跑卡 E2-b）。第三轮离线实测仅数分钟，`metadb` 20 条前后不变、`lastseen` 全程 NULL |
 
 ## 九、对 SpMusic 的直接含义
 

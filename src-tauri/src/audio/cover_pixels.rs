@@ -90,7 +90,7 @@ const MAX_PLAYLIST_CLIENTS: usize = 16;
 /// per-cover work -- is the active constraint. The cap exists to stop decoding
 /// from starving the UI; at 16 on a 20-core host the machine is still far from
 /// saturated.
-const MAX_PLAYLIST_DECODE_PERMITS: usize = 16;
+const MAX_PLAYLIST_DECODE_PERMITS: usize = 4;
 
 /// Width rule, separated from the host lookup so every core count can be asserted.
 ///

@@ -29,6 +29,8 @@ async function harness(count = 100, prepareItems = (items) => items) {
   const decodePending = []
   let holdDecode = false
   let beginFailure = false
+  let admissionWidth = 2
+  const widthListeners = new Set()
   let observer
   let nextUrl = 0
   let refIndex = 0
@@ -84,7 +86,7 @@ async function harness(count = 100, prepareItems = (items) => items) {
     },
     useCallback: callback => callback,
     useMemo: factory => factory(),
-    useSyncExternalStore: () => {},
+    useSyncExternalStore: (_subscribe, getSnapshot) => getSnapshot(),
     isStreamSource: () => false,
     attemptTrackThumbnailPath: attemptThumbnailPath,
     attemptFolderThumbnailPath: attemptThumbnailPath,
@@ -92,6 +94,11 @@ async function harness(count = 100, prepareItems = (items) => items) {
     requestAnimationFrame: callback => { const id = ++frameSequence; frames.set(id, callback); return id },
     cancelAnimationFrame: id => frames.delete(id),
     beginAudioPlaylistCoverWindow: async () => { if (beginFailure) throw new Error('window unavailable'); return 1 },
+    coverOwnerAdmissionWidth: () => admissionWidth,
+    subscribeCoverOwnerWidth: listener => {
+      widthListeners.add(listener)
+      return () => widthListeners.delete(listener)
+    },
     scheduleTrackThumbnail: (input, options) => {
       pixelCalls.push({ input, options })
       calls.push(input.sourcePath)
@@ -161,6 +168,13 @@ async function harness(count = 100, prepareItems = (items) => items) {
   const unmount = () => { for (const cleanup of cleanups) cleanup?.() }
   return {
     get items() { return items }, store, calls, pending, revoked, pathCalls, pixelCalls, demand, scroll, panel, finish, drain, flush, unmount, render,
+    readPresentation: item => module.useAllSongsCoverPresentation(store, item.key, item.trackId, item.sourcePath),
+    readUrl: item => module.useAllSongsCoverUrl(store, item.key, item.trackId, item.sourcePath),
+    reportWidth: async width => {
+      admissionWidth = width
+      for (const listener of widthListeners) listener()
+      await flush()
+    },
     holdDecode: () => { holdDecode = true },
     failBegin: value => { beginFailure = value },
     releaseDecodeAt: async index => { const resolve=decodePending.splice(index,1)[0]; assert(resolve,'a decoder is pending'); resolve(); await flush() },
@@ -169,6 +183,48 @@ async function harness(count = 100, prepareItems = (items) => items) {
     revisions: roots => module.folderCoverRevisions(store, roots),
   }
 }
+
+test('an ordinary song card reads the published cover from the same identity as the window', async () => {
+  const h = await harness(1, ([item]) => [{ ...item, artworkRevision: 7 }])
+  try {
+    const [item] = h.items
+    await h.demand([0])
+    await h.drain()
+    const entry = h.store.cache.get(item.key)
+    assert(entry?.presentation)
+    assert.equal(h.readPresentation(item), entry.presentation)
+    assert.equal(h.readUrl(item), entry.coverUrl)
+    assert.equal(h.readPresentation({ ...item, trackId: 'another-track' }), undefined)
+  } finally { h.dispose() }
+})
+
+test('a late native width report fills the visible window while overscan stays bounded', async () => {
+  const h = await harness()
+  try {
+    await h.demand(Array.from({ length: 20 }, (_, index) => index))
+    assert.equal(h.pending.length, 2, 'owner starts at the same floor as the playlist')
+    await h.reportWidth(12)
+    assert.equal(h.pending.length, 8, 'six visible jobs and only two overscan jobs run without waiting for the first two')
+    assert.equal(h.pixelCalls.filter(({ options }) => options.priority === 0).length, 6)
+    await h.drain()
+    assert.equal(h.store.cache.size, 20)
+  } finally { h.dispose() }
+})
+
+test('a far jump cancels the former window and denies its late covers publication', async () => {
+  const h = await harness()
+  try {
+    await h.demand([0, 1, 2, 3])
+    const oldSignals = h.pixelCalls.map(({ options }) => options.signal)
+    assert.equal(oldSignals.length, 2)
+    await h.scroll(800)
+    await h.demand([20, 21, 22, 23])
+    assert(oldSignals.every(signal => signal.aborted))
+    await h.drain()
+    assert.equal(h.store.cache.has(h.items[0].key), false)
+    assert(h.items.slice(20, 24).every(item => h.store.cache.get(item.key)?.coverUrl))
+  } finally { h.dispose() }
+})
 
 test('more than 60 demanded covers converge without evicting or reloading visible rows', async () => {
   const h = await harness()

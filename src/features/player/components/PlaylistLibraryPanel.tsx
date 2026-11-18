@@ -1,6 +1,10 @@
 import { AllSongsListOptionsDialog } from './AllSongsListOptionsDialog'
-import { sortAllSongs, type AllSongsSort } from '../model/allSongsListOptions'
+import { LibraryListOptionsDialog } from './LibraryListOptionsDialog'
+import { ALL_SONGS_SORT_OPTIONS, isAllSongsSingleLineLayout, newAllSongsShuffleSeed, readAllSongsOptions, sortAllSongs, writeAllSongsOptions, type AllSongsSort } from '../model/allSongsListOptions'
 import { highestRatedSongs } from '../model/highestRated'
+import { DEFAULT_MOST_PLAYED_OPTIONS } from '../model/mostPlayed'
+import { defaultSongRootLayout, PLAYLIST_ROOT_SORTS, readSongRootListOptions, sortPlaylistRootItems, STREAM_ROOT_SORTS, writeSongRootListOptions, type SongRootListOptions } from '../model/songRootListOptions'
+import { formatDurationClock } from '../model/playlistDuration'
 import type { RatingMode } from '../model/trackRating'
 import type { TrackRating } from '../model/playerTypes'
 import streamRootIcon from '@/assets/media-library/streams-root.svg'
@@ -55,6 +59,16 @@ const ALL_SONGS_LAYOUT_SELECTORS = {
   getId: (element: HTMLElement) => element.dataset.songKey,
 }
 const MotionEmpty = motion.create(Empty)
+function defaultPlaylistRootLayout() {
+  try {
+    const legacy = localStorage.getItem('spmusic.playlist-management.layout-level.v1')
+    if (legacy !== null && /^[0-5]$/.test(legacy)) return defaultPlaylistManagementLevel()
+  } catch { /* Use the playlist root default. */ }
+  return 3
+}
+
+type RootOptionSort = AllSongsSort | typeof STREAM_ROOT_SORTS[number]['value'] | typeof PLAYLIST_ROOT_SORTS[number]['value'] | ''
+
 type Props = {
   ratingMode?: RatingMode
   ratingsByTrackId?: Readonly<Record<string, TrackRating>>
@@ -71,6 +85,7 @@ type Props = {
   playbackTransitionPending: boolean
   onPlayToggle: () => void
   onOpenPlayer: () => void
+  onOpenLibrarySettings?: (returnFocus?: HTMLElement | null) => void
 }
 
 type AllSongsCardProps = {
@@ -91,6 +106,7 @@ type AllSongsCardProps = {
   selected: boolean
   artworkVisible: boolean
   showExtendedMetadata: boolean
+  showAudioFormatOnly: boolean
   coverFailed: boolean
   onCoverFailed: (key: string, source: string) => void
   onActivate: (key: string) => void
@@ -102,7 +118,7 @@ type AllSongsCardProps = {
 // into the aggregated rows. The rows therefore keep their identity while covers
 // arrive, and only the card whose own store entry changed re-renders.
 const AllSongsCard = memo(function AllSongsCard({ queued, hideRating, rating, ratingMode, playCount, item, index, store, artworkSource, fallbackArtworkSource, current,
-  canActivate, selectMode, showReorderHandle, selected, artworkVisible, showExtendedMetadata, coverFailed, onCoverFailed, onActivate,
+  canActivate, selectMode, showReorderHandle, selected, artworkVisible, showExtendedMetadata, showAudioFormatOnly, coverFailed, onCoverFailed, onActivate,
   onToggleSelect, onEnterSelectMode }: AllSongsCardProps) {
   const cover = useAllSongsCoverPresentation(store, item.key, item.trackId, item.sourcePath)
   const track = item.track
@@ -111,12 +127,12 @@ const AllSongsCard = memo(function AllSongsCard({ queued, hideRating, rating, ra
     artworkSource={artworkSource} fallbackArtworkSource={fallbackArtworkSource}
     current={current} unavailable={!item.available} canSelectUnavailable canActivate={canActivate}
     selectMode={selectMode} showReorderHandle={showReorderHandle} selected={selected} artworkVisible={artworkVisible}
-    showExtendedMetadata={showExtendedMetadata} contentVisible contentRepresentative={false}
+    showExtendedMetadata={showExtendedMetadata} showAudioFormatOnly={showAudioFormatOnly} contentVisible contentRepresentative={false}
     contentShape={contentShape} coverFailed={coverFailed} onCoverFailed={onCoverFailed}
     onActivate={onActivate} onToggleSelect={onToggleSelect} onEnterSelectMode={onEnterSelectMode} />
 })
 
-export function PlaylistLibraryPanel({ ratingMode = 'thumbs', ratingsByTrackId, playlist, entryPosition, allSongsCoverStore, librarySidebarOpen, onLibrarySidebarOpenChange, searchRequestId = 0, controllerMode = 'movable', playback, timeline }: Props) {
+export function PlaylistLibraryPanel({ ratingMode = 'thumbs', ratingsByTrackId, playlist, entryPosition, allSongsCoverStore, librarySidebarOpen, onLibrarySidebarOpenChange, searchRequestId = 0, controllerMode = 'movable', playback, timeline, onOpenLibrarySettings }: Props) {
   const appearanceMotion = useAppearanceMotion()
   const systemIcons = useSystemIcons()
   const MoreIcon = systemIcons.more
@@ -131,11 +147,9 @@ export function PlaylistLibraryPanel({ ratingMode = 'thumbs', ratingsByTrackId, 
   const category = mediaLibraryCategories.find((item) => item.id === categoryId)!
   const isAllSongs = categoryId === 'songs'
   const [listOptionsOpen, setListOptionsOpen] = useState(false)
-  const [allSongsSort, setAllSongsSort] = useState<AllSongsSort>('title')
-  const [allSongsDescending, setAllSongsDescending] = useState(false)
-  const [allSongsTitleOnly, setAllSongsTitleOnly] = useState(false)
-  const [randomSeed, setRandomSeed] = useState(1)
-  const [sortPlayCounts, setSortPlayCounts] = useState<ReadonlyMap<string, number>>(new Map())
+  const [allSongsOptions, setAllSongsOptions] = useState(readAllSongsOptions)
+  const { sort: allSongsSort, reverse: allSongsDescending, titleOnly: allSongsTitleOnly, shuffleSeed } = allSongsOptions
+  useEffect(() => { if (isAllSongs && isPresent) writeAllSongsOptions(allSongsOptions) }, [allSongsOptions, isAllSongs, isPresent])
   const listOptionsTrigger = useRef<HTMLElement | null>(null)
   const isLowest = categoryId === 'lowest-rated'
   const isHighest = categoryId === 'highest-rated'
@@ -147,6 +161,20 @@ export function PlaylistLibraryPanel({ ratingMode = 'thumbs', ratingsByTrackId, 
   const isStreams = categoryId === 'streams'
   const songsLoading = isStreams ? Boolean(library.streamsLoading) : library.allSongsMetadataStatus === 'loading'
   const isSongs = isQueue || categoryId === 'songs' || isRecent || isLong || isStreams
+  const isPlaylists = categoryId === 'playlists'
+  const hasRootListOptions = isSongs || isPlaylists
+  const hasSongSort = categoryId === 'recent-played' || isRecentAdded || isLong
+  const rootDefaults = useMemo(() => readSongRootListOptions(categoryId), [categoryId])
+  const [rootPreferences, setRootPreferences] = useState<Partial<Record<typeof categoryId, SongRootListOptions>>>({})
+  const rootOptions = rootPreferences[categoryId] ?? rootDefaults
+  useEffect(() => {
+    if (hasRootListOptions && !isAllSongs && isPresent) writeSongRootListOptions(categoryId, rootOptions)
+  }, [categoryId, hasRootListOptions, isAllSongs, isPresent, rootOptions])
+  const mostOptions = library.mostPlayedOptions ?? DEFAULT_MOST_PLAYED_OPTIONS
+  const songLimit = (isRecent && !isMost) || isLong ? rootOptions.limit : undefined
+  const rootSongSort = rootOptions.songSort ?? (categoryId === 'recent-played' ? 'last-played' : 'modified')
+  const streamSort = library.streamSort ?? 'name'
+  const isRootShuffle = hasSongSort && rootSongSort === 'random' || isStreams && streamSort === 'shuffle'
   const highestSongs = useMemo(() => highestRatedSongs(library.highestRatedSongs ?? [], ratingsByTrackId ?? {}, ratingMode), [library.highestRatedSongs, ratingsByTrackId, ratingMode])
   const sourceSongs = isQueue ? library.queueSongs : isLowest ? library.lowestRatedSongs : isHighest ? highestSongs : isStreams ? library.streamSongs : isMost ? library.mostPlayedSongs : isLong ? library.longSongs : isRecentAdded ? library.recentAddedSongs : isRecent ? library.recentSongs : library.allSongs
   const hasDataSource = isSongs || categoryId === 'playlists' || categoryId === 'folder'
@@ -179,22 +207,32 @@ export function PlaylistLibraryPanel({ ratingMode = 'thumbs', ratingsByTrackId, 
   const dockRouteKey = `category:${categoryId}`
   const managementChrome = useCollectionManagementChrome(categoryId, isPresent)
   const { toolbarRef, navigationMotion } = managementChrome
-  const { layout, announcement } = useCollectionLayout({
+  const { layout, announcement, selectLevel: selectManagementLayout } = useCollectionLayout({
     panelRef: managementPanelRef, gridRef, layouts: PLAYLIST_MANAGEMENT_LAYOUTS,
     storageKey: PLAYLIST_MANAGEMENT_LAYOUT_STORAGE_KEY,
-    defaultLevel: defaultPlaylistManagementLevel, selectors: MANAGEMENT_LAYOUT_SELECTORS,
+    defaultLevel: defaultPlaylistRootLayout, selectors: MANAGEMENT_LAYOUT_SELECTORS,
     gestureArea: 'panel',
     announce: (nextLayout) => `列表视图已切换为${nextLayout.label}`,
   })
+  const songsLayoutKey = isStreams ? STREAMS_LAYOUT_STORAGE_KEY : isAllSongs ? ALL_SONGS_LAYOUT_STORAGE_KEY : `spmusic.${categoryId}.layout-level.v1`
   const { layout: songsLayout, announcement: songsAnnouncement, selectLevel: selectSongsLayout } = useCollectionLayout({
     panelRef: songsLayoutPanelRef, gridRef: songsListRef, layouts: PLAYLIST_SONG_LAYOUTS,
-    storageKey: isStreams ? STREAMS_LAYOUT_STORAGE_KEY : ALL_SONGS_LAYOUT_STORAGE_KEY, defaultLevel: isStreams ? defaultStreamsLevel : defaultAllSongsLevel,
+    storageKey: songsLayoutKey, defaultLevel: isStreams ? defaultStreamsLevel : isAllSongs ? defaultAllSongsLevel : () => defaultSongRootLayout(categoryId),
     selectors: ALL_SONGS_LAYOUT_SELECTORS, gestureArea: 'panel',
     announce: (nextLayout) => `歌曲视图已切换为${nextLayout.label}`,
   })
-  const visible = useMemo(() => categoryItems
-    .filter((item) => item.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
-    .sort((left, right) => compareByQuickIndex(left.name, right.name)), [categoryItems, query])
+  useEffect(() => {
+    if (!isPresent || !isSongs || isAllSongs || isStreams) return
+    try {
+      if (localStorage.getItem(songsLayoutKey) === null) localStorage.setItem(songsLayoutKey, String(songsLayout.level))
+    } catch { /* Keep view preferences in memory when storage is unavailable. */ }
+  }, [isAllSongs, isPresent, isSongs, isStreams, songsLayout.level, songsLayoutKey])
+  const compactSongLayout = isSongs && isAllSongsSingleLineLayout(songsLayout.level)
+  const songTitlesOnly = isSongs && (isAllSongs ? allSongsTitleOnly : rootOptions.titleOnly) && !compactSongLayout
+  const visible = useMemo(() => {
+    const matches = categoryItems.filter(item => item.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
+    return sortPlaylistRootItems(matches, isPlaylists ? rootOptions.playlistSort : 'name', isPlaylists && rootOptions.reverse)
+  }, [categoryItems, isPlaylists, query, rootOptions.playlistSort, rootOptions.reverse])
   // `library.allSongs` gets a fresh array whenever a row is republished (a cover,
   // a duration, a bit of metadata). The quick-index view is decided only by the
   // row keys and their titles, so keep the sorted key order while those are
@@ -225,11 +263,29 @@ export function PlaylistLibraryPanel({ ratingMode = 'thumbs', ratingsByTrackId, 
     return ordered.length === songs.length ? ordered
       : [...songs].sort((left, right) => compareByQuickIndex(left.track.title, right.track.title))
   }, [isQueue, orderedSongKeys, sourceSongs, library.allSongsManualOrder, isStreams, isRecent, isLong])
+  const activeSongSort = isAllSongs ? allSongsSort : hasSongSort ? rootSongSort : undefined
+  const sortRatings = activeSongSort === 'rating' ? ratingsByTrackId : undefined
+  const sortPlayCounts = activeSongSort === 'play-count' ? library.mostPlayedCounts : undefined
+  const sortLastPlayedAt = activeSongSort === 'last-played' ? library.allSongsLastPlayedAt : undefined
+  const sortShuffleOrder = activeSongSort === 'random' || isRootShuffle ? library.allSongsShuffleOrder : undefined
+  const longHasFilesystemDates = useMemo(() => isLong && Boolean(sourceSongs?.some(item => item.fileModifiedAtMs != null || item.fileCreatedAtMs != null)), [isLong, sourceSongs])
+  const useExistingLongOrder = isLong && rootOptions.songSort === null && !rootOptions.reverse && (library.allSongsManualOrder || !longHasFilesystemDates)
   const sortedAllSongs = useMemo(() => {
-    if (!isAllSongs) return orderedSongs
-    if (allSongsSort === 'title') return allSongsDescending ? [...orderedSongs].reverse() : orderedSongs
-    return sortAllSongs(orderedSongs, allSongsSort, allSongsDescending, ratingsByTrackId, sortPlayCounts, randomSeed)
-  }, [isAllSongs, orderedSongs, allSongsSort, allSongsDescending, ratingsByTrackId, sortPlayCounts, randomSeed])
+    if (isAllSongs && allSongsSort === 'title') return allSongsDescending ? [...orderedSongs].reverse() : orderedSongs
+    const cap = (songs: AllSongsItem[]) => songLimit !== undefined && songLimit < songs.length ? songs.slice(0, songLimit) : songs
+    const members = isLong ? orderedSongs : cap(orderedSongs)
+    if (isStreams) {
+      if (streamSort === 'shuffle') return sortAllSongs(members, 'random', rootOptions.reverse, { shuffleSeed: rootOptions.shuffleSeed, shuffleOrder: sortShuffleOrder })
+      const display = streamSort === 'name' ? [...members].sort((left, right) => left.sourcePath.localeCompare(right.sourcePath, 'en', { sensitivity: 'base' })
+        || left.sourcePath.localeCompare(right.sourcePath)) : members
+      return rootOptions.reverse ? [...display].reverse() : display
+    }
+    if (!activeSongSort || useExistingLongOrder || categoryId === 'recent-played' && !sortLastPlayedAt && rootOptions.songSort === null && !rootOptions.reverse) return isLong ? cap(members) : members
+    const sorted = sortAllSongs(members, activeSongSort, isAllSongs ? allSongsDescending : rootOptions.reverse, {
+      ratings: sortRatings, counts: sortPlayCounts, lastPlayedAt: sortLastPlayedAt, shuffleSeed: isAllSongs ? shuffleSeed : rootOptions.shuffleSeed, shuffleOrder: sortShuffleOrder,
+    })
+    return isLong ? cap(sorted) : sorted
+  }, [isAllSongs, orderedSongs, allSongsSort, allSongsDescending, songLimit, isLong, isStreams, streamSort, rootOptions.reverse, rootOptions.shuffleSeed, rootOptions.songSort, activeSongSort, useExistingLongOrder, categoryId, sortRatings, sortPlayCounts, sortLastPlayedAt, shuffleSeed, sortShuffleOrder])
   const visibleSongs = useMemo(() => sortedAllSongs
     .filter((item) => `${item.track.title} ${item.track.artist} ${item.track.album} ${isStreams ? item.sourcePath : ''}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())), [sortedAllSongs, query, isStreams])
   const displayedSongs = useMemo(() => {
@@ -309,7 +365,7 @@ export function PlaylistLibraryPanel({ ratingMode = 'thumbs', ratingsByTrackId, 
   const reorderSourceVersion = useMemo(() => JSON.stringify(fullReorderKeys), [fullReorderKeys])
   const visibleReorderKeys = useMemo(() => visibleSongs.map(item => item.key), [visibleSongs])
   const songReorder = usePlaylistSongReorder({
-    enabled: isLong && selectMode && isPresent && library.allSongsMetadataStatus !== 'loading' && !playlist.isOpenAudioDisabled
+    enabled: useExistingLongOrder && selectMode && isPresent && library.allSongsMetadataStatus !== 'loading' && !playlist.isOpenAudioDisabled
       && !library.isDeletePending && Boolean(library.onReorderSongs),
     scopeKey: 'all-songs', sourceVersion: reorderSourceVersion, layoutKey: `${songsLayout.level}:${query}:${searchOpen}:${searchRequestId}:${dismissedSearchRequestId}`,
     orderedKeys: visibleReorderKeys, selectedKeys: selected, gridRef: songsListRef, scrollRef: panelRef,
@@ -330,13 +386,19 @@ export function PlaylistLibraryPanel({ ratingMode = 'thumbs', ratingsByTrackId, 
     },
   })
   const songsByKey = useMemo(() => new Map(visibleSongs.map((item) => [item.key, item])), [visibleSongs])
-  const songActionsRef = useRef({ songsByKey, visibleSongs, onPlaySong: library.onPlaySong, onPlayQueueEntry: library.onPlayQueueEntry, isQueue })
-  useLayoutEffect(() => { songActionsRef.current = { songsByKey, visibleSongs, onPlaySong: library.onPlaySong, onPlayQueueEntry: library.onPlayQueueEntry, isQueue } }, [songsByKey, visibleSongs, library.onPlaySong, library.onPlayQueueEntry, isQueue])
+  const playbackSort = isStreams ? streamSort === 'shuffle' ? 'random' : streamSort === 'last-played' || streamSort === 'play-count' ? streamSort : undefined
+    : activeSongSort
+  const playbackShuffleReverse = playbackSort === 'random' ? isAllSongs ? allSongsDescending : rootOptions.reverse : undefined
+  const songActionsRef = useRef({ songsByKey, visibleSongs, onPlaySong: library.onPlaySong, onPlayQueueEntry: library.onPlayQueueEntry, isQueue, playbackSort, playbackShuffleReverse })
+  useLayoutEffect(() => {
+    songActionsRef.current = { songsByKey, visibleSongs, onPlaySong: library.onPlaySong, onPlayQueueEntry: library.onPlayQueueEntry, isQueue, playbackSort, playbackShuffleReverse }
+  }, [songsByKey, visibleSongs, library.onPlaySong, library.onPlayQueueEntry, isQueue, playbackSort, playbackShuffleReverse])
   const handleSongActivate = useCallback((key: string) => {
     const item = songActionsRef.current.songsByKey.get(key)
     if (item && songActionsRef.current.isQueue) { void songActionsRef.current.onPlayQueueEntry?.(item.key); return }
     if (item) songActionsRef.current.onPlaySong?.(item.scope, item.trackId,
-      songActionsRef.current.visibleSongs.map(({ scope, trackId }) => ({ scope, trackId })))
+      songActionsRef.current.visibleSongs.map(({ scope, trackId }) => ({ scope, trackId })),
+      songActionsRef.current.playbackSort, songActionsRef.current.playbackShuffleReverse)
   }, [])
   const handleSongToggleSelect = useCallback((key: string) => {
     setSelected((previous) => {
@@ -466,28 +528,63 @@ export function PlaylistLibraryPanel({ ratingMode = 'thumbs', ratingsByTrackId, 
     const target = candidates[0]
     if (isQueue && target) { void library.onPlayQueueEntry?.(target.key); return }
     if (target) library.onPlaySong?.(target.scope, target.trackId,
-      candidates.map(({ scope, trackId }) => ({ scope, trackId })))
-  }, [isQueue, selectMode, selectedSongs, playableSongs, library])
+      candidates.map(({ scope, trackId }) => ({ scope, trackId })), playbackSort, playbackShuffleReverse)
+  }, [isQueue, selectMode, selectedSongs, playableSongs, library, playbackSort, playbackShuffleReverse])
   const shufflePresentation = getShuffleModePresentation('shuffle-all', systemIcons)
   const shuffleSongs = useCallback(async () => {
     if (playbackCommandLocked || songsLoading || !library.onShufflePlay) return
     const candidates = selectMode ? selectedSongs : playableSongs
     if (!candidates.length) return
     if (isQueue) { await library.onPlayQueueEntry?.(undefined, true); return }
-    const succeeded = await library.onShufflePlay(candidates.map(({ scope, trackId }) => ({ scope, trackId })))
+    const succeeded = await library.onShufflePlay(candidates.map(({ scope, trackId }) => ({ scope, trackId })), playbackSort, playbackShuffleReverse)
     if (succeeded) showPlaybackModeToast({ ...getShuffleModePresentation('shuffle-all', systemIcons),
       label: `${appCopy.controls.shuffle} · ${appCopy.controls.playAllCategories}` }, { replay: true })
-  }, [isQueue, playbackCommandLocked, songsLoading, library, selectMode, selectedSongs, playableSongs, systemIcons])
+  }, [isQueue, playbackCommandLocked, songsLoading, library, selectMode, selectedSongs, playableSongs, systemIcons, playbackSort, playbackShuffleReverse])
   const playListsRandomly = useCallback(() => {
     const candidates = selectMode ? selectedItems : visible
     const target = candidates[Math.floor(Math.random() * candidates.length)]
     if (target) library.onPlay(target.scope)
   }, [selectMode, selectedItems, visible, library])
   function toggleSelection() { setSelectMode(!selectMode); setSelected(new Set()) }
+  function changeAllSongsSort(sort: AllSongsSort) {
+    const shuffleSeed = sort === 'random' ? newAllSongsShuffleSeed() : allSongsOptions.shuffleSeed
+    setAllSongsOptions(previous => ({ ...previous, sort, shuffleSeed }))
+  }
+  function changeRootOptions(patch: Partial<SongRootListOptions>) {
+    setRootPreferences(previous => ({ ...previous, [categoryId]: { ...previous[categoryId] ?? rootDefaults, ...patch } }))
+  }
+  function changeRootSort(value: RootOptionSort) {
+    if (isStreams) {
+      const stream = STREAM_ROOT_SORTS.find(option => option.value === value)
+      if (stream) {
+        library.onStreamSortChange?.(stream.value)
+        if (stream.value === 'shuffle') changeRootOptions({ shuffleSeed: newAllSongsShuffleSeed() })
+      }
+      return
+    }
+    if (isPlaylists) {
+      const sort = PLAYLIST_ROOT_SORTS.find(option => option.value === value)
+      if (sort) changeRootOptions({ playlistSort: sort.value })
+      return
+    }
+    const sort = ALL_SONGS_SORT_OPTIONS.find(option => option.value === value)
+    if (sort) changeRootOptions({ songSort: sort.value, ...(sort.value === 'random' ? { shuffleSeed: newAllSongsShuffleSeed() } : {}) })
+  }
+  const rootSortOptions = isStreams ? STREAM_ROOT_SORTS : isPlaylists ? PLAYLIST_ROOT_SORTS : hasSongSort ? ALL_SONGS_SORT_OPTIONS : []
+  const rootSortValue = isStreams ? streamSort : isPlaylists ? rootOptions.playlistSort
+    : hasSongSort && !(useExistingLongOrder && library.allSongsManualOrder) ? rootSongSort : ''
+  function changeRootDirection(descending: boolean) {
+    if (isMost) library.onMostPlayedOptionsChange?.({ ...mostOptions, direction: descending ? 'asc' : 'desc' })
+    else changeRootOptions({ reverse: descending })
+  }
+  function changeRootLimit(limit: number) {
+    if (isMost) library.onMostPlayedOptionsChange?.({ ...mostOptions, limit })
+    else changeRootOptions({ limit })
+  }
   function openCreatePlaylist() { setPlaylistName(''); setCreateError(''); setCreateOpen(true) }
   function renderMore(compact = false) {
-    if (!compact || isQueue || isLong || isMost || isHighest || isLowest || isStreams) return <LibraryRootMenu key={categoryId} categoryId={categoryId} library={library} rootToolbar={!compact} onListOptions={isAllSongs ? () => {
-      listOptionsTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    if (!compact || isQueue || isLong || isMost || isHighest || isLowest || isStreams) return <LibraryRootMenu key={categoryId} categoryId={categoryId} library={library} rootToolbar={!compact} onListOptions={hasRootListOptions ? (trigger: HTMLButtonElement | null) => {
+      listOptionsTrigger.current = trigger
       setListOptionsOpen(true)
     } : undefined} />
     return <DropdownMenu>
@@ -574,9 +671,22 @@ export function PlaylistLibraryPanel({ ratingMode = 'thumbs', ratingsByTrackId, 
       </DialogContent>
     </Dialog>
     {isAllSongs && <AllSongsListOptionsDialog open={listOptionsOpen} onOpenChange={setListOptionsOpen} finalFocus={listOptionsTrigger}
-      sort={allSongsSort} onSortChange={value => { setAllSongsSort(value); if (value === 'random') setRandomSeed(Math.floor(Math.random() * 0x7fffffff)); if (value === 'play-count') setSortPlayCounts(new Map(library.mostPlayedCounts)) }}
-      descending={allSongsDescending} onDescendingChange={setAllSongsDescending} titleOnly={allSongsTitleOnly} onTitleOnlyChange={setAllSongsTitleOnly}
-      layoutLevel={songsLayout.level} onLayoutChange={selectSongsLayout} />}
+      onOpenSettings={() => { setListOptionsOpen(false); onOpenLibrarySettings?.(listOptionsTrigger.current) }}
+      sort={allSongsSort} onSortChange={changeAllSongsSort}
+      descending={allSongsDescending} onDescendingChange={reverse => { setAllSongsOptions(previous => ({ ...previous, reverse })) }}
+      titleOnly={allSongsTitleOnly} onTitleOnlyChange={titleOnly => { setAllSongsOptions(previous => ({ ...previous, titleOnly })) }}
+      layoutLevel={songsLayout.level} onLayoutChange={level => selectSongsLayout(level, { animate: true })} />}
+    {!isAllSongs && hasRootListOptions && <LibraryListOptionsDialog<RootOptionSort> categoryLabel={category.label}
+      open={listOptionsOpen} onOpenChange={setListOptionsOpen} finalFocus={listOptionsTrigger}
+      onOpenSettings={() => { setListOptionsOpen(false); onOpenLibrarySettings?.(listOptionsTrigger.current) }}
+      sort={isMost || rootSortOptions.length ? { options: rootSortOptions, value: rootSortValue, onChange: changeRootSort,
+        descending: isMost ? mostOptions.direction === 'asc' : rootOptions.reverse, onDescendingChange: changeRootDirection } : undefined}
+      titleOnly={isSongs ? { checked: rootOptions.titleOnly, onChange: titleOnly => changeRootOptions({ titleOnly }), disabled: compactSongLayout } : undefined}
+      limit={isMost || songLimit !== undefined ? { value: isMost ? mostOptions.limit : rootOptions.limit, onChange: changeRootLimit } : undefined}
+      duration={isLong ? { value: (library.longTracksMinDurationMs ?? DEFAULT_LONG_TRACKS_MIN_DURATION_MS) / 1000,
+        max: 120 * 60, step: 60, onChange: value => library.onLongTracksMinDurationChange?.(value * 1000), format: value => formatDurationClock(value) ?? '0:00' } : undefined}
+      layoutLevel={isSongs ? songsLayout.level : layout.level}
+      onLayoutChange={level => { if (isSongs) selectSongsLayout(level, { animate: true }); else selectManagementLayout(level, { animate: true }) }} />}
     <Dialog open={createOpen} onOpenChange={setCreateOpen}>
       <DialogContent>
         <form onSubmit={(event) => {
@@ -621,7 +731,7 @@ export function PlaylistLibraryPanel({ ratingMode = 'thumbs', ratingsByTrackId, 
       <span className="sr-only" role="status" aria-live="polite">{isSongs ? songsAnnouncement : announcement}</span>
       {isSongs ? (isStreams && library.streamsError ? <MotionEmpty className="playlist-management-empty" variants={navigationMotion.chrome} initial={false} animate="animate"><EmptyHeader><EmptyTitle>无法读取流列表</EmptyTitle><EmptyDescription>{library.streamsError}</EmptyDescription></EmptyHeader><Button onClick={library.onRefreshStreams} disabled={songsLoading}>重试</Button></MotionEmpty> : songsLoading ? <PlaylistMetadataLoading layout={songsLayout} trackCount={sourceSongs?.length ?? 0} /> : visibleSongs.length ? <div ref={songsSpaceRef} style={songsWindow.spaceStyle}><p className="sr-only" aria-live="polite">{songReorder.announcement}</p><motion.div ref={songsListRef} className="playlist-grid all-songs-list" aria-label={isStreams ? '流歌曲列表' : isRecent || isLong ? `${category.label}歌曲列表` : "全部歌曲列表"}
         onPointerDownCapture={songReorder.onPointerDownCapture} onClickCapture={songReorder.onClickCapture} onKeyDownCapture={songReorder.onKeyDownCapture}
-        data-title-only={isAllSongs && allSongsTitleOnly ? true : undefined} data-sort={isAllSongs ? allSongsSort : undefined}
+        data-title-only={songTitlesOnly || undefined} data-sort={isStreams ? streamSort : activeSongSort}
         data-layout-level={songsLayout.level} data-layout-flow={songsLayout.flow} data-layout-columns={songsLayout.columns}
         data-content-window={songsWindow.enabled ? 'bounded' : 'full'} data-cover-motion={appearanceMotion.disabled ? 'off' : undefined}
         variants={songsLayout.flow === 'tile' ? undefined : navigationMotion.cover} initial={atomicOverview && songsLayout.flow !== 'tile' ? 'initial' : false} animate="animate" exit={atomicOverview && songsLayout.flow !== 'tile' ? 'exit' : 'animate'} transition={navigationMotion.transition}
@@ -641,12 +751,13 @@ export function PlaylistLibraryPanel({ ratingMode = 'thumbs', ratingsByTrackId, 
           panel.scrollTop += space.getBoundingClientRect().top - panel.getBoundingClientRect().top + Math.floor(next / songsLayout.columns) * songsWindow.stride
         }}
         style={{ ...songsLayout.style, touchAction: 'pan-y', transformOrigin: 'left top', ...songsWindow.gridStyle }}>
-        {renderedSongs.map((item, index) => <AllSongsCard key={item.key} item={item} queued={isQueue && songsLayout.flow !== 'tile' && Boolean(library.queueUnplayedEntryIds?.has(item.key))} hideRating={isMost} rating={isHighest || isLowest ? ratingsByTrackId?.[item.trackId] ?? 0 : undefined} ratingMode={ratingMode} playCount={isMost ? library.mostPlayedCounts?.get(normalizeAudioSourcePath(item.sourcePath)) : undefined} index={songsWindow.first + index} store={coverStore}
+        {renderedSongs.map((item, index) => <AllSongsCard key={item.key} item={item} queued={isQueue && songsLayout.flow !== 'tile' && Boolean(library.queueUnplayedEntryIds?.has(item.key))} hideRating={isMost || songTitlesOnly || isAllSongs && compactSongLayout} rating={isHighest || isLowest ? ratingsByTrackId?.[item.trackId] ?? 0 : undefined} ratingMode={ratingMode} playCount={isMost ? library.mostPlayedCounts?.get(normalizeAudioSourcePath(item.sourcePath)) : undefined} index={songsWindow.first + index} store={coverStore}
             artworkSource={playlist.artworkSource} fallbackArtworkSource={playlist.fallbackArtworkSource}
             current={isQueue ? item.key === library.currentQueueEntryId : item.trackId === playlist.currentTrackId}
             canActivate={!songActivationLocked}
-            selectMode={selectMode} showReorderHandle={categoryId !== 'songs' && !isQueue && !isMost && !isHighest && !isLowest && !isStreams} selected={selected.has(item.key)}
-            artworkVisible={songsLayout.showArtwork} showExtendedMetadata={songsLayout.flow !== 'tile'}
+            selectMode={selectMode} showReorderHandle={useExistingLongOrder} selected={selected.has(item.key)}
+            artworkVisible={songsLayout.showArtwork} showExtendedMetadata={songsLayout.flow !== 'tile' && !songTitlesOnly && !compactSongLayout}
+            showAudioFormatOnly={songsLayout.flow !== 'tile' && (songTitlesOnly || compactSongLayout)}
             coverFailed={failedSongCovers.has(item.key)}
             onCoverFailed={handleSongCoverFailed}
             onActivate={handleSongActivate}
@@ -656,7 +767,7 @@ export function PlaylistLibraryPanel({ ratingMode = 'thumbs', ratingsByTrackId, 
             // cannot enter selection mode while leaving; the section is `inert`.
             onToggleSelect={handleSongToggleSelect} onEnterSelectMode={handleSongEnterSelectMode} />)}
       </motion.div></div> : isQueue ? null : <MotionEmpty className="playlist-management-empty" variants={navigationMotion.chrome} initial={false} animate="animate"><EmptyHeader><EmptyTitle>{(sourceSongs?.length ?? 0) ? '没有匹配的歌曲' : isStreams ? '暂无流' : isLong ? '暂无符合时长的歌曲' : isRecent ? `暂无${category.label}` : '暂无歌曲'}</EmptyTitle><EmptyDescription>{(sourceSongs?.length ?? 0) ? '尝试其他名称，或清空搜索。' : isStreams ? '在更多操作中添加 HTTP(S) 地址，或导入包含网络地址的 M3U / M3U8 播放列表。' : isLong ? `这里显示时长达到 ${(library.longTracksMinDurationMs ?? DEFAULT_LONG_TRACKS_MIN_DURATION_MS) / 60000} 分钟的歌曲，可在更多操作的列表选项中调整最小时长。` : isLowest ? '标记为不喜欢（1 星）的歌曲会显示在这里。' : isHighest ? ratingMode === 'thumbs' ? '标记为喜欢的歌曲会显示在这里。' : '评分为 2～5 星的歌曲会显示在这里。' : isRecentAdded ? '选择音乐文件夹后，这里会按文件创建时间显示歌曲。' : isRecent ? '歌曲实际播放达到一半后，会显示在这里。' : '选择音乐文件夹后，这里会汇总其中及子文件夹内的歌曲；不会自动创建播放列表。下次启动会重新扫描。'}</EmptyDescription></EmptyHeader>{!isRecent || (sourceSongs?.length ?? 0) > 0 ? <Button disabled={library.isImportPending} onClick={(sourceSongs?.length ?? 0) ? () => setQuery('') : isStreams ? library.onImportPlaylist : library.onSelectFolders}>{(sourceSongs?.length ?? 0) ? '清空搜索' : isStreams ? '导入播放列表' : '选择文件夹'}</Button> : null}</MotionEmpty>) : categoryId === 'playlists' && library.isPlaylistRestorePending && !visible.length ? <Empty className="playlist-management-empty"><EmptyHeader><EmptyTitle>正在恢复播放列表</EmptyTitle><EmptyDescription>正在读取已保存的 M3U8 清单。</EmptyDescription></EmptyHeader></Empty> : visible.length ? <div ref={gridRef} className="playlist-management-grid"
-        data-layout-level={layout.level} data-layout-flow={layout.flow} data-layout-artwork={layout.showArtwork}
+        data-layout-level={layout.level} data-layout-flow={layout.flow} data-layout-artwork={layout.showArtwork} data-sort={isPlaylists ? rootOptions.playlistSort : undefined}
         aria-label={layout.label} style={{ ...layout.style, touchAction: 'pan-y' }}>
         {visible.map((item) => <motion.div key={item.scope} className="playlist-management-card"
           variants={navigationMotion.cover} style={{ transformOrigin: 'left top' }}
@@ -697,6 +808,9 @@ export function PlaylistLibraryPanel({ ratingMode = 'thumbs', ratingsByTrackId, 
         selectMode={selectMode} onSelect={toggleSelection} selectDisabled={isSongs ? !sourceSongs?.length : !categoryItems.length}
         more={renderMore(true)} />
     </motion.div> : null}
-    {!isQueue && !isRecent && !isStreams && (!isAllSongs || allSongsSort === 'title' && !allSongsDescending) && <CollectionQuickIndex panelRef={panelRef} names={quickIndexNames} label={isSongs ? '歌曲' : category.label} onJump={jumpToIndex} />}
+    {!isQueue && !isRecent && !isStreams && (!isAllSongs || allSongsSort === 'title' && !allSongsDescending)
+      && (!isLong || useExistingLongOrder || rootSongSort === 'title' && !rootOptions.reverse)
+      && (!isPlaylists || rootOptions.playlistSort === 'name' && !rootOptions.reverse)
+      && <CollectionQuickIndex panelRef={panelRef} names={quickIndexNames} label={isSongs ? '歌曲' : category.label} onJump={jumpToIndex} />}
   </motion.div>
 }

@@ -284,6 +284,8 @@ async function harness(options = {}) {
       selectHeroEdge, isHeroEdge, HERO_MAX_EDGE,
       URL, document, IntersectionObserver, ResizeObserver, MutationObserver } = globalThis.__libraryArtworkTest
     const window = globalThis.__libraryArtworkTest
+    const coverOwnerAdmissionWidth = () => 2
+    const subscribeCoverOwnerWidth = () => () => {}
     const createImageBitmap = () => globalThis.__libraryArtworkTest.createImageBitmap()
     const fetch = (...args) => globalThis.__libraryArtworkTest.fetch(...args)
     const setTimeout = (callback, delay) => globalThis.__libraryArtworkTest.setTimeout(callback, delay)

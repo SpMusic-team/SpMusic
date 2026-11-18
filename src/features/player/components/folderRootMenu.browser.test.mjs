@@ -15,14 +15,24 @@ let fixture=runInNewContext(literal[1],{dependency})
 fixture=fixture.replace("ReactDOM.createRoot(document.getElementById('root')).render(",`
 const query=new URLSearchParams(location.search);
 roots.splice(0,roots.length,...(query.has('empty')?[]:query.has('mixedRoots')?['/music','/empty','/missing','/music-else']:['/music','/music-else']));
-window.scanGate=false;window.holdScans=query.has('restoreGate');window.testPendingScans=[];window.holdPicker=false;window.pendingPickers=[];
+window.scanGate=false;window.holdScans=query.has('restoreGate');window.testPendingScans=[];window.holdSave=false;window.pendingSaves=[];
 window.requests=[];window.scanFailures=[];window.descriptorVersion=0;window.summaryLabel='Initial';window.completedScans=0;
+let folderSettings={revision:0,roots:roots.map(path=>({path,selected:true,directoryRules:[]}))};
 const invokeOriginal=window.backendInvoke;
 window.backendInvoke=async(command,args)=>{
  window.requests.push({command,args});
- if(command==='library_select_folders')return window.holdPicker?await new Promise(resolve=>window.pendingPickers.push(resolve)):window.folderSelection??null;
- if(command==='library_add_folder'){if(!roots.includes(args.path))roots.push(args.path);return {folders:[...roots]};}
- if(command==='library_clear_folders'&&window.clearFailure)throw {code:'LIBRARY_STORAGE_ERROR',message:'Controlled clear failure',recoverable:true};
+ if(command==='library_get_folders')return structuredClone(folderSettings);
+ if(command==='library_select_folders')return window.folderSelection??null;
+ if(command==='library_list_folder_directories')return {...args.input,children:[]};
+ if(command==='library_replace_folders'){
+  if(window.holdSave)await new Promise(resolve=>window.pendingSaves.push(resolve));
+  if(args.input.expectedRevision!==folderSettings.revision)throw {code:'LIBRARY_SETTINGS_CONFLICT',message:'Controlled revision conflict'};
+  folderSettings={revision:folderSettings.revision+1,roots:structuredClone(args.input.roots)};return structuredClone(folderSettings);
+ }
+ if(command==='library_clear_folders'){
+  if(window.clearFailure)throw {code:'LIBRARY_STORAGE_ERROR',message:'Controlled clear failure',recoverable:true};
+  folderSettings={revision:folderSettings.revision+1,roots:[]};return null;
+ }
  if(command==='audio_import_playlist')return null;
  if(command==='library_scan_folder'){
   const version=window.descriptorVersion,fail=window.scanFailures.includes(args.path);
@@ -49,7 +59,7 @@ const surface=`import React from '${dependency('react.js')}';import {PlayerSurfa
 const html=(await(await fetch(origin)).text()).replace(/src="\/src\/[^\"]+"/,'src="/__folder_root_menu_fixture.js"')
 const directory=process.env.SPMUSIC_TEST_SCREENSHOTS||'C:/Users/winkeses/.codex/tmp/folder-root-menu-independent'
 mkdirSync(directory,{recursive:true})
-const browser=await chromium.launch({headless:true,channel:'msedge'}),errors=[],evidence=[]
+const browser=await chromium.launch({headless:true,channel:'msedge',args:['--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets']}),errors=[],evidence=[]
 async function open(query='',width=1280,height=900){
  const page=await browser.newPage({viewport:{width,height},reducedMotion:'reduce'});page.setDefaultTimeout(12000)
  page.on('pageerror',error=>errors.push(error.message))
@@ -62,7 +72,7 @@ async function open(query='',width=1280,height=900){
  await page.route('**/__folder_root_menu_surface.js',route=>route.fulfill({contentType:'text/javascript',body:realSurface}))
  await page.route('**/__folder_root_menu_fixture.js',route=>route.fulfill({contentType:'text/javascript',body:fixture}))
  await page.route('**/__folder_root_menu_test*',route=>route.fulfill({contentType:'text/html',body:html}))
- await page.goto(origin+'/__folder_root_menu_test'+query)
+ await page.goto(origin+'/__folder_root_menu_test'+query,{waitUntil:'domcontentloaded'})
  await page.waitForFunction(()=>window.vm?.playlist.library)
  return page
 }
@@ -78,7 +88,7 @@ async function releaseScans(page){
  await page.evaluate(()=>{window.holdScans=false;window.testPendingScans.splice(0).forEach(job=>job.resolve())});await settle(page)
 }
 function assertNoPlaybackOrRegistry(calls){
- for(const command of ['library_select_folders','library_add_folder','audio_open_source','audio_load_file','audio_load_and_play','audio_hydrate_track'])assert.equal(count(calls,command),0,`rescan never invokes ${command}`)
+ for(const command of ['library_select_folders','library_replace_folders','audio_open_source','audio_load_file','audio_load_and_play','audio_hydrate_track'])assert.equal(count(calls,command),0,`rescan never invokes ${command}`)
 }
 
 try{
@@ -121,12 +131,14 @@ try{
  assert((await songIds(page)).includes('root'),'failed rescan retains the prior successful source')
  assertNoPlaybackOrRegistry(await requests(page))
  await page.waitForFunction(()=>window.requests.filter(call=>call.command==='library_warm_cover_thumbnails').length===1)
- // Import and rescan are mutually exclusive even through direct VM callbacks.
- await page.evaluate(()=>{window.requests=[];window.holdPicker=true;window.savedRescan=window.vm.playlist.library.onRescanFolders;window.vm.playlist.library.onSelectFolders()})
- await page.waitForFunction(()=>window.pendingPickers.length===1)
+ // Saving folder selection and rescanning are mutually exclusive even through direct VM callbacks.
+ await page.evaluate(()=>{window.requests=[];window.holdSave=true;window.savedRescan=window.vm.playlist.library.onRescanFolders;window.vm.playlist.library.onSelectFolders()})
+ const editor=page.getByRole('dialog',{name:'文件夹选择',exact:true})
+ await editor.getByRole('button',{name:'保存并扫描',exact:true}).click()
+ await page.waitForFunction(()=>window.pendingSaves.length===1)
  await page.evaluate(()=>window.savedRescan());await settle(page)
  assert.equal(count(await requests(page),'library_scan_folder'),0)
- await page.evaluate(()=>window.pendingPickers.splice(0).forEach(resolve=>resolve(null)));await ready(page)
+ await page.evaluate(()=>{window.holdSave=false;window.pendingSaves.splice(0).forEach(resolve=>resolve())});await ready(page)
  // Clear changes the library epoch; old success and old errors stay discarded.
  await page.evaluate(()=>{window.requests=[];window.holdScans=true;window.vm.playlist.library.onRescanFolders()})
  await page.waitForFunction(()=>window.testPendingScans.length>0)
@@ -181,7 +193,11 @@ try{
   await tags.evaluate(()=>{window.summaryGate=false;window.pendingSummaries.splice(0).forEach(resolve=>resolve())})
   if(!failure){
    await tags.evaluate(()=>{window.folderSelection=['/music']})
-   await tags.locator('.playlist-management-empty').getByRole('button',{name:'选择文件夹',exact:true}).click();await ready(tags)
+   await tags.locator('.playlist-management-empty').getByRole('button',{name:'选择文件夹',exact:true}).click()
+   const selection=tags.getByRole('dialog',{name:'文件夹选择',exact:true})
+   await selection.getByRole('button',{name:'添加文件夹或存储',exact:true}).click()
+   await selection.locator('.folder-selection-name[title="/music"]').waitFor()
+   await selection.getByRole('button',{name:'保存并扫描',exact:true}).click();await ready(tags)
   }
   console.log('Checking cleared summary recovery',failure)
   try{await tags.waitForFunction(()=>window.vm.playlist.library.allSongsMetadataStatus==='ready'&&window.vm.playlist.library.allSongs.some(row=>row.track.title==='Initial Title root'))}
@@ -198,11 +214,11 @@ try{
  const dialog=ui.getByRole('dialog',{name:'文件夹层次结构',exact:true})
  await trigger.click();await dialog.waitFor()
  assert.equal(await dialog.getByRole('button').count(),4)
- assert.equal(await dialog.getByRole('button',{name:'列表选项，暂不可用'}).isDisabled(),true)
+ assert.equal(await dialog.getByRole('button',{name:'列表选项',exact:true}).isEnabled(),true)
  await ui.waitForFunction(()=>document.activeElement?.textContent==='选择文件夹')
  await ui.keyboard.press('Shift+Tab')
- await ui.waitForFunction(()=>document.activeElement?.textContent==='在侧栏置顶')
- assert.equal(await ui.evaluate(()=>document.activeElement?.textContent),'在侧栏置顶','focus wraps past disabled list options')
+ await ui.waitForFunction(()=>document.activeElement?.textContent==='列表选项')
+ assert.equal(await ui.evaluate(()=>document.activeElement?.textContent),'列表选项','focus wraps to the enabled list options')
  await ui.keyboard.press('Tab')
  await ui.waitForFunction(()=>document.activeElement?.textContent==='选择文件夹')
  assert.equal(await ui.evaluate(()=>document.activeElement?.textContent),'选择文件夹')
@@ -231,7 +247,12 @@ try{
  await trigger.click();await ui.mouse.click(8,8);await dialog.waitFor({state:'hidden'})
  assert.equal(await trigger.evaluate(node=>node===document.activeElement),true,'backdrop returns focus to trigger')
  await trigger.click();await dialog.getByRole('button',{name:'选择文件夹',exact:true}).click();await dialog.waitFor({state:'hidden'});await ready(ui)
- assert.equal(count(await requests(ui),'library_select_folders'),1,'select action invokes the existing picker')
+ const selection=ui.getByRole('dialog',{name:'文件夹选择',exact:true})
+ await selection.waitFor()
+ assert.equal(await ui.getByRole('dialog').count(),1,'select action hands off to the folder editor')
+ await selection.getByRole('button',{name:'添加文件夹或存储',exact:true}).click()
+ await ui.waitForFunction(()=>window.requests.filter(call=>call.command==='library_select_folders').length===1)
+ await ui.keyboard.press('Escape');await selection.waitFor({state:'hidden'})
  await trigger.click();await dialog.getByRole('button',{name:'重新扫描',exact:true}).click();await dialog.waitFor({state:'hidden'});await rescanDone(ui)
  assert.equal(count(await requests(ui),'library_scan_folder'),4,'UI rescan retries two roots in addition to restore')
  const sidebar=ui.locator('.folder-hierarchy .playlist-library-sidebar:not([data-overlay]) .playlist-library-category-label')
@@ -282,11 +303,20 @@ try{
  await narrow.getByRole('button',{name:'更多文件夹操作',exact:true}).click()
  const narrowDialog=narrow.getByRole('dialog',{name:'文件夹层次结构',exact:true});await narrowDialog.waitFor()
  const narrowBox=await narrowDialog.boundingBox();assert(narrowBox.x>=16&&narrowBox.y>=16&&narrowBox.x+narrowBox.width<=344&&narrowBox.y+narrowBox.height<=464)
- await narrowDialog.getByRole('button',{name:'列表选项，暂不可用'}).scrollIntoViewIfNeeded()
+ const narrowOptionsEntry=narrowDialog.getByRole('button',{name:'列表选项',exact:true})
+ await narrowOptionsEntry.scrollIntoViewIfNeeded()
  assert.equal(await narrowDialog.evaluate(node=>node.scrollWidth<=node.clientWidth),true,'narrow menu has no horizontal clipping')
  await narrowDialog.screenshot({path:directory+'/menu-narrow.png'})
- await narrow.keyboard.press('Escape');await narrowDialog.waitFor({state:'hidden'})
- evidence.push({scenario:'narrow-scroll-and-dismiss',box:narrowBox,passed:true});await narrow.close()
+ await narrowOptionsEntry.click();await narrowDialog.waitFor({state:'hidden'})
+ const narrowOptions=narrow.getByRole('dialog',{name:'列表选项：文件夹层次结构',exact:true})
+ await narrowOptions.waitFor()
+ const optionsBox=await narrowOptions.boundingBox();assert(optionsBox.x>=16&&optionsBox.y>=16&&optionsBox.x+optionsBox.width<=344&&optionsBox.y+optionsBox.height<=464)
+ assert.deepEqual(await narrowOptions.locator('legend').allTextContents(),['布局','查看方式'])
+ assert.equal(await narrowOptions.locator('.all-songs-options-scroll').evaluate(node=>node.scrollWidth<=node.clientWidth),true)
+ await narrowOptions.screenshot({path:directory+'/options-narrow.png'})
+ await narrow.keyboard.press('Escape');await narrowOptions.waitFor({state:'hidden'})
+ assert.equal(await narrow.getByRole('button',{name:'更多文件夹操作',exact:true}).evaluate(node=>node===document.activeElement),true)
+ evidence.push({scenario:'narrow-menu-and-list-options-handoff',box:narrowBox,optionsBox,passed:true});await narrow.close()
  assert.deepEqual(errors,[],'no uncaught browser runtime errors')
  writeFileSync(directory+'/evidence.json',JSON.stringify({evidence,errors},null,2))
  console.log(JSON.stringify({pass:true,evidence,directory}))

@@ -31,7 +31,7 @@ async function harness() {
   )
   assert.notEqual(patched, compiled, 'test substitutes only the native cover command boundary')
   const url = `data:text/javascript;base64,${Buffer.from(patched).toString('base64')}#${Math.random()}`
-  const { schedulePlaylistCoverPixels: schedule, scheduleTrackThumbnail, scheduleFolderThumbnail, DEFAULT_MAX_CONCURRENT, maxConcurrentWidth, setMaxConcurrent, resetMaxConcurrentForTests } = await import(url)
+  const { schedulePlaylistCoverPixels: schedule, scheduleTrackThumbnail, scheduleFolderThumbnail, DEFAULT_MAX_CONCURRENT, maxConcurrentWidth, setMaxConcurrent, resetMaxConcurrentForTests, coverOwnerAdmissionWidth, subscribeCoverOwnerWidth } = await import(url)
   const input = (name, windowGeneration = 1) => ({
     clientId: 'test-client', filePath: `/covers/${name}.flac`, maxEdge: 256, windowGeneration,
   })
@@ -56,7 +56,7 @@ async function harness() {
   }
   return {
     schedule, scheduleTrackThumbnail, scheduleFolderThumbnail, DEFAULT_MAX_CONCURRENT, maxConcurrentWidth, setMaxConcurrent, resetMaxConcurrentForTests, calls, pending, input, flush,
-    settle, fail, settleOldest, drain,
+    settle, fail, settleOldest, drain, coverOwnerAdmissionWidth, subscribeCoverOwnerWidth,
     get inFlight() { return pending.length },
     get maximumActive() { return maximumActive },
   }
@@ -360,6 +360,23 @@ test('setMaxConcurrent widens the pool and refills in the same turn', async () =
   for (let index = 0; index < 12; index += 1) h.schedule(h.input(`wide-${index}`), { priority: 1 })
   assert.equal(h.inFlight, 16, 'the widened pool admits up to the new width')
   await h.drain()
+})
+
+test('row owners follow the native report even when the shared pool already has that width', async () => {
+  const h = await harness()
+  const reports = []
+  const unsubscribe = h.subscribeCoverOwnerWidth(() => reports.push(h.coverOwnerAdmissionWidth()))
+  assert.equal(h.coverOwnerAdmissionWidth(), 2)
+  assert.equal(h.setMaxConcurrent(h.DEFAULT_MAX_CONCURRENT), false)
+  assert.equal(h.setMaxConcurrent(8), true)
+  assert.equal(h.setMaxConcurrent(1), false)
+  unsubscribe()
+  assert.equal(h.setMaxConcurrent(16), true)
+  assert.deepEqual(reports, [h.DEFAULT_MAX_CONCURRENT, 8])
+
+  const narrow = await harness()
+  narrow.setMaxConcurrent(1)
+  assert.equal(narrow.coverOwnerAdmissionWidth(), 1)
 })
 
 test('setMaxConcurrent rejects every malformed width and leaves the pool unchanged', async () => {

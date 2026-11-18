@@ -45,6 +45,8 @@ export type PlaylistTrackRow = {
   libraryComposerName?: string | null
   libraryGenreName?: string | null
   libraryYear?: number | null
+  libraryTrackNumber?: number | null
+  libraryDiscNumber?: number | null
   albumArtist?: string | null
   durationSeconds: number
   fileExtension?: string
@@ -70,7 +72,7 @@ export function nonEmptyText(value: unknown): string | undefined {
   return trimmed || undefined
 }
 
-function nonEmptyYear(value: number | null | undefined): number | null {
+function positiveTagNumber(value: number | null | undefined): number | null {
   return value != null && Number.isSafeInteger(value) && value > 0 && value <= 0xffff_ffff ? value : null
 }
 
@@ -136,7 +138,9 @@ export function playlistTrackRowFromSummary(
     libraryArtistName: nonEmptyText(summary?.artist) ?? null,
     libraryComposerName: nonEmptyText(summary?.composer) ?? null,
     libraryGenreName: nonEmptyText(summary?.genre) ?? null,
-    libraryYear: nonEmptyYear(summary?.year),
+    libraryYear: positiveTagNumber(summary?.year),
+    ...(summary?.trackNumber !== undefined ? { libraryTrackNumber: positiveTagNumber(summary.trackNumber) } : {}),
+    ...(summary?.discNumber !== undefined ? { libraryDiscNumber: positiveTagNumber(summary.discNumber) } : {}),
     albumArtist: nonEmptyText(summary?.albumArtist) ?? null,
     // The tag channel deliberately carries no duration: a container header
     // estimate would fight the decoder-backed duration channel and could flip a
@@ -173,6 +177,8 @@ export function playlistTrackRowEqual(left: PlaylistTrackRow, right: PlaylistTra
     && left.libraryComposerName === right.libraryComposerName
     && left.libraryGenreName === right.libraryGenreName
     && left.libraryYear === right.libraryYear
+    && left.libraryTrackNumber === right.libraryTrackNumber
+    && left.libraryDiscNumber === right.libraryDiscNumber
     && left.albumArtist === right.albumArtist
     && left.durationSeconds === right.durationSeconds
     && left.fileExtension === right.fileExtension

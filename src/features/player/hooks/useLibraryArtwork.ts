@@ -33,7 +33,7 @@ import {
   beginAudioPlaylistCoverWindow, probeAudioPlaylistCover,
   type AudioFolderPlaylist, type AudioFolderTrackRef,
 } from '@/features/player/services/audioCommands'
-import { schedulePlaylistCoverPixels, scheduleTrackThumbnail } from '@/features/player/services/playlistCoverScheduler'
+import { coverOwnerAdmissionWidth, schedulePlaylistCoverPixels, scheduleTrackThumbnail, subscribeCoverOwnerWidth } from '@/features/player/services/playlistCoverScheduler'
 import {
   attemptPlaylistCoverThumbnailPath,
   attemptTrackThumbnailPath,
@@ -186,7 +186,6 @@ type Runtime = {
 const EMPTY_ROWS: ReadonlyMap<string, ArtworkRow> = new Map()
 const MAX_RESIDENT = 80
 const MAX_DETAIL = 40
-const CONCURRENCY = 2
 
 /**
  * Full source identity for one library artwork row.
@@ -432,10 +431,16 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
       runtime.heroPendingReplacements.delete(src)
       for (const oldSource of oldSources) releasePlaylistCoverUrl(oldSource)
     }
+    let backgroundActive = 0
     runtime.pump = () => {
       if (!runtime.mounted || !runtime.visible) return
-      while (runtime.active < CONCURRENCY) {
+      const width = coverOwnerAdmissionWidth()
+      const previewPaths = new Set(runtime.previews.values())
+      const priorityFor = (key: string) => previewPaths.has(key) ? 0 : runtime.detailVisiblePaths.has(key) ? 1 : 2
+      while (runtime.active < width) {
+        const allowBackground = backgroundActive < Math.max(1, Math.min(2, width - 1))
         const next = [...runtime.desired].find(([key, edge]) => {
+          if (!allowBackground && priorityFor(key) === 2) return false
           const descriptor = runtime.descriptors.get(key)
           const entry = runtime.cache.get(key)
           if (!descriptor?.available || runtime.queued.has(key)) return false
@@ -459,6 +464,7 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
         })
         if (!next) break
         const [key, edge] = next
+        const background = priorityFor(key) === 2
         const descriptor = runtime.descriptors.get(key)!
         const revision = runtime.revision
         const current = () => runtime.mounted && runtime.visible && runtime.revision === revision && runtime.desired.has(key)
@@ -473,6 +479,7 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
         const forceEdge = forcePixels ? runtime.recoveryEdge.get(key) : undefined
         runtime.queued.add(key)
         runtime.active += 1
+        if (background) backgroundActive += 1
         void (async () => {
           let thumbnail: PlaylistCoverImage | undefined
           try {
@@ -639,6 +646,7 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
             if (thumbnail) releasePlaylistCoverUrl(thumbnail.src)
             runtime.queued.delete(key)
             runtime.active -= 1
+            if (background) backgroundActive -= 1
             runtime.pump()
           }
         })()
@@ -977,8 +985,10 @@ export function useLibraryArtwork(sources: readonly AudioFolderPlaylist[], detai
     replacementObserver.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['src'] })
     window.addEventListener('spmusic:playlist-cover-image-load', onImageLoad)
     window.addEventListener('spmusic:playlist-cover-image-error', onImageError)
+    const unsubscribeWidth = subscribeCoverOwnerWidth(runtime.pump)
     return () => {
       runtime.mounted = false
+      unsubscribeWidth()
       runtime.controller.abort()
       mutations.disconnect()
       observer.disconnect()

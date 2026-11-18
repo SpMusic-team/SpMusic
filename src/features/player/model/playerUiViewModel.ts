@@ -11,6 +11,7 @@ import type { PlaylistDurationStatus } from '@/features/player/model/playlistDur
 import type { Track, TrackArtwork, TrackArtworkPrefetchCandidate, TrackFeedback, TrackRating, TrackSummary } from '@/features/player/model/playerTypes'
 import type { PlayerVisualTimelineClock } from '@/features/player/model/visualTimelineClock'
 import type { PlaybackQueueEntry } from '@/features/player/model/playbackQueue'
+import type { AllSongsSort } from './allSongsListOptions'
 import type { AudioOutputInfo, AudioTransportTarget, AudioTransportTransition } from '@/features/player/services/audioCommands'
 
 export type PlayerContentState = 'empty' | 'loading' | 'track' | 'error'
@@ -154,6 +155,8 @@ export type PlaylistTrackItemViewModel = TrackSummary
     libraryComposerName?: string | null
     libraryGenreName?: string | null
     libraryYear?: number | null
+    libraryTrackNumber?: number | null
+    libraryDiscNumber?: number | null
     albumArtist?: string | null
     coverThumbnail?: PlaylistCoverImage
   }>
@@ -163,6 +166,8 @@ export type PlaylistTrackMetadata = Pick<
   'id' | 'title' | 'artist' | 'album' | 'stream' | 'durationSeconds' | 'fileExtension' | 'coverTone' | 'audioFormat'
 > & Readonly<{
   hasLocalArtwork: boolean
+  libraryTrackNumber?: number | null
+  libraryDiscNumber?: number | null
 }>
 
 // Visual completion cannot overwrite text or duration from the metadata lane.
@@ -180,6 +185,8 @@ export type PlaylistTrackVisual = Pick<Track, 'id' | 'coverTone'> & Readonly<{
 }>
 
 export type PlaylistLibraryItem = {
+  libraryAddedAtMs?: number
+  fileModifiedAtMs?: number
   scope: string
   name: string
   trackCount: number
@@ -195,6 +202,8 @@ export type AllSongsItem = Readonly<{
   trackId: string
   sourcePath: string
   fileCreatedAtMs?: number | null
+  fileModifiedAtMs?: number | null
+  libraryAddedAtMs?: number | null
   track: PlaylistTrackItemViewModel
   available: boolean
   artworkRevision?: number
@@ -277,6 +286,7 @@ export type PlaylistLibraryViewModel = PlaylistAddCallbacks & {
   albumLocation?: string | null
   onAlbumLocationChange?: (key: string | null) => void
   folderRoots?: readonly { path: string; directoryPaths?: readonly string[]; status: 'loading' | 'ready' | 'error'; error?: string; selection?: RootSelection }[]
+  directoryModifiedAtMs?: ReadonlyMap<string, number>
   isFolderRestorePending?: boolean
   folderError?: string
   flatFolderLocation?: { rootPath: string; directoryPath: string } | null
@@ -292,6 +302,8 @@ export type PlaylistLibraryViewModel = PlaylistAddCallbacks & {
   highestRatedSongs?: readonly AllSongsItem[]
   mostPlayedSongs?: readonly AllSongsItem[]
   mostPlayedCounts?: ReadonlyMap<string, number>
+  allSongsLastPlayedAt?: ReadonlyMap<string, number>
+  allSongsShuffleOrder?: readonly string[]
   mostPlayedOptions?: MostPlayedOptions
   onMostPlayedOptionsChange?: (value: MostPlayedOptions) => void
   onClearMostPlayed?: () => void
@@ -309,8 +321,8 @@ export type PlaylistLibraryViewModel = PlaylistAddCallbacks & {
   onOpen: () => void
   onSelect: (scope: string) => void
   onPlay: (scope: string) => void
-  onPlaySong?: (scope: string, trackId: string, orderedSongs?: readonly PlaybackQueueEntry[]) => void
-  onShufflePlay?: (orderedSongs: readonly PlaybackQueueEntry[]) => Promise<boolean> | boolean
+  onPlaySong?: (scope: string, trackId: string, orderedSongs?: readonly PlaybackQueueEntry[], allSongsSort?: AllSongsSort, allSongsShuffleReverse?: boolean) => void
+  onShufflePlay?: (orderedSongs: readonly PlaybackQueueEntry[], allSongsSort?: AllSongsSort, allSongsShuffleReverse?: boolean) => Promise<boolean> | boolean
   onSelectFolders?: () => void
   onRescanFolders?: () => void
   isFolderRescanPending?: boolean

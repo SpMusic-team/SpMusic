@@ -5,7 +5,7 @@ import { appCopy } from '@/features/player/model/playerCopy'
 import type { RatingMode } from '../model/trackRating'
 import type { PlaylistControllerMode } from '@/features/player/model/playlistControllerMode'
 import { IconButton } from './IconButton'
-import { SettingsDialog } from './SettingsDialog'
+import { SettingsDialog, type SettingsDialogState } from './SettingsDialog'
 
 type TauriWindow = ReturnType<typeof getCurrentWindow>
 
@@ -15,6 +15,8 @@ export type WindowLayoutState = {
 }
 
 type WindowBarProps = {
+  settingsDialog: SettingsDialogState
+  onSettingsOpenChange: (open: boolean) => void
   ratingMode?: RatingMode
   onRatingModeChange?: (mode: RatingMode) => void
   controllerMode?: PlaylistControllerMode
@@ -43,6 +45,8 @@ function getTauriWindow(): TauriWindow | null {
 }
 
 export function WindowBar({
+  settingsDialog,
+  onSettingsOpenChange,
   ratingMode = 'thumbs',
   onRatingModeChange,
   controllerMode = 'movable',
@@ -171,6 +175,8 @@ export function WindowBar({
       <h1 id="app-title" className="sr-only">{appCopy.appTitle}</h1>
       <div className="window-actions" onDoubleClick={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
         <SettingsDialog
+          dialogState={settingsDialog}
+          onOpenChange={onSettingsOpenChange}
           ratingMode={ratingMode}
           onRatingModeChange={onRatingModeChange}
           controllerMode={controllerMode}

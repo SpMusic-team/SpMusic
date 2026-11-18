@@ -252,6 +252,8 @@ async function harness(options = {}) {
       notePathLanePresentationFailure, IntersectionObserver, ResizeObserver,
       MutationObserver, document, URL } = globalThis.__coverContractTest
     const window = globalThis.__coverContractTest
+    const coverOwnerAdmissionWidth = () => 2
+    const subscribeCoverOwnerWidth = () => () => {}
     const isStreamSource = () => false
     const orderPlaylistArtworkRows = (entries) => [...entries]
   `

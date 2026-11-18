@@ -3,7 +3,7 @@ export const MOST_PLAYED_STORAGE_KEY = 'spmusic.most-played.v1'
 export const MOST_PLAYED_OPTIONS_STORAGE_KEY = 'spmusic.most-played.options.v1'
 export type MostPlayedEntry = { sourcePath: string; playCount: number; lastPlayedAt: number }
 export type MostPlayedOptions = { limit: number; from: number; direction: 'asc' | 'desc' }
-export const DEFAULT_MOST_PLAYED_OPTIONS: MostPlayedOptions = { limit: 100, from: 0, direction: 'desc' }
+export const DEFAULT_MOST_PLAYED_OPTIONS: MostPlayedOptions = { limit: 200, from: 0, direction: 'desc' }
 export function isMostPlayedOptions(value: unknown): value is MostPlayedOptions {
   if (!value || typeof value !== 'object') return false
   const item = value as MostPlayedOptions

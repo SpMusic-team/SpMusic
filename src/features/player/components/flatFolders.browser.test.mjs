@@ -100,6 +100,7 @@ await page.route('**/__flat_folders_fixture.js', route => route.fulfill({ conten
 await page.route('**/__flat_folders_test?*', route => route.fulfill({ contentType: 'text/html', body: html }))
 await page.addInitScript(() => {
   localStorage.setItem('spmusic.player.startup-page.v1', 'media-library')
+  localStorage.setItem('spmusic.flat-folders.layout-level.v1', '0')
   localStorage.removeItem('spmusic.player.session.v1')
 })
 

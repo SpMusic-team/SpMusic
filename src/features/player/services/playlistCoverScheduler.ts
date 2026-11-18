@@ -117,6 +117,17 @@ let maxConcurrent = DEFAULT_MAX_CONCURRENT
  * behind a lower ceiling.
  */
 let widthReported = false
+const coverOwnerWidthListeners = new Set<() => void>()
+
+/** Row owners leave room for other work until the native capability is known. */
+export function coverOwnerAdmissionWidth(): number {
+  return widthReported ? maxConcurrent : 2
+}
+
+export function subscribeCoverOwnerWidth(listener: () => void): () => void {
+  coverOwnerWidthListeners.add(listener)
+  return () => { coverOwnerWidthListeners.delete(listener) }
+}
 
 /**
  * Replaces the admit width.
@@ -132,6 +143,7 @@ export function setMaxConcurrent(width: unknown): boolean {
   widthReported = true
   maxConcurrent = width
   if (changed) pump()
+  for (const listener of coverOwnerWidthListeners) listener()
   return changed
 }
 

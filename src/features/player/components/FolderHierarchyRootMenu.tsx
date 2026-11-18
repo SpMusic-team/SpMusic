@@ -15,6 +15,7 @@ type Props = {
   onSelectFolders?: () => void
   onRescan?: () => void
   onTogglePinned?: () => void
+  onListOptions?: (trigger: HTMLButtonElement | null) => void
   busy?: boolean
   rescanDisabled?: boolean
   pinned?: boolean
@@ -22,7 +23,7 @@ type Props = {
   detail?: { title: string; parent: string; metadata: ReactNode; artwork: ReactNode; triggerIcon: ReactNode }
 }
 
-export function FolderHierarchyRootMenu({ onSelectFolders, onRescan, onTogglePinned, busy = false, rescanDisabled = false, pinned = false, detail, rootToolbar = false }: Props) {
+export function FolderHierarchyRootMenu({ onSelectFolders, onRescan, onTogglePinned, onListOptions, busy = false, rescanDisabled = false, pinned = false, detail, rootToolbar = false }: Props) {
   const icons = useSystemIcons()
   const [open, setOpen] = useState(false)
   const [transferring, setTransferring] = useState(false)
@@ -54,7 +55,14 @@ export function FolderHierarchyRootMenu({ onSelectFolders, onRescan, onTogglePin
         <Button className="folder-root-menu-action" variant="ghost" disabled={busy || !onSelectFolders} onClick={selectFolders}><img src={selectFoldersIcon} alt="" /><span>选择文件夹</span></Button>
         <Button className="folder-root-menu-action" variant="ghost" disabled={busy || rescanDisabled || !onRescan} title={detail ? "当前文件夹重新扫描暂不可用" : undefined} onClick={() => run(onRescan)}><img src={rescanIcon} alt="" /><span>重新扫描</span></Button>
         <Button className="folder-root-menu-action" variant="ghost" disabled={!onTogglePinned} title={detail ? "当前文件夹侧栏置顶暂不可用" : undefined} aria-pressed={pinned} onClick={() => run(onTogglePinned)}><img src={pinIcon} alt="" /><span>{pinned ? '取消侧栏置顶' : '在侧栏置顶'}</span></Button>
-        <Button className="folder-root-menu-action" variant="ghost" disabled aria-label="列表选项，暂不可用" title="列表选项暂不可用"><img className="folder-root-menu-settings" src={settingsIcon} alt="" /><span>列表选项</span></Button>
+        <Button className="folder-root-menu-action" variant="ghost" disabled={!onListOptions}
+          aria-label={onListOptions ? undefined : '列表选项，暂不可用'} title={onListOptions ? undefined : '列表选项暂不可用'} onClick={() => {
+            if (!onListOptions) return
+            trigger.current?.focus({ preventScroll: true })
+            setTransferring(true)
+            setOpen(false)
+            onListOptions(trigger.current)
+          }}><img className="folder-root-menu-settings" src={settingsIcon} alt="" /><span>列表选项</span></Button>
       </div>
     </DialogContent>}
   </Dialog>

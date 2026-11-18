@@ -47,6 +47,7 @@ type PlaylistCardProps = {
   selected: boolean
   artworkVisible: boolean
   showExtendedMetadata: boolean
+  showAudioFormatOnly?: boolean
   contentVisible: boolean
   contentRepresentative: boolean
   contentShape: number
@@ -113,6 +114,7 @@ export const PlaylistCard = memo(function PlaylistCard({
   selected,
   artworkVisible,
   showExtendedMetadata,
+  showAudioFormatOnly,
   contentVisible,
   contentRepresentative,
   contentShape,
@@ -207,13 +209,13 @@ export const PlaylistCard = memo(function PlaylistCard({
       onContextMenu={longPress.onContextMenu}
     >
       {contentVisible ? <PlaylistCardContent queued={queued} rating={rating} ratingMode={ratingMode} playCount={playCount} track={track} positionMs={positionMs} songKey={songKey} coverUrl={coverUrl} coverPresentation={coverPresentation} artworkVisible={artworkVisible}
-        selectMode={selectMode} showReorderHandle={showReorderHandle} unavailable={unavailable} showExtendedMetadata={showExtendedMetadata}
+        selectMode={selectMode} showReorderHandle={showReorderHandle} unavailable={unavailable} showExtendedMetadata={showExtendedMetadata} showAudioFormatOnly={showAudioFormatOnly}
         coverState={coverState} coverFailed={coverFailed} onCoverFailed={onCoverFailed} /> : null}
     </button>
   )
 })
 
-function PlaylistCardContent({ queued, rating, ratingMode, playCount, track, positionMs, songKey, coverUrl, coverPresentation, artworkVisible, selectMode, showReorderHandle, unavailable, showExtendedMetadata, coverState, coverFailed, onCoverFailed }: Pick<PlaylistCardProps, 'queued' | 'rating' | 'ratingMode' | 'playCount' | 'track' | 'positionMs' | 'songKey' | 'coverUrl' | 'coverPresentation' | 'artworkVisible' | 'selectMode' | 'showReorderHandle' | 'unavailable' | 'showExtendedMetadata' | 'coverFailed' | 'onCoverFailed'> & { coverState: PlaylistCardCoverState }) {
+function PlaylistCardContent({ queued, rating, ratingMode, playCount, track, positionMs, songKey, coverUrl, coverPresentation, artworkVisible, selectMode, showReorderHandle, unavailable, showExtendedMetadata, showAudioFormatOnly, coverState, coverFailed, onCoverFailed }: Pick<PlaylistCardProps, 'queued' | 'rating' | 'ratingMode' | 'playCount' | 'track' | 'positionMs' | 'songKey' | 'coverUrl' | 'coverPresentation' | 'artworkVisible' | 'selectMode' | 'showReorderHandle' | 'unavailable' | 'showExtendedMetadata' | 'showAudioFormatOnly' | 'coverFailed' | 'onCoverFailed'> & { coverState: PlaylistCardCoverState }) {
   const systemIcons = useSystemIcons()
   const badge = rating !== undefined || playCount !== undefined || queued ? <span className="playlist-card-badges">{rating !== undefined ? <SongRatingBadge rating={rating} mode={ratingMode ?? 'thumbs'} /> : playCount}{queued ? <span className={ratingMode === 'stars' ? 'playlist-card-glyph playlist-card-queue-mark is-stars' : 'playlist-card-glyph playlist-card-queue-mark'} aria-label="队列未播放" style={{ maskImage: `url("${pendingQueueGlyph}")` }} /> : null}</span> : undefined
   const coverSource = coverUrl ?? track.coverImage ?? track.coverImageFallback
@@ -226,9 +228,10 @@ function PlaylistCardContent({ queued, rating, ratingMode, playCount, track, pos
     ? artistText ? `${artistText} - ${albumText}` : albumText
     : artistText
   const bitDepth = track.audioFormat?.bitDepth
-  const formatParts = showExtendedMetadata ? [formatTrackClock(track.durationSeconds), track.fileExtension?.toLowerCase()].filter((part): part is string => Boolean(part)) : []
+  const showAudioFormat = showExtendedMetadata || showAudioFormatOnly
+  const formatParts = showAudioFormat ? [formatTrackClock(track.durationSeconds), track.fileExtension?.toLowerCase()].filter((part): part is string => Boolean(part)) : []
   if (positionMs !== undefined) formatParts.unshift(formatTrackClock(positionMs / 1000) ?? '0:00')
-  if (showExtendedMetadata && bitDepth != null && Number.isFinite(bitDepth) && bitDepth >= 24) formatParts.push(`${bitDepth}bit`)
+  if (showAudioFormat && bitDepth != null && Number.isFinite(bitDepth) && bitDepth >= 24) formatParts.push(`${bitDepth}bit`)
   const handleCoverError = (event: SyntheticEvent<HTMLImageElement>) => {
     const image = event.currentTarget
     const fallback = track.coverImageFallback

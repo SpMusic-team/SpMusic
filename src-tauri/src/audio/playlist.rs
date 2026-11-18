@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{BTreeMap, HashSet},
     fs,
     path::{Path, PathBuf},
 };
@@ -87,8 +87,7 @@ pub(crate) fn restore_playlist_track(source_path: &str) -> AudioFolderTrackRef {
     if super::network::is_stream(source_path) {
         return stream_descriptor(source_path, None, None);
     }
-    let path = Path::new(source_path);
-    folder_track_ref(path, path.is_file())
+    folder_track_ref(Path::new(source_path))
 }
 
 pub(crate) fn stream_descriptor(
@@ -111,6 +110,7 @@ pub(crate) fn stream_descriptor(
         file_name: name,
         available: true,
         file_created_at_ms: None,
+        file_modified_at_ms: None,
     }
 }
 
@@ -152,16 +152,20 @@ pub(crate) fn load_library_folder(
             true,
         )
     })?;
-    load_recursive_library_playlist(&directory)
+    load_recursive_library_playlist(&directory, modified_at_ms(&metadata))
 }
 
-fn load_recursive_library_playlist(root: &Path) -> Result<AudioFolderPlaylist, AudioCommandError> {
-    let mut pending = vec![root.to_path_buf()];
+fn load_recursive_library_playlist(
+    root: &Path,
+    root_modified_at_ms: Option<u64>,
+) -> Result<AudioFolderPlaylist, AudioCommandError> {
+    let mut pending = vec![(root.to_path_buf(), root_modified_at_ms)];
     let mut visited = HashSet::new();
     let mut sources = HashSet::new();
     let mut tracks = Vec::new();
     let mut directory_paths = Vec::new();
-    while let Some(directory) = pending.pop() {
+    let mut directory_modified_at_ms = BTreeMap::new();
+    while let Some((directory, modified)) = pending.pop() {
         if !visited.insert(directory.clone()) {
             continue;
         }
@@ -179,7 +183,11 @@ fn load_recursive_library_playlist(root: &Path) -> Result<AudioFolderPlaylist, A
                 continue;
             }
         };
-        directory_paths.push(directory.to_string_lossy().into_owned());
+        let directory_path = directory.to_string_lossy().into_owned();
+        if let Some(modified) = modified {
+            directory_modified_at_ms.insert(directory_path.clone(), modified);
+        }
+        directory_paths.push(directory_path);
         for entry in entries {
             let entry = match entry {
                 Ok(entry) => entry,
@@ -211,7 +219,7 @@ fn load_recursive_library_playlist(root: &Path) -> Result<AudioFolderPlaylist, A
                 }
             };
             if metadata.is_dir() {
-                pending.push(normalized);
+                pending.push((normalized, modified_at_ms(&metadata)));
             } else if metadata.is_file()
                 && has_supported_audio_extension(&normalized)
                 && sources.insert(normalized.clone())
@@ -237,9 +245,12 @@ fn load_recursive_library_playlist(root: &Path) -> Result<AudioFolderPlaylist, A
         directory_path: root.to_string_lossy().into_owned(),
         directory_name: name.clone(),
         directory_paths: Some(directory_paths),
+        directory_modified_at_ms: Some(directory_modified_at_ms),
         source_kind: AudioPlaylistSourceKind::Folder,
         source_path: root.to_string_lossy().into_owned(),
         source_name: name,
+        library_added_at_ms: None,
+        file_modified_at_ms: None,
         selected_index: 0,
         tracks,
     })
@@ -288,6 +299,7 @@ fn load_directory_audio_playlist(
                 .and_then(|name| name.to_str())
                 .unwrap_or("audio")
                 .to_string();
+            let metadata = fs::metadata(&path).ok();
             AudioFolderTrackRef {
                 station_name: None,
                 source_kind: None,
@@ -297,10 +309,8 @@ fn load_directory_audio_playlist(
                 source_path: path.to_string_lossy().into_owned(),
                 file_name,
                 available: true,
-                file_created_at_ms: fs::metadata(&path)
-                    .ok()
-                    .as_ref()
-                    .and_then(file_created_at_ms),
+                file_created_at_ms: metadata.as_ref().and_then(file_created_at_ms),
+                file_modified_at_ms: metadata.as_ref().and_then(modified_at_ms),
             }
         })
         .collect::<Vec<_>>();
@@ -351,6 +361,9 @@ fn load_directory_audio_playlist(
         directory_path: directory.to_string_lossy().into_owned(),
         directory_name: directory_name.clone(),
         directory_paths: None,
+        directory_modified_at_ms: None,
+        library_added_at_ms: None,
+        file_modified_at_ms: None,
         source_kind: AudioPlaylistSourceKind::Folder,
         source_path: directory.to_string_lossy().into_owned(),
         source_name: directory_name,
@@ -496,7 +509,7 @@ fn load_m3u8_playlist(
             continue;
         }
 
-        let track = folder_track_ref(&candidate_path, candidate_path.is_file());
+        let track = folder_track_ref(&candidate_path);
         if seen.insert(track.id.clone()) {
             tracks.push(track);
         }
@@ -545,9 +558,12 @@ fn load_m3u8_playlist(
         directory_path: directory.to_string_lossy().into_owned(),
         directory_name,
         directory_paths: None,
+        directory_modified_at_ms: None,
         source_kind: AudioPlaylistSourceKind::M3u8,
         source_path: playlist_path.to_string_lossy().into_owned(),
         source_name,
+        library_added_at_ms: None,
+        file_modified_at_ms: playlist_source_modified_at_ms(&playlist_path),
         selected_index,
         tracks,
     })
@@ -649,9 +665,9 @@ fn is_remote_or_unsupported_uri(entry: &str) -> bool {
         || (lower.contains("://") && !lower.starts_with("file://"))
 }
 
-fn folder_track_ref(path: &Path, available: bool) -> AudioFolderTrackRef {
-    let metadata = available.then(|| fs::metadata(path).ok()).flatten();
-    folder_track_ref_with_metadata(path, available, metadata.as_ref())
+fn folder_track_ref(path: &Path) -> AudioFolderTrackRef {
+    let metadata = fs::metadata(path).ok().filter(fs::Metadata::is_file);
+    folder_track_ref_with_metadata(path, metadata.is_some(), metadata.as_ref())
 }
 
 fn folder_track_ref_with_metadata(
@@ -669,15 +685,27 @@ fn folder_track_ref_with_metadata(
         file_name: file_name_string(path),
         available,
         file_created_at_ms: metadata.and_then(file_created_at_ms),
+        file_modified_at_ms: metadata.and_then(modified_at_ms),
     }
 }
 
 fn file_created_at_ms(metadata: &fs::Metadata) -> Option<u64> {
-    creation_time_millis(metadata.created().ok()?)
+    system_time_millis(metadata.created().ok()?)
 }
 
-fn creation_time_millis(created: std::time::SystemTime) -> Option<u64> {
-    safe_timestamp_millis(created.duration_since(std::time::UNIX_EPOCH).ok()?)
+fn modified_at_ms(metadata: &fs::Metadata) -> Option<u64> {
+    system_time_millis(metadata.modified().ok()?)
+}
+
+pub(crate) fn playlist_source_modified_at_ms(path: &Path) -> Option<u64> {
+    let metadata = fs::symlink_metadata(path)
+        .ok()
+        .filter(fs::Metadata::is_file)?;
+    modified_at_ms(&metadata)
+}
+
+pub(crate) fn system_time_millis(time: std::time::SystemTime) -> Option<u64> {
+    safe_timestamp_millis(time.duration_since(std::time::UNIX_EPOCH).ok()?)
 }
 
 fn safe_timestamp_millis(since_epoch: std::time::Duration) -> Option<u64> {
@@ -727,14 +755,14 @@ mod recently_added_tests {
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     #[test]
-    fn creation_time_is_safe_unix_millis_without_fallback() {
-        assert_eq!(creation_time_millis(UNIX_EPOCH), Some(0));
+    fn filesystem_time_is_safe_unix_millis_without_fallback() {
+        assert_eq!(system_time_millis(UNIX_EPOCH), Some(0));
         assert_eq!(
-            creation_time_millis(UNIX_EPOCH + Duration::from_millis(1234)),
+            system_time_millis(UNIX_EPOCH + Duration::from_millis(1234)),
             Some(1234)
         );
         assert_eq!(
-            creation_time_millis(UNIX_EPOCH - Duration::from_secs(1)),
+            system_time_millis(UNIX_EPOCH - Duration::from_secs(1)),
             None
         );
         assert_eq!(
@@ -744,9 +772,9 @@ mod recently_added_tests {
     }
 
     #[test]
-    fn library_scan_and_restored_descriptors_publish_filesystem_creation_time() {
+    fn local_descriptors_publish_distinct_filesystem_timestamps() {
         let directory = std::env::temp_dir().join(format!(
-            "spmusic-recent-added-{}-{}",
+            "spmusic-file-times-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -754,26 +782,87 @@ mod recently_added_tests {
                 .as_nanos()
         ));
         fs::create_dir(&directory).unwrap();
+        let empty_child = directory.join("empty");
+        fs::create_dir(&empty_child).unwrap();
         let path = directory.join("track.flac");
         fs::write(&path, b"descriptor only; no audio decode needed").unwrap();
-        let expected = file_created_at_ms(&fs::metadata(&path).unwrap());
+        let modified_seconds = 1_625_097_600;
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(UNIX_EPOCH + Duration::from_secs(modified_seconds))
+            .unwrap();
+        let expected_created = file_created_at_ms(&fs::metadata(&path).unwrap());
+        let expected_modified = Some(modified_seconds * 1000);
         let playlist = load_library_folder(&directory).unwrap();
         assert_eq!(playlist.tracks.len(), 1);
-        assert_eq!(playlist.tracks[0].file_created_at_ms, expected);
-        let wire = serde_json::to_value(&playlist.tracks[0]).unwrap();
+        let expected_directory_times = [&directory, &empty_child]
+            .into_iter()
+            .map(|path| {
+                let canonical = path.canonicalize().unwrap().to_string_lossy().into_owned();
+                let millis = fs::metadata(path)
+                    .unwrap()
+                    .modified()
+                    .unwrap()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as u64;
+                (canonical, millis)
+            })
+            .collect::<BTreeMap<_, _>>();
         assert_eq!(
-            wire.get("fileCreatedAtMs"),
-            Some(&serde_json::json!(expected))
+            playlist.directory_paths.as_ref().unwrap(),
+            &expected_directory_times.keys().cloned().collect::<Vec<_>>()
         );
         assert_eq!(
-            restore_playlist_track(path.to_str().unwrap()).file_created_at_ms,
-            expected
+            serde_json::to_value(&playlist).unwrap()["directoryModifiedAtMs"],
+            serde_json::json!(expected_directory_times)
         );
+        let flat = load_directory_audio_playlist(&directory, None).unwrap();
+        assert_eq!(flat.tracks.len(), 1);
+        let playlist_path = directory.join("test.m3u8");
+        fs::write(
+            &playlist_path,
+            b"#EXTM3U\ntrack.flac\nmissing.flac\nhttps://example.invalid/live.mp3\n",
+        )
+        .unwrap();
+        let imported = import_m3u8_playlist(&playlist_path).unwrap();
+        assert_eq!(imported.tracks.len(), 3);
+        for playlist in [&flat, &imported] {
+            let wire = serde_json::to_value(playlist).unwrap();
+            assert!(wire.get("directoryModifiedAtMs").is_none());
+        }
+        for metadata in [
+            &playlist.tracks[0],
+            &flat.tracks[0],
+            &imported.tracks[0],
+            &restore_playlist_track(path.to_str().unwrap()),
+        ] {
+            assert!(metadata.available);
+            assert_eq!(metadata.file_created_at_ms, expected_created);
+            assert_eq!(metadata.file_modified_at_ms, expected_modified);
+            let wire = serde_json::to_value(metadata).unwrap();
+            assert_eq!(
+                wire.get("fileCreatedAtMs"),
+                Some(&serde_json::json!(expected_created))
+            );
+            assert_eq!(
+                wire.get("fileModifiedAtMs"),
+                Some(&serde_json::json!(expected_modified))
+            );
+        }
         fs::remove_file(&path).unwrap();
-        assert_eq!(
-            restore_playlist_track(path.to_str().unwrap()).file_created_at_ms,
-            None
-        );
+        let missing = restore_playlist_track(path.to_str().unwrap());
+        assert!(!missing.available);
+        assert!(!imported.tracks[1].available);
+        for metadata in [&missing, &imported.tracks[1], &imported.tracks[2]] {
+            assert_eq!(metadata.file_created_at_ms, None);
+            let wire = serde_json::to_value(metadata).unwrap();
+            assert_eq!(wire.get("fileModifiedAtMs"), Some(&serde_json::Value::Null));
+        }
+        fs::remove_file(&playlist_path).unwrap();
+        fs::remove_dir(&empty_child).unwrap();
         fs::remove_dir(&directory).unwrap();
     }
 }

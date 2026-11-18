@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState } from 'react'
+import { lazy, Suspense, useId, useRef, useState } from 'react'
 import { PaletteIcon, SettingsIcon } from 'lucide-react'
 import {
   Dialog,
@@ -9,7 +9,7 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { Field, FieldContent, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field'
+import { Field, FieldContent, FieldDescription, FieldGroup, FieldLabel, FieldTitle } from '@/components/ui/field'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { IconButton } from '@/features/player/components/IconButton'
@@ -29,7 +29,13 @@ const DevAudioSettingsField = import.meta.env.DEV
     })))
   : null
 
+export type SettingsDialogState =
+  | { open: boolean; section: 'general' }
+  | { open: boolean; section: 'library'; returnFocus: HTMLElement | null }
+
 type SettingsDialogProps = {
+  dialogState?: SettingsDialogState
+  onOpenChange?: (open: boolean) => void
   ratingMode?: RatingMode
   onRatingModeChange?: (mode: RatingMode) => void
   controllerMode?: PlaylistControllerMode
@@ -46,6 +52,8 @@ type SettingsDialogProps = {
 }
 
 export function SettingsDialog({
+  dialogState,
+  onOpenChange,
   ratingMode = 'thumbs',
   onRatingModeChange,
   controllerMode = 'movable',
@@ -56,21 +64,27 @@ export function SettingsDialog({
   librarySettings,
 }: SettingsDialogProps) {
   const settingsCopy = appCopy.settings
-  const [settingsOpen, setSettingsOpen] = useState(false)
+  const settingsTriggerRef = useRef<HTMLButtonElement>(null)
+  const libraryTitleRef = useRef<HTMLDivElement>(null)
+  const libraryTitleId = useId()
+  const [localOpen, setLocalOpen] = useState(false)
+  const settingsOpen = dialogState?.open ?? localOpen
   const [themeManagerOpen, setThemeManagerOpen] = useState(false)
   const [startupPage, setStartupPage] = useState<StartupPage>(readStartupPage)
   const startupPageItems = [
     { value: 'player', label: settingsCopy.startupPage.player },
     { value: 'media-library', label: settingsCopy.startupPage.mediaLibrary },
   ]
+  const changeOpen = (open: boolean) => {
+    if (dialogState === undefined) setLocalOpen(open)
+    onOpenChange?.(open)
+    if (!open) setThemeManagerOpen(false)
+  }
 
   return (
-    <Dialog open={settingsOpen} onOpenChange={(open) => {
-      setSettingsOpen(open)
-      if (!open) setThemeManagerOpen(false)
-    }}>
+    <Dialog open={settingsOpen} onOpenChange={changeOpen}>
       <Tooltip>
-        <TooltipTrigger render={<DialogTrigger render={<Button className="window-settings-trigger" aria-label={appCopy.controls.settings} size="icon" type="button" variant="ghost" />} />}>
+        <TooltipTrigger render={<DialogTrigger render={<Button ref={settingsTriggerRef} className="window-settings-trigger" aria-label={appCopy.controls.settings} size="icon" type="button" variant="ghost" />} />}>
           <SettingsIcon />
         </TooltipTrigger>
         <TooltipContent>{appCopy.controls.settings}</TooltipContent>
@@ -79,6 +93,12 @@ export function SettingsDialog({
         className="player-settings-dialog"
         data-theme-manager-open={themeManagerOpen}
         overlayClassName={themeManagerOpen ? 'player-settings-overlay player-settings-overlay-hidden' : 'player-settings-overlay'}
+        initialFocus={dialogState?.section === 'library' && librarySettings ? libraryTitleRef : undefined}
+        finalFocus={dialogState?.section === 'library' ? () => {
+          const target = dialogState.returnFocus
+          if (target?.isConnected && !target.closest('[inert]') && target.getClientRects().length) return target
+          return settingsTriggerRef.current
+        } : undefined}
       >
         <DialogHeader>
           <DialogTitle>{settingsCopy.title}</DialogTitle>
@@ -145,9 +165,11 @@ export function SettingsDialog({
             </Select>
           </Field>
           {librarySettings ? (
-            <Field className="player-settings-row player-settings-library-row" orientation="horizontal">
+            <Field className="player-settings-row player-settings-library-row" orientation="horizontal" aria-labelledby={libraryTitleId}>
               <FieldContent>
-                <FieldLabel>{settingsCopy.librarySelection.title}</FieldLabel>
+                <FieldTitle ref={libraryTitleRef} id={libraryTitleId} role="heading" aria-level={3} tabIndex={-1}>
+                  {settingsCopy.librarySelection.title}
+                </FieldTitle>
                 <FieldDescription>{settingsCopy.librarySelection.description}</FieldDescription>
                 <FieldDescription role="status">
                   {librarySettings.status === 'loading'
@@ -184,7 +206,7 @@ export function SettingsDialog({
                 open={debugToolsOpen}
                 onOpenChange={(open) => {
                   onDebugToolsOpenChange?.(open)
-                  if (open) setSettingsOpen(false)
+                  if (open) changeOpen(false)
                 }}
               />
             </Suspense>

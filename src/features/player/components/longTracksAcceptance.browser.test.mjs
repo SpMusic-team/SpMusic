@@ -102,14 +102,21 @@ const longIds = () => page.evaluate(() => window.vm.playlist.library.longSongs?.
 const options = async () => {
   await page.getByRole('button', { name: '更多列表操作', exact: true }).click()
   await page.getByRole('button', { name: '列表选项', exact: true }).click()
-  await page.getByRole('dialog', { name: '长 · 列表选项' }).waitFor()
+  const dialog = page.getByRole('dialog', { name: '列表选项：长', exact: true })
+  await dialog.waitFor()
+  return dialog
 }
 const setMinimum = async minutes => {
-  await options()
-  await page.getByLabel('最小时长（分钟）', { exact: true }).fill(String(minutes))
-  await page.getByRole('button', { name: '保存', exact: true }).click()
-  await page.getByRole('dialog', { name: '长 · 列表选项' }).waitFor({ state: 'hidden' })
-  await page.locator('[role="dialog"]').waitFor({ state: 'hidden' })
+  const dialog = await options()
+  const slider = dialog.getByRole('slider', { name: '最短持续时间' })
+  if (minutes === 120) await slider.press('End')
+  else {
+    await slider.press('Home')
+    for (let step = 1; step < minutes; step++) await slider.press('ArrowRight')
+  }
+  await page.waitForFunction(value => window.vm.playlist.library.longTracksMinDurationMs === value, minutes * 60_000)
+  await dialog.getByRole('button', { name: '关闭', exact: true }).click()
+  await dialog.waitFor({ state: 'hidden' })
 }
 try {
   await page.goto(origin + '/__long_test?normal=1')
@@ -143,13 +150,12 @@ try {
   await page.waitForFunction(() => window.vm.playlist.library.longSongs.length === 2)
   assert.deepEqual((await longIds()).sort(), ['hour', 'tail'])
   assert.deepEqual(await queueIds(), queueBefore, 'threshold changes cannot mutate current queue snapshot')
-  await options()
-  await page.getByLabel('最小时长（分钟）', { exact: true }).fill('-1')
-  await page.getByRole('button', { name: '保存', exact: true }).click()
-  assert.equal(await page.getByRole('dialog', { name: '长 · 列表选项' }).count(), 1, 'invalid threshold does not close settings')
-  assert.equal(await page.evaluate(() => window.vm.playlist.library.longTracksMinDurationMs), 1800000)
-  await page.getByRole('button', { name: '取消', exact: true }).click()
-  await page.keyboard.press('Escape')
+  const boundedOptions = await options()
+  const minimumSlider = boundedOptions.getByRole('slider', { name: '最短持续时间' })
+  assert.equal(await minimumSlider.getAttribute('min'), '60')
+  assert.equal(await minimumSlider.getAttribute('max'), '7200')
+  assert.equal(await minimumSlider.inputValue(), '1800')
+  await boundedOptions.getByRole('button', { name: '关闭', exact: true }).click()
   await page.getByRole('button', { name: '随机播放长', exact: true }).click(); await ready()
   assert.deepEqual((await queueIds()).sort(), ['hour', 'tail'], 'shuffle uses new threshold')
   await backFromPlayer()

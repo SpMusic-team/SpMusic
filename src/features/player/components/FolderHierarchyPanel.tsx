@@ -1,5 +1,6 @@
 import { useLibrarySearch } from '../hooks/useLibrarySearch'
 import { useHeroTier } from '@/features/player/hooks/useHeroTier'
+import { LibraryListOptionsDialog } from './LibraryListOptionsDialog'
 import { LibraryRootMenu } from './LibraryRootMenu'
 import { compareByQuickIndex } from '../model/quickIndex'
 import { formatDurationClock } from '../model/playlistDuration'
@@ -34,6 +35,7 @@ import { useAllSongsRenderWindow } from '../hooks/useAllSongsRenderWindow'
 import { folderCoverRevisions, useAllSongsCoverPresentation, useCollectionCoverPresentation, useAllSongsCoverLease, useAllSongsWindow, type AllSongsCoverStore, type AllSongsCoverItem, type TrackCandidatesCoverItem } from '../hooks/useAllSongsWindow'
 import { reportCoverPresentation } from '../model/playlistCoverReadiness'
 import { flatFolderEntries, folderNavigationKey, folderEntries, folderRootSongs, folderName, folderPath, insideFolder, parentFolder, type FolderHierarchyEntry } from '../model/folderHierarchy'
+import { FLAT_FOLDER_SORT_OPTIONS, readFolderRootListOptions, sortFlatFolderEntries, writeFolderRootListOptions, type FolderRootListOptions } from '../model/folderRootListOptions'
 import { PLAYLIST_SONG_LAYOUTS } from '../model/playlistSongLayouts'
 import { mediaLibraryCategories, type MediaLibraryCategoryId } from '../model/mediaLibraryCategories'
 import type { AllSongsItem, PlayerPlaylistViewModel } from '../model/playerUiViewModel'
@@ -61,7 +63,9 @@ function flatFolderCover(directoryPath: string, songs: readonly AllSongsItem[], 
     available: songs.some(song => song.available),
     ...(heroEdge === undefined ? {} : { heroEdge }) }
 }
-const defaultLevel = () => 3
+const defaultFlatDetailLevel = () => 0
+const defaultRootLevel = () => 4
+const defaultHierarchyDetailLevel = () => 3
 
 function totalClock(songs: readonly AllSongsItem[]) {
   if (songs.some(item => item.available && !(Number(item.track.durationSeconds) > 0))) return null
@@ -89,7 +93,7 @@ function Song({ item, store, playlist, selectMode, selected, artworkVisible, sho
     coverFailed={failed} onCoverFailed={() => setFailed(true)} onActivate={onPlay} onToggleSelect={onSelect} onEnterSelectMode={onEnterSelectMode} />
 }
 
-type Props = { categoryId?: 'folder' | 'folders'; playlist: PlayerPlaylistViewModel; allSongsCoverStore: AllSongsCoverStore; librarySidebarOpen: boolean; onLibrarySidebarOpenChange: (open: boolean) => void; searchRequestId?: number; controllerMode?: PlaylistControllerMode; timelineInteraction?: PlayerTimelineViewModel['interaction'] }
+type Props = { categoryId?: 'folder' | 'folders'; playlist: PlayerPlaylistViewModel; allSongsCoverStore: AllSongsCoverStore; librarySidebarOpen: boolean; onLibrarySidebarOpenChange: (open: boolean) => void; searchRequestId?: number; controllerMode?: PlaylistControllerMode; timelineInteraction?: PlayerTimelineViewModel['interaction']; onOpenLibrarySettings?: (returnFocus?: HTMLElement | null) => void }
 
 export function FolderHierarchyPanel(props: Props) {
   const { categoryId = 'folders', playlist, librarySidebarOpen, onLibrarySidebarOpenChange } = props
@@ -140,7 +144,7 @@ export function FolderHierarchyPanel(props: Props) {
   </motion.div>
 }
 
-function FolderHierarchyScene({ categoryId = 'folders', playlist, allSongsCoverStore: store, searchRequestId = 0, controllerMode = 'movable', timelineInteraction, scrollPositions, outerPresent, coverRevisions }: Props & { scrollPositions: RefObject<Map<string, number>>; outerPresent: boolean; coverRevisions: ReadonlyMap<string, number> }) {
+function FolderHierarchyScene({ categoryId = 'folders', playlist, allSongsCoverStore: store, searchRequestId = 0, controllerMode = 'movable', timelineInteraction, onOpenLibrarySettings, scrollPositions, outerPresent, coverRevisions }: Props & { scrollPositions: RefObject<Map<string, number>>; outerPresent: boolean; coverRevisions: ReadonlyMap<string, number> }) {
   const library = playlist.library!
   const flat = categoryId === 'folder'
   const changeLocation = flat ? library.onFlatFolderLocationChange : library.onFolderLocationChange
@@ -154,6 +158,9 @@ function FolderHierarchyScene({ categoryId = 'folders', playlist, allSongsCoverS
   const requestedLocation = flat ? library.flatFolderLocation : library.folderLocation
   const root = roots.find(item => folderPath(item.path) === folderPath(requestedLocation?.rootPath ?? ''))
   const location = flat ? requestedLocation : root ? requestedLocation : null
+  const [listOptionsOpen, setListOptionsOpen] = useState(false)
+  const [folderOptions, setFolderOptions] = useState(() => readFolderRootListOptions(categoryId))
+  const optionsTrigger = useRef<HTMLElement | null>(null)
   const managementChrome = useCollectionManagementChrome(categoryId, present && !location)
   const { atomicOverview, navigationMotion } = managementChrome
   const locationKey = categoryId + ':' + (location ? folderNavigationKey(location.rootPath, location.directoryPath) : 'roots')
@@ -189,13 +196,16 @@ function FolderHierarchyScene({ categoryId = 'folders', playlist, allSongsCoverS
   const globalSearch = useLibrarySearch()
   const toggleSearch = useCallback(() => globalSearch ? globalSearch() : setSearch(previous => ({ ...previous, open: !showSearch, dismissedRequest: searchRequestId })), [showSearch, searchRequestId, globalSearch])
   const songs = library.allSongs ?? EMPTY_SONGS
-  const directories = useMemo(() => (flat ? location ? [] : flatFolderEntries(songs) : folderEntries(roots, songs, location)).sort((a, b) => compareByQuickIndex(a.name, b.name)), [flat, roots, songs, location])
+  const directories = useMemo(() => flat
+    ? location ? [] : sortFlatFolderEntries(flatFolderEntries(songs), folderOptions.sort, folderOptions.reverse, library.directoryModifiedAtMs)
+    : folderEntries(roots, songs, location).sort((a, b) => compareByQuickIndex(a.name, b.name)),
+  [flat, roots, songs, location, folderOptions.sort, folderOptions.reverse, library.directoryModifiedAtMs])
   const visibleDirectories = useMemo(() => directories.filter(item => `${item.name} ${item.parentName}`.toLocaleLowerCase().includes(query)), [directories, query])
   const ownerSongs = useMemo(() => location && !flat ? folderRootSongs(root, songs) : songs, [flat, location, root, songs])
   const directSongs = useMemo(() => location ? ownerSongs.filter(item => parentFolder(item.sourcePath) === folderPath(location.directoryPath)) : EMPTY_SONGS, [ownerSongs, location])
   const visibleSongs = useMemo(() => directSongs.filter(item => `${item.track.title} ${item.track.artist} ${item.track.album}`.toLocaleLowerCase().includes(query)).sort((a, b) => a.track.title.localeCompare(b.track.title, 'zh-CN', { numeric: true })), [directSongs, query])
   const recursiveSongs = useMemo(() => flat ? directSongs : location ? ownerSongs.filter(item => insideFolder(item.sourcePath, location.directoryPath)) : ownerSongs, [flat, directSongs, location, ownerSongs])
-  const { layout, announcement } = useCollectionLayout({ panelRef, gridRef, layouts: PLAYLIST_SONG_LAYOUTS, storageKey: flat ? 'spmusic.flat-folders.layout-level.v1' : 'spmusic.folder-hierarchy.layout-level.v1', defaultLevel: flat ? () => 0 : defaultLevel, selectors: SELECTORS, gestureArea: location ? 'grid' : 'panel', wheelGestureArea: 'panel', announce: next => `文件夹和歌曲视图已切换为${next.label}` })
+  const { layout, announcement, selectLevel } = useCollectionLayout({ panelRef, gridRef, layouts: PLAYLIST_SONG_LAYOUTS, storageKey: flat ? 'spmusic.flat-folders.layout-level.v1' : 'spmusic.folder-hierarchy.layout-level.v1', defaultLevel: location ? flat ? defaultFlatDetailLevel : defaultHierarchyDetailLevel : defaultRootLevel, selectors: SELECTORS, gestureArea: location ? 'grid' : 'panel', wheelGestureArea: 'panel', announce: next => `文件夹和歌曲视图已切换为${next.label}` })
   const folderLayout = FOLDER_CARD_LAYOUTS[layout.level]
   useEffect(() => {
     if (present && flat && requestedLocation && !library.isFolderRestorePending && !library.isFolderRescanPending && !library.isImportPending && !songs.some(item => parentFolder(item.sourcePath) === folderPath(requestedLocation.directoryPath))) changeLocation?.(null)
@@ -344,7 +354,16 @@ function FolderHierarchyScene({ categoryId = 'folders', playlist, allSongsCoverS
       changeLocation?.({ rootPath: flat ? roots.find(root => insideFolder(directory.path, root.path))?.path ?? directory.path : location?.rootPath ?? directory.path, directoryPath: directory.path })
     }
   }
-  const renderRootMore = (rootToolbar = false) => flat ? <LibraryRootMenu categoryId="folder" library={library} rootToolbar={rootToolbar} /> : <FolderHierarchyRootMenu rootToolbar={rootToolbar} onSelectFolders={library.onSelectFolders}
+  const openListOptions = (trigger: HTMLButtonElement | null) => {
+    optionsTrigger.current = trigger
+    setListOptionsOpen(true)
+  }
+  const updateFolderOptions = (next: Partial<FolderRootListOptions>) => {
+    const updated = { ...folderOptions, ...next }
+    setFolderOptions(updated)
+    writeFolderRootListOptions(categoryId, updated)
+  }
+  const renderRootMore = (rootToolbar = false) => flat ? <LibraryRootMenu categoryId="folder" library={library} rootToolbar={rootToolbar} onListOptions={openListOptions} /> : <FolderHierarchyRootMenu rootToolbar={rootToolbar} onSelectFolders={library.onSelectFolders} onListOptions={openListOptions}
     onRescan={library.onRescanFolders} onTogglePinned={library.onToggleFoldersPin} pinned={library.foldersPinnedInSidebar}
     busy={library.isImportPending || library.isFolderRestorePending || library.isFolderRescanPending}
     rescanDisabled={!library.folderRoots?.length} />
@@ -424,7 +443,7 @@ function FolderHierarchyScene({ categoryId = 'folders', playlist, allSongsCoverS
             {visibleDirectories.map((directory, index) => <motion.div key={directory.path} style={{ minWidth: 0, transformOrigin: 'left top' }} variants={navigationMotion.cover}
               initial={!location && atomicOverview ? 'initial' : false} animate="animate" exit={!location && atomicOverview ? 'exit' : 'animate'} transition={navigationMotion.transition}><FolderHierarchyCard flat={flat} directory={directory} layout={folderLayout}
               navigationKey={categoryId + ':' + folderNavigationKey(flat ? roots.find(root => insideFolder(directory.path, root.path))?.path ?? directory.path : location?.rootPath ?? directory.path, directory.path)} sharedProjection={sharedProjection} projectionKey={projectionKey} transition={returnTransition}
-              coverItem={folderCovers[index]} store={store} selectMode={currentSelection.active}
+              coverItem={folderCovers[index]} store={store} selectMode={currentSelection.active} titleOnly={!location && folderOptions.titleOnly}
               selected={currentSelection.keys.has(`folder:${directory.path}`)} onActivate={() => enter(directory)} onEnterSelectMode={enterSelectMode} /></motion.div>)}
           </div>
           {location && metadataLoading && directSongs.length ? <PlaylistMetadataLoading layout={layout} trackCount={directSongs.length} /> : visibleSongs.length ? <div ref={spaceRef} style={songWindow.spaceStyle}><div ref={songsRef} className="playlist-grid folder-songs" data-layout-level={layout.level} data-layout-flow={layout.flow} data-layout-columns={layout.columns} style={{ ...layout.style, ...songWindow.gridStyle }} onKeyDown={event => {
@@ -446,7 +465,16 @@ function FolderHierarchyScene({ categoryId = 'folders', playlist, allSongsCoverS
         </>}
       </div>
     </motion.section>
-    {flat && !location && present ? <CollectionQuickIndex panelRef={panelRef} names={visibleDirectories.map(item => item.name)} /> : null}
+    {flat && !location && present && folderOptions.sort === 'name' && !folderOptions.reverse ? <CollectionQuickIndex panelRef={panelRef} names={visibleDirectories.map(item => item.name)} /> : null}
+    {!location && present ? <LibraryListOptionsDialog categoryLabel={category.label} open={listOptionsOpen} onOpenChange={setListOptionsOpen}
+      finalFocus={optionsTrigger} onOpenSettings={() => {
+        setListOptionsOpen(false)
+        onOpenLibrarySettings?.(optionsTrigger.current)
+      }} sort={flat ? {
+        options: FLAT_FOLDER_SORT_OPTIONS, value: folderOptions.sort, onChange: sort => updateFolderOptions({ sort }),
+        descending: folderOptions.reverse, onDescendingChange: reverse => updateFolderOptions({ reverse }),
+      } : undefined} titleOnly={{ checked: folderOptions.titleOnly, onChange: titleOnly => updateFolderOptions({ titleOnly }), disabled: !folderLayout.showParent }}
+      layoutLevel={layout.level} onLayoutChange={level => selectLevel(level, { animate: true })} /> : null}
     {renderHeroActions(true)}
   </>
 }

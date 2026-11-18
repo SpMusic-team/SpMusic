@@ -2,8 +2,14 @@ import type { AudioFolderPlaylist } from '@/features/player/services/audioComman
 
 export type PlaybackQueueEntry = Readonly<{ scope: string; trackId: string }>
 
+export type AllSongsPlaybackSort = 'last-played' | 'play-count' | 'random'
+
 export type PlaybackQueueOrigin = Readonly<{
   kind: 'queue' | 'all-songs' | 'recent-played' | 'recent-added' | 'long-tracks' | 'lowest-rated' | 'highest-rated' | 'most-played' | 'playlist' | 'streams'
+  allSongsSort?: AllSongsPlaybackSort
+  // The snapshot stores its effective traversal. Remember the direction that
+  // produced it so the restored random list can recover the base order.
+  allSongsShuffleReverse?: boolean
   sourceScope?: string
   // Custom lists have no external registry to reload after an app restart.
   // Retain their complete source descriptors independently of a filtered queue.
@@ -13,6 +19,10 @@ export type PlaybackQueueOrigin = Readonly<{
 export type PlaybackQueueSelection = PlaybackQueueOrigin & Readonly<{
   entries: readonly PlaybackQueueEntry[]
 }>
+
+export function hasSongSortOptions(kind: PlaybackQueueOrigin['kind']): boolean {
+  return kind === 'all-songs' || kind === 'streams' || kind === 'recent-played' || kind === 'recent-added' || kind === 'long-tracks'
+}
 
 // A playback snapshot is an internal descriptor, never a user-created playlist.
 // Its unique scope also fences cached previews when the same source is selected again.
@@ -28,6 +38,10 @@ export function playbackQueueOrigin(playlist: AudioFolderPlaylist | null | undef
 export function isPlaybackQueueOrigin(value: unknown): value is PlaybackQueueOrigin {
   if (!value || typeof value !== 'object') return false
   const origin = value as Partial<PlaybackQueueOrigin>
+  if (origin.allSongsSort !== undefined && (!origin.kind || !hasSongSortOptions(origin.kind)
+    || origin.allSongsSort !== 'last-played' && origin.allSongsSort !== 'play-count' && origin.allSongsSort !== 'random')) return false
+  if (origin.allSongsShuffleReverse !== undefined
+    && (origin.allSongsSort !== 'random' || typeof origin.allSongsShuffleReverse !== 'boolean')) return false
   if (origin.kind === 'queue' || origin.kind === 'streams' || origin.kind === 'all-songs' || origin.kind === 'recent-played' || origin.kind === 'recent-added' || origin.kind === 'long-tracks' || origin.kind === 'lowest-rated' || origin.kind === 'highest-rated' || origin.kind === 'most-played') return origin.sourceScope === undefined && origin.sourcePlaylist === undefined
   if (origin.kind !== 'playlist' || typeof origin.sourceScope !== 'string' || !origin.sourceScope) return false
   const source = origin.sourcePlaylist

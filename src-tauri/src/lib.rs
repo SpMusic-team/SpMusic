@@ -135,14 +135,15 @@ fn audio_import_playlist(
     else {
         return Ok(None);
     };
-    let playlist = import_m3u8_playlist(&path)?;
-    registry
+    let mut playlist = import_m3u8_playlist(&path)?;
+    let library_added_at_ms = registry
         .upsert(&playlist)
         .map_err(|error| AudioCommandError {
             code: audio::AudioErrorCode::InternalError,
             message: format!("保存播放列表失败：{}", error.message),
             recoverable: true,
         })?;
+    playlist.library_added_at_ms = library_added_at_ms;
     audio.remember_playlist(&playlist);
     streams
         .import(&playlist)

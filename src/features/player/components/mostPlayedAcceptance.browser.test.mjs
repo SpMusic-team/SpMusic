@@ -41,8 +41,8 @@ const rows=[
  ['band','Rock','Band Singer','AC/DC','AC/DC'],
  ['hidden','Hidden','Hidden Singer','Hidden Album Credit','Hidden Writer']
 ];
-const descriptors=rows.map(([id])=>({id,sourcePath:(id==='hidden'?'/hidden/':'/music/')+id+'.flac',fileName:id+'.flac',available:true}));
-const track=path=>{const descriptor=descriptors.find(row=>row.sourcePath===path);if(!descriptor)throw Error('Unknown path '+path);const row=rows.find(row=>row[0]===descriptor.id);return {...descriptor,durationMs:4000,metadata:{title:'Song '+row[0]+(row[0]==='a'?' long title repeated for clipping '.repeat(12):''),artist:row[2]+(row[0]==='a'?' long artist repeated for clipping '.repeat(12):''),album:row[1],albumArtist:row[3],composer:row[4],genre:null,year:2023,trackNumber:null,discNumber:null,comment:null,lyrics:null,audioFormat:null,coverArt:null}}};
+const descriptors=rows.map(([id],index)=>({id,sourcePath:(id==='hidden'?'/hidden/':'/music/')+id+'.flac',fileName:id+'.flac',available:true,fileModifiedAtMs:1000+index}));
+const track=path=>{const descriptor=descriptors.find(row=>row.sourcePath===path);if(!descriptor)throw Error('Unknown path '+path);const row=rows.find(row=>row[0]===descriptor.id);return {...descriptor,durationMs:4000,metadata:{title:'Song '+row[0]+(row[0]==='a'?' long title repeated for clipping '.repeat(12):''),artist:row[2]+(row[0]==='a'?' long artist repeated for clipping '.repeat(12):''),album:row[1],albumArtist:row[3],composer:row[4],genre:null,year:2023,trackNumber:row[0]==='a'?10:null,discNumber:row[0]==='a'?2:null,comment:null,lyrics:null,audioFormat:null,coverArt:null}}};
 window.backendInvoke=async(command,args)=>{
  const input=args?.input;window.calls.push({command,input,args});
  if(command==='library_get_playlists')return [];
@@ -67,7 +67,7 @@ window.backendInvoke=async(command,args)=>{
  if(command==='audio_probe_playlist_durations')return input.paths.map(sourcePath=>({sourcePath,durationMs:4000,error:null}));
  if(command==='audio_probe_playlist_track_summaries'){
   if(window.summaryGate)await new Promise(resolve=>window.pendingSummaries.push(resolve));
-  return input.paths.map(sourcePath=>{const item=track(sourcePath);return {sourcePath,summary:{title:item.metadata.title,artist:item.metadata.artist,album:item.metadata.album,albumArtist:item.metadata.albumArtist,composer:item.metadata.composer,year:2023,bitDepth:24,sampleRateHz:96000,bitrateKbps:null,codec:'FLAC'},error:null}});
+  return input.paths.map(sourcePath=>{const item=track(sourcePath);return {sourcePath,summary:{title:item.metadata.title,artist:item.metadata.artist,album:item.metadata.album,albumArtist:item.metadata.albumArtist,composer:item.metadata.composer,year:2023,trackNumber:item.metadata.trackNumber,discNumber:item.metadata.discNumber,bitDepth:24,sampleRateHz:96000,bitrateKbps:null,codec:'FLAC'},error:null}});
  }
  if(['audio_transition_playback','audio_play','audio_pause'].includes(command)){state={...state,phase:command==='audio_pause'?'paused':input?.target??'playing',transportSettledRequestId:input?.requestId??null};return {...state}}
  if(command==='audio_seek'){state={...state,positionMs:input.positionMs};return {...state}}
@@ -88,7 +88,15 @@ await page.route('**/src/features/player/components/PlayerSurface.tsx*', route =
 await page.route('**/__most_played_real_surface.js', route => route.fulfill({ contentType: 'text/javascript', body: realSurface }))
 await page.route('**/__most_played_fixture.js', route => route.fulfill({ contentType: 'text/javascript', body: fixture }))
 await page.route('**/__most_played_test?*', route => route.fulfill({ contentType: 'text/html', body: html }))
-await page.addInitScript(() => { localStorage.setItem('spmusic.player.startup-page.v1', 'media-library'); localStorage.removeItem('spmusic.player.session.v1') })
+await page.addInitScript(() => {
+  localStorage.setItem('spmusic.player.startup-page.v1', 'media-library')
+  // Exercise legacy limit/date preferences and compare the same card layout across roots.
+  if (!localStorage.getItem('spmusic.most-played.options.v1')) {
+    localStorage.setItem('spmusic.most-played.options.v1', JSON.stringify({ limit: 2, from: 25, direction: 'desc' }))
+  }
+  if (!localStorage.getItem('spmusic.most-played.layout-level.v1')) localStorage.setItem('spmusic.most-played.layout-level.v1', '4')
+  if (!sessionStorage.getItem('test-restore-all-songs-snapshot')) localStorage.removeItem('spmusic.player.session.v1')
+})
 const evidence = process.env.SPMUSIC_TEST_SCREENSHOTS
 if (evidence) mkdirSync(evidence, { recursive: true })
 const screenshot = async name => { if (evidence) await page.screenshot({ path: evidence + '/' + name + '.png' }) }
@@ -110,9 +118,26 @@ const pulseFor = async (start, count, phase='playing') => page.evaluate(async ({
 const play = async id => { await songs().filter({hasText:'Song '+id}).first().click(); await ready() }
 const persisted = () => page.evaluate(()=>JSON.parse(localStorage.getItem('spmusic.recently-played.v1')||'{"entries":[]}').entries)
 const mostPersisted = () => page.evaluate(()=>JSON.parse(localStorage.getItem('spmusic.most-played.v1')||'{"entries":[]}').entries)
+const selectAllSongsSort = async (label, reverse = false) => {
+  await page.locator('.playlist-management:not([inert])').getByRole('button', { name: '更多列表操作', exact: true }).first().click()
+  await page.getByRole('dialog', { name: '所有歌曲', exact: true }).getByRole('button', { name: '列表选项', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: '列表选项：所有歌曲', exact: true })
+  await dialog.getByRole('radio', { name: label, exact: true }).click()
+  await dialog.getByRole('checkbox', { name: '倒序', exact: true }).setChecked(reverse)
+  await dialog.getByRole('button', { name: '关闭', exact: true }).click()
+  await dialog.waitFor({ state: 'hidden' })
+}
 try {
-  await page.goto(origin + '/__most_played_test?normal=1')
+  await page.goto(origin + '/__most_played_test?normal=1', { waitUntil: 'commit' })
   await page.waitForFunction(() => window.vm?.playlist.library.allSongs.length === 8 && !window.vm.playlist.library.isImportPending)
+  await selectCategory('songs')
+  await page.waitForFunction(() => window.vm.playlist.library.allSongsMetadataStatus === 'ready')
+  const allSongsTagData = await page.evaluate(() => {
+    const item = window.vm.playlist.library.allSongs.find(song => song.trackId === 'a')
+    return [item.track.libraryTrackNumber, item.track.libraryDiscNumber, item.fileModifiedAtMs, item.libraryAddedAtMs]
+  })
+  assert.deepEqual(allSongsTagData.slice(0, 3), [10, 2, 1000], 'existing native summary and folder scan publish track, disc and file time')
+  assert(Number.isSafeInteger(allSongsTagData[3]) && allSongsTagData[3] > 1000, 'first library inclusion has a separate epoch timestamp')
   await selectCategory('most-played')
   await page.getByText('暂无最常播放', {exact:true}).waitFor()
   assert.equal(await page.locator('.playlist-management:not([inert]) .playlist-management-quick-index').count(),0)
@@ -210,7 +235,7 @@ try {
   const queueBefore=await queueIds(); await pulseFor(0,23)
   assert.deepEqual(await queueIds(),queueBefore,'new count cannot replace playback snapshot')
   await backFromPlayer(); await selectCategory('most-played')
-  await page.reload(); await page.waitForFunction(()=>window.vm?.playlist.library.allSongs.length===8&&!window.vm.playlist.library.isImportPending)
+  await page.reload({ waitUntil: 'commit' }); await page.waitForFunction(()=>window.vm?.playlist.library.allSongs.length===8&&!window.vm.playlist.library.isImportPending)
   await selectCategory('most-played'); await songs().first().waitFor()
   assert.equal((await mostPersisted()).find(x=>x.sourcePath==='/music/a.flac').playCount,2,'reload keeps counters')
   await page.getByRole('button',{name:'随机播放最常播放',exact:true}).click(); await ready()
@@ -218,12 +243,14 @@ try {
   await backFromPlayer(); await selectCategory('most-played')
   await page.getByRole('button',{name:'更多列表操作',exact:true}).click()
   await page.getByRole('button',{name:'列表选项',exact:true}).click()
-  await page.getByRole('dialog',{name:'最常播放 · 列表选项'}).waitFor()
-  await page.getByLabel('最多歌曲数',{exact:true}).fill('2')
-  await page.getByRole('button',{name:'降序（最多在前）',exact:true}).click()
-  await page.getByRole('button',{name:'保存',exact:true}).click()
+  const mostOptions = page.getByRole('dialog', { name: '列表选项：最常播放', exact: true })
+  await mostOptions.waitFor()
+  assert.deepEqual(await page.evaluate(() => window.vm.playlist.library.mostPlayedOptions), { limit: 2, from: 25, direction: 'desc' })
+  await mostOptions.getByRole('radio', { name: '500', exact: true }).click()
+  await mostOptions.getByRole('checkbox', { name: '倒序', exact: true }).check()
+  await mostOptions.getByRole('button', { name: '关闭', exact: true }).click()
   await page.waitForFunction(()=>window.vm.playlist.library.mostPlayedOptions.direction==='asc')
-  assert.equal(await page.evaluate(()=>window.vm.playlist.library.mostPlayedOptions.limit),2)
+  assert.deepEqual(await page.evaluate(() => window.vm.playlist.library.mostPlayedOptions), { limit: 500, from: 25, direction: 'asc' })
   await page.getByRole('dialog').waitFor({state:'hidden'})
   const snapshot=await queueIds(), recentsBefore=await persisted()
   await page.getByRole('button',{name:'更多列表操作',exact:true}).click()
@@ -238,9 +265,56 @@ try {
   assert.equal((await mostPersisted()).length,1,'uncounted current round may qualify once after clear')
   await page.reload(); await page.waitForFunction(()=>window.vm?.playlist.library.allSongs.length===8&&!window.vm.playlist.library.isImportPending)
   assert.equal(await page.evaluate(()=>window.vm.playlist.library.mostPlayedOptions.direction),'asc','direction persists')
-  assert.equal(await page.evaluate(()=>window.vm.playlist.library.mostPlayedOptions.limit),2,'limit persists')
+  assert.equal(await page.evaluate(()=>window.vm.playlist.library.mostPlayedOptions.limit),500,'limit preset persists')
+  assert.equal(await page.evaluate(()=>window.vm.playlist.library.mostPlayedOptions.from),25,'preset and direction changes retain the existing date filter')
+  assert.equal(await page.evaluate(() => window.vm.playlist.library.allSongs.find(song => song.trackId === 'a').libraryAddedAtMs), allSongsTagData[3], 'rescanning on startup keeps library inclusion time')
+
+  await selectCategory('songs'); await songs().first().waitFor()
+  await selectAllSongsSort('根据播放次数')
+  const countsBefore = await mostPersisted()
+  const recentsBeforeCountSort = await persisted()
+  await play('other'); await pulseFor(0, 23)
+  assert.deepEqual(await mostPersisted(), countsBefore, 'the active count-sorted queue does not count its own plays')
+  const recentTime = entries => entries.find(item => item.sourcePath === '/music/other.flac')?.lastPlayedAt ?? 0
+  assert(recentTime(await persisted()) > recentTime(recentsBeforeCountSort), 'the same listen still records its most recent play time')
+
+  await backFromPlayer(); await selectCategory('songs'); await songs().first().waitFor()
+  await selectAllSongsSort('根据最后播放的时间')
+  const recentsBeforeTimeSort = await persisted()
+  await play('other'); await pulseFor(0, 23)
+  assert.deepEqual(await persisted(), recentsBeforeTimeSort, 'the active time-sorted queue keeps its prior recent timestamp')
+  const countForOther = entries => entries.find(item => item.sourcePath === '/music/other.flac')?.playCount ?? 0
+  assert.equal(countForOther(await mostPersisted()), countForOther(countsBefore) + 1, 'the same listen still increments its play count')
+
+  await backFromPlayer(); await selectCategory('songs'); await songs().first().waitFor()
+  await selectAllSongsSort('根据标题')
+  await page.getByRole('button', { name: '随机播放所有歌曲', exact: true }).click()
+  await page.waitForFunction(() => window.vm.playlist.library.allSongsShuffleOrder?.length === 8)
+  const priorShuffle = await page.evaluate(() => window.vm.playlist.library.allSongsShuffleOrder)
+  await backFromPlayer(); await selectCategory('songs'); await songs().first().waitFor()
+  await selectAllSongsSort('根据随机顺序', true)
+  const displayedShuffle = await songIds()
+  assert.deepEqual(displayedShuffle, [...priorShuffle].reverse(), 'random sorting adopts the existing shuffle order')
+  await page.getByRole('button', { name: '随机播放所有歌曲', exact: true }).click()
+  await ready()
+  await page.waitForFunction(() => window.vm.playback.shuffleMode === 'shuffle-all')
+  assert.equal(await page.evaluate(() => window.nativeState().currentTrackId), displayedShuffle[0], 'shuffle starts at the first displayed song')
+  await page.evaluate(() => window.vm.playback.onNext())
+  await page.waitForFunction(id => window.nativeState().currentTrackId === id, displayedShuffle[1])
+  await ready()
+  await backFromPlayer(); await selectCategory('songs'); await songs().first().waitFor()
+  assert.deepEqual(await songIds(), displayedShuffle, 'starting reversed shuffle keeps the displayed order aligned with the live queue')
+  await page.waitForFunction(() => {
+    const saved = JSON.parse(localStorage.getItem('spmusic.player.session.v1') ?? 'null')
+    return saved?.playlist.customPlaylist?.playbackQueue?.allSongsShuffleReverse === true
+  })
+  await page.evaluate(() => sessionStorage.setItem('test-restore-all-songs-snapshot', '1'))
+  await page.reload({ waitUntil: 'commit' })
+  await page.waitForFunction(() => window.vm?.playlist.library.allSongs.length === 8 && !window.vm.playlist.library.isImportPending)
+  await selectCategory('songs'); await songs().first().waitFor()
+  assert.deepEqual(await songIds(), displayedShuffle, 'restored reversed shuffle uses saved traversal rather than a new seed')
   assert.deepEqual(errors,[])
-  console.log('most played independent browser: empty/full page, shared card/controller, no index, 50% listening, seek exclusion, once-per-round counter, repeat increments, stable scoped queue, shuffle and reload passed')
+  console.log('most played independent browser: empty/full page, shared card/controller, no index, 50% listening, seek exclusion, once-per-round counter, repeat increments, stable scoped queue, shuffle and reload, All Songs metadata/writes/shuffle passed')
 } catch(error) {
   await screenshot('most-played-failure')
   console.error(await page.evaluate(()=>({route:window.vm?.playlist.library.route,text:document.querySelector('.playlist-management-content:not([inert])')?.innerText,keys:Object.keys(window.vm?.playlist.library??{}),state:window.nativeState?.()})),errors)

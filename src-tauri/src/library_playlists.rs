@@ -6,12 +6,16 @@ use std::{
     io::Write,
     path::{Component, Path, PathBuf},
     sync::Mutex,
+    time::SystemTime,
 };
 
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    audio::{restore_playlist_track, AudioFolderPlaylist, AudioPlaylistSourceKind},
+    audio::{
+        playlist_source_modified_at_ms, restore_playlist_track, system_time_millis,
+        AudioFolderPlaylist, AudioPlaylistSourceKind,
+    },
     file_deletion::{
         checked_regular_file, path_key as deletion_path_key, recycle_file, DeleteFailure,
     },
@@ -78,6 +82,8 @@ struct StoredPlaylist {
     source_name: String,
     directory_path: String,
     directory_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    library_added_at_ms: Option<u64>,
     tracks: Vec<StoredTrack>,
 }
 
@@ -115,16 +121,17 @@ impl LibraryPlaylistRegistry {
             .lock
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        Ok(self
-            .read()?
+        let mut stored = self.read()?;
+        self.observe_legacy_additions(&mut stored);
+        Ok(stored
             .playlists
             .into_iter()
             .map(StoredPlaylist::restore)
             .collect())
     }
 
-    pub fn upsert(&self, playlist: &AudioFolderPlaylist) -> Result<(), LibraryError> {
-        let snapshot = StoredPlaylist::from_playlist(playlist)?;
+    pub fn upsert(&self, playlist: &AudioFolderPlaylist) -> Result<Option<u64>, LibraryError> {
+        let mut snapshot = StoredPlaylist::from_playlist(playlist)?;
         let _guard = self
             .lock
             .lock()
@@ -133,16 +140,22 @@ impl LibraryPlaylistRegistry {
         // must never be replaced with an apparently successful partial import.
         let mut stored = self.read()?;
         let key = path_key(&snapshot.source_path);
-        if let Some(existing) = stored
+        let existing = stored
             .playlists
             .iter_mut()
-            .find(|item| path_key(&item.source_path) == key)
-        {
+            .find(|item| path_key(&item.source_path) == key);
+        let library_added_at_ms = existing
+            .as_ref()
+            .and_then(|item| item.library_added_at_ms)
+            .or_else(|| system_time_millis(SystemTime::now()));
+        snapshot.library_added_at_ms = library_added_at_ms;
+        if let Some(existing) = existing {
             *existing = snapshot;
         } else {
             stored.playlists.push(snapshot);
         }
-        self.write(&stored)
+        self.write(&stored)?;
+        Ok(library_added_at_ms)
     }
 
     /// Delete playlist identities, never their referenced songs. Keep the lock
@@ -491,6 +504,28 @@ impl LibraryPlaylistRegistry {
         Ok(stored.playlists.remove(index).restore())
     }
 
+    fn observe_legacy_additions(&self, stored: &mut StoredPlaylists) {
+        let Some(now) = system_time_millis(SystemTime::now()) else {
+            return;
+        };
+        let mut observed = Vec::new();
+        for (index, playlist) in stored.playlists.iter_mut().enumerate() {
+            if playlist.library_added_at_ms.is_none() {
+                playlist.library_added_at_ms = Some(now);
+                observed.push(index);
+            }
+        }
+        if observed.is_empty() {
+            return;
+        }
+        if let Err(error) = self.write(stored) {
+            tracing::warn!(error = %error.message, "cannot record legacy playlist registration times");
+            for index in observed {
+                stored.playlists[index].library_added_at_ms = None;
+            }
+        }
+    }
+
     fn read(&self) -> Result<StoredPlaylists, LibraryError> {
         let bytes = match fs::read(&self.path) {
             Ok(bytes) => bytes,
@@ -616,6 +651,7 @@ impl StoredPlaylist {
             source_name: playlist.source_name.clone(),
             directory_path: playlist.directory_path.clone(),
             directory_name: playlist.directory_name.clone(),
+            library_added_at_ms: None,
             tracks: playlist
                 .tracks
                 .iter()
@@ -640,6 +676,9 @@ impl StoredPlaylist {
             || !valid_path(&self.directory_path)
             || self.source_name.trim().is_empty()
             || self.directory_name.trim().is_empty()
+            || self
+                .library_added_at_ms
+                .is_some_and(|value| value > 9_007_199_254_740_991)
         {
             return Err(LibraryError::storage(
                 "Saved playlist descriptor is invalid",
@@ -664,7 +703,8 @@ impl StoredPlaylist {
 
     fn restore(self) -> AudioFolderPlaylist {
         // Keep the accepted snapshot even when the original M3U8 was changed
-        // or deleted. Only availability and derived track identity are read.
+        // or deleted. The source timestamp is read separately from its contents.
+        let file_modified_at_ms = playlist_source_modified_at_ms(Path::new(&self.source_path));
         AudioFolderPlaylist {
             source_kind: AudioPlaylistSourceKind::M3u8,
             source_path: self.source_path,
@@ -672,6 +712,9 @@ impl StoredPlaylist {
             directory_path: self.directory_path,
             directory_name: self.directory_name,
             directory_paths: None,
+            directory_modified_at_ms: None,
+            library_added_at_ms: self.library_added_at_ms,
+            file_modified_at_ms,
             selected_index: 0,
             tracks: self
                 .tracks
@@ -1817,6 +1860,82 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["two.flac", "three.mp3"]
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn imported_playlist_dates_use_registration_and_live_source_metadata() {
+        let root = test_dir();
+        let registry = LibraryPlaylistRegistry::new(&root);
+        let imported = list(&root, "first", "one.mp3\n");
+        let file = Path::new(&imported.source_path);
+        assert_eq!(imported.library_added_at_ms, None);
+        assert!(imported.file_modified_at_ms.is_some());
+        let registered = registry.upsert(&imported).unwrap().unwrap();
+        assert_eq!(
+            registry.get().unwrap()[0].library_added_at_ms,
+            Some(registered)
+        );
+
+        let earlier = 1_600_000_000_000;
+        let mut stored = registry.read().unwrap();
+        stored.playlists[0].library_added_at_ms = Some(earlier);
+        registry.write(&stored).unwrap();
+
+        let source_changed_seconds = 1_690_000_000;
+        fs::write(file, "two.flac\n").unwrap();
+        OpenOptions::new()
+            .write(true)
+            .open(file)
+            .unwrap()
+            .set_modified(UNIX_EPOCH + std::time::Duration::from_secs(source_changed_seconds))
+            .unwrap();
+        let modified = source_changed_seconds * 1000;
+        let restored = registry.get().unwrap().remove(0);
+        let wire = serde_json::to_value(&restored).unwrap();
+        assert_eq!(wire["libraryAddedAtMs"], serde_json::json!(earlier));
+        assert_eq!(wire["fileModifiedAtMs"], serde_json::json!(modified));
+        assert_eq!(restored.tracks[0].file_name, "one.mp3");
+
+        let reimported = import_m3u8_playlist(file).unwrap();
+        assert_eq!(reimported.file_modified_at_ms, Some(modified));
+        assert_eq!(registry.upsert(&reimported).unwrap(), Some(earlier));
+        fs::remove_file(file).unwrap();
+        let restored = LibraryPlaylistRegistry::new(&root).get().unwrap().remove(0);
+        assert_eq!(restored.library_added_at_ms, Some(earlier));
+        assert_eq!(restored.tracks[0].file_name, "two.flac");
+        assert!(serde_json::to_value(restored)
+            .unwrap()
+            .get("fileModifiedAtMs")
+            .is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn get_observes_legacy_registration_only_once_after_storage_succeeds() {
+        let root = test_dir();
+        let registry = LibraryPlaylistRegistry::new(&root);
+        registry.upsert(&list(&root, "first", "one.mp3\n")).unwrap();
+        let mut old = registry.read().unwrap();
+        old.playlists[0].library_added_at_ms = None;
+        registry.write(&old).unwrap();
+        let legacy_bytes = fs::read(&registry.path).unwrap();
+        assert!(!String::from_utf8_lossy(&legacy_bytes).contains("libraryAddedAtMs"));
+
+        let blocked = registry.path.with_extension("json.tmp");
+        fs::create_dir(&blocked).unwrap();
+        assert_eq!(registry.get().unwrap()[0].library_added_at_ms, None);
+        assert_eq!(fs::read(&registry.path).unwrap(), legacy_bytes);
+        fs::remove_dir(&blocked).unwrap();
+
+        let observed = registry.get().unwrap()[0].library_added_at_ms;
+        assert!(observed.is_some());
+        let persisted = fs::read(&registry.path).unwrap();
+        assert_eq!(
+            LibraryPlaylistRegistry::new(&root).get().unwrap()[0].library_added_at_ms,
+            observed
+        );
+        assert_eq!(fs::read(&registry.path).unwrap(), persisted);
         fs::remove_dir_all(root).unwrap();
     }
 

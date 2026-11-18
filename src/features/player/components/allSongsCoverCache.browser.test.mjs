@@ -26,6 +26,7 @@ const compile = source => ts.transpileModule(source, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
 }).outputText.replace(/import \{([^}]+)\} from 'react';?/, (_, names) => `import React from 'react'; const {${names}}=React;`).replaceAll("from 'react'", `from '${dependency('react.js')}'`)
   .replace(/from '(@\/[^']+)'/g, (_, path) => `from '/src/${path.slice(2)}.ts'`)
+  .replace(/from '(\.{1,2}\/[^']+)'/g, (_, path) => `from '${new URL(path, origin + '/' + hookPath).pathname}.ts'`)
 const service = (await (await fetch(origin + '/src/features/player/services/audioCommands.ts')).text())
   .replace(/import \{ convertFileSrc, invoke \} from [^;]+;/,
     'const invoke=(...args)=>window.backendInvoke(...args);const convertFileSrc=path=>path;')
@@ -86,7 +87,15 @@ async function open(source) {
 }
 async function settled(page) {
   await page.waitForFunction(() => window.desired.size > 0 && [...window.desired].every(key => window.store.cache.has(key) || window.fail.has(key)) && window.events.active === 0)
-  await page.waitForFunction(() => [...document.querySelectorAll('img')].every(image => image.complete && image.naturalWidth > 0))
+  await page.waitForFunction(() => {
+    const cards = new Map([...document.querySelectorAll('.card[data-song-key]')].map(card => [card.dataset.songKey, card]))
+    return [...window.desired].every(key => {
+      const url = window.store.cache.get(key)?.coverUrl
+      if (!url) return window.fail.has(key)
+      const image = cards.get(key)?.querySelector('img')
+      return image?.src === url && image.complete && image.naturalWidth > 0
+    })
+  })
 }
 async function evidence(page) {
   return page.evaluate(() => ({ demand:window.desired.size,cache:window.store.cache.size,probes:window.events.probes.length,pixels:window.events.pixels.length,

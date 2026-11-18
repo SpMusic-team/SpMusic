@@ -87,6 +87,26 @@ export function useCollectionLayout<Layout extends { label: string }>(options: O
     for (const animation of activeLayoutAnimationsRef.current) animation.cancel()
     activeLayoutAnimationsRef.current.clear()
   }, [])
+  const applyLevel = useCallback((nextLevel: number, animate: boolean) => {
+    const nextLayout = layouts[nextLevel]
+    if (!Number.isInteger(nextLevel) || !nextLayout) return false
+    if (animate) {
+      if (nextLevel === layoutLevelRef.current) return false
+      const grid = gridRef.current
+      const panel = panelRef.current
+      // Capture painted geometry before cancelling interrupted animations.
+      const snapshot = grid && panel && !appearanceMotion.disabled ? snapshotCardLayout(grid, panel, selectors) : null
+      pendingLayoutSnapshotRef.current = snapshot
+      if (grid) callbacksRef.current.onBeforeTransition?.(snapshot, grid)
+      layoutTransitionGenerationRef.current += 1
+      stopLayoutAnimations()
+    }
+    layoutLevelRef.current = nextLevel
+    setLevel(nextLevel)
+    try { window.localStorage.setItem(storageKey, String(nextLevel)) } catch { /* Blocked storage must not block the view. */ }
+    setAnnouncement(callbacksRef.current.announce(nextLayout))
+    return true
+  }, [appearanceMotion.disabled, gridRef, layouts, panelRef, selectors, stopLayoutAnimations, storageKey])
   useLayoutEffect(() => {
     const snapshots = pendingLayoutSnapshotRef.current
     pendingLayoutSnapshotRef.current = null
@@ -145,24 +165,9 @@ export function useCollectionLayout<Layout extends { label: string }>(options: O
         && !element.closest<HTMLElement>('[contenteditable]')?.isContentEditable
     }
     const changeLayout = (direction: -1 | 1, now: number) => {
-      const grid = gridRef.current
       if (now < wheelLockedUntilRef.current) return
-      const currentLevel = layoutLevelRef.current
-      const nextLevel = Math.max(0, Math.min(layouts.length - 1, currentLevel + direction))
-      if (nextLevel === currentLevel) return
-      const nextLayout = layouts[nextLevel]
-      if (!nextLayout) return
-      // Capture painted geometry before cancelling interrupted animations.
-      const snapshot = !grid || appearanceMotion.disabled ? null : snapshotCardLayout(grid, panel, selectors)
-      pendingLayoutSnapshotRef.current = snapshot
-      if (grid) callbacksRef.current.onBeforeTransition?.(snapshot, grid)
-      layoutTransitionGenerationRef.current += 1
-      stopLayoutAnimations()
-      wheelLockedUntilRef.current = now + PLAYLIST_WHEEL_STEP_LOCK_MS
-      layoutLevelRef.current = nextLevel
-      setLevel(nextLevel)
-      try { window.localStorage.setItem(storageKey, String(nextLevel)) } catch { /* Blocked storage must not block the view. */ }
-      setAnnouncement(callbacksRef.current.announce(nextLayout))
+      const nextLevel = Math.max(0, Math.min(layouts.length - 1, layoutLevelRef.current + direction))
+      if (applyLevel(nextLevel, true)) wheelLockedUntilRef.current = now + PLAYLIST_WHEEL_STEP_LOCK_MS
     }
     const pressedControlKeys = new Set<string>()
     let wheelInput: 'control' | 'trackpad' | null = null
@@ -301,13 +306,9 @@ export function useCollectionLayout<Layout extends { label: string }>(options: O
       pendingLayoutSnapshotRef.current = null
       stopLayoutAnimations()
     }
-  }, [appearanceMotion, stopLayoutAnimations, panelRef, gridRef, layouts, storageKey, selectors, gestureArea, wheelGestureArea])
-  const selectLevel = useCallback((nextLevel: number) => {
-    if (!Number.isInteger(nextLevel) || !layouts[nextLevel]) return
-    layoutLevelRef.current = nextLevel
-    setLevel(nextLevel)
-    try { window.localStorage.setItem(storageKey, String(nextLevel)) } catch { /* Storage is optional. */ }
-    setAnnouncement(callbacksRef.current.announce(layouts[nextLevel]))
-  }, [layouts, storageKey])
+  }, [appearanceMotion, applyLevel, stopLayoutAnimations, panelRef, gridRef, layouts.length, gestureArea, wheelGestureArea])
+  const selectLevel = useCallback((nextLevel: number, selection?: { animate?: boolean }) => {
+    applyLevel(nextLevel, selection?.animate === true)
+  }, [applyLevel])
   return { level, layout: layouts[level] ?? layouts[defaultLevel()]!, announcement, selectLevel }
 }

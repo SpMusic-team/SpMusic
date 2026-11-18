@@ -86,7 +86,11 @@ await page.route('**/src/features/player/components/PlayerSurface.tsx*', route =
 await page.route('**/__contributor_real_surface.js', route => route.fulfill({ contentType: 'text/javascript', body: realSurface }))
 await page.route('**/__contributor_fixture.js', route => route.fulfill({ contentType: 'text/javascript', body: fixture }))
 await page.route('**/__contributor_test?*', route => route.fulfill({ contentType: 'text/html', body: html }))
-await page.addInitScript(() => { localStorage.setItem('spmusic.player.startup-page.v1', 'media-library'); localStorage.removeItem('spmusic.player.session.v1') })
+await page.addInitScript(() => {
+  localStorage.setItem('spmusic.player.startup-page.v1', 'media-library')
+  localStorage.removeItem('spmusic.player.session.v1')
+  for (const category of ['artist', 'album-artist', 'composer']) localStorage.setItem(`spmusic.${category}-root.layout-level.v1`, '0')
+})
 const evidence = process.env.SPMUSIC_TEST_SCREENSHOTS
 if (evidence) mkdirSync(evidence, { recursive: true })
 const screenshot = async name => { if (evidence) await page.screenshot({ path: evidence + '/' + name + '.png' }) }

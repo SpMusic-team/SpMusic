@@ -93,7 +93,7 @@ function actionsFor(id: MediaLibraryCategoryId): Action[] {
   return [select, rescan, pin, settings]
 }
 
-export function LibraryRootMenu({ categoryId, library, onSort, onListOptions, rootToolbar = false }: { categoryId: MediaLibraryCategoryId; library: PlaylistLibraryViewModel; onSort?: () => void; onListOptions?: () => void; rootToolbar?: boolean }) {
+export function LibraryRootMenu({ categoryId, library, onSort, onListOptions, rootToolbar = false }: { categoryId: MediaLibraryCategoryId; library: PlaylistLibraryViewModel; onSort?: () => void; onListOptions?: (trigger: HTMLButtonElement | null) => void; rootToolbar?: boolean }) {
   const icons = useSystemIcons()
   const [open, setOpen] = useState(false)
   const [transferring, setTransferring] = useState(false)
@@ -123,6 +123,13 @@ export function LibraryRootMenu({ categoryId, library, onSort, onListOptions, ro
   const run = (action: Action) => {
     if (action.kind === 'import') { setOpen(false); library.onImportPlaylist?.(); return }
     if (categoryId === 'queue' && action.label === '清空队列') { if (library.onClearQueue?.()) setOpen(false); return }
+    if (onListOptions && (action === settings || categoryId === 'streams' && action === sort)) {
+      trigger.current?.focus({ preventScroll: true })
+      setTransferring(true)
+      setOpen(false)
+      onListOptions(trigger.current)
+      return
+    }
     if (categoryId === 'streams') {
       if (action.label === '添加地址') { setStreamUrl('http://'); setStreamError(''); setStreamAdd(true); return }
       if (action.label === '导入播放列表') { setOpen(false); library.onImportPlaylist?.(); return }
@@ -139,13 +146,6 @@ export function LibraryRootMenu({ categoryId, library, onSort, onListOptions, ro
         library.onMostPlayedOptionsChange({ ...(library.mostPlayedOptions ?? DEFAULT_MOST_PLAYED_OPTIONS), limit: Number.MAX_SAFE_INTEGER, from: 0 }); setOpen(false); return
       }
       if (action.label === '清空' && library.onClearMostPlayed) { setClearMost(true); return }
-    }
-    if (action === settings && onListOptions) {
-      trigger.current?.focus({ preventScroll: true })
-      setTransferring(true)
-      setOpen(false)
-      onListOptions()
-      return
     }
     if (action === sort && onSort) { setOpen(false); onSort(); return }
     if (action === settings && categoryId === 'long-tracks' && library.onLongTracksMinDurationChange) {

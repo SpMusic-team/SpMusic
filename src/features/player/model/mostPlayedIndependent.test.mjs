@@ -37,7 +37,7 @@ test('storage ignores malformed data, normalized duplicates keep newer not sum, 
 })
 test('bad options fall back; unavailable option persistence does not throw',()=>{
  globalThis.localStorage={getItem:()=>'{"limit":1,"from":0,"direction":"asc"}',setItem:()=>{throw Error('quota')}}
- assert.deepEqual(m.readMostPlayedOptions(),{limit:100,from:0,direction:'desc'})
+ assert.deepEqual(m.readMostPlayedOptions(),{limit:200,from:0,direction:'desc'})
  for(const options of [{limit:1,from:0,direction:'asc'},{limit:2,from:-1,direction:'asc'},{limit:2,from:1e300,direction:'desc'},{limit:2,from:0,direction:'title'}]) assert.equal(m.isMostPlayedOptions(options),false)
  assert.doesNotThrow(()=>m.writeMostPlayedOptions({limit:2,from:0,direction:'asc'}))
  globalThis.localStorage={getItem:()=>{throw Error('blocked')}};assert.deepEqual(m.readMostPlayed(),[])

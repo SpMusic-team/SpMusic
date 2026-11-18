@@ -45,8 +45,8 @@ pub(crate) use device::current_output_info;
 pub use error::AudioCommandError;
 pub(crate) use error::{audio_error, AudioErrorCode};
 pub(crate) use playlist::{
-    default_filters, import_m3u8_playlist, load_library_folder, restore_playlist_track,
-    source_filters, stream_descriptor,
+    default_filters, import_m3u8_playlist, load_library_folder, playlist_source_modified_at_ms,
+    restore_playlist_track, source_filters, stream_descriptor, system_time_millis,
 };
 pub(crate) use playlist_cover::probe_playlist_cover;
 pub use playlist_duration::probe_playlist_durations;

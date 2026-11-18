@@ -282,6 +282,8 @@ fn read_track_tag_summary(path: &Path) -> Result<AudioPlaylistTrackTagSummary, A
         composer: None,
         genre: None,
         year: None,
+        track_number: None,
+        disc_number: None,
         bit_depth: properties.bit_depth(),
         sample_rate_hz: properties.sample_rate(),
         bitrate_kbps: properties.audio_bitrate(),
@@ -310,6 +312,8 @@ fn read_track_tag_summary(path: &Path) -> Result<AudioPlaylistTrackTagSummary, A
             .date()
             .map(|timestamp| u32::from(timestamp.year))
             .filter(|year| *year > 0);
+        summary.track_number = tag.track().filter(|number| *number > 0);
+        summary.disc_number = tag.disk().filter(|number| *number > 0);
     }
 
     Ok(summary)
@@ -441,6 +445,8 @@ mod tests {
             composer: None,
             genre: None,
             year: None,
+            track_number: None,
+            disc_number: None,
             bit_depth: None,
             sample_rate_hz: None,
             bitrate_kbps: None,
@@ -730,6 +736,45 @@ mod tests {
     }
 
     #[test]
+    fn tagged_wav_exposes_positive_track_and_disc_numbers() {
+        use lofty::{
+            config::WriteOptions,
+            tag::{Tag, TagExt, TagType},
+        };
+
+        for (track, disc, expected) in [
+            (Some(12), Some(2), (Some(12), Some(2))),
+            (Some(0), Some(0), (None, None)),
+            (None, None, (None, None)),
+        ] {
+            let fixture = Fixture::new();
+            let mut tag = Tag::new(TagType::Id3v2);
+            tag.set_title("编号测试".to_owned());
+            if let Some(track) = track {
+                tag.set_track(track);
+                tag.set_track_total(16);
+            }
+            if let Some(disc) = disc {
+                tag.set_disk(disc);
+                tag.set_disk_total(3);
+            }
+            tag.save_to_path(&fixture.wav, WriteOptions::default())
+                .expect("write ID3v2 number fixture");
+
+            let items = probe(vec![fixture.wav_path()]);
+            let summary = items[0].summary.as_ref().expect("read the number fixture");
+            assert!(items[0].error.is_none());
+            assert_eq!((summary.track_number, summary.disc_number), expected);
+            let wire = serde_json::to_value(summary).unwrap();
+            assert_eq!(
+                wire.get("trackNumber"),
+                Some(&serde_json::json!(expected.0))
+            );
+            assert_eq!(wire.get("discNumber"), Some(&serde_json::json!(expected.1)));
+        }
+    }
+
+    #[test]
     fn panicking_item_is_isolated_and_releases_the_batch_permit() {
         let fixture = Fixture::new();
         let poisoned = fixture.wav_path();
@@ -795,9 +840,11 @@ mod tests {
             "bitrateKbps",
             "codec",
             "composer",
+            "discNumber",
             "genre",
             "sampleRateHz",
             "title",
+            "trackNumber",
             "year",
         ] {
             assert!(summary.get(field).is_some(), "{field} must be present");
@@ -820,6 +867,8 @@ mod tests {
         assert!(summary_ty.contains("composer: string | null"));
         assert!(summary_ty.contains("genre: string | null"));
         assert!(summary_ty.contains("year: number | null"));
+        assert!(summary_ty.contains("trackNumber: number | null"));
+        assert!(summary_ty.contains("discNumber: number | null"));
         assert!(summary_ty.contains("sampleRateHz: number | null"));
         assert!(
             !summary_ty.contains("durationMs"),

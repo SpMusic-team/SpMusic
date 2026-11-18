@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
-import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
+import { useAppearance } from '@/features/appearance/hooks/useAppearance'
 import { getShuffleModePresentation, showPlaybackModeToast } from '@/features/player/components/playbackModePresentation'
 import { PlaylistActionButtons } from '@/features/player/components/PlaylistActionButtons'
 import { PlaylistCard } from '@/features/player/components/PlaylistCard'
@@ -17,6 +17,7 @@ import { PlaylistCoverImage } from '@/features/player/components/PlaylistCoverIm
 import { PlaylistPlaybackDock } from '@/features/player/components/PlaylistPlaybackDock'
 import { PlaylistLibrarySidebar } from '@/features/player/components/PlaylistLibrarySidebar'
 import { useCollectionLayout } from '@/features/player/hooks/useCollectionLayout'
+import { TILE_HEIGHT_SAMPLES, usePlaylistTileRenderWindow } from '@/features/player/hooks/usePlaylistTileRenderWindow'
 import { usePlaylistSongReorder } from '@/features/player/hooks/usePlaylistSongReorder'
 import { mergeFilteredSongOrder } from '@/features/player/model/manualSongOrderStorage'
 import { CollectionHero } from '@/features/player/components/CollectionHero'
@@ -467,8 +468,7 @@ export function PlaylistPanel({
   onLibrarySidebarOpenChange,
   searchRequestId = 0,
 }: PlaylistPanelProps) {
-  const systemIcons = useSystemIcons()
-  const appearanceMotion = useAppearanceMotion()
+  const { appearance, icons: systemIcons, motion: appearanceMotion } = useAppearance()
   // Motion registers shared nodes at mount. Mode-specific keys below unmount
   // those nodes while their layoutId still identifies the old projection stack.
   const [heroOffscreen, setHeroOffscreen] = useState(false)
@@ -566,11 +566,23 @@ export function PlaylistPanel({
   }, [filteredTracks, reorderPreviewKeys])
   const firstFilteredTrackId = filteredTracks[0]?.id
   const contentShapes = useMemo(() => new Map(filteredTracks.map(track => [track.id, playlistCardContentShape(track)])), [filteredTracks])
+  const [tileWindowSuspended, setTileWindowSuspended] = useState(false)
+  const layoutWindowFrame = useRef(0)
+  useLayoutEffect(() => () => {
+    if (layoutWindowFrame.current) cancelAnimationFrame(layoutWindowFrame.current)
+  }, [])
   const { level: layoutLevel, layout, announcement: layoutAnnouncement } = useCollectionLayout({
     panelRef, gridRef, layouts: PLAYLIST_SONG_LAYOUTS, storageKey: PLAYLIST_LAYOUT_STORAGE_KEY,
     defaultLevel: defaultPlaylistSongLevel, selectors: DETAIL_LAYOUT_SELECTORS, gestureArea: 'panel',
     announce: (nextLayout) => `歌曲视图已切换为${nextLayout.label}`,
     onBeforeTransition: (snapshot, grid) => {
+      // The destination must be ready when useCollectionLayout measures FLIP.
+      if (layoutWindowFrame.current) cancelAnimationFrame(layoutWindowFrame.current)
+      setTileWindowSuspended(true)
+      if (!snapshot) layoutWindowFrame.current = requestAnimationFrame(() => {
+        layoutWindowFrame.current = 0
+        setTileWindowSuspended(false)
+      })
       artworkHoldIdsRef.current = snapshot ? new Set(
         [...grid.querySelectorAll<HTMLElement>('[data-playlist-track-id]')].flatMap((card) => {
           const trackId = card.dataset.playlistTrackId
@@ -580,7 +592,11 @@ export function PlaylistPanel({
         }),
       ) : null
     },
-    onSettled: () => { artworkHoldIdsRef.current = null; setArtworkWindowRevision((previous) => previous + 1) },
+    onSettled: () => {
+      artworkHoldIdsRef.current = null
+      setTileWindowSuspended(false)
+      setArtworkWindowRevision((previous) => previous + 1)
+    },
   })
 
   const fullReorderKeys = useMemo(() => tracks.map(track => track.id), [tracks])
@@ -616,6 +632,21 @@ export function PlaylistPanel({
     () => unavailableTrackIds ?? new Set<string>(),
     [unavailableTrackIds],
   )
+  const tileWindowEnabled = layout.level === 2 && displayedTracks.length > 100
+    && metadataStatus !== 'loading' && !selectMode && !reorderPreviewKeys && !tileWindowSuspended
+    && (appearance.metadata.tier === 'standard' || !appearance.advanced.customCss.trim())
+    && (appearance.metadata.tier !== 'experimental' || !appearance.experimental.layoutCss.trim())
+  const firstFocusable = useMemo(() => tileWindowEnabled && onTrackSelect
+    ? displayedTracks.findIndex(track => !unavailable.has(track.id)) : -1,
+  [tileWindowEnabled, onTrackSelect, displayedTracks, unavailable])
+  const lastFocusable = useMemo(() => tileWindowEnabled && onTrackSelect
+    ? displayedTracks.findLastIndex(track => !unavailable.has(track.id)) : -1,
+  [tileWindowEnabled, onTrackSelect, displayedTracks, unavailable])
+  const tileWindow = usePlaylistTileRenderWindow({
+    enabled: tileWindowEnabled, present: isPresent, panelRef, gridRef, tracks: displayedTracks,
+    trackIdsKey: filteredTrackIdsKey, firstFocusable, lastFocusable, appearance,
+  })
+  const { measuring: measuringTileWindow, moveToIndex: moveToTileIndex, indexById: tileIndexById, refresh: refreshTileWindow } = tileWindow
   const totalClock = formatPlaylistDurationLabel({
     status: totalDurationStatus, totalSeconds: totalDurationSeconds,
   }, tracks.length)
@@ -749,12 +780,19 @@ export function PlaylistPanel({
       initialPositionAppliedRef.current = false
       if (entryPosition.target === 'top') {
         panel.scrollTo({ top: 0, behavior: 'instant' })
+        refreshTileWindow()
         rebaseController({ reveal: true })
         initialPositionAppliedRef.current = true
         return
       }
     }
-    if (initialPositionAppliedRef.current || !currentTrackId) return
+    if (initialPositionAppliedRef.current || !currentTrackId || measuringTileWindow) return
+    const currentIndex = tileIndexById.get(currentTrackId)
+    if (currentIndex !== undefined && moveToTileIndex(currentIndex, true)) {
+      rebaseController({ reveal: true })
+      initialPositionAppliedRef.current = true
+      return
+    }
     const grid = gridRef.current
     if (!grid) return
     const currentCard = [...grid.querySelectorAll<HTMLElement>('[data-playlist-track-id]')]
@@ -765,7 +803,8 @@ export function PlaylistPanel({
     panel.scrollTop += cardRect.top - panelRect.top - (panel.clientHeight - cardRect.height) / 2
     rebaseController({ reveal: true })
     initialPositionAppliedRef.current = true
-  }, [currentTrackId, filteredTrackIdsKey, entryPosition, metadataStatus, rebaseController])
+  }, [currentTrackId, filteredTrackIdsKey, entryPosition, metadataStatus, measuringTileWindow,
+    moveToTileIndex, refreshTileWindow, tileIndexById, rebaseController])
 
   useLayoutEffect(() => {
     if (!searchOpen || searchRequestId <= 0 || focusedSearchRequestIdRef.current === searchRequestId) return
@@ -777,9 +816,10 @@ export function PlaylistPanel({
     // Consume each request once so ordinary search-button toggles keep their behavior.
     initialPositionAppliedRef.current = true
     panel.scrollTo({ top: 0, behavior: 'instant' })
+    refreshTileWindow()
     input.focus({ preventScroll: true })
     rebaseController({ reveal: true })
-  }, [searchOpen, searchRequestId, rebaseController])
+  }, [searchOpen, searchRequestId, refreshTileWindow, rebaseController])
 
   useLayoutEffect(() => {
     rebaseController({ reveal: true })
@@ -953,7 +993,7 @@ export function PlaylistPanel({
     }
 
     const cards = grid.querySelectorAll<HTMLElement>('[data-playlist-track-id]')
-    if (cards.length === 0) {
+    if (cards.length === 0 && !grid.querySelector('.playlist-tile-measure')) {
       if (layout.showArtwork) clearArtworkWindow()
       onVisibleTrackIdsChange([], true, layout.showArtwork)
     }
@@ -1061,7 +1101,8 @@ export function PlaylistPanel({
     image.hidden = true
   }, [firstTrack?.coverImageFallback])
   const showExtendedMetadata = layout.flow !== 'tile'
-  const cards = useMemo(() => displayedTracks.map((track, index) => (
+  const { windows, spacerHeight } = tileWindow
+  const renderCard = useCallback((track: PlaylistTrackItemViewModel, index: number) => (
     <PlaylistCard
       key={track.id}
       track={track}
@@ -1091,9 +1132,24 @@ export function PlaylistPanel({
       // is still impossible: the section is `inert` while `!isPresent`.
       onEnterSelectMode={handleEnterSelectMode}
     />
-  )), [displayedTracks, artworkSource, fallbackArtworkSource, currentTrackId, unavailable, onTrackSelect, selectMode, selectedIds,
+  ), [artworkSource, fallbackArtworkSource, currentTrackId, unavailable, onTrackSelect, selectMode, selectedIds,
     artworkWindowIds, showExtendedMetadata, handleActivate, handleToggleSelect, handleEnterSelectMode,
     contentShapes, failedCoverSources, handleCoverFailed])
+  const cards = useMemo(() => {
+    const children = []
+    let previousEnd = 0
+    const addSpacer = (end: number) => {
+      const height = spacerHeight(previousEnd, end)
+      if (height > 0) children.push(<div key={'spacer:' + previousEnd} className="playlist-tile-spacer" aria-hidden="true" style={{ height }} />)
+    }
+    for (const window of windows) {
+      if (window.first > previousEnd) addSpacer(window.first)
+      for (let index = window.first; index < window.end; index += 1) children.push(renderCard(displayedTracks[index], index))
+      previousEnd = window.end
+    }
+    if (previousEnd < displayedTracks.length) addSpacer(displayedTracks.length)
+    return children
+  }, [displayedTracks, renderCard, spacerHeight, windows])
 
   function renderPlaylistActions(compact = false) {
     const returning = compact && !isPresent && chromeTransition.offscreenReturn && controllerActionsVisible
@@ -1245,13 +1301,33 @@ export function PlaylistPanel({
             onPointerDownCapture={songReorder.onPointerDownCapture}
             onClickCapture={songReorder.onClickCapture}
             onKeyDownCapture={songReorder.onKeyDownCapture}
-            data-content-window="full"
+            onKeyDown={event => {
+              if (!tileWindow.bounded || event.key !== 'Tab' || event.defaultPrevented || !onTrackSelect) return
+              const trackId = event.target instanceof HTMLElement ? event.target.dataset.playlistTrackId : undefined
+              const index = trackId === undefined ? undefined : tileIndexById.get(trackId)
+              if (index === undefined) return
+              const step = event.shiftKey ? -1 : 1
+              let next = index + step
+              while (next >= 0 && next < displayedTracks.length && unavailable.has(displayedTracks[next].id)) next += step
+              if (next < 0 || next >= displayedTracks.length || windows.some(window => next >= window.first && next < window.end)) return
+              if (tileWindow.focusIndex(next)) event.preventDefault()
+            }}
+            data-content-window={tileWindow.bounded ? 'bounded' : 'full'}
             data-layout-level={layout.level}
             data-layout-flow={layout.flow}
             data-layout-columns={layout.columns}
             data-cover-motion={appearanceMotion.disabled ? 'off' : undefined}
             style={{ ...layout.style, touchAction: 'pan-y' }}
           >
+            {tileWindowEnabled ? <div className="playlist-tile-measure" aria-hidden="true" inert>
+              {TILE_HEIGHT_SAMPLES.map((sample, index) => <button key={index} type="button" className="playlist-card" tabIndex={-1}>
+                <span className="playlist-card-cover" />
+                <span className="playlist-card-copy">
+                  <span className="playlist-card-title">{sample.title}</span>
+                  {sample.secondary ? <span className={sample.secondary}>{'empty' in sample ? '' : 'A'}</span> : null}
+                </span>
+              </button>)}
+            </div> : null}
             {cards}
           </div>
         </>

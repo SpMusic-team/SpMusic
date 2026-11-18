@@ -236,6 +236,8 @@ export type PlaylistTrackTagSummary = {
   albumArtist: string | null
   composer?: string | null
   year: number | null
+  trackNumber?: number | null
+  discNumber?: number | null
   bitDepth: number | null
   sampleRateHz: number | null
   bitrateKbps: number | null
@@ -270,7 +272,7 @@ function nullableSummaryNumber(value: unknown): number | null {
   throw new PlaylistTrackSummaryProtocolError('Playlist track summary numeric field is invalid')
 }
 
-function nullableSummaryYear(value: unknown): number | null {
+function nullablePositiveTagNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 && value <= 0xffff_ffff ? value : null
 }
 
@@ -288,7 +290,9 @@ function parsePlaylistTrackTagSummary(value: unknown): PlaylistTrackTagSummary {
     albumArtist: nullableSummaryText(summary.albumArtist),
     composer: nullableSummaryText(summary.composer),
     genre: nullableSummaryText(summary.genre),
-    year: nullableSummaryYear(summary.year),
+    year: nullablePositiveTagNumber(summary.year),
+    ...(summary.trackNumber !== undefined ? { trackNumber: nullablePositiveTagNumber(summary.trackNumber) } : {}),
+    ...(summary.discNumber !== undefined ? { discNumber: nullablePositiveTagNumber(summary.discNumber) } : {}),
     bitDepth: nullableSummaryNumber(summary.bitDepth),
     sampleRateHz: nullableSummaryNumber(summary.sampleRateHz),
     bitrateKbps: nullableSummaryNumber(summary.bitrateKbps),
@@ -385,12 +389,17 @@ export type AudioFolderTrackRef = {
   available: boolean
   /** Filesystem creation time. Optional for older saved queues. */
   fileCreatedAtMs?: number | null
+  /** Filesystem modification time in Unix milliseconds. Optional for older saved queues. */
+  fileModifiedAtMs?: number | null
 }
 
 export type AudioPlaylistSourceKind = 'folder' | 'm3u8' | 'custom' | 'streams'
 
 export type AudioFolderPlaylist = {
   directoryPaths?: string[]
+  directoryModifiedAtMs?: Record<string, number>
+  libraryAddedAtMs?: number
+  fileModifiedAtMs?: number
   directoryPath: string
   directoryName: string
   sourceKind: AudioPlaylistSourceKind

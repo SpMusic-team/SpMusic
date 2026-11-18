@@ -40,6 +40,7 @@ import { TrackMeta } from '@/features/player/components/TrackMeta'
 import { readRatingMode, persistRatingMode, feedbackFromRating, type RatingMode } from '../model/trackRating'
 import type { TrackRating } from '../model/playerTypes'
 import { WindowBar, type WindowLayoutState } from '@/features/player/components/WindowBar'
+import type { SettingsDialogState } from '@/features/player/components/SettingsDialog'
 import { ArtworkCanvas } from '@/features/player/components/ArtworkCanvas'
 import { appCopy } from '@/features/player/model/playerCopy'
 import { readPlaylistControllerMode, persistPlaylistControllerMode, type PlaylistControllerMode } from '@/features/player/model/playlistControllerMode'
@@ -853,6 +854,14 @@ export function PlayerSurface({
   devAudioTools,
   librarySettings,
 }: PlayerSurfaceProps) {
+  const [settingsDialog, setSettingsDialog] = useState<SettingsDialogState>({ open: false, section: 'general' })
+  const handleSettingsOpenChange = useCallback((open: boolean) => {
+    // Keep the entry target available while the dialog restores focus on exit.
+    setSettingsDialog((previous) => open ? { open, section: 'general' } : { ...previous, open })
+  }, [])
+  const openLibrarySettings = useCallback((returnFocus: HTMLElement | null = null) => {
+    setSettingsDialog({ open: true, section: 'library', returnFocus })
+  }, [])
   const [allSongsCoverStore] = useState(createAllSongsCoverStore)
   useEffect(() => () => disposeAllSongsCoverStore(allSongsCoverStore), [allSongsCoverStore])
   const { playback, timeline, volume, queue, playlist, feedback } = viewModel
@@ -3208,6 +3217,8 @@ export function PlayerSurface({
             nativeWindowState={nativeWindowState}
             windowBar={(
               <WindowBar
+                settingsDialog={settingsDialog}
+                onSettingsOpenChange={handleSettingsOpenChange}
                 ratingMode={ratingMode}
                 onRatingModeChange={handleRatingModeChange}
                 controllerMode={controllerMode}
@@ -3428,12 +3439,13 @@ export function PlayerSurface({
               variants={appearanceMotion.variants.backdrop} transition={appearanceMotion.layoutTransition}
               initial="initial" animate="animate" exit="exit" /> : null}
             {playlist.isOpen && playlist.library?.route?.view === 'overview' ? <MediaLibraryPanel key="media-library-overview" playlist={playlist} onOpenPlayer={() => requestPlaylistOpenChange(false)} /> : null}
-            {playlist.isOpen && playlist.library?.route?.view === 'category' && playlist.library.route.categoryId === 'bookmarks' ? <BookmarksPanel key="bookmarks" playlist={playlist} allSongsCoverStore={allSongsCoverStore} librarySidebarOpen={librarySidebarOpen} onLibrarySidebarOpenChange={setCompactSidebarOpen} /> : null}
-            {playlist.isOpen && playlist.library?.route?.view === 'category' && playlist.library.route.categoryId === 'album' ? <AlbumLibraryPanel key="album" controllerMode={controllerMode} timelineInteraction={timeline.interaction} playlist={playlist} allSongsCoverStore={allSongsCoverStore} librarySidebarOpen={librarySidebarOpen} onLibrarySidebarOpenChange={setCompactSidebarOpen} searchRequestId={searchRequestId} /> : null}
-            {playlist.isOpen && playlist.library?.route?.view === 'category' && (playlist.library.route.categoryId === 'artist' || playlist.library.route.categoryId === 'album-artist' || playlist.library.route.categoryId === 'composer' || playlist.library.route.categoryId === 'year' || playlist.library.route.categoryId === 'genre') ? <AlbumLibraryPanel key={playlist.library.route.categoryId} categoryId={playlist.library.route.categoryId} controllerMode={controllerMode} timelineInteraction={timeline.interaction} playlist={playlist} allSongsCoverStore={allSongsCoverStore} librarySidebarOpen={librarySidebarOpen} onLibrarySidebarOpenChange={setCompactSidebarOpen} searchRequestId={searchRequestId} /> : null}
-            {playlist.isOpen && playlist.library?.route?.view === 'category' && ['folders', 'folder'].includes(playlist.library.route.categoryId) ? <FolderHierarchyPanel key={playlist.library.route.categoryId} categoryId={playlist.library.route.categoryId === 'folder' ? 'folder' : 'folders'} controllerMode={controllerMode} timelineInteraction={timeline.interaction} playlist={playlist} allSongsCoverStore={allSongsCoverStore} librarySidebarOpen={librarySidebarOpen} onLibrarySidebarOpenChange={setCompactSidebarOpen} searchRequestId={searchRequestId} /> : null}
+            {playlist.isOpen && playlist.library?.route?.view === 'category' && playlist.library.route.categoryId === 'bookmarks' ? <BookmarksPanel onOpenLibrarySettings={openLibrarySettings} key="bookmarks" playlist={playlist} allSongsCoverStore={allSongsCoverStore} librarySidebarOpen={librarySidebarOpen} onLibrarySidebarOpenChange={setCompactSidebarOpen} /> : null}
+            {playlist.isOpen && playlist.library?.route?.view === 'category' && playlist.library.route.categoryId === 'album' ? <AlbumLibraryPanel onOpenLibrarySettings={openLibrarySettings} key="album" controllerMode={controllerMode} timelineInteraction={timeline.interaction} playlist={playlist} allSongsCoverStore={allSongsCoverStore} librarySidebarOpen={librarySidebarOpen} onLibrarySidebarOpenChange={setCompactSidebarOpen} searchRequestId={searchRequestId} /> : null}
+            {playlist.isOpen && playlist.library?.route?.view === 'category' && (playlist.library.route.categoryId === 'artist' || playlist.library.route.categoryId === 'album-artist' || playlist.library.route.categoryId === 'composer' || playlist.library.route.categoryId === 'year' || playlist.library.route.categoryId === 'genre') ? <AlbumLibraryPanel onOpenLibrarySettings={openLibrarySettings} key={playlist.library.route.categoryId} categoryId={playlist.library.route.categoryId} controllerMode={controllerMode} timelineInteraction={timeline.interaction} playlist={playlist} allSongsCoverStore={allSongsCoverStore} librarySidebarOpen={librarySidebarOpen} onLibrarySidebarOpenChange={setCompactSidebarOpen} searchRequestId={searchRequestId} /> : null}
+            {playlist.isOpen && playlist.library?.route?.view === 'category' && ['folders', 'folder'].includes(playlist.library.route.categoryId) ? <FolderHierarchyPanel onOpenLibrarySettings={openLibrarySettings} key={playlist.library.route.categoryId} categoryId={playlist.library.route.categoryId === 'folder' ? 'folder' : 'folders'} controllerMode={controllerMode} timelineInteraction={timeline.interaction} playlist={playlist} allSongsCoverStore={allSongsCoverStore} librarySidebarOpen={librarySidebarOpen} onLibrarySidebarOpenChange={setCompactSidebarOpen} searchRequestId={searchRequestId} /> : null}
             {playlist.isOpen && playlist.library?.isOpen && playlist.library.route?.view !== 'overview' && !(playlist.library.route?.view === 'category' && ['bookmarks', 'folders', 'folder', 'album', 'artist', 'album-artist', 'composer', 'year', 'genre'].includes(playlist.library.route.categoryId)) ? (
               <PlaylistLibraryPanel ratingMode={ratingMode} ratingsByTrackId={feedback.ratingsByTrackId}
+                onOpenLibrarySettings={openLibrarySettings}
                 controllerMode={controllerMode}
                 entryPosition={playlist.entryPosition}
                 allSongsCoverStore={allSongsCoverStore}

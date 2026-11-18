@@ -60,6 +60,38 @@ test('invalid snapshots cannot be restored', () => withStore((values) => {
   assert.equal(readPlaybackSession(), null)
 }))
 
+test('restored All Songs queues keep the sort that started playback', () => withStore((values) => {
+  const customPlaylist = {
+    sourceKind: 'custom' as const,
+    sourcePath: 'queue:all-songs:test',
+    sourceName: '所有歌曲',
+    directoryPath: '',
+    directoryName: '所有歌曲',
+    selectedIndex: 0,
+    tracks: [{ id: 'song', sourcePath: session.sourcePath, fileName: 'song.flac', available: true }],
+  }
+  for (const allSongsSort of [undefined, 'last-played', 'play-count', 'random'] as const) {
+    const saved = {
+      ...session,
+      playlist: { sourceKind: 'custom' as const, sourcePath: customPlaylist.sourcePath,
+        customPlaylist: { ...customPlaylist, playbackQueue: {
+          kind: 'all-songs' as const,
+          ...(allSongsSort ? { allSongsSort } : {}),
+          ...(allSongsSort === 'random' ? { allSongsShuffleReverse: true } : {}),
+        } } },
+    }
+    persistPlaybackSession(saved)
+    assert.deepEqual(readPlaybackSession(), saved)
+  }
+  const saved = JSON.parse(values.get(key)!)
+  saved.playlist.customPlaylist.playbackQueue.allSongsSort = 'last-played'
+  values.set(key, JSON.stringify(saved))
+  assert.equal(readPlaybackSession(), null)
+  saved.playlist.customPlaylist.playbackQueue.kind = 'most-played'
+  values.set(key, JSON.stringify(saved))
+  assert.equal(readPlaybackSession(), null)
+}))
+
 test('unavailable storage leaves playback operations usable', () => {
   const original = Object.getOwnPropertyDescriptor(globalThis, 'window')
   Object.defineProperty(globalThis, 'window', { configurable: true, value: {

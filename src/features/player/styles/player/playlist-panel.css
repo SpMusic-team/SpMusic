@@ -350,11 +350,24 @@
 }
 .playlist-grid[data-layout-level="2"] {
   width: calc(100% + 16px);
-  grid-template-columns: repeat(auto-fill, 130px);
+  --playlist-tile-column-width: 130px;
+  grid-template-columns: repeat(auto-fill, var(--playlist-tile-column-width));
   gap: 21px;
   justify-content: center;
   margin-left: -8px;
 }
+.playlist-tile-measure {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: var(--playlist-tile-column-width);
+  height: 64px;
+  overflow: hidden;
+  visibility: hidden;
+  pointer-events: none;
+}
+.playlist-tile-spacer { grid-column: 1 / -1; pointer-events: none; }
+
 .playlist-grid[data-layout-level="5"] { --playlist-grid-gap: 8px; }
 .playlist-grid[data-layout-level="6"] { --playlist-grid-gap: 6px; }
 .playlist-grid[data-layout-level="7"] { --playlist-grid-gap: 3px; }

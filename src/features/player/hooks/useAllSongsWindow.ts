@@ -21,7 +21,7 @@ import {
 import type { PlaylistCoverImage } from '@/features/player/model/playerUiViewModel'
 import type { AllSongsItem } from '@/features/player/model/playerUiViewModel'
 import { beginAudioPlaylistCoverWindow, type AudioThumbnailPathMaxEdge } from '@/features/player/services/audioCommands'
-import { scheduleFolderThumbnail, scheduleTrackThumbnail } from '@/features/player/services/playlistCoverScheduler'
+import { coverOwnerAdmissionWidth, scheduleFolderThumbnail, scheduleTrackThumbnail, subscribeCoverOwnerWidth } from '@/features/player/services/playlistCoverScheduler'
 import {
   attemptFolderThumbnailPath,
   attemptTrackThumbnailPath,
@@ -41,7 +41,14 @@ type HeroCoverEdge = number | undefined
 
 export type FolderCoverItem = Readonly<{ kind: 'folder'; key: string; rootPath: string; directoryPath: string; available: boolean; heroEdge?: HeroCoverEdge }>
 type TrackCoverItem = Pick<AllSongsItem, 'key' | 'trackId' | 'sourcePath' | 'available' | 'artworkRevision'> & Readonly<{ heroEdge?: HeroCoverEdge }>
-export type TrackCandidatesCoverItem = Readonly<{ kind: 'track-candidates'; key: string; candidates: readonly TrackCoverItem[]; available: boolean; heroEdge?: HeroCoverEdge }>
+export type TrackCandidatesCoverItem = Readonly<{
+  kind: 'track-candidates'
+  key: string
+  candidates: readonly TrackCoverItem[]
+  available: boolean
+  heroEdge?: HeroCoverEdge
+  fairCandidateSearch?: boolean
+}>
 export type AllSongsCoverItem = TrackCoverItem | FolderCoverItem | TrackCandidatesCoverItem
 
 /**
@@ -149,8 +156,10 @@ type WindowRuntime = {
   /**
    * Which channel produced a row's current URL. Recovery semantics depend on it.
    */
-  coverQueued: Set<string>
+  coverQueued: Map<string, { controller: AbortController; isCurrent: () => boolean }>
   coverActive: number
+  coverBackgroundActive: number
+  collectionSearch: Map<string, { item: TrackCandidatesCoverItem; nextIndex: number; hadFailure: boolean }>
   /** Per-key publish sequence; a new token on every actual commit. */
   publishSequences: Map<string, number>
   /**
@@ -177,7 +186,6 @@ type WindowRuntime = {
   pump: () => void
 }
 
-const WINDOW_CONCURRENCY = 2
 const CACHE_LIMIT = 60
 /** Bound on recovery/publish bookkeeping; the owner's lifetime caps them all. */
 const RECOVERY_RECORD_LIMIT = 128
@@ -275,7 +283,7 @@ export function folderCoverRevisions(store: AllSongsCoverStore, roots: readonly 
 }
 
 export function useAllSongsCoverUrl(store: AllSongsCoverStore, key: string, trackId: string, sourcePath: string): string | undefined {
-  return useCoverUrl(store, key, JSON.stringify(['track', trackId, sourcePath]), false)
+  return useCoverUrl(store, key, coverIdentity({ trackId, sourcePath }, false), false)
 }
 
 export function useFolderCoverUrl(store: AllSongsCoverStore, item?: FolderCoverItem): string | undefined {
@@ -296,7 +304,7 @@ export function useCollectionCoverUrl(store: AllSongsCoverStore, item?: AllSongs
  * keeps displaying it.
  */
 export function useAllSongsCoverPresentation(store: AllSongsCoverStore, key: string, trackId: string, sourcePath: string): CoverPresentation | undefined {
-  return useCoverPresentation(store, key, JSON.stringify(['track', trackId, sourcePath]), false)
+  return useCoverPresentation(store, key, coverIdentity({ trackId, sourcePath }, false), false)
 }
 
 /** Published presentation for a collection/folder cover row. */
@@ -371,7 +379,8 @@ export function useAllSongsWindow(items: readonly AllSongsCoverItem[], panelRef:
     const runtime: WindowRuntime = {
       mounted: true, controller: new AbortController(), sessionGeneration: nextCoverSessionGeneration(),
       desired: new Set(), visible: new Set(), cache: store.cache,
-      coverQueued: new Set(), coverActive: 0,
+      coverQueued: new Map(), coverActive: 0, coverBackgroundActive: 0,
+      collectionSearch: new Map(),
       publishSequences: new Map(), recovery: createCoverRecoveryLedger(RECOVERY_RECORD_LIMIT), recoveryStart: new Map(), demandSeen: new Set(), lastPresented: new Map(),
       pump: () => {},
     }
@@ -505,7 +514,7 @@ export function useAllSongsWindow(items: readonly AllSongsCoverItem[], panelRef:
      * work, but through the same `coverActive` ledger and the same scheduler, so
      * the concurrency and priority bounds are unchanged.
      */
-    const takeRecoveryJob = (): { record: CoverRecoveryRecord; startIndex: number; item: AllSongsCoverItem } | undefined => {
+    const takeRecoveryJob = (allowBackground: boolean) => {
       let best: { record: CoverRecoveryRecord; startIndex: number; item: AllSongsCoverItem; priority: 0 | 1 | 2 } | undefined
       for (const record of runtime.recovery.entries()) {
         if (record.phase !== 'queued' || record.attempted) continue
@@ -519,6 +528,7 @@ export function useAllSongsWindow(items: readonly AllSongsCoverItem[], panelRef:
           continue
         }
         const priority = coverPriority(record.key)
+        if (priority > 0 && !allowBackground) continue
         if (!best || priority < best.priority) best = { record, startIndex: runtime.recoveryStart.get(record.key) ?? 0, item, priority }
       }
       if (!best) return undefined
@@ -526,7 +536,7 @@ export function useAllSongsWindow(items: readonly AllSongsCoverItem[], panelRef:
       // reaches admission does not consume the epoch.
       if (!runtime.recovery.begin(best.record.key)) return undefined
       runtime.recoveryStart.delete(best.record.key)
-      return { record: best.record, startIndex: best.startIndex, item: best.item }
+      return best
     }
 
     /**
@@ -573,8 +583,9 @@ export function useAllSongsWindow(items: readonly AllSongsCoverItem[], panelRef:
     }
 
     /** Settle one recovery: commit a replacement, or a bounded, non-broken failure. */
-    const runRecovery = (record: CoverRecoveryRecord, item: AllSongsCoverItem, startIndex: number) => {
+    const runRecovery = (record: CoverRecoveryRecord, item: AllSongsCoverItem, startIndex: number, priority: 0 | 1 | 2) => {
       runtime.coverActive += 1
+      if (priority > 0) runtime.coverBackgroundActive += 1
       /**
        * Terminal settlement for this recovery.
        *
@@ -655,6 +666,7 @@ export function useAllSongsWindow(items: readonly AllSongsCoverItem[], panelRef:
           // owner's lifetime.
           if (record.phase === 'running') runtime.recovery.settle(record.key)
           runtime.coverActive -= 1
+          if (priority > 0) runtime.coverBackgroundActive -= 1
           runtime.pump()
         }
       })()
@@ -674,30 +686,71 @@ export function useAllSongsWindow(items: readonly AllSongsCoverItem[], panelRef:
       return previous
     }
 
+    const uncoveredItem = (key: string) => {
+      if (runtime.coverQueued.has(key)) return undefined
+      const item = itemsByKeyRef.current.get(key)
+      const cached = runtime.cache.get(key)
+      return item?.available && (!cached || coverIdentity(cached) !== coverIdentity(item)) ? item : undefined
+    }
+    const canRunBackground = (width: number, releasingBackground = false) =>
+      runtime.coverBackgroundActive - Number(releasingBackground) < Math.max(1, Math.min(2, width - 1))
+
     const pump = () => {
       if (!runtime.mounted) return
+      for (const job of runtime.coverQueued.values()) {
+        if (!job.isCurrent()) job.controller.abort()
+      }
+      for (const [key, search] of runtime.collectionSearch) {
+        const current = itemsByKeyRef.current.get(key)
+        const cached = runtime.cache.get(key)
+        if (!runtime.desired.has(key) || !current
+          || (current !== search.item && coverIdentity(current) !== coverIdentity(search.item))
+          || (cached && coverIdentity(cached) === coverIdentity(search.item))) {
+          runtime.collectionSearch.delete(key)
+        }
+      }
       // Demand can shrink without a publication (all remaining rows cached).
       trimCache()
       // Re-entering demand opens a new retry epoch; staying in demand does not.
       reconcileRecovery()
       // Cover work is independent of the whole-library summary/duration pass.
       // Keep a small first-screen demand alive while that pass hides the list.
-      while (runtime.coverActive < WINDOW_CONCURRENCY) {
+      const width = coverOwnerAdmissionWidth()
+      while (runtime.coverActive < width) {
+        const allowBackground = canRunBackground(width)
         // Forced pixel recovery has its own admission table and runs ahead of
         // normal work, through the same concurrency slot.
-        const recovery = takeRecoveryJob()
-        if (recovery) { runRecovery(recovery.record, recovery.item, recovery.startIndex); continue }
+        const recovery = takeRecoveryJob(allowBackground)
+        if (recovery) { runRecovery(recovery.record, recovery.item, recovery.startIndex, recovery.priority); continue }
         let item: AllSongsCoverItem | undefined
         for (const key of runtime.desired) {
-          const candidate = itemsByKeyRef.current.get(key)
-          const cached = runtime.cache.get(key)
-          if (candidate?.available && (!cached || coverIdentity(cached) !== coverIdentity(candidate)) && !runtime.coverQueued.has(key)) {
-            item = candidate
-            break
-          }
+          if (!allowBackground && coverPriority(key) > 0) continue
+          if (runtime.collectionSearch.has(key)) continue
+          item = uncoveredItem(key)
+          if (item) break
+        }
+        // Give untouched cards their first chance within each priority tier.
+        // A visible continuation still goes ahead of work outside the viewport.
+        let preferredPriority = item ? coverPriority(item.key) : 3
+        for (const [key, search] of runtime.collectionSearch) {
+          const priority = coverPriority(key)
+          if (priority >= preferredPriority || (!allowBackground && priority > 0) || runtime.coverQueued.has(key)) continue
+          item = search.item
+          preferredPriority = priority
+          if (priority === 0) break
         }
         if (!item) break
-        runtime.coverQueued.add(item.key)
+        const previousSearch = runtime.collectionSearch.get(item.key)
+        runtime.collectionSearch.delete(item.key)
+        const controller = new AbortController()
+        const itemIsCurrent = () => {
+          const current = itemsByKeyRef.current.get(item.key)
+          return runtime.mounted && !controller.signal.aborted && runtime.desired.has(item.key)
+            && current !== undefined && coverIdentity(current) === coverIdentity(item)
+        }
+        runtime.coverQueued.set(item.key, { controller, isCurrent: itemIsCurrent })
+        const background = coverPriority(item.key) > 0
+        if (background) runtime.coverBackgroundActive += 1
         runtime.coverActive += 1
         void (async () => {
           // Two independent owners of a publishable URL:
@@ -715,11 +768,6 @@ export function useAllSongsWindow(items: readonly AllSongsCoverItem[], panelRef:
           let lane: CoverSourceLane | undefined
           let attemptId: string | undefined
           let candidateIndex: number | undefined
-          const itemIsCurrent = () => {
-            const current = itemsByKeyRef.current.get(item.key)
-            return runtime.mounted && runtime.desired.has(item.key)
-              && current !== undefined && coverIdentity(current) === coverIdentity(item)
-          }
           try {
             const coverGeneration = await coverReady
             if (coverGeneration == null) {
@@ -732,7 +780,7 @@ export function useAllSongsWindow(items: readonly AllSongsCoverItem[], panelRef:
             const pathEdge = heroPathEdge(item)
             const attemptOptions: AttemptOptions = {
               priority: coverPriority(item.key),
-              signal: runtime.controller.signal,
+              signal: controller.signal,
               isCurrent: itemIsCurrent,
               optionalHeroRead: pathEdge > 256,
             }
@@ -741,11 +789,26 @@ export function useAllSongsWindow(items: readonly AllSongsCoverItem[], panelRef:
             // A candidate whose path attempt failed on a real error may still be
             // readable through the pixel lane. Tracked separately from `hasArtwork`
             // so a fully-failed row still settles as a transient failure.
-            let candidateFailure = false
+            let candidateFailure = previousSearch?.hadFailure ?? false
             if ('kind' in item && item.kind === 'track-candidates') {
+              const collection = item
+              const yieldAfter = (index: number) => {
+                const nextIndex = index + 1
+                if (!collection.fairCandidateSearch || nextIndex >= collection.candidates.length) return false
+                const priority = coverPriority(collection.key)
+                const allowBackground = canRunBackground(coverOwnerAdmissionWidth(), background)
+                for (const key of runtime.desired) {
+                  const peerPriority = coverPriority(key)
+                  if (peerPriority > priority || (peerPriority > 0 && !allowBackground) || !uncoveredItem(key)) continue
+                  // Rotate scans only when a peer can use the released slot.
+                  runtime.collectionSearch.set(collection.key, { item: collection, nextIndex, hadFailure: candidateFailure })
+                  return true
+                }
+                return false
+              }
               // A missing cover does not represent the whole directory: only an
               // exhausted candidate list confirms that the group has no artwork.
-              for (let index = 0; index < item.candidates.length; index += 1) {
+              for (let index = previousSearch?.nextIndex ?? 0; index < item.candidates.length; index += 1) {
                 const candidate = item.candidates[index]!
                 if (!itemIsCurrent()) return
                 if (!candidate.available || isStreamSource(candidate)) continue
@@ -768,7 +831,10 @@ export function useAllSongsWindow(items: readonly AllSongsCoverItem[], panelRef:
                 }
                 // Confirmed absent artwork is a verdict about this candidate only;
                 // the next candidate may still have a cover.
-                if (attempt.status === 'missing') continue
+                if (attempt.status === 'missing') {
+                  if (yieldAfter(index)) return
+                  continue
+                }
                 // The path attempt already counted its failure. Retry this same
                 // candidate once through the original pixel command, then move on.
                 let pixels: Awaited<ReturnType<typeof scheduleTrackThumbnail>> = null
@@ -793,6 +859,7 @@ export function useAllSongsWindow(items: readonly AllSongsCoverItem[], panelRef:
                   hasArtwork = true
                   break
                 }
+                if (yieldAfter(index)) return
               }
             } else if ('kind' in item || !isStreamSource(item)) {
               const attempt = 'kind' in item
@@ -849,6 +916,7 @@ export function useAllSongsWindow(items: readonly AllSongsCoverItem[], panelRef:
             if (bitmapUrl) store.retire(item.key, bitmapUrl)
             runtime.coverQueued.delete(item.key)
             runtime.coverActive -= 1
+            if (background) runtime.coverBackgroundActive -= 1
             runtime.pump()
           }
         })()
@@ -994,12 +1062,16 @@ export function useAllSongsWindow(items: readonly AllSongsCoverItem[], panelRef:
     window.addEventListener(COVER_IMAGE_LOAD_EVENT, onReport)
     window.addEventListener(COVER_IMAGE_ERROR_EVENT, onReport)
 
+    const unsubscribeWidth = subscribeCoverOwnerWidth(pump)
     pump()
     return () => {
       runtime.mounted = false
+      unsubscribeWidth()
       runtime.controller.abort()
+      for (const job of runtime.coverQueued.values()) job.controller.abort()
       runtime.desired.clear()
       runtime.visible.clear()
+      runtime.collectionSearch.clear()
       replacements.disconnect()
       window.removeEventListener(COVER_IMAGE_LOAD_EVENT, onReport)
       window.removeEventListener(COVER_IMAGE_ERROR_EVENT, onReport)

@@ -258,6 +258,9 @@ mod tests {
             directory_path: root.to_string_lossy().into_owned(),
             directory_name: "fixture".into(),
             directory_paths: None,
+            directory_modified_at_ms: None,
+            library_added_at_ms: None,
+            file_modified_at_ms: None,
             selected_index: 0,
             tracks: vec![],
         };

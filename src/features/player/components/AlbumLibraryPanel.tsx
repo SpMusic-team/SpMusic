@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogTitle, DialogHeader, DialogFooter } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Field, FieldGroup, FieldLabel } from '@/components/ui/field'
-import { genreEntries, genreAlbums, genreRoute, readGenreSort, writeGenreSort, sortGenreEntries, sortGenreAlbums, sortGenreSongs, GENRE_SORT_FIELDS, type GenreSort } from '../model/genreLibrary'
+import { genreEntries, genreAlbums, genreRoute, readGenreSort, writeGenreSort, sortGenreAlbums, sortGenreSongs, GENRE_SORT_FIELDS, type GenreSort } from '../model/genreLibrary'
 import genreIcon from '@/assets/genre-library/00729.svg'
 import genreMusicNote from '@/assets/genre-library/86e1e.svg'
 import sortIcon from '@/assets/library-root-menu/b9f3f.svg'
@@ -19,6 +19,7 @@ import { CollectionManagementHeader } from './CollectionManagementHeader'
 import { CollectionHero } from './CollectionHero'
 import { CollectionQuickIndex } from './CollectionQuickIndex'
 import { LibraryRootMenu } from './LibraryRootMenu'
+import { LibraryListOptionsDialog } from './LibraryListOptionsDialog'
 import { PlaylistLibrarySidebar } from './PlaylistLibrarySidebar'
 import { PlaylistActionButtons } from './PlaylistActionButtons'
 import { PlaylistHeroMoreMenu, type PlaylistHeroMoreAction } from './PlaylistHeroMoreMenu'
@@ -37,9 +38,10 @@ import { useAllSongsRenderWindow } from '../hooks/useAllSongsRenderWindow'
 import { useCollectionCoverPresentation, useAllSongsCoverPresentation, useAllSongsCoverLease, useAllSongsWindow, type AllSongsCoverStore, type AllSongsCoverItem, type TrackCandidatesCoverItem } from '../hooks/useAllSongsWindow'
 import { COVER_IMAGE_ERROR_EVENT, COVER_IMAGE_LOAD_EVENT, coverAbsoluteUrl, type CoverPresentationOutcome } from '../model/playlistCoverReadiness'
 import { albumEntries, type AlbumEntry } from '../model/albumLibrary'
+import { COLLECTION_ROOT_SORT_OPTIONS, readCollectionRootListOptions, sortCollectionRoot, writeCollectionRootListOptions } from '../model/collectionRootListOptions'
 import { formatDurationClock } from '../model/playlistDuration'
 import { artistEntries, artistAlbums, artistRoute, uniqueArtistSongs, CONTRIBUTOR_LABELS, type ContributorCategoryId } from '../model/artistLibrary'
-import { yearEntries, yearAlbums, yearRoute, sortYearEntries, sortYearAlbums, sortYearSongs, type YearSortScope } from '../model/yearLibrary'
+import { yearEntries, yearAlbums, yearRoute, sortYearAlbums, sortYearSongs, type YearSortScope } from '../model/yearLibrary'
 import yearIcon from '@/assets/year-library/1fed4.svg'
 import yearMusicNote from '@/assets/year-library/36e6f.svg'
 import { FOLDER_CARD_LAYOUTS } from '../model/folderCardLayouts'
@@ -61,9 +63,9 @@ const EMPTY: readonly AllSongsItem[] = []
 const MotionEmpty = motion.create(Empty)
 const CATEGORY = { ...mediaLibraryCategories.find(item => item.id === 'album')!, overviewIcon: albumIcon }
 const SELECTORS = { item: '[data-collection-key]', cover: '.folder-cover, .playlist-card-cover', copy: '.folder-copy, .playlist-card-copy', getId: (node: HTMLElement) => node.dataset.collectionKey }
-const rootLevel = () => 0
 const detailLevel = () => 3
-type Props = { categoryId?: 'album' | 'year' | 'genre' | ContributorCategoryId; playlist: PlayerPlaylistViewModel; allSongsCoverStore: AllSongsCoverStore; librarySidebarOpen: boolean; onLibrarySidebarOpenChange: (open: boolean) => void; searchRequestId?: number; controllerMode?: PlaylistControllerMode; timelineInteraction?: PlayerTimelineViewModel['interaction'] }
+type Props = { categoryId?: 'album' | 'year' | 'genre' | ContributorCategoryId; playlist: PlayerPlaylistViewModel; allSongsCoverStore: AllSongsCoverStore; librarySidebarOpen: boolean; onLibrarySidebarOpenChange: (open: boolean) => void; onOpenLibrarySettings?: (returnFocus?: HTMLElement | null) => void; searchRequestId?: number; controllerMode?: PlaylistControllerMode; timelineInteraction?: PlayerTimelineViewModel['interaction'] }
+const ROOT_LEVELS: Record<NonNullable<Props['categoryId']>, number> = { album: 3, artist: 1, 'album-artist': 0, composer: 3, genre: 3, year: 5 }
 
 function contributorNavigation(library: NonNullable<PlayerPlaylistViewModel['library']>, categoryId: NonNullable<Props['categoryId']>) {
   if (categoryId === 'album-artist') return { location: library.albumArtistLocation, change: library.onAlbumArtistLocationChange }
@@ -153,13 +155,12 @@ function ArtistMenuArtwork({ item, store }: { item?: AllSongsCoverItem; store: A
   return <span ref={frame} className="artist-menu-cover"><span className="artist-menu-cover" data-cover-key={item?.key}><AlbumCover song={item} store={store} artist /></span></span>
 }
 
-function AlbumCard({ album, store, level, selected, selectMode, sharedProjection, projectionKey, transition, onActivate, onEnterSelectMode, artist = false, year = false, genre = false, categoryLabel = '艺术家', identityPrefix = 'album' }: {
-  identityPrefix?: string; artist?: boolean; year?: boolean; genre?: boolean; categoryLabel?: string; album: AlbumEntry; store: AllSongsCoverStore; level: number; selected: boolean; selectMode: boolean;
+function AlbumCard({ album, coverItem, store, level, selected, selectMode, sharedProjection, projectionKey, transition, onActivate, onEnterSelectMode, artist = false, year = false, genre = false, titleOnly = false, categoryLabel = '艺术家', identityPrefix = 'album' }: {
+  identityPrefix?: string; artist?: boolean; year?: boolean; genre?: boolean; titleOnly?: boolean; categoryLabel?: string; album: AlbumEntry; coverItem: TrackCandidatesCoverItem; store: AllSongsCoverStore; level: number; selected: boolean; selectMode: boolean;
   sharedProjection: boolean; projectionKey: string; transition: ReturnType<typeof useAppearanceMotion>['layoutTransition']; onActivate: () => void; onEnterSelectMode?: (key: string) => void
 }) {
   const layout = FOLDER_CARD_LAYOUTS[level]
   const longPress = usePlaylistCardLongPress({ identity: album.key, disabled: false, selectMode, onEnterSelectMode })
-  const coverItem = useMemo(() => collectionCover(album, identityPrefix), [album, identityPrefix])
   const artistStyle = level === 0
     ? { '--folder-card-width': '100%', '--folder-cover-width': 'min(280px, 100%)', '--folder-cover-height': 'auto', '--folder-title-size': '32px', '--folder-title-line': '40px' }
     : { '--folder-cover-width': `${Math.min(layout.coverWidth, layout.coverHeight)}px`, '--folder-cover-height': `${Math.min(layout.coverWidth, layout.coverHeight)}px` }
@@ -173,7 +174,7 @@ function AlbumCard({ album, store, level, selected, selectMode, sharedProjection
     </motion.span> : null}
     <span className="folder-copy">
       <motion.span key={`title:${projectionKey}`} className="folder-name" title={album.name} layout={sharedProjection ? 'position' : undefined} layoutId={sharedProjection ? `${identityPrefix}-name:${album.key}` : undefined} transition={{ layout: transition }}>{album.name}</motion.span>
-      {year || genre ? <span className={genre ? "genre-card-meta" : "year-card-meta"}><span className={genre ? "genre-card-music" : "year-card-music"} style={{ maskImage: `url("${genre ? genreMusicNote : yearMusicNote}")` }} aria-hidden="true" /><span>{album.songs.length} | {clock(album.songs) ?? '读取中'}</span></span> : !artist ? <span className="folder-parent-name" title={album.artist}>{album.artist}</span> : null}
+      {year || genre ? <span className={genre ? "genre-card-meta" : "year-card-meta"}><span className={genre ? "genre-card-music" : "year-card-music"} style={{ maskImage: `url("${genre ? genreMusicNote : yearMusicNote}")` }} aria-hidden="true" /><span>{album.songs.length} | {clock(album.songs) ?? '读取中'}</span></span> : !artist && !titleOnly ? <span className="folder-parent-name" title={album.artist}>{album.artist}</span> : null}
     </span>
     {selectMode && onEnterSelectMode && (!layout.coverWidth || artist) ? <SongCardCheckbox /> : null}
   </Button>
@@ -226,7 +227,7 @@ export function AlbumLibraryPanel(props: Props) {
   </motion.div>
 }
 
-function AlbumScene({ albums: rootEntries, categoryId = 'album', playlist, allSongsCoverStore: store, searchRequestId = 0, controllerMode = 'movable', timelineInteraction, outerPresent, positions }: Props & { albums: readonly AlbumEntry[]; outerPresent: boolean; positions: RefObject<Map<string, number>> }) {
+function AlbumScene({ albums: rootEntries, categoryId = 'album', playlist, allSongsCoverStore: store, searchRequestId = 0, controllerMode = 'movable', timelineInteraction, onOpenLibrarySettings, outerPresent, positions }: Props & { albums: readonly AlbumEntry[]; outerPresent: boolean; positions: RefObject<Map<string, number>> }) {
   const library = playlist.library!
   const genreMode = categoryId === 'genre'
   const genreLocation = genreMode ? library.genreLocation : null
@@ -268,6 +269,13 @@ function AlbumScene({ albums: rootEntries, categoryId = 'album', playlist, allSo
   const sortScope: YearSortScope = yearRoot || genreRoot ? 'root' : yearOverview || genreOverview ? 'albums' : yearSongs || genreSongs ? 'songs' : 'album-tracks'
   const [genreSort, setGenreSort] = useState<GenreSort>(() => readGenreSort(sortScope))
   const [optionsOpen, setOptionsOpen] = useState(false)
+  const [rootOptions, setRootOptions] = useState(() => readCollectionRootListOptions(categoryId))
+  const optionsTrigger = useRef<HTMLElement | null>(null)
+  const updateRootOptions = (change: Partial<typeof rootOptions>) => {
+    const next = { ...rootOptions, ...change }
+    setRootOptions(next)
+    writeCollectionRootListOptions(categoryId, next)
+  }
   const appearance = useAppearanceMotion()
   const icons = useSystemIcons()
   const chrome = useContext(LibraryChromeTransitionContext)
@@ -297,12 +305,20 @@ function AlbumScene({ albums: rootEntries, categoryId = 'album', playlist, allSo
   const [departureCover, setDepartureCover] = useState<string>()
   const loading = library.allSongsMetadataStatus === 'loading' || (artistMode || yearMode || genreMode) && Boolean(library.isFolderRestorePending || library.isFolderRescanPending || library.isImportPending)
   const album = genreMode && genreLocation?.view !== 'album' ? currentGenre : yearMode && yearLocation?.view !== 'album' ? currentYear : artistMode && artistLocation?.view !== 'album' ? currentArtist : albums.find(item => item.key === location)
-  const visibleAlbums = useMemo(() => { const matches = loading ? [] : albums.filter(item => `${item.name} ${item.artist}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())); return genreMode ? genreRoot ? sortGenreEntries(matches, genreSort) : sortGenreAlbums(matches, genreSort) : yearMode ? yearRoot ? sortYearEntries(matches, { field: 'year', direction: 'desc' }) : sortYearAlbums(matches, { field: 'name', direction: 'asc' }) : matches }, [albums, query, loading, yearMode, yearRoot, genreMode, genreRoot, genreSort])
+  const orderedAlbums = useMemo(() => !hasHero ? sortCollectionRoot(albums, categoryId, rootOptions) : albums, [albums, hasHero, categoryId, rootOptions])
+  const visibleAlbums = useMemo(() => {
+    if (loading) return []
+    const term = query.trim().toLocaleLowerCase()
+    const matches = orderedAlbums.filter(item => `${item.name} ${item.artist}`.toLocaleLowerCase().includes(term))
+    if (!hasHero) return matches
+    if (genreMode) return sortGenreAlbums(matches, genreSort)
+    return yearMode ? sortYearAlbums(matches, { field: 'name', direction: 'asc' }) : matches
+  }, [orderedAlbums, query, loading, hasHero, yearMode, genreMode, genreSort])
   const indexNames = useMemo(() => visibleAlbums.map(item => item.name), [visibleAlbums])
   const songs = album?.songs ?? EMPTY
   const visibleSongs = useMemo(() => { const matches = songs.filter(item => `${item.track.title} ${item.track.artist} ${item.track.album}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())); return genreMode ? sortGenreSongs(matches, genreSort) : yearMode ? sortYearSongs(matches, { field: 'title', direction: 'asc' }) : matches }, [songs, query, yearMode, genreMode, genreSort])
   const songIndexNames = useMemo(() => visibleSongs.map(item => item.track.title), [visibleSongs])
-  const candidates = useMemo(() => uniqueArtistSongs(detail ? (selectionEnabled && selectMode ? songs : visibleSongs).filter(item => !selectMode || selected.has(item.key)) : (selectionEnabled && selectMode ? albums : visibleAlbums).filter(item => !selectMode || selected.has(item.key)).flatMap(item => item.songs)).filter(item => item.available), [selectionEnabled, detail, songs, albums, visibleSongs, visibleAlbums, selectMode, selected])
+  const candidates = useMemo(() => uniqueArtistSongs(detail ? (selectionEnabled && selectMode ? songs : visibleSongs).filter(item => !selectMode || selected.has(item.key)) : (selectionEnabled && selectMode ? orderedAlbums : visibleAlbums).filter(item => !selectMode || selected.has(item.key)).flatMap(item => item.songs)).filter(item => item.available), [selectionEnabled, detail, songs, orderedAlbums, visibleSongs, visibleAlbums, selectMode, selected])
   const showSearch = searchOpen || searchRequestId > dismissedRequest
   const globalSearch = useLibrarySearch()
   const toggleSearch = useCallback(() => { if (globalSearch) { globalSearch(); return }; if (showSearch) setQuery(''); setSearchOpen(!showSearch); setDismissedRequest(searchRequestId) }, [showSearch, searchRequestId, globalSearch])
@@ -310,7 +326,7 @@ function AlbumScene({ albums: rootEntries, categoryId = 'album', playlist, allSo
   const { atomicOverview, navigationMotion } = managementChrome
   const { offscreenEntry, sharedProjection, projectionKey, entryControls } = useCollectionEntryProjection(present, chrome.offscreenReturn)
   const { layout, announcement, selectLevel } = useCollectionLayout({ panelRef, gridRef, layouts: PLAYLIST_SONG_LAYOUTS,
-    storageKey: genreMode ? `spmusic.genre-${sortScope}.layout-level.v1` : yearMode ? `spmusic.year-${sortScope}.layout-level.v1` : artistMode ? `spmusic.${categoryId}-${artistRoot ? 'root' : artistOverview ? 'albums' : 'tracks'}.layout-level.v1` : detail ? 'spmusic.album-tracks.layout-level.v1' : 'spmusic.albums.layout-level.v1', defaultLevel: genreRoot ? () => 3 : yearRoot ? () => 5 : detail ? detailLevel : rootLevel,
+    storageKey: genreMode ? `spmusic.genre-${sortScope}.layout-level.v1` : yearMode ? `spmusic.year-${sortScope}.layout-level.v1` : artistMode ? `spmusic.${categoryId}-${artistRoot ? 'root' : artistOverview ? 'albums' : 'tracks'}.layout-level.v1` : detail ? 'spmusic.album-tracks.layout-level.v1' : 'spmusic.albums.layout-level.v1', defaultLevel: !hasHero ? () => ROOT_LEVELS[categoryId] : detail ? detailLevel : () => 0,
     selectors: SELECTORS, gestureArea: detail ? 'grid' : 'panel', wheelGestureArea: 'panel', announce: next => `${categoryLabel}视图已切换为${next.label}` })
   const folderLayout = FOLDER_CARD_LAYOUTS[layout.level]
   const cardGridStyle = artistRoot && layout.level === 0 ? { ...folderLayout.style, '--folder-card-width': '310px' } : folderLayout.style
@@ -354,7 +370,9 @@ function AlbumScene({ albums: rootEntries, categoryId = 'album', playlist, allSo
     [hasHero, album, heroPrefix, heroTier],
   )
   const artistCoverItem = useMemo(() => currentArtist ? collectionCover(currentArtist, categoryId) : undefined, [currentArtist, categoryId])
-  const entryCovers = useMemo(() => new Map(visibleAlbums.map(entry => [entry.key, collectionCover(entry, identityPrefix)])), [visibleAlbums, identityPrefix])
+  const entryCovers = useMemo(() => new Map(visibleAlbums.map(entry => [entry.key, {
+    ...collectionCover(entry, identityPrefix), fairCandidateSearch: true,
+  }])), [visibleAlbums, identityPrefix])
   // Small surfaces (the "all songs" tiles and the more-menu thumbnail) must NOT reuse the
   // hero item: with the hero at a high tier they would each pull a full-size image into a
   // 20–60 px box (plan C7). They keep an ordinary 256 item of their own.
@@ -402,7 +420,7 @@ function AlbumScene({ albums: rootEntries, categoryId = 'album', playlist, allSo
   const toggleSelect = (key: string) => setSelected(previous => { const next = new Set(previous); if (next.has(key)) next.delete(key); else next.add(key); return next })
   const enterSelectMode = (key: string) => { setSelectMode(true); setSelected(previous => new Set(previous).add(key)) }
   const selectableKeys = detail ? visibleSongs.map(item => item.key) : visibleAlbums.map(item => item.key)
-  const selectedSongKeys = uniqueArtistSongs(detail ? songs.filter(item => selected.has(item.key)) : albums.filter(item => selected.has(item.key)).flatMap(item => item.songs)).map(item => item.key)
+  const selectedSongKeys = uniqueArtistSongs(detail ? songs.filter(item => selected.has(item.key)) : orderedAlbums.filter(item => selected.has(item.key)).flatMap(item => item.songs)).map(item => item.key)
   useLibraryDockBinding(`category:${categoryId}`, {
     searchOpen: showSearch, onSearchToggle: toggleSearch,
     controllerOffsetY: controllerMotion.offsetY, controllerHidden: selectionEnabled && selectMode ? false : controllerMotion.hidden,
@@ -439,7 +457,7 @@ function AlbumScene({ albums: rootEntries, categoryId = 'album', playlist, allSo
     if (target && !loading && !playlist.isOpenAudioDisabled) library.onPlaySong?.(target.scope, target.trackId, entries.map(({ scope, trackId }) => ({ scope, trackId })))
   }
   const toggleSelection = () => { setSelectMode(!selectMode); setSelected(new Set()) }
-  const renderMore = (rootToolbar = false) => <LibraryRootMenu categoryId={categoryId} library={library} rootToolbar={rootToolbar} onListOptions={genreMode ? () => setOptionsOpen(true) : undefined} />
+  const renderMore = (rootToolbar = false) => <LibraryRootMenu categoryId={categoryId} library={library} rootToolbar={rootToolbar} onListOptions={trigger => { optionsTrigger.current = trigger; setOptionsOpen(true) }} />
   const menuCategoryId = categoryId
   const menuPinned = library.pinnedCategoryIds?.includes(menuCategoryId) ?? false
   const menuBusy = Boolean(library.isImportPending || library.isFolderRescanPending)
@@ -515,8 +533,8 @@ function AlbumScene({ albums: rootEntries, categoryId = 'album', playlist, allSo
             event.preventDefault(); pendingAlbumFocus.current = visibleAlbums[next].key; scrollToAlbum(next)
           }} className="folder-directory-list album-list" aria-label={`${listLabel}列表`} data-folder-flow={folderLayout.flow} data-folder-level={layout.level} style={{ ...cardGridStyle, ...albumWindow.gridStyle }}>
             {renderedAlbums.map(item => <motion.div key={item.key} style={{ minWidth: 0, transformOrigin: 'left top' }} variants={navigationMotion.cover}
-              initial={atomicOverview ? 'initial' : false} animate="animate" exit={atomicOverview ? 'exit' : 'animate'} transition={navigationMotion.transition}><AlbumCard album={item} store={store} level={layout.level} sharedProjection={sharedProjection} projectionKey={projectionKey} transition={returnTransition} selected={selected.has(item.key)} selectMode={selectMode}
-              genre={genreRoot} year={yearRoot} artist={artistRoot} categoryLabel={categoryLabel} identityPrefix={identityPrefix} onEnterSelectMode={selectionEnabled ? enterSelectMode : undefined} onActivate={() => { if (selectMode) toggleSelect(item.key); else { setDepartureCover(entryCovers.get(item.key)?.key); openEntry(item) } }} /></motion.div>)}
+              initial={atomicOverview ? 'initial' : false} animate="animate" exit={atomicOverview ? 'exit' : 'animate'} transition={navigationMotion.transition}><AlbumCard album={item} coverItem={entryCovers.get(item.key)!} store={store} level={layout.level} sharedProjection={sharedProjection} projectionKey={projectionKey} transition={returnTransition} selected={selected.has(item.key)} selectMode={selectMode}
+              genre={genreRoot} year={yearRoot} artist={artistRoot} titleOnly={!hasHero && categoryId === 'album' && rootOptions.titleOnly} categoryLabel={categoryLabel} identityPrefix={identityPrefix} onEnterSelectMode={selectionEnabled ? enterSelectMode : undefined} onActivate={() => { if (selectMode) toggleSelect(item.key); else { setDepartureCover(entryCovers.get(item.key)?.key); openEntry(item) } }} /></motion.div>)}
           </div></div> : <div ref={spaceRef} className={genreMode || yearMode ? 'album-song-space' : undefined} style={songWindow.spaceStyle}>
             <div ref={songsRef} className="playlist-grid folder-songs album-songs" data-layout-level={layout.level} data-layout-flow={layout.flow} data-layout-columns={layout.columns} style={{ ...layout.style, ...songWindow.gridStyle }} onKeyDown={event => {
               if (!songWindow.enabled || event.key !== 'Tab') return
@@ -532,9 +550,14 @@ function AlbumScene({ albums: rootEntries, categoryId = 'album', playlist, allSo
         {!loading && (detail ? !visibleSongs.length : !visibleAlbums.length) ? <MotionEmpty className="playlist-management-empty" variants={navigationMotion.chrome} initial={atomicOverview ? 'initial' : false} animate="animate" exit={atomicOverview ? 'exit' : 'animate'} transition={navigationMotion.transition}><EmptyHeader><EmptyTitle>{query ? `没有匹配的${artistRoot || genreRoot || yearRoot ? categoryLabel : detail ? '歌曲' : '专辑'}` : detail ? '集合中没有歌曲' : `暂无${categoryLabel}`}</EmptyTitle><EmptyDescription>{query ? '尝试其他名称，或清空搜索。' : `选择音乐文件夹后，按歌曲的${categoryLabel}标签浏览。`}</EmptyDescription></EmptyHeader>{!detail && !query ? <Button onClick={library.onSelectFolders} disabled={library.isImportPending || library.isFolderRestorePending}>选择文件夹</Button> : null}</MotionEmpty> : null}
       </div>
     </motion.section>
-    {!detail && !yearRoot && present ? <CollectionQuickIndex panelRef={panelRef} names={indexNames} label={listLabel} itemSelector=".album-card[data-album-key]" onJump={albumWindow.enabled ? (key, index) => { if (key === 'top') { if (panelRef.current) panelRef.current.scrollTop = 0 } else if (index !== undefined) scrollToAlbum(index) } : undefined} /> : null}
+    {!detail && !yearRoot && present && (hasHero || rootOptions.sort === 'name' && !rootOptions.descending) ? <CollectionQuickIndex panelRef={panelRef} names={indexNames} label={listLabel} itemSelector=".album-card[data-album-key]" onJump={albumWindow.enabled ? (key, index) => { if (key === 'top') { if (panelRef.current) panelRef.current.scrollTop = 0 } else if (index !== undefined) scrollToAlbum(index) } : undefined} /> : null}
     {(yearSongs || genreSongs || (artistSongs && (categoryId === 'artist' || categoryId === 'album-artist'))) && present && !loading ? <CollectionQuickIndex panelRef={panelRef} names={songIndexNames} label="歌曲" onJump={jumpToSongIndex} /> : null}
-    {genreMode ? <Dialog open={optionsOpen} onOpenChange={setOptionsOpen}><DialogContent aria-describedby={undefined}>
+    {!hasHero && present ? <LibraryListOptionsDialog categoryLabel={categoryLabel} open={optionsOpen} onOpenChange={setOptionsOpen} finalFocus={optionsTrigger}
+      onOpenSettings={() => { setOptionsOpen(false); onOpenLibrarySettings?.(optionsTrigger.current) }}
+      sort={{ options: COLLECTION_ROOT_SORT_OPTIONS[categoryId], value: rootOptions.sort, onChange: sort => updateRootOptions({ sort }), descending: rootOptions.descending, onDescendingChange: descending => updateRootOptions({ descending }) }}
+      titleOnly={categoryId === 'album' ? { checked: rootOptions.titleOnly, onChange: titleOnly => updateRootOptions({ titleOnly }) } : undefined}
+      layoutLevel={layout.level} onLayoutChange={level => selectLevel(level, { animate: true })} /> : null}
+    {genreMode && hasHero ? <Dialog open={optionsOpen} onOpenChange={setOptionsOpen}><DialogContent aria-describedby={undefined}>
       <DialogHeader><DialogTitle>流派 · 列表选项</DialogTitle></DialogHeader>
       <FieldGroup>
         <Field><FieldLabel>排序方式</FieldLabel><Select value={genreSort.field} items={GENRE_SORT_FIELDS[sortScope]} onValueChange={field => { if (field) { const next = { ...genreSort, field }; setGenreSort(next); writeGenreSort(sortScope, next) } }}><SelectTrigger aria-label="排序方式"><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{GENRE_SORT_FIELDS[sortScope].map(field => <SelectItem key={field.value} value={field.value}>{field.label}</SelectItem>)}</SelectGroup></SelectContent></Select></Field>

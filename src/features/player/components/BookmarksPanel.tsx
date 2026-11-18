@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { motion, useIsPresent } from 'motion/react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -7,13 +7,15 @@ import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem } from '@/components/ui/dropdown-menu'
 import { useAppearanceMotion, useSystemIcons } from '@/features/appearance/hooks/useAppearance'
 import { CollectionManagementHeader } from './CollectionManagementHeader'
+import { LibraryListOptionsDialog } from './LibraryListOptionsDialog'
 import { PlaylistCard } from './PlaylistCard'
 import { PlaylistLibrarySidebar } from './PlaylistLibrarySidebar'
 import { useCollectionManagementChrome } from '../hooks/useCollectionManagementChrome'
 import { useLibraryDockBinding } from '../hooks/useLibraryDockBinding'
 import { useAllSongsCoverPresentation, useAllSongsWindow, type AllSongsCoverStore } from '../hooks/useAllSongsWindow'
 import { useCollectionLayout } from '../hooks/useCollectionLayout'
-import { PLAYLIST_SONG_LAYOUTS, ALL_SONGS_LAYOUT_STORAGE_KEY, defaultAllSongsLevel } from '../model/playlistSongLayouts'
+import { PLAYLIST_SONG_LAYOUTS, ALL_SONGS_LAYOUT_STORAGE_KEY } from '../model/playlistSongLayouts'
+import { isAllSongsSingleLineLayout } from '../model/allSongsListOptions'
 import { projectBookmarks, type BookmarkEntry } from '../model/bookmarks'
 import { mediaLibraryCategories } from '../model/mediaLibraryCategories'
 import type { AllSongsItem, PlayerPlaylistViewModel } from '../model/playerUiViewModel'
@@ -23,25 +25,41 @@ const BOOKMARK_LAYOUT_SELECTORS = {
   item: '[data-song-key]', cover: '.playlist-card-cover', copy: '.playlist-card-copy',
   getId: (element: HTMLElement) => element.dataset.songKey,
 }
+const BOOKMARK_LAYOUT_STORAGE_KEY = 'spmusic.bookmarks.layout-level.v1'
+const BOOKMARK_TITLE_ONLY_KEY = 'spmusic.bookmarks.title-only.v1'
 
-function BookmarkCard({ bookmark, item, playlist, store, selected, selecting, busy, active, artworkVisible, showExtendedMetadata, onPlay, onSelect }: {
+function defaultBookmarkLayoutLevel() {
+  try {
+    const legacy = localStorage.getItem(ALL_SONGS_LAYOUT_STORAGE_KEY)
+    if (legacy !== null && /^[0-9]$/.test(legacy)) return Number(legacy)
+  } catch { /* The design default also applies with storage unavailable. */ }
+  return 5
+}
+
+function readBookmarkTitleOnly() {
+  try { return localStorage.getItem(BOOKMARK_TITLE_ONLY_KEY) === 'true' } catch { return false }
+}
+
+function BookmarkCard({ bookmark, item, playlist, store, selected, selecting, busy, active, artworkVisible, showExtendedMetadata, showAudioFormatOnly, onPlay, onSelect }: {
   bookmark: BookmarkEntry; item?: AllSongsItem; playlist: PlayerPlaylistViewModel; store: AllSongsCoverStore
-  artworkVisible: boolean; showExtendedMetadata: boolean
+  artworkVisible: boolean; showExtendedMetadata: boolean; showAudioFormatOnly: boolean
   selected: boolean; selecting: boolean; busy: boolean; active: boolean; onPlay: () => void; onSelect: () => void
 }) {
   const cover = useAllSongsCoverPresentation(store, bookmark.id, item?.trackId ?? '', bookmark.sourcePath)
   const track = item?.track ?? { id: bookmark.id, title: bookmark.sourcePath.split(/[\\/]/).at(-1) ?? bookmark.sourcePath,
     artist: '歌曲不在当前媒体库中', album: '', hasLocalArtwork: false }
-  return <PlaylistCard track={track} songKey={bookmark.id} positionMs={showExtendedMetadata ? bookmark.positionMs : undefined} coverUrl={cover?.src} coverPresentation={cover}
+  return <PlaylistCard track={track} songKey={bookmark.id} positionMs={showExtendedMetadata || showAudioFormatOnly ? bookmark.positionMs : undefined} coverUrl={cover?.src} coverPresentation={cover}
     artworkSource={playlist.artworkSource} fallbackArtworkSource={playlist.fallbackArtworkSource}
     current={active} unavailable={!item?.available} canSelectUnavailable canActivate={!busy}
     selectMode={selecting} showReorderHandle={false} selected={selected} artworkVisible={artworkVisible} showExtendedMetadata={showExtendedMetadata}
+    showAudioFormatOnly={showAudioFormatOnly}
     contentVisible contentRepresentative={false} contentShape={15} coverFailed={false} onCoverFailed={() => {}}
     onActivate={onPlay} onToggleSelect={onSelect} />
 }
 
-export function BookmarksPanel({ playlist, allSongsCoverStore, librarySidebarOpen, onLibrarySidebarOpenChange }: {
+export function BookmarksPanel({ playlist, allSongsCoverStore, librarySidebarOpen, onLibrarySidebarOpenChange, onOpenLibrarySettings }: {
   playlist: PlayerPlaylistViewModel; allSongsCoverStore: AllSongsCoverStore; librarySidebarOpen?: boolean; onLibrarySidebarOpenChange?: (open: boolean) => void
+  onOpenLibrarySettings?: (returnFocus?: HTMLElement | null) => void
 }) {
   const library = playlist.library!
   const present = useIsPresent()
@@ -50,9 +68,13 @@ export function BookmarksPanel({ playlist, allSongsCoverStore, librarySidebarOpe
   const chrome = useCollectionManagementChrome('bookmarks', present)
   const panelRef = useRef<HTMLElement>(null)
   const gridRef = useRef<HTMLDivElement>(null)
-  const { layout, announcement } = useCollectionLayout({
+  const menuTrigger = useRef<HTMLButtonElement>(null)
+  const optionsRequested = useRef(false)
+  const [optionsOpen, setOptionsOpen] = useState(false)
+  const [titleOnly, setTitleOnly] = useState(readBookmarkTitleOnly)
+  const { layout, announcement, selectLevel } = useCollectionLayout({
     panelRef, gridRef, layouts: PLAYLIST_SONG_LAYOUTS,
-    storageKey: ALL_SONGS_LAYOUT_STORAGE_KEY, defaultLevel: defaultAllSongsLevel,
+    storageKey: BOOKMARK_LAYOUT_STORAGE_KEY, defaultLevel: defaultBookmarkLayoutLevel,
     selectors: BOOKMARK_LAYOUT_SELECTORS, gestureArea: 'panel', wheelGestureArea: 'panel',
     announce: nextLayout => `歌曲视图已切换为${nextLayout.label}`,
     onBeforeTransition: (snapshot, grid) => {
@@ -63,6 +85,15 @@ export function BookmarksPanel({ playlist, allSongsCoverStore, librarySidebarOpe
   useLayoutEffect(() => {
     if (appearance.disabled && gridRef.current) delete gridRef.current.dataset.layoutTransition
   }, [appearance.disabled])
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(BOOKMARK_LAYOUT_STORAGE_KEY)
+      if (saved === null || !/^[0-9]$/.test(saved)) localStorage.setItem(BOOKMARK_LAYOUT_STORAGE_KEY, String(layout.level))
+    } catch { /* Keep the current session usable without storage. */ }
+  }, [layout.level])
+  const singleLine = isAllSongsSingleLineLayout(layout.level)
+  const withAudioFormat = layout.flow !== 'tile'
+  const formatOnly = titleOnly || singleLine
   const [query, setQuery] = useState('')
   const [search, setSearch] = useState(false)
   const [selecting, setSelecting] = useState(false)
@@ -102,11 +133,17 @@ export function BookmarksPanel({ playlist, allSongsCoverStore, librarySidebarOpe
     <motion.section ref={panelRef} className="playlist-management-content bookmarks-content" aria-label="书签" tabIndex={-1}>
       <CollectionManagementHeader chrome={chrome} category={mediaLibraryCategories.find(category => category.id === 'bookmarks')!}
         sharedProjection={!appearance.disabled} onOverview={library.onOpenOverview} returnTransition={appearance.layoutTransition}
-        more={<DropdownMenu><DropdownMenuTrigger render={<Button className="playlist-hero-icon playlist-hero-more-button" variant="outline" aria-label="更多书签操作"><icons.more /></Button>} />
+        more={<DropdownMenu onOpenChangeComplete={open => {
+          if (!open && optionsRequested.current) {
+            optionsRequested.current = false
+            if (present) setOptionsOpen(true)
+          }
+        }}><DropdownMenuTrigger render={<Button ref={menuTrigger} className="playlist-hero-icon playlist-hero-more-button" variant="outline" aria-label="更多书签操作"><icons.more /></Button>} />
           <DropdownMenuContent align="end"><DropdownMenuGroup>
             <DropdownMenuItem disabled={!visible.length} onClick={() => { setSelecting(true); setSelected(new Set(visible.map(row => row.bookmark.id))) }}>选择全部可见书签</DropdownMenuItem>
             <DropdownMenuItem disabled={!selected.size || busy} onClick={remove}>删除所选书签</DropdownMenuItem>
             <DropdownMenuItem onClick={() => library.onToggleCategoryPin?.('bookmarks')}>{library.pinnedCategoryIds?.includes('bookmarks') ? '取消侧栏置顶' : '在侧栏置顶'}</DropdownMenuItem>
+            <DropdownMenuItem onClick={() => { optionsRequested.current = true }}>列表选项</DropdownMenuItem>
           </DropdownMenuGroup></DropdownMenuContent></DropdownMenu>}
         actions={{ shuffleLabel: '随机播放书签', shuffleDisabled: busy || !candidates.length, onShuffle: () => { void play(candidates[Math.floor(Math.random() * candidates.length)]) },
           playLabel: '播放书签', playDisabled: busy || !candidates.length, onPlay: () => { void play(candidates[0]) },
@@ -117,12 +154,18 @@ export function BookmarksPanel({ playlist, allSongsCoverStore, librarySidebarOpe
       <span className="sr-only" role="status" aria-live="polite">{announcement}</span>
       {library.allSongsMetadataStatus === 'loading' ? <p role="status" className="playlist-management-empty">正在读取书签歌曲…</p> : visible.length ?
         <div ref={gridRef} className="playlist-grid all-songs-list bookmarks-list" aria-label="书签歌曲列表"
-          data-layout-flow={layout.flow} data-layout-level={layout.level} data-layout-columns={layout.columns}
+          data-layout-flow={layout.flow} data-layout-level={layout.level} data-layout-columns={layout.columns} data-title-only={titleOnly || undefined}
           style={{ ...layout.style, touchAction: 'pan-y', transformOrigin: 'left top' }}>
           {visible.map(row => <BookmarkCard key={row.bookmark.id} {...row} playlist={playlist} store={store} selecting={selecting} selected={selected.has(row.bookmark.id)}
-            artworkVisible={layout.showArtwork} showExtendedMetadata={layout.flow !== 'tile'}
+            artworkVisible={layout.showArtwork} showExtendedMetadata={withAudioFormat && !formatOnly} showAudioFormatOnly={withAudioFormat && formatOnly}
             busy={Boolean(busy)} active={row.bookmark.id === activeId && row.item?.trackId === playlist.currentTrackId} onPlay={() => { void play(row) }} onSelect={() => toggle(row.bookmark.id)} />)}
         </div> : <Empty className="playlist-management-empty"><EmptyHeader><EmptyTitle>{rows.length ? '未找到书签' : '暂无书签'}</EmptyTitle><EmptyDescription>{rows.length ? '试试其他歌曲、艺术家或专辑名称。' : '在当前曲目的更多菜单中添加书签，保存此刻的播放位置。'}</EmptyDescription></EmptyHeader></Empty>}
     </motion.section>
+    {present && <LibraryListOptionsDialog categoryLabel="书签" open={optionsOpen} onOpenChange={setOptionsOpen} finalFocus={menuTrigger}
+      onOpenSettings={() => { setOptionsOpen(false); onOpenLibrarySettings?.(menuTrigger.current) }}
+      titleOnly={{ checked: titleOnly, disabled: singleLine, onChange: checked => {
+        setTitleOnly(checked)
+        try { localStorage.setItem(BOOKMARK_TITLE_ONLY_KEY, String(checked)) } catch { /* Retain the session preference. */ }
+      } }} layoutLevel={layout.level} onLayoutChange={level => selectLevel(level, { animate: true })} />}
   </motion.div>
 }

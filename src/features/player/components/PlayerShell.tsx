@@ -1,7 +1,7 @@
 import type { TrackRating, TrackFeedback } from '../model/playerTypes'
 import type { RatingMode } from '../model/trackRating'
 import { updateTrackRating } from '../model/trackRatingStorage'
-import { flatFolderEntries } from '../model/folderHierarchy'
+import { flatFolderEntries, folderPath } from '../model/folderHierarchy'
 import { compareByQuickIndex } from '../model/quickIndex'
 import { highestRatedSongs, lowestRatedSongs } from '../model/highestRated'
 import { mostPlayedSongs, readMostPlayedOptions, writeMostPlayedOptions, isMostPlayedOptions, type MostPlayedOptions } from '../model/mostPlayed'
@@ -34,7 +34,7 @@ import type { AllSongsItem, DevAudioToolsViewModel, PlayerUiViewModel, PlaylistA
 import { playlistArtworkKey } from '@/features/player/model/playlistArtworkStore'
 import { readStartupPage } from '@/features/player/model/startupPageStorage'
 import { readPlaybackSession } from '@/features/player/model/playbackSessionStorage'
-import { playbackQueueOrigin, type PlaybackQueueOrigin } from '@/features/player/model/playbackQueue'
+import { hasSongSortOptions, playbackQueueOrigin, type PlaybackQueueOrigin } from '@/features/player/model/playbackQueue'
 import { sharePlaylistTrackRows } from '@/features/player/model/playlistTrackRows'
 import { applyManualSongOrder } from '@/features/player/model/manualSongOrderStorage'
 import { playlistArtworkRevision } from '@/features/player/model/playlistArtworkRevision'
@@ -145,6 +145,13 @@ export function PlayerShell() {
   const [selectedBrowsedScope, setBrowsedScope] = useState<string | null>(null)
   const [playlistEntryPosition, setPlaylistEntryPosition] = useState<NonNullable<PlayerUiViewModel['playlist']['entryPosition']>>({ requestId: 0, target: 'current-track' })
   const librarySources = useMemo(() => [...player.libraryFolderPlaylists, ...player.sessionPlaylists, ...(player.streamPlaylist ? [player.streamPlaylist] : [])], [player.libraryFolderPlaylists, player.sessionPlaylists, player.streamPlaylist])
+  const directoryModifiedAtMs = useMemo(() => {
+    const dates = new Map<string, number>()
+    for (const source of player.libraryFolderPlaylists) {
+      for (const [path, date] of Object.entries(source.directoryModifiedAtMs ?? {})) dates.set(folderPath(path), date)
+    }
+    return dates
+  }, [player.libraryFolderPlaylists])
   const requestedBrowsedScope = selectedBrowsedScope ?? player.playbackSourceScope
   const browsedPlaylist = librarySources.find((item) => playlistScope(item) === requestedBrowsedScope)
   const browsedScope = browsedPlaylist ? requestedBrowsedScope : null
@@ -370,11 +377,12 @@ export function PlayerShell() {
         if (seen.has(key)) continue
         seen.add(key)
         rows.push({ key, scope, trackId: descriptor.id, sourcePath: descriptor.sourcePath, artworkRevision,
-          available: descriptor.available, fileCreatedAtMs: descriptor.fileCreatedAtMs, track: pendingPlaylistTrackRow(descriptor) })
+          available: descriptor.available, fileCreatedAtMs: descriptor.fileCreatedAtMs, fileModifiedAtMs: descriptor.fileModifiedAtMs,
+          libraryAddedAtMs: player.libraryAddedTimes.get(key), track: pendingPlaylistTrackRow(descriptor) })
       }
     }
     return rows
-  }, [player.libraryFolderPlaylists])
+  }, [player.libraryFolderPlaylists, player.libraryAddedTimes])
   const allSongsActiveRows = isSongsCategoryOpen ? playlistTracks : null
   const allSongsDurations = isSongsCategoryOpen ? durationData.durationsByScope : null
   // The aggregated rows deliberately carry no artwork. `libraryArtwork` is a Map
@@ -397,7 +405,14 @@ export function PlayerShell() {
         || summariesByScope[player.activePlaylistScope ?? '']?.[trackId]
       const displayRow = activeRow && activeRowReady ? activeRow : sourceRow ?? activeRow ?? item.track
       // Hydration owns presentation, while the tag lane owns grouping identity.
-      const row = sourceRow ? { ...displayRow, libraryAlbumName: sourceRow.libraryAlbumName, libraryArtistName: sourceRow.libraryArtistName, libraryComposerName: sourceRow.libraryComposerName, libraryGenreName: sourceRow.libraryGenreName, libraryYear: sourceRow.libraryYear, albumArtist: sourceRow.albumArtist } : displayRow
+      const row = sourceRow ? {
+        ...displayRow, libraryAlbumName: sourceRow.libraryAlbumName, libraryArtistName: sourceRow.libraryArtistName,
+        libraryComposerName: sourceRow.libraryComposerName, libraryGenreName: sourceRow.libraryGenreName,
+        libraryYear: sourceRow.libraryYear,
+        libraryTrackNumber: sourceRow.libraryTrackNumber === undefined ? displayRow.libraryTrackNumber : sourceRow.libraryTrackNumber,
+        libraryDiscNumber: sourceRow.libraryDiscNumber === undefined ? displayRow.libraryDiscNumber : sourceRow.libraryDiscNumber,
+        albumArtist: sourceRow.albumArtist,
+      } : displayRow
       const durationMs = allSongsDurations?.get(scope)?.get(sourcePath)
       rows.push({ ...item, track: (row.durationSeconds ?? 0) > 0 || durationMs == null ? row : { ...row, durationSeconds: durationMs / 1000 } })
     }
@@ -511,7 +526,8 @@ export function PlayerShell() {
   const recentAddedSongs = useMemo(() => recentlyAddedSongs(allSongs), [allSongs])
   const streamRows = useMemo<AllSongsItem[]>(() => (player.streamPlaylist?.tracks ?? []).map(descriptor => ({
     key: descriptor.id, scope: STREAMS_SCOPE, trackId: descriptor.id, sourcePath: descriptor.sourcePath,
-    available: descriptor.available, track: streamPresentationRow(summariesByScope[STREAMS_SCOPE]?.[descriptor.id] ?? pendingPlaylistTrackRow(descriptor), descriptor, descriptor, player.track),
+    available: descriptor.available, libraryAddedAtMs: descriptor.createdAtMs,
+    track: streamPresentationRow(summariesByScope[STREAMS_SCOPE]?.[descriptor.id] ?? pendingPlaylistTrackRow(descriptor), descriptor, descriptor, player.track),
   })), [player.streamPlaylist, summariesByScope, player.track])
   const streamKeys = useMemo(() => streamRows.map(item => item.key).join('\u0000'), [streamRows])
   const streamShuffleKeys = useMemo(() => streamKeys.split('\u0000').map(key => ({ key, order: [...key].reduce((hash, char) => Math.imul(hash ^ char.charCodeAt(0), 16777619), Math.floor(streamShuffleSeed * 0xffffffff)) >>> 0 }))
@@ -533,8 +549,13 @@ export function PlayerShell() {
   const ratedSongs = useMemo(() => highestRatedSongs(allSongs, player.ratingsByTrackId), [allSongs, player.ratingsByTrackId])
   const mostSongs = useMemo(() => mostPlayedSongs(allSongs, player.mostPlayed, mostPlayedOptions), [allSongs, player.mostPlayed, mostPlayedOptions])
   const mostPlayedCounts = useMemo(() => new Map(player.mostPlayed.map(item => [item.sourcePath, item.playCount])), [player.mostPlayed])
+  const allSongsLastPlayedAt = useMemo(() => new Map(player.recentlyPlayed.map(item => [item.sourcePath, item.lastPlayedAt])), [player.recentlyPlayed])
   const recentSongs = useMemo(() => recentlyPlayedSongs(allSongs, player.recentlyPlayed), [allSongs, player.recentlyPlayed])
   const longSongs = useMemo(() => longTracksSongs(allSongs, durationData.durationsByScope, longTracksMinDurationMs), [allSongs, durationData.durationsByScope, longTracksMinDurationMs])
+  const category = libraryRoute.view === 'category' ? libraryRoute.categoryId : undefined
+  const libraryQueueKind = category === 'streams' || category === 'recent-played' || category === 'recent-added'
+    || category === 'lowest-rated' || category === 'highest-rated' || category === 'most-played' || category === 'long-tracks'
+    ? category : 'all-songs'
   const pageOrigin: PlaybackQueueOrigin = {
     kind: isBrowsingActive && (player.playbackQueueKind === 'queue' || player.playbackQueueKind === 'streams' || player.playbackQueueKind === 'lowest-rated' || player.playbackQueueKind === 'highest-rated' || player.playbackQueueKind === 'most-played' || player.playbackQueueKind === 'all-songs' || player.playbackQueueKind === 'recent-played' || player.playbackQueueKind === 'recent-added' || player.playbackQueueKind === 'long-tracks') ? player.playbackQueueKind! : 'playlist',
     sourceScope: isBrowsingActive && (player.playbackQueueKind === 'queue' || player.playbackQueueKind === 'streams' || player.playbackQueueKind === 'lowest-rated' || player.playbackQueueKind === 'highest-rated' || player.playbackQueueKind === 'most-played' || player.playbackQueueKind === 'all-songs' || player.playbackQueueKind === 'recent-played' || player.playbackQueueKind === 'recent-added' || player.playbackQueueKind === 'long-tracks') ? undefined
@@ -721,6 +742,7 @@ export function PlayerShell() {
           const artwork = first ? libraryArtwork.get(normalizeAudioSourcePath(first.sourcePath)) : undefined
           return {
           scope, name: playlistDisplayName(item), trackCount: item.tracks.length, sourceKind: item.sourceKind,
+          libraryAddedAtMs: item.libraryAddedAtMs, fileModifiedAtMs: item.fileModifiedAtMs,
           // The library owns sidebar previews across active-playlist changes.
           coverSourcePath: first?.sourcePath,
           coverTrack: firstRow ? { ...firstRow, ...artwork, coverThumbnail: artwork?.coverThumbnail ?? firstRow.coverThumbnail } : undefined,
@@ -747,6 +769,7 @@ export function PlayerShell() {
         isFolderRestorePending: player.libraryRestorePending,
         folderError: player.libraryFolderErrors[''],
         onFolderLocationChange: setFolderLocation,
+        directoryModifiedAtMs,
         folderRoots: player.activeFolderPaths.map(path => {
           const source = player.libraryFolderPlaylists.find(item => normalizeAudioSourcePath(item.sourcePath) === normalizeAudioSourcePath(path))
           const error = player.libraryFolderErrors[path]
@@ -777,6 +800,8 @@ export function PlayerShell() {
         highestRatedSongs: ratedSongs,
         lowestRatedSongs: lowestSongs,
         mostPlayedCounts,
+        allSongsLastPlayedAt,
+        allSongsShuffleOrder: player.libraryShuffleOrder?.kind === libraryQueueKind ? player.libraryShuffleOrder.order : undefined,
         mostPlayedOptions,
         onMostPlayedOptionsChange: changeMostPlayedOptions,
         onClearMostPlayed: player.clearMostPlayed,
@@ -798,9 +823,15 @@ export function PlayerShell() {
           if (track && item) void player.selectPlaybackQueueTrack({ kind: 'playlist', sourceScope: scope,
             entries: item.tracks.map((entry) => ({ scope, trackId: entry.id })) }, track.id)
         },
-        onPlaySong: (scope, trackId, orderedSongs) => { void player.selectPlaybackQueueTrack({ kind: libraryRoute.view === 'category' && (libraryRoute.categoryId === 'streams' || libraryRoute.categoryId === 'recent-played' || libraryRoute.categoryId === 'recent-added' || libraryRoute.categoryId === 'lowest-rated' || libraryRoute.categoryId === 'highest-rated' || libraryRoute.categoryId === 'most-played' || libraryRoute.categoryId === 'long-tracks') ? libraryRoute.categoryId : 'all-songs',
-          entries: orderedSongs ?? [{ scope, trackId }] }, trackId) },
-        onShufflePlay: (entries) => player.shufflePlaybackQueue({ kind: libraryRoute.view === 'category' && (libraryRoute.categoryId === 'streams' || libraryRoute.categoryId === 'recent-played' || libraryRoute.categoryId === 'recent-added' || libraryRoute.categoryId === 'lowest-rated' || libraryRoute.categoryId === 'highest-rated' || libraryRoute.categoryId === 'most-played' || libraryRoute.categoryId === 'long-tracks') ? libraryRoute.categoryId : 'all-songs', entries }),
+        onPlaySong: (scope, trackId, orderedSongs, sort, reverse) => {
+          const allSongsSort = hasSongSortOptions(libraryQueueKind) && (sort === 'last-played' || sort === 'play-count' || sort === 'random') ? sort : undefined
+          void player.selectPlaybackQueueTrack({ kind: libraryQueueKind, allSongsSort, allSongsShuffleReverse: allSongsSort === 'random' ? reverse : undefined,
+            entries: orderedSongs ?? [{ scope, trackId }] }, trackId)
+        },
+        onShufflePlay: (entries, sort, reverse) => {
+          const allSongsSort = hasSongSortOptions(libraryQueueKind) && (sort === 'last-played' || sort === 'play-count' || sort === 'random') ? sort : undefined
+          return player.shufflePlaybackQueue({ kind: libraryQueueKind, allSongsSort, allSongsShuffleReverse: allSongsSort === 'random' ? reverse : undefined, entries })
+        },
         onSelectFolders: () => { void player.selectFolders() },
         foldersPinnedInSidebar,
         onToggleFoldersPin: toggleFoldersPin,

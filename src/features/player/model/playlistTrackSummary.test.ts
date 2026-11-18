@@ -27,6 +27,8 @@ test('a fully tagged summary keeps every field the hydrated row publishes', () =
     album: 'Album a',
     albumArtist: 'Album Artist a',
     year: null,
+    trackNumber: 12,
+    discNumber: 2,
     bitDepth: 24,
     sampleRateHz: 96000,
     bitrateKbps: 2304,
@@ -41,8 +43,11 @@ test('a fully tagged summary keeps every field the hydrated row publishes', () =
     libraryAlbumName: 'Album a',
     libraryArtistName: 'Artist a',
     libraryComposerName: null,
+    libraryGenreName: null,
     albumArtist: 'Album Artist a',
     libraryYear: null,
+    libraryTrackNumber: 12,
+    libraryDiscNumber: 2,
     // duration-probe channels so a tag header estimate cannot flip a total.
     durationSeconds: 0,
     fileExtension: 'flac',
@@ -127,6 +132,8 @@ test('rows compare field by field so unchanged batches are not republished', () 
   assert.equal(playlistTrackRowEqual(row, playlistTrackRowFromSummary(descriptor, { ...summary, artist: 'Other' })), false)
   assert.equal(playlistTrackRowEqual(row, playlistTrackRowFromSummary(descriptor, { ...summary, albumArtist: 'Other' })), false)
   assert.equal(playlistTrackRowEqual(row, playlistTrackRowFromSummary(descriptor, { ...summary, year: 2023 })), false)
+  assert.equal(playlistTrackRowEqual(row, playlistTrackRowFromSummary(descriptor, { ...summary, trackNumber: 12 })), false)
+  assert.equal(playlistTrackRowEqual(row, playlistTrackRowFromSummary(descriptor, { ...summary, discNumber: 2 })), false)
   assert.equal(playlistTrackRowEqual(row, playlistTrackRowFromSummary(descriptor, { ...summary, bitDepth: 16 })), false)
 })
 

@@ -117,7 +117,7 @@ if(evidence)mkdirSync(evidence,{recursive:true})
 const screenshot = async name => { if(evidence)await page.screenshot({path:evidence+'/'+name+'.png'}) }
 const active = () => page.locator('.playlist-management-content:not([inert])')
 const songs = () => active().locator('.all-songs-list [data-song-key]')
-const titles = () => page.evaluate(()=>window.vm.playlist.library.streamSongs.map(row=>row.track.title))
+const titles = () => songs().locator('.playlist-card-title').allTextContents()
 const selectCategory = async category => {
   await page.evaluate(category=>window.vm.playlist.library.onSelectCategory(category),category)
   await page.waitForFunction(category=>window.vm.playlist.library.route.categoryId===category,category)
@@ -130,12 +130,13 @@ const returnToLibrary = async()=>{
   await page.waitForFunction(()=>window.vm.playlist.isOpen)
 }
 const menu = async label => { await page.getByRole('button',{name:'更多列表操作',exact:true}).click();await page.getByRole('button',{name:label,exact:true}).click() }
-const sort = async label => {
+const sort = async (label, reverse = false) => {
   await menu('列表选项')
-  await page.getByRole('dialog',{name:'流 · 列表选项'}).getByRole('combobox').click()
-  await page.getByRole('option',{name:label,exact:true}).click()
-  await page.getByRole('button',{name:'完成',exact:true}).click()
-  await page.getByRole('dialog').waitFor({state:'hidden'})
+  const options = page.getByRole('dialog', { name: '列表选项：流', exact: true })
+  await options.getByRole('radio', { name: label, exact: true }).click()
+  await options.getByRole('checkbox', { name: '倒序', exact: true }).setChecked(reverse)
+  await options.getByRole('button', { name: '关闭', exact: true }).click()
+  await options.waitFor({ state: 'hidden' })
 }
 const add = async (url) => {
   await menu('添加地址')
@@ -149,7 +150,7 @@ try {
   await selectCategory('streams')
   await songs().first().waitFor()
   assert.equal(await songs().count(),3)
-  assert.deepEqual(await titles(),['Alpha Radio','Beta Radio','Gamma Radio'])
+  assert.deepEqual(await titles(),['Gamma Radio','Beta Radio','Alpha Radio'], 'initial sort uses stream URL order')
   assert(await page.getByRole('button',{name:'播放流',exact:true}).isEnabled())
   assert(await page.getByRole('button',{name:'随机播放流',exact:true}).isEnabled())
   assert.equal(await page.evaluate(()=>window.vm.playlist.library.allSongs.length),1,'streams excluded from local library')
@@ -196,13 +197,15 @@ try {
   await page.waitForFunction(()=>document.querySelectorAll('.playlist-management-content:not([inert]) .all-songs-list [data-song-key]').length===1)
   assert((await songs().first().innerText()).includes('Alpha Radio'))
   await page.getByRole('searchbox',{name:'搜索流名称或地址'}).press('Escape')
-  await sort('播放次数');assert.equal((await titles())[0],'Gamma Radio')
-  await sort('最近播放');assert.equal((await titles())[0],'Alpha Radio','recent order uses recent record rather than play-count record')
-  await sort('添加时间');assert.equal((await titles())[0],'Beta Radio')
-  await sort('随机');const shuffled=await titles();await page.evaluate(()=>window.vm.playlist.library.onRefreshStreams());await page.waitForFunction(()=>!window.vm.playlist.library.streamsLoading)
+  await sort('根据播放次数');assert.equal((await titles())[0],'Gamma Radio')
+  await sort('根据最后播放的时间');assert.equal((await titles())[0],'Alpha Radio','recent order uses recent record rather than play-count record')
+  await sort('根据添加到媒体库的日期');assert.equal((await titles())[0],'Beta Radio')
+  await sort('根据随机顺序');const shuffled=await titles();await page.evaluate(()=>window.vm.playlist.library.onRefreshStreams());await page.waitForFunction(()=>!window.vm.playlist.library.streamsLoading)
   assert.deepEqual(await titles(),shuffled,'ordinary refresh preserves shuffled sequence')
-  await sort('评分');assert.equal((await titles()).length,3)
-  await sort('名称')
+  await sort('根据星级');assert.equal((await titles()).length,3)
+  await sort('根据URL', true)
+  assert.deepEqual(await titles(), ['Alpha Radio', 'Beta Radio', 'Gamma Radio'], 'reverse applies to the visible URL order')
+  await sort('根据URL')
   await add('ftp://example.test/radio')
   assert.equal(await page.getByRole('dialog',{name:'添加地址',exact:true}).count(),1)
   assert.equal(await page.evaluate(()=>window.calls.filter(row=>row.command==='library_add_stream').length),0,'invalid scheme rejected before native command')

@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -214,6 +216,10 @@ pub struct AudioPlaylistTrackTagSummary {
     pub genre: Option<String>,
     #[ts(type = "number | null")]
     pub year: Option<u32>,
+    #[ts(type = "number | null")]
+    pub track_number: Option<u32>,
+    #[ts(type = "number | null")]
+    pub disc_number: Option<u32>,
     // Deliberately no duration: playback duration stays authoritative on
     // `audio_probe_playlist_durations` / the hydration path, so a container
     // header estimate can never flip a published playlist total. See
@@ -294,9 +300,21 @@ pub struct AudioFolderPlaylist {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub directory_paths: Option<Vec<String>>,
+    /// Filesystem modification times in Unix epoch milliseconds for enumerated directories.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "Record<string, number>")]
+    pub directory_modified_at_ms: Option<BTreeMap<String, u64>>,
     pub source_kind: AudioPlaylistSourceKind,
     pub source_path: String,
     pub source_name: String,
+    /// First registration of this playlist in the library, in Unix epoch milliseconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub library_added_at_ms: Option<u64>,
+    /// Modification time of the playlist source file, in Unix epoch milliseconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub file_modified_at_ms: Option<u64>,
     #[ts(type = "number")]
     pub selected_index: usize,
     pub tracks: Vec<AudioFolderTrackRef>,
@@ -339,6 +357,9 @@ pub struct AudioFolderTrackRef {
     /// Filesystem creation time, never a scan time or modification-time fallback.
     #[ts(type = "number | null")]
     pub file_created_at_ms: Option<u64>,
+    /// Filesystem modification time in Unix epoch milliseconds.
+    #[ts(type = "number | null")]
+    pub file_modified_at_ms: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, TS)]

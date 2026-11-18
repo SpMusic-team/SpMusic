@@ -19,6 +19,7 @@ import musicSmall from '@/assets/playlist-library/16dbd.svg'
 
 type Props = {
   flat?: boolean
+  titleOnly?: boolean
   navigationKey: string
   sharedProjection: boolean
   projectionKey: string
@@ -43,7 +44,7 @@ function summary(directory: FolderHierarchyEntry) {
   return duration === null ? String(count) : `${count} | ${duration}`
 }
 
-export function FolderHierarchyCard({ flat = false, navigationKey, sharedProjection, projectionKey, transition, directory, layout, coverItem, store, selectMode, selected, onActivate, onEnterSelectMode }: Props) {
+export function FolderHierarchyCard({ flat = false, titleOnly = false, navigationKey, sharedProjection, projectionKey, transition, directory, layout, coverItem, store, selectMode, selected, onActivate, onEnterSelectMode }: Props) {
   const cover = useCollectionCoverPresentation(store, coverItem)
   const longPress = usePlaylistCardLongPress({ identity: `folder:${directory.path}`, disabled: false, selectMode, onEnterSelectMode })
   const folder = layout.folderGlyph === 48 ? folder48 : layout.folderGlyph === 32 ? folder32 : folder16
@@ -53,7 +54,7 @@ export function FolderHierarchyCard({ flat = false, navigationKey, sharedProject
   const twoLine = layout.variant === 'row-compact' || layout.variant === 'text-two-line'
   const folderGlyph = flat ? null : <img className="folder-row-icon" src={folder} alt="" />
   const name = <motion.span key={`name:${projectionKey}`} className="folder-name" title={directory.name} layout={sharedProjection ? 'position' : undefined} layoutId={sharedProjection ? `folder-name:${navigationKey}` : undefined} transition={{ layout: transition }}>{directory.name}</motion.span>
-  const parent = layout.showParent ? <span className="folder-parent-name" title={directory.parentName}>{directory.parentName}</span> : null
+  const parent = layout.showParent && !titleOnly ? <span className="folder-parent-name" title={directory.parentName}>{directory.parentName}</span> : null
   const statistics = layout.showStatistics ? <span className="folder-meta"><span className="folder-music-icon" data-music-glyph={layout.musicGlyph} style={{ maskImage: `url("${music}")` }} aria-hidden="true" /><span className="folder-meta-text">{summary(directory)}</span>{!tile && !twoLine && layout.variant !== 'row-wide' ? folderGlyph : null}</span> : null
   return <Button variant="ghost" className="folder-row" data-folder-path={directory.path}
     data-folder-kind={flat ? 'flat' : 'hierarchy'} data-folder-variant={layout.variant} data-folder-size={layout.size} data-folder-level={layout.level}

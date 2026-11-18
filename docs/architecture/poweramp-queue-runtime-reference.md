@@ -5,8 +5,10 @@ doc_type: "architecture"
 status: "active"
 owner_agent: "Architecture Agent"
 version_scope: "project"
+revision: 1
+open_items: 14
 created: "2026-10-27"
-updated: "2026-10-27"
+updated: "2026-11-18"
 source_documents:
   - "user request: 把 Poweramp 播放队列运行逻辑写成外部参考文档，用于评估 SpMusic 队列行为的设计取舍"
   - "user request: 按新增方法体实证证据修订本文，更正 3 处任务卡错误并闭环 Q4"

@@ -5,8 +5,10 @@ doc_type: "architecture"
 status: "active"
 owner_agent: "Architecture Agent"
 version_scope: "project"
+revision: 1
+open_items: 9
 created: "2026-11-06"
-updated: "2026-11-06"
+updated: "2026-11-18"
 source_documents:
   - "user request: 查清 Poweramp 设置根页面下「外观」项里的所有内容"
   - ".rea-analysis/Poweramp-v3.apk :: com.maxmpz.audioplayer build-1025-uni (1025009) :: SHA-256 4467fdac3e89b98485866e454bc3b7dc2d73d788d7a1aa9c73ea1028d36b82e0"

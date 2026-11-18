@@ -5,8 +5,10 @@ doc_type: "architecture"
 status: "active"
 owner_agent: "Architecture Agent"
 version_scope: "project"
+revision: 1
+open_items: 7
 created: "2026-10-28"
-updated: "2026-10-28"
+updated: "2026-11-18"
 source_documents:
   - "user request: 对照 SpMusic 三页面模型，逆向 Poweramp 的「所有歌曲」「文件夹」「文件夹层次结构」三者关系"
   - "shared task: task-11 记录 Poweramp 媒体库三视图关系"

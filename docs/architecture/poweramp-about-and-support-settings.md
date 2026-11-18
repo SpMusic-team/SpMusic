@@ -2,11 +2,13 @@
 doc_id: poweramp-about-and-support-settings
 title: Poweramp「关于 / 技术支持 / 命令历史 / 翻译」偏好结构（build-1035）
 doc_type: architecture
-status: draft
+status: "superseded"
 owner_agent: lead
 version_scope: build-1035-bundle-play (versionCode 1035009)
+revision: 2
+open_items: 4
 created: 2026-11-06
-updated: 2026-11-06
+updated: "2026-11-18"
 source_documents:
   - .rea-analysis/v1035/decoded/res/xml/general.xml
   - .rea-analysis/v1035/decoded/res/xml/support.xml

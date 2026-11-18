@@ -2,11 +2,11 @@
 doc_id: "TASK-FOOBAR2000-FOOBAKA-DS-PHASE-2"
 title: "foobar2000 与 foobaka 第二轮逆向研究及 SpMusic 实施方案"
 doc_type: "task"
-status: "待执行"
+status: "已执行（静态部分完成；受阻项已移交，见执行状态小节）"
 owner_agent: "PM Agent"
 version_scope: "研究与产品评估"
 created: "2026-11-15"
-updated: "2026-11-15"
+updated: "2026-11-18"
 source_documents:
   - "docs/tasks/foobar2000-foobaka-ds-research-goals.md"
   - "docs/architecture/foobar2000-research.md"
@@ -18,6 +18,25 @@ source_documents:
 ---
 
 # foobar2000 与 foobaka 第二轮逆向研究及 SpMusic 实施方案
+
+> **执行状态（2026-11-18 更新）**
+>
+> | 条款 | 状态 | 证据 |
+> | --- | --- | --- |
+> | 阶段 0 环境与 PCM 预检 | **完成** | `.rea-analysis/phase3/run-20261117-p3a/raw/a1-preflight.json` |
+> | 1.1 同任务对照（找歌→播放） | **受阻** | Album List Filter 不刷新；GUI 菜单选中后对话框不出现（phase-4 复核） |
+> | 1.2 长列表 ≥300 条 | **完成** | `phase3/workstream-u1/truth-table.json` |
+> | 1.3 首达/回访三对交错 | **完成（第四轮）** | 键盘定位替代滚轮，三对内容与封面全一致 |
+> | 1.4 头图同尺寸对照 | **完成** | `phase3/raw/heroart-measure.json` |
+> | 2.1 查询真值表 | **完成** | `phase3/raw/q1-all-results.json`（35 条） |
+> | 2.2 增量与离线 | **完成** | `phase3/raw/l1-three-scenarios.json`、`io/l1-summary.json` |
+> | 2.3 组织与恢复 | **一半完成** | 只读体检已实现；批量改名/迁移**已移交**（见 [操作者卡](../tasks/foobar2000-gui-operator-handoff.md) 任务 C） |
+> | 3.1 接缝最小矩阵 | **完成（第四轮）** | CUE 分轨逐样本零误差 |
+> | 3.2 测量边界声明 | **完成** | `phase4/raw/a1-negative-control.json` |
+> | 3.3 精度与稳定 | **完成（第四轮）** | ±0.5 LSB 抖动实验证明链路为 16-bit |
+> | 3.4 RG Track/Album 可选验证 | **未做** | 需已知增益标签的对照夹具；**优先级低**（可选验证项） |
+>
+> 详细证据与勘误见 [phase-4 findings](../architecture/foobar2000-foobaka-phase-4-findings.md)。
 
 ## 直接交给 DS
 

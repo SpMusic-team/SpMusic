@@ -2,11 +2,11 @@
 doc_id: "TASK-FOOBAR2000-FOOBAKA-DS-PHASE-3"
 title: "foobar2000 与 foobaka 第三轮逆向执行方案"
 doc_type: "task"
-status: "待执行"
+status: "已执行（静态部分完成；受阻项已移交，见执行状态小节）"
 owner_agent: "PM Agent"
 version_scope: "研究与产品评估"
 created: "2026-11-16"
-updated: "2026-11-16"
+updated: "2026-11-18"
 source_documents:
   - "docs/tasks/foobar2000-foobaka-ds-phase-2-plan.md"
   - "docs/test/foobar2000-foobaka-phase-2-comparison.md"
@@ -17,6 +17,38 @@ source_documents:
 ---
 
 # foobar2000 与 foobaka 第三轮逆向执行方案
+
+> **执行状态（2026-11-18 更新）**
+>
+> | 条款 | 状态 | 说明 |
+> | --- | --- | --- |
+> | Q1 夹具（20 条多值/缺字段/诱饵） | **完成** | `phase3/fixtures/q1test` |
+> | Q1 建规则→改标签→自动重算 | **完成** | 136 B 定义 blob 已解，且**可离线合成**（第四轮） |
+> | Q1 非法语法 / ALL / NONE | **完成** | 35 条查询实测 |
+> | Q1 单变量干预 R（只改规则） | **完成** | `.fplite` SHA 不变 |
+> | Q1 单变量干预 S（只改标签） | **结论：不可复现** | 过滤条件**不持久化**在任何 profile SQLite（第四轮穷举） |
+> | Q1 分派表 12 字节勘误 | **完成并再修正** | 第四轮确认为 **19 项**、基址 `0x27BD40`（非 22 项/`0x27BD3C`） |
+> | L1 三场景增量（记录级） | **完成** | A=0 / B=1 / C=1 |
+> | L1 进程级 I/O（ETW） | **完成** | 三场景均零 Read，未区分差异 |
+> | L1 离线与恢复三环 | **完成** | 不删条目、不写 `lastseen`、同路径接回 |
+> | U1 300 条封面夹具 | **完成** | 250 unique / 30 none / 20 shared |
+> | U1 首达/回访 | **完成** | 零空白 |
+> | U1 同任务找歌（L59） | **受阻→已移交** | 与 P2 §1.1 同一堵墙；见 [操作者卡](foobar2000-gui-operator-handoff.md) 任务 A |
+> | U1 头图对照（L61） | **完成** | 目录图优先；面板 844×997 |
+> | A1 PCM 抓样 | **完成（第四轮）** | 第三轮的「不可完成」判断已推翻 |
+> | L73 统计键核查 | **完成** | 结论已漂移，见 findings §9.1b |
+> | 扫描诊断候选卡 | **已产出** | 六条立项条件全 ✅，但**未落地代码** |
+> | B（foobaka）对照 | **数据层完成 / 行为层受阻** | 界面失败真因见 phase-4 §3.3c（脚本宿主崩溃）；需完整桌面才能继续 |
+>
+> 详细证据与勘误见 [phase-4 findings](../architecture/foobar2000-foobaka-phase-4-findings.md)。
+>
+> **2026-11-18 第 10 轮复核**：剩余未完成条款已逐项判定可完成性——
+> 全部属于「需要操作界面」或「需要特定夹具」，**没有一项能靠纯静态分析补齐**。
+> 已整理成可执行的操作者移交卡：[foobar2000-gui-operator-handoff.md](foobar2000-gui-operator-handoff.md)。
+>
+> **2026-11-18 第 40 轮（末轮）最终结论**：
+> 剩余条款全部属于「需动态调试」或「需人工操作界面」两类。
+> 静态逆向路径已穷尽，详见 [全局总结](../architecture/foobar2000-investigation-summary.md) §六。
 
 ## 直接交给 DS
 

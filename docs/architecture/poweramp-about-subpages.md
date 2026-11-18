@@ -5,8 +5,10 @@ doc_type: "architecture"
 status: "active"
 owner_agent: "Architecture Agent"
 version_scope: "build-1035-bundle-play (versionCode 1035009)"
+revision: 1
+open_items: 7
 created: "2026-11-07"
-updated: "2026-11-07"
+updated: "2026-11-18"
 source_documents:
   - ".rea-analysis/v1035/decoded/res/xml/feature_packages.xml"
   - ".rea-analysis/v1035/decoded/res/xml/translations.xml"

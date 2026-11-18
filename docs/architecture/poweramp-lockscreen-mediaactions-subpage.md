@@ -5,8 +5,10 @@ doc_type: "architecture"
 status: "active"
 owner_agent: "Architecture Agent"
 version_scope: "build-1035-bundle-play (versionCode 1035009)"
+revision: 1
+open_items: 4
 created: "2026-11-07"
-updated: "2026-11-07"
+updated: "2026-11-18"
 source_documents:
   - ".rea-analysis/v1035/decoded/res/xml/ui_mediaactions.xml :: 本页 XML 原文（16 行 / 2796 B，本文权威结构来源）"
   - ".rea-analysis/v1035/decoded/res/xml/lockscreen.xml :: 入口页 A（第 9 行 buttons）"

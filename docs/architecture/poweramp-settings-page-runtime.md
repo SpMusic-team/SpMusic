@@ -2,11 +2,13 @@
 doc_id: poweramp-settings-page-runtime
 title: Poweramp 设置页共享运行时机制（build-1035）
 doc_type: architecture
-status: draft
+status: "active"
 owner_agent: lead
 version_scope: build-1035-bundle-play (versionCode 1035009)
+revision: 1
+open_items: 6
 created: 2026-11-06
-updated: 2026-11-06
+updated: "2026-11-18"
 source_documents:
   - .rea-analysis/v1035/decoded/smali/ׅ/u61.smali
   - .rea-analysis/v1035/decoded/smali/ׅ/n91.smali

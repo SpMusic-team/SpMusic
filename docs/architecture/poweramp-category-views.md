@@ -5,8 +5,10 @@ doc_type: "architecture"
 status: "active"
 owner_agent: "Architecture Agent"
 version_scope: "project"
+revision: 1
+open_items: 6
 created: "2026-11-03"
-updated: "2026-11-03"
+updated: "2026-11-18"
 source_documents:
   - "user request: 逆向 Poweramp 媒体库下「年份」「流派」两页的组织方式与多层下钻结构"
   - "shared task: task-15 / task-16"

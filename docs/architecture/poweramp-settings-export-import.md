@@ -2,11 +2,13 @@
 doc_id: poweramp-settings-export-import
 title: Poweramp「导出/导入设置」完整实现（含 .poweramp-backup 格式逆向）
 doc_type: architecture
-status: draft
+status: "active"
 owner_agent: lead
 version_scope: build-1035-bundle-play (versionCode 1035009)
+revision: 6
+open_items: 3
 created: 2026-11-07
-updated: 2026-11-07
+updated: "2026-11-18"
 source_documents:
   - .rea-analysis/v1035/decoded/res/xml/singlepane.xml
   - .rea-analysis/v1035/decoded/res/values/strings.xml

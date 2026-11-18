@@ -2,11 +2,13 @@
 doc_id: poweramp-library-full-implementation
 title: Poweramp「设置 → 媒体库」及 6 个子页的完整实现（build-1035）
 doc_type: architecture
-status: draft
+status: "active"
 owner_agent: lead
 version_scope: build-1035-bundle-play (versionCode 1035009)
+revision: 3
+open_items: 8
 created: 2026-11-06
-updated: 2026-11-06
+updated: "2026-11-18"
 source_documents:
   - .rea-analysis/v1035/decoded/res/xml/library.xml
   - .rea-analysis/v1035/decoded/res/xml/library_lists.xml

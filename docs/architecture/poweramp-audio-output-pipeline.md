@@ -5,8 +5,10 @@ doc_type: "architecture"
 status: "active"
 owner_agent: "Architecture Agent"
 version_scope: "project"
+revision: 1
+open_items: 10
 created: "2026-10-27"
-updated: "2026-10-27"
+updated: "2026-11-18"
 source_documents:
   - "user request: 把音频输出链路的 Native 实证正式化，重点是独占输出与 AAudio 两对 request/readback 的对称性"
   - "shared task: task-10 记录 Poweramp 音频输出链路与独占输出（Native 层实证）"

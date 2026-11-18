@@ -2,11 +2,13 @@
 doc_id: poweramp-headset-complete
 title: Poweramp「设置 → 耳机/蓝牙」完整参考（根页 + 3 个下钻 + 运行时全链路）
 doc_type: architecture
-status: draft
+status: "active"
 owner_agent: lead
 version_scope: build-1035-bundle-play (versionCode 1035009)
+revision: 1
+open_items: 5
 created: 2026-11-07
-updated: 2026-11-07
+updated: "2026-11-18"
 consolidates:
   - poweramp-headset-settings.md
   - poweramp-headset-full-implementation.md

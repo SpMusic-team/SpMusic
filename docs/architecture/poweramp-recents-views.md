@@ -5,8 +5,10 @@ doc_type: "architecture"
 status: "active"
 owner_agent: "Architecture Agent"
 version_scope: "project"
+revision: 1
+open_items: 11
 created: "2026-10-30"
-updated: "2026-10-30"
+updated: "2026-11-18"
 source_documents:
   - "user request: 逆向 Poweramp 媒体库下「最近播放」「最近添加」「最多播放」「长」四页的组织与实现"
   - "shared task: task-13 / task-14"
@@ -724,8 +726,8 @@ SpMusic 若要实现，最小改动是给曲目元数据加 `played_at` / `playe
 | `g1` 库门面（实体映射） | `ev_fefbb506fc94b86da675ec3a73b7d1aa6b3b31598f8615f20e1e2985fd94fc7b` |
 | **`e4.X0`（Top Rated SQL，类摘要 + 方法体一并返回）** | `ev_adee2652eac06d255e5c5c0e2e6055c61bc0086836701fd729e40c7a01d65449` |
 | **`e3.X0`（Low Rated SQL，同上）** | `ev_3df5bec0faf6e496f8094fc37a9a719fe5d0f2ac16710358e9223a939fea5037` |
-| `e4.mo2437`（top_rated_files_limit） | `ev_6f927d81b0a85cd5b7c075409ff9a9ed57b83362ad521978a6f7aa4b8a9299d8` |
-| `e3.mo2437`（low_rated_files_limit） | `ev_edc936beecef02672ec8ebb5e6f904babc1337969e3db679ad08434328771ebc` |
+| **`e4.с()`**（top_rated_files_limit；JADX 记作 `e4.mo2437`） | 【实证·产物】`.rea-analysis/smali/smali/com/maxmpz/audioplayer/rest/library/e4.smali:312-326`：`sget у->g0` → `iget s->А` → `const/4 v1, 0x2` → `Math.max(2, v0)` |
+| **`e3.с()`**（low_rated_files_limit；JADX 记作 `e3.mo2437`） | 【实证·产物】`.rea-analysis/smali/smali/com/maxmpz/audioplayer/rest/library/e3.smali:278-292`：`sget у->h0` → `iget s->А` → `const/4 v1, 0x2` → `Math.max(2, v0)` |
 | **`p0.O(int)`（排序映射总表，G7）** | `ev_1e2ad4fc55f8ecfe280c5a39e15f01d4b8a9ebb36614e813f6eda9b98db832da` |
 | `RatingBar` 类摘要（34 方法 / 28 字段） | `ev_9aa08753783b12b5f8d2ff3cb65f98c0d5f68c9628a1f1bdaba44ac2011f7282` |
 | **`RatingBar.onTouchEvent`（交互状态机）** | `ev_dcef6878849eabd257fb63b754115afd1253a7ef2201db459f103ecb58a92921` |
@@ -747,6 +749,11 @@ SpMusic 若要实现，最小改动是给曲目元数据加 `played_at` / `playe
 | `b0.updateTrackPlayedAtAsNeeded` | `ev_d0b474c2b56135d2569818e53e19cf9d9af14fbabb2a9771c8fca35b2fa1b7c8` |
 | `C0742` 类摘要（116 字段） | `ev_90ee531e61575a22aa66995833544192dbe7e62f9e6d758dff9beb7aa1d39fef` |
 | `C0742.<clinit>` | `ev_0fe14e74dc505f456d7050484d28ee88d265d30f42a11f25f03d35465f41bb67` |
+
+> **⚠️ 命名体系说明**：本文正文用 **JADX 命名**（`mo2437` 是 JADX 为桥接方法生成的序号名），
+> 而 smali 产物里同一方法叫 **`с()`**（U+0441 CYRILLIC SMALL LETTER ES，与拉丁 `c` 形近但不同码位）。`mo2437` 在两版 smali 中**均为零命中**，
+> 这是命名体系差异，不是记录失效。上表两行已于 2026-11-18 由 `ev_` ID（记录缺失）改为**可复验的 smali 指针**。
+> 两套命名体系的完整说明见 `poweramp-corpus-conventions.md` §4。
 
 资源与偏好 XML 来源：`.rea-analysis/decoded/res/values/strings.xml`、`.rea-analysis/decoded/res/xml/library.xml`（apktool 3.0.3 解码，已入库）。
 复现命令：

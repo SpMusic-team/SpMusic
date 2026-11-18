@@ -2,11 +2,13 @@
 doc_id: poweramp-headset-subtree
 title: Poweramp「耳机/蓝牙」子树完整实现（含 commands_history / audio_focus / long_volume_controls）
 doc_type: architecture
-status: draft
+status: "superseded"
 owner_agent: lead
 version_scope: build-1035-bundle-play (versionCode 1035009)
+revision: 4
+open_items: 3
 created: 2026-11-07
-updated: 2026-11-07
+updated: "2026-11-18"
 source_documents:
   - .rea-analysis/v1035/decoded/res/xml/headset.xml
   - .rea-analysis/v1035/decoded/res/xml/commands_history.xml

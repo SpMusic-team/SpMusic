@@ -5,8 +5,10 @@ doc_type: "architecture"
 status: "active"
 owner_agent: "Architecture Agent"
 version_scope: "project"
+revision: 1
+open_items: 9
 created: "2026-11-06"
-updated: "2026-11-06"
+updated: "2026-11-18"
 source_documents:
   - "user request: 记录 Poweramp 设置根页面下含了什么大项目，作为后续逐项深挖的总索引"
   - ".rea-analysis/Poweramp-v3.apk :: com.maxmpz.audioplayer build-1025-uni (1025009) :: SHA-256 4467fdac3e89b98485866e454bc3b7dc2d73d788d7a1aa9c73ea1028d36b82e0"
@@ -345,6 +347,10 @@ flowchart TD
 
 ## 8. 文档地图（全部 Poweramp 文档）
 
+> **📖 先读 `poweramp-corpus-conventions.md`**：它定义了两套引证制度（`ev_` ID 制 / smali 指针制）、
+> 两个 build 的版本域与路径映射、四套混淆命名体系、以及 `status`/`revision`/`open_items` 的读法。
+> **不读它就直接按本索引跳文档，容易把"名字找不到"误判成"结论有误"。**
+>
 > 本仓库的 Poweramp 逆向文档分**两条线索**：**A. 设置树**（本文所属）与 **B. 媒体库视图与运行时**（另一条）。
 > 下表是完整索引，便于按需查阅。
 
@@ -352,6 +358,7 @@ flowchart TD
 
 | 层级 | 文档 | 覆盖 |
 | --- | --- | --- |
+| **元规范** | **`poweramp-corpus-conventions.md`** | **证据制度（`ev_` 制 / smali 指针制）、版本域路径映射、四套混淆命名对照、`status`/`revision`/`open_items` 读法、产物可得性** |
 | **根** | **本文** | `singlepane` 根页 24 key、11 个一级目标规模、深链/搜索/自删三机制 |
 | **共享层** | `poweramp-settings-page-runtime.md` | 三层骨架、45 分支分发表、`n91` 契约、六大通用机制、`C`=父页 id |
 | **共享层·存储** | **`poweramp-faststaticprefs.md`** | **偏好存储引擎**：`ls`(mmap `FastStaticPrefs`) / `a30`(值对象) / `er`(脏位) / `ms`(工厂+槽位表)；双魔数校验、顺序读协议 |
@@ -396,6 +403,76 @@ flowchart TD
 | `poweramp-queue-view.md` | 队列（独立表 + 入队时间戳驱动） |
 | `poweramp-queue-runtime-reference.md` | 队列运行逻辑（next/prev、随机、延迟队列） |
 | `poweramp-search-and-queue-impact.md` | 搜索逻辑及其对队列的影响 |
+| **`poweramp-impl-idea11-repeat-wording.md`** | 已实现投票逐条逆向 #8：Repeat 六态文案统一（七组平行数组） |
+| **`poweramp-impl-idea15-custom-buttons.md`** | 已实现投票逐条逆向 #7：自定义播放界面按钮（10 键、横竖屏双套、编辑入口） |
+| **`poweramp-impl-idea39-device-first-output.md`** | 已实现投票逐条逆向 #6：输出菜单设备优先反转、`?device=` 寻址机制 |
+| **`poweramp-impl-idea40-bit-perfect.md`** | 已实现投票逐条逆向 #5：能力位掩码协议、设备类型枚举、四开关关系（仅 1035） |
+| **`poweramp-impl-idea54-multi-drag.md`** | 已实现投票逐条逆向 #4：自研拖拽框架、多选行收集算法、单/多行共用助手 |
+| **`poweramp-impl-idea55-player-screen.md`** | 已实现投票逐条逆向 #3：术语统一（资源层）+ 简中三译法缺陷 |
+| **`poweramp-impl-idea57-synced-lyrics.md`** | 已实现投票逐条逆向 #2：LRC 解析、毫秒换算、四级取词链、缓存两表、滚动渲染 |
+| **`poweramp-plugin-command-protocol.md`** | 插件系统（九）：byte[] 命令协议、结构体偏移、跨 native 单向通道 |
+| **`poweramp-output-opts-fields.md`** | 插件系统（四十）：OutputOpts 八字段语义（`toString` 自证） |
+| **`poweramp-final-boundary-ledger.md`** | 插件系统（三十九）：边界终账、38 篇地图、8 项硬边界 |
+| **`poweramp-opaque-type-marker.md`** | 插件系统（三十八）：`type` 是不透明标记、位域解读的证伪 |
+| **`poweramp-pseudo-values-and-obfuscation.md`** | 插件系统（三十七）：唯一伪值 `__avail_hires`、混淆类合并 |
+| **`poweramp-lib-single-and-underscore.md`** | 插件系统（三十六）：`lib` 单值约束、下划线二次定位 |
+| **`poweramp-w-conditional-enable.md`** | 插件系统（三十五）：`w()` 条件可用性、能力位判定、禁用 vs 移除 |
+| **`poweramp-msg-protocol-native-evidence.md`** | 插件系统（三十四）：msgID 协议、native 错误串互证、`plugin_id` |
+| **`poweramp-w-switch-assembly.md`** | 插件系统（三十三）：`w()` 十参签名、掩码 vs 0x1 双语义 |
+| **`poweramp-residual-batch-closure.md`** | 插件系统（三十二）：四项残余批量闭合（调用方、迭代器、日志、SQL 片段） |
+| **`poweramp-audio-param-stage.md`** | 插件系统（三十一）：阶段⑤ 动态列表构建、192kHz 上限、值/文案双数组 |
+| **`poweramp-milk-data-layer.md`** | 插件系统（三十）：milk/data 四类映射、预设 `shuffle_order` 随机重排 |
+| **`poweramp-cross-package-resources.md`** | 插件系统（二十九）：跨包资源解析、uniqName 派生边界、两机制成熟度对比 |
+| **`poweramp-audio-flags-matrix.md`** | 插件系统（二十八）：UI 掩码与合成 flags 位矩阵、`oem_variant` |
+| **`poweramp-scan-container-dispatch.md`** | 插件系统（二十七）：scanContainer 八出口、兜底空扫描、清理分流 |
+| **`poweramp-utils-m-hashmap.md`** | 插件系统（二十六）：`utils/m` 自定义哈希表（双数组 + 0.8 负载） |
+| **`poweramp-builtin-compiled-diff.md`** | 插件系统（二十五）：builtin vs compiled 真实差异、type 扩到 6 种 |
+| **`poweramp-output-opts-bitfield.md`** | 插件系统（二十四）：OutputOpts flags 位域、0x1010 = bit12+bit4 |
+| **`poweramp-pak-container-type-flags.md`** | 插件系统（二十三）：容器 type 位域、4 种 flag、`zip://` |
+| **`poweramp-plugin-final-closure.md`** | 插件系统（二十二）：13 处回填、StateBus 语义、`plugin/у`、硬边界终表 |
+| **`poweramp-plugin-residual-closure.md`** | 插件系统（二十一）：残余项闭合（DDL 缺失、死字段、六处订正汇总） |
+| **`poweramp-skin-overlap-apply.md`** | 插件系统（二十）：overlapAttr 应用机制、`applyStyle(,true)` 覆盖顺序 |
+| **`poweramp-device-opts-render-stages.md`** | 插件系统（十九）：`c1.z()` 32 键与九阶段划分 |
+| **`poweramp-plugin-lib-declaration.md`** | 插件系统（十八）：`lib` 子元素、`libBasePath`、`mapLibraryName`、字段订正 |
+| **`poweramp-pak-filename-parsing.md`** | 插件系统（十七）：预设文件名解析、`名称 - 作者` 约定、out[] 顺序订正 |
+| **`poweramp-pak-read-side.md`** | 插件系统（十六）：pak 读取侧 ContentProvider、聚合统计查询 |
+| **`poweramp-pak-data-model.md`** | 插件系统（十五）：pak 两表模型、8 条预编译 SQL、容器两段式写入 |
+| **`poweramp-pak-zip-scanning.md`** | 插件系统（十四）：pak zip 扫描、native 迭代器、条目入库去重 |
+| **`poweramp-pak-apk-resolution.md`** | 插件系统（十三）：`apk://` 物理定位、自己包/外部包分流、flag 0x8/0xa |
+| **`poweramp-skin-parsing-chain.md`** | 插件系统（十二）：皮肤解析链 SkinInfo/SkinOption、overlap 16 属性 |
+| **`poweramp-plugin-output-selection.md`** | 插件系统（十一）：输出插件四级降级选择链、OutputOpts |
+| **`poweramp-plugin-descriptor-fields.md`** | 插件系统（十）：描述符字段语义、StateBus 当前插件链 |
+| **`poweramp-plugin-naming-convention.md`** | 插件系统（八）：uniqName 命名全链路（四处派生）、`pa_output_*` 约定 |
+| **`poweramp-plugin-device-opts-handler.md`** | 插件系统（七）：设备选项页 c1、`__avail_hires` 伪插件、三条篇闭环 |
+| **`poweramp-skin-system.md`** | 插件系统（六）：皮肤体系、meta-data 发现、overlapAttr 覆盖机制 |
+| **`poweramp-pak-uri-schemes.md`** | 插件系统（五）：pak 四种 URI scheme、apk:// 跨包资源 |
+| **`poweramp-settings-fragment-dispatch.md`** | 插件系统（四）：设置分发中枢 f0、17 个 helper、58 分支全表 |
+| **`poweramp-plugin-device-binding.md`** | 插件系统（三）：插件列表页、设备反查表、三种跳转分支 |
+| **`poweramp-plugin-instances.md`** | 插件系统（二）：命名约定反射、三级缓存、负缓存哨兵 |
+| **`poweramp-changelog-audio-output.md`** | 版本更新逆向：音频输出与解码（36 条 / 找到 29） |
+| **`poweramp-changelog-ui-skin.md`** | 版本更新逆向：UI 与皮肤（29 条 / 找到 24） |
+| **`poweramp-changelog-library.md`** | 版本更新逆向：库、列表与扫描（25 条 / 找到 21） |
+| **`poweramp-changelog-headset-misc.md`** | 版本更新逆向：耳机蓝牙+播放控制+杂项（59 条 / 找到 30） |
+| **`poweramp-forum-dev-responses-index.md`** | 论坛投票讨论：开发者回复取证总索引（28 帖 / 342 评论 / 124 官方回复） |
+| **`poweramp-forum-index-topic.md`** | 官方索引帖：开发者维护的投票总表 + 落地 build 号 |
+| **`poweramp-forum-ab-repeat.md`** | 论坛取证：A-B Repeat（4 帖 / 23 官方回复） |
+| **`poweramp-forum-lyrics.md`** | 论坛取证：歌词（4 帖 / 20 官方回复） |
+| **`poweramp-forum-queue-insert.md`** | 论坛取证：队列/插入（9 帖 / 56 官方回复） |
+| **`poweramp-forum-ui-sleep-eq.md`** | 论坛取证：睡眠/界面/EQ（11 帖 / 25 官方回复） |
+| **`poweramp-changelog-residual-closure.md`** | 版本更新残余项再闭合（4 项） |
+| **`poweramp-changelog-link-anchor-verify.md`** | 深链锚点验证（59 链接 / 46 命中 / 13 已解释） |
+| **`poweramp-changelog-index.md`** | 版本更新逐条逆向总索引（12 区块 / 149 条 / 4 篇专文） |
+| **`poweramp-plugin-system-index.md`** | **插件系统 10 篇专文总览**（三层架构、核心不变量、硬边界、剩余项） |
+| **`poweramp-plugin-system.md`** | **插件系统**：内置清单 20 条、类型位域枚举、三条发现链 |
+| **`poweramp-impl-index.md`** | **已实现投票 8 篇专文总览**（按层次归类、共同模式、剩余项汇总） |
+| **`poweramp-impl-idea58-insert-position.md`** | 已实现投票逐条逆向 #1：插入位置三态（开头/末尾/洗牌）、批量插入 SQL、位次补偿 |
+| **`poweramp-release-changelog.md`** | **版本更新记录**（build 971–103x 全文）+ 设置深链逆向入口 + 版本串组装机制 |
+| **`poweramp-feature-votes.md`** | **官方功能投票清单**（未完成 46 / 已完成 8）+ 已完成项的逆向实现（Bit Perfect、设备优先输出、同步歌词等） |
+| **`poweramp-list-options-settings-entry.md`** | **三个排序开关的设置页入口**：`library_lists` 位置/默认值/监听器索引/生效链路（即时 vs 重扫） |
+| **`poweramp-list-options-sql-builders.md`** | **ORDER BY 构建器全解**：8 个构建器逐一拆解 + 三个隐藏排序开关（`no_sort_field`/`use_albumartist_albums`/`show_cue_source`） |
+| **`poweramp-list-options-implementation.md`** | **实现层**：排序状态字位布局、22 个 SQL 构建器、14 位分类索引、109 个偏好键映射、`d()` 哨兵 |
+| **`poweramp-list-options-matrix.md`** | **38 个分类的列表选项横向对照**：七种排序表、四套缩放表、能力接口闭包判定 |
+| **`poweramp-album-songs-list-options.md`** | **专辑子页面的列表选项**：`q` 实体、16 项排序 vs 专辑页 5 项、每分类独立偏好键 |
 | `poweramp-audio-output-pipeline.md` | 音频输出链路与独占输出（Native 层） |
 
 > **两线的关系**：设置树改的是**行为参数**，B 线文档描述的是**这些参数如何影响实际数据流**。例如 `library_lists` 的 `join_albums`（设置）↔ `entity-views.md` 的专辑归并（数据）；`misc` 的队列入队选项（设置）↔ `queue-runtime-reference.md` 的入队决策（运行时）。

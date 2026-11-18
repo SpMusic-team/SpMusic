@@ -5,8 +5,10 @@ doc_type: "architecture"
 status: "active"
 owner_agent: "Architecture Agent"
 version_scope: "project"
+revision: 1
+open_items: 3
 created: "2026-10-27"
-updated: "2026-10-27"
+updated: "2026-11-18"
 source_documents:
   - "user request: 记录 Poweramp 音频设置页结构，重点是「独占输出」实为四正交开关组合而非单一开关"
   - "shared task: task-9 记录 Poweramp 音频设置页完整结构（外部参考实现）"

@@ -5,8 +5,10 @@ doc_type: "architecture"
 status: "active"
 owner_agent: "Architecture Agent"
 version_scope: "project"
+revision: 1
+open_items: 8
 created: "2026-10-28"
-updated: "2026-10-28"
+updated: "2026-11-18"
 source_documents:
   - "user request: 逆向 Poweramp 媒体库下「专辑」「艺术家」「专辑艺术家」「作曲家」四类页面的组织方式"
   - "shared task: task-12"

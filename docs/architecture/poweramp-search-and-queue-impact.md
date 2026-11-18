@@ -5,8 +5,10 @@ doc_type: "architecture"
 status: "active"
 owner_agent: "Architecture Agent"
 version_scope: "project"
+revision: 1
+open_items: 9
 created: "2026-10-27"
-updated: "2026-10-27"
+updated: "2026-11-18"
 source_documents:
   - "user request: 把 Poweramp 搜索逻辑记进架构文档，重点记录伪行（_id=-2/-3）对播放队列的影响"
   - "shared task: task-8 记录 Poweramp 搜索逻辑及其对播放队列的影响（外部参考实现）"

@@ -5,8 +5,10 @@ doc_type: "architecture"
 status: "active"
 owner_agent: "Architecture Agent"
 version_scope: "project"
+revision: 1
+open_items: 11
 created: "2026-11-03"
-updated: "2026-11-03"
+updated: "2026-11-18"
 source_documents:
   - "user request: 逆向 Poweramp 媒体库下「流」页的实现与组织，并查清流究竟是什么、怎么运行"
   - "shared task: task-18"

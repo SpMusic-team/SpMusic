@@ -2,11 +2,13 @@
 doc_id: poweramp-misc-complete
 title: Poweramp「设置 → 其他」完整参考（根页 26 元素 + 4 分类 + 全部子页）
 doc_type: architecture
-status: draft
+status: "active"
 owner_agent: lead
 version_scope: build-1035-bundle-play (versionCode 1035009)
+revision: 4
+open_items: 9
 created: 2026-11-07
-updated: 2026-11-07
+updated: "2026-11-18"
 source_documents:
   - .rea-analysis/v1035/decoded/res/xml/misc.xml
   - .rea-analysis/v1035/decoded/res/xml/ui_mediaactions.xml

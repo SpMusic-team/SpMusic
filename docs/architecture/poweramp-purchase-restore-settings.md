@@ -2,11 +2,13 @@
 doc_id: poweramp-purchase-restore-settings
 title: Poweramp「已购买/购买方式」两页完整实现（付费解锁与恢复购买）
 doc_type: architecture
-status: draft
+status: "active"
 owner_agent: lead
 version_scope: build-1035-bundle-play (versionCode 1035009)
+revision: 2
+open_items: 7
 created: 2026-11-07
-updated: 2026-11-07
+updated: "2026-11-18"
 source_documents:
   - .rea-analysis/v1035/decoded/res/xml/already_purchased.xml
   - .rea-analysis/v1035/decoded/res/xml/buy_methods.xml

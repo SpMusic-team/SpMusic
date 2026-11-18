@@ -2,11 +2,13 @@
 doc_id: poweramp-album-art-settings
 title: Poweramp「设置 → 专辑封面」偏好结构（build-1035）
 doc_type: architecture
-status: draft
+status: "active"
 owner_agent: lead
 version_scope: build-1035-bundle-play (versionCode 1035009)
+revision: 1
+open_items: 9
 created: 2026-11-06
-updated: 2026-11-06
+updated: "2026-11-18"
 source_documents:
   - .rea-analysis/v1035/decoded/res/xml/aa.xml
   - .rea-analysis/v1035/decoded/res/values/strings.xml

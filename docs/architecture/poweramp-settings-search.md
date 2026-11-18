@@ -2,11 +2,13 @@
 doc_id: poweramp-settings-search
 title: Poweramp 设置页「搜索」完整实现（SQLite FTS4 全文索引 + 自定义 Layout）
 doc_type: architecture
-status: draft
+status: "complete"
 owner_agent: lead
 version_scope: build-1035-bundle-play (versionCode 1035009)
+revision: 4
+open_items: 0
 created: 2026-11-07
-updated: 2026-11-07
+updated: "2026-11-18"
 source_documents:
   - .rea-analysis/v1035/decoded/res/xml/*.xml（62 个设置页）
   - .rea-analysis/v1035/decoded/res/values/attrs.xml

@@ -2,11 +2,13 @@
 doc_id: poweramp-headset-settings
 title: Poweramp「设置 → 耳机/蓝牙」偏好结构（build-1035）
 doc_type: architecture
-status: draft
+status: "superseded"
 owner_agent: lead
 version_scope: build-1035-bundle-play (versionCode 1035009)
+revision: 1
+open_items: 7
 created: 2026-11-06
-updated: 2026-11-06
+updated: "2026-11-18"
 source_documents:
   - .rea-analysis/v1035/decoded/res/xml/headset.xml
   - .rea-analysis/v1035/decoded/res/xml/misc.xml

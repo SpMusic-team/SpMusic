@@ -5,8 +5,9 @@ doc_type: "architecture"
 status: "active"
 owner_agent: "lead"
 version_scope: "build-1035-bundle-play (versionCode 1035009)"
+revision: 1
 created: "2026-11-07"
-updated: "2026-11-07"
+updated: "2026-11-18"
 source_documents:
   - ".rea-analysis/v1035/decoded/smali/ׅ/er.smali"
   - ".rea-analysis/v1035/decoded/smali/ׅ/fc.smali"

@@ -149,9 +149,56 @@ CREATE TABLE config (key TEXT UNIQUE PRIMARY KEY, value TEXT)
 与注入的鼠标事件均无响应**；只有**键盘 Enter**（焦点在按钮上时）与
 **系统对话框的 `WM_SETTEXT`** 有效。这一条对后续任何 DUI 自动化都适用。
 
-## 二、增量核对：`size` + `mtime`，单曲是最小单位
+## 二、跨版本 schema 演进
 
-### 2.1 判据
+对比 2.24.6 / 2.25.11 / 2.26.2 / 2.26.3 四个样本的内核 SQL 字面量：
+
+### 2.1 列集合基本稳定
+
+| 列 | 2.24.6 | 2.25.11 | 2.26.2 | 2.26.3 |
+| --- | :---: | :---: | :---: | :---: |
+| `playCount` / `rating` / `dateAdded` / `firstPlayed` / `lastPlayed` | 有 | 有 | 有 | 有 |
+| `attribsValid` / `infoBrowseTime` / `lastseen` | 有 | 有 | 有 | 有 |
+| **`handler`**（media 表） | — | **有** | 有 | 有 |
+| **`partial`** | — | — | **有** | **有** |
+
+> **修正第 2 轮的表述**：当时记的「metadb 15 字段」只对 **2.24.6** 成立。
+> 2.26 多了 `partial` 列，是 **16 字段**。
+
+### 2.2 `partial` 列是什么
+
+2.26.2 起出现这条查询：
+
+```sql
+SELECT info, infoBrowse, size, lastModified, infoBrowseTime, created,
+       attribs, attribsValid, partial
+FROM metadb WHERE name = ?
+```
+
+配合同时新增的 `LargeFieldsConfig-v2.txt`（默认内容只有一行注释指向官网 URL），
+可以判断：**2.26 引入了「部分元数据」概念**——记录可以处于「已完整加载」与
+「只加载了部分」两种状态，从而支持大库分批加载而不阻塞首屏。
+
+> **对 SpMusic 的含义**：`partial` 这个思路值得借鉴。
+> 若大库首屏被「必须读完所有标签」阻塞，可以考虑先标记为「部分」，
+> 后台补齐后再清除标记——而不是让整个列表等所有元数据就绪。
+
+### 2.3 一处容易误判的地方
+
+2.25.11 起，`CREATE TABLE IF NOT EXISTS metadb (` 在二进制里**不再连续**——
+列名被拆到多处存储，中间夹杂其他 SQL：
+
+```
+2.24.6:  "CREATE TABLE ... metadb ( name TEXT ..., rating INTEGER)"   ← 完整一条
+2.25.11: "CREATE TABLE ... metadb ( " + [其他 SQL] + "attribsValid" + ...  ← 被打散
+```
+
+**因此不能只看「CREATE 后面是否紧跟某列名」来判断列是否存在**——
+必须全文搜索列名。本轮最初就差点误判成「playCount 在 2.25 被删除」。
+
+## 三、增量核对：`size` + `mtime`，单曲是最小单位
+
+### 5.1 判据
 
 ```sql
 SELECT info, infoBrowse, size, lastModified, infoBrowseTime, created, attribs, attribsValid
@@ -168,7 +215,7 @@ UPDATE metadb
 
 **是 OR 关系**：size 变了必然重读；只有 mtime 变也重读。存在 mtime-only 的快速路径（未变则跳过）。
 
-### 2.2 用到的 Win32 API（本机复现验证）
+### 3.2 用到的 Win32 API（本机复现验证）
 
 | API | 2.24.6 | 2.25.11 | 2.26.2 | 2.26.3 |
 | --- | :---: | :---: | :---: | :---: |
@@ -185,14 +232,14 @@ UPDATE metadb
 
 **这是从 API 层反证「身份 = 路径字符串」**：没有用 `FILE_ID_INFO` 一类的方式做文件系统级身份比对，四版本一致。
 
-### 2.3 单曲级别是最小重读单位
+### 3.3 单曲级别是最小重读单位
 
 三条证据：
 1. `UPDATE metadb SET info=?2… WHERE name=?1` 是**单行更新**
 2. 有 `Pending` / `Reading tags...` 的**逐条状态机**
 3. 有 `File is taking a long time to process` 的**单文件告警**
 
-### 2.4 运行中变更：`ReadDirectoryChangesW` + 三级降级
+### 3.4 运行中变更：`ReadDirectoryChangesW` + 三级降级
 
 | 级 | 名称 |
 | --- | --- |
@@ -202,7 +249,16 @@ UPDATE metadb
 
 失败路径提示：`Folder monitoring not available for this resource`。
 
-## 三、离线宽限：某份快照中的 `retention` 折算为 28 天
+## 四、文件操作与播放列表格式
+
+> **本节已独立成篇**：[foobar2000-fileops-playlist.md](foobar2000-fileops-playlist.md)
+>
+> 包含：
+> - File Operations 预设的 INI 格式（8 键 / 4 种操作 / 9 个占位符）
+> - 改名后引用是否跟随的分层结论
+> - `.fpl`(v1.4) 自包含 vs `.fplite`(v2.0) 纯引用（42 倍体积差）
+
+## 五、离线宽限：某份快照中的 `retention` 折算为 28 天
 
 > **第三轮勘误（2026-11-17）**：本节初版把 28 天写成「已确认的产品行为」。实际只做到：**某份 `metadb_indexes` 快照里四条 `retention` 值折算为 28 天**，外加相关 SQL 字符串。**生产环境实际的清理时机与适用条件未实测**，需按 §十 的复跑卡验证。
 >
@@ -237,7 +293,7 @@ CREATE TABLE IF NOT EXISTS metadb_indexes (
 UPDATE metadb_indexes SET retention = 0 WHERE retention < 0
 ```
 
-### 3.2 GC 是 mark & sweep
+### 5.2 GC 是 mark & sweep
 
 ```sql
 -- 临时表：本批次见到的条目
@@ -253,7 +309,7 @@ DELETE FROM metadb WHERE lastseen < ?;
 UPDATE metadb SET lastseen = ? WHERE lastseen IS NULL;
 ```
 
-### 3.3 删除阈值 = `now − MAX(retention)`，不是「本批次」
+### 5.3 删除阈值 = `now − MAX(retention)`，不是「本批次」
 
 ```sql
 SELECT MAX(retention) FROM metadb_indexes
@@ -268,7 +324,7 @@ SELECT MAX(retention) FROM metadb_indexes
 | 「本批次没见到 → 删」 | 「`lastseen < now − 28 天` → 删」 |
 | 拔一次移动硬盘就清空 | **拔盘 28 天内完全无损** |
 
-### 3.4 状态机
+### 5.4 状态机
 
 ```
 目录可达         → 枚举到 → 更新 lastseen = now
@@ -281,7 +337,7 @@ SELECT MAX(retention) FROM metadb_indexes
 
 **恢复是按路径接回，不是按大小/时间配对**——因为 size/mtime 是**失效判据**不是**身份判据**。
 
-### 3.5 运行期实测（第三轮补充）：短时间离线根本不进入删除逻辑
+### 5.5 运行期实测（第三轮补充）：短时间离线根本不进入删除逻辑
 
 第三轮在 A′ 2.24.6 上做了「同路径目录改名 → 离线启动 → 同路径改回」实验：
 
@@ -307,7 +363,7 @@ Unable to open item for playback (Object not found):
 **同时这修正了本文 §3.3 的一处过度概括**：原文把「不判删」归因于 28 天宽限。
 实测表明**短时间离线压根不进入删除路径**，宽限期是否是 28 天**仍未验证**。
 
-### 3.6 三个反直觉的事实
+### 5.6 三个反直觉的事实
 
 **（1）没有「离线条目」这个 UI 概念。**
 全程序扫描 `offline` 只命中 `SMB2_STATUS_FILE_IS_OFFLINE`（SMB 状态码表）。foobar2000 分两层处理：
@@ -332,7 +388,7 @@ DDL 里有、GC 的 SQL 全套存在，但本样本 1,822 行**全 NULL**。说�
 
 **这五种都是「暂时」而非「永久失效」，对应的是保留而不是删除。** 这个分类粒度值得 SpMusic 直接借鉴。
 
-### 3.7 dead items 是显式功能
+### 5.7 dead items 是显式功能
 
 | 偏移 | 字符串 |
 | --- | --- |
@@ -343,9 +399,19 @@ DDL 里有、GC 的 SQL 全套存在，但本样本 1,822 行**全 NULL**。说�
 
 **失效判定交给用户决策**，不是静默删除，且逐项记日志。
 
-## 四、迁移与恢复
+## 六、主题容器（.fth）格式
 
-### 4.1 `foo_fileops.dll` 能做四个操作，预览是一等公民
+> **本节已独立成篇**：[foobar2000-theme-format.md](foobar2000-theme-format.md)
+>
+> 包含：
+> - `.fth` 四版逐字节零变化
+> - 容器结构（魔数 + 类型表 + 记录）
+> - 19 纯配色 + 13 纯布局的分离设计
+> - LAYOUT 内层的完整结构（差分法解出）
+
+## 七、迁移与恢复
+
+### 7.1 `foo_fileops.dll` 能做四个操作，预览是一等公民
 
 | 能力 | 证据 |
 | --- | --- |
@@ -358,13 +424,13 @@ DDL 里有、GC 的 SQL 全套存在，但本样本 1,822 行**全 NULL**。说�
 | 预设层级 | `group|preset` |
 | 文件名模式 | Title Format |
 
-### 4.2 关键：fileops **不更新引用**
+### 7.2 关键：fileops **不更新引用**
 
 实测该 DLL 里**没有任何** metadb / library / playlist 标识符。引用更新在**核心**：`metadb_handle_impl::set_path` + `on_changed_sorted` / `triggerCallbacks`。
 
 **这是一个干净的分层**：文件操作组件只负责搬文件，身份更新由核心做。
 
-### 4.3 `foo_playcount` 的匹配键是 64bit 哈希，不是路径
+### 7.3 `foo_playcount` 的匹配键是 64bit 哈希，不是路径
 
 ```sql
 metadb_index_C653739F(key INTEGER, filename TEXT PRIMARY KEY)   -- key = 64bit 哈希
@@ -383,25 +449,25 @@ metadb_index_C653739F_data(key, value BLOB)                      -- value 恒 40
 
 > **待确认的关键点**：`C653739F` 这个 64bit 哈希的**算法未知**。若它是**路径哈希**，那么"文件移动后播放统计丢失"就是必然而非偶然；若是内容哈希，则有机会跟随。这一条已列入复跑卡。
 
-### 4.4 换盘重定位：**没有这个能力**
+### 7.4 换盘重定位：**没有这个能力**
 
 全程序 + fileops 搜索 `relocate` / `remap` / `rebase` 无命中。
 
 **为什么没有**：因为主键是路径字符串。换盘后路径变了，主键就对不上；而索引层的哈希虽然存在，但**没有把哈希反查结果回写为新路径**的机制。
 
-### 4.5 重复引用：全局唯一 `name`
+### 7.5 重复引用：全局唯一 `name`
 
 `metadb.name`、18 个索引的 `filename`、`media.name` **全是 UNIQUE PK**。
 
 所以**同一个文件在多个歌单里出现时，元数据只有一条记录**。歌单只存引用（v2 格式：UTF-8 BOM + 每行一个 `file://…` 的纯文本 fplite + 独立 `-props.sqlite`）。
 
-### 4.6 索引孤儿：metadb 删了，索引不级联删
+### 7.6 索引孤儿：metadb 删了，索引不级联删
 
 实测 6 个索引各 7 行 orphan（`_cue_test` / `_lyrics_test` / `_seam_chirp`）。
 
 **metadb 删条目时不级联删索引数据**，各索引按自己的 `retention` 单独过期。配套有 `erase_orphaned_data` / `have_orphaned_data` 两个接口。
 
-## 五、版本演进：2.26 做过一次曲库层重构
+## 八、版本演进：2.26 做过一次曲库层重构
 
 | 项 | 2.24.6 | 2.26.3 |
 | --- | --- | --- |
@@ -411,7 +477,7 @@ metadb_index_C653739F_data(key, value BLOB)                      -- value 恒 40
 
 说明 2.24.6 → 2.26 之间曲库持久化层被重构过。
 
-## 六、`LargeFieldsConfig` 两代，语义不同
+## 九、`LargeFieldsConfig` 两代，语义不同
 
 任务卡指的是**第二代**（`LargeFieldsConfig-v2.txt`，2.26.3 才有）。但**第一代 `LargeFieldsConfig.txt` 就在 B 根目录**（1,132 B），且语义比 v2 明确：
 
@@ -429,7 +495,7 @@ fieldSpam=…（12 项）   # 非常用元字段，"不被缓存"
 
 **第二代 v2** 在二进制里只剩文件名 + 一行官网 URL 注释、**无解析日志**，静态分析到此为止——需要靠复跑卡实测。
 
-## 七、本机实测到的一个编码陷阱
+## 十、本机实测到的一个编码陷阱
 
 B 的 `library-error-log.txt`（90 B）实测是 **UTF-8 无 BOM**、Tab 分三列：
 
@@ -441,7 +507,7 @@ file://…\t原因\tFILETIME
 
 **教训**：不能对整个样本套用单一编码假设，要逐文件嗅探。
 
-## 八、证据强度
+## 十一、证据强度
 
 | 结论 | 强度 | 依据 |
 | --- | --- | --- |
@@ -461,7 +527,7 @@ file://…\t原因\tFILETIME
 | `LargeFieldsConfig` v1/v2 真实边界 | **未知** | 需动态验证 |
 | 28 天宽限的**运行时**验证 | **未做** | 需外部机器（复跑卡 E2-b）。第三轮离线实测仅数分钟，`metadb` 20 条前后不变、`lastseen` 全程 NULL |
 
-## 九、对 SpMusic 的直接含义
+## 十二、对 SpMusic 的直接含义
 
 SpMusic 的现状见 [SpMusic 曲库基线核查](#) 与
 `.rea-analysis/phase2/run-20261115-p2a/workstream-library/REPORT.md` §5。
@@ -476,7 +542,7 @@ SpMusic 的现状见 [SpMusic 曲库基线核查](#) 与
 
 **一条必须先修的静默缺陷**：子目录 `read_dir` 失败只 `tracing::warn` + `continue`，导致**子树掉线 = 静默少歌，用户零提示**。这正好对应 foobar2000 那五种细粒度 IO 错误分类要解决的问题。
 
-## 十、复跑卡（外部机器）
+## 十三、复跑卡（外部机器）
 
 本机无法运行 foobar2000，以下实验需在能运行的机器上做。完整步骤见
 `.rea-analysis/phase2/run-20261115-p2a/workstream-library/REPORT.md` §6。
@@ -492,7 +558,7 @@ SpMusic 的现状见 [SpMusic 曲库基线核查](#) 与
 
 FILETIME 换算：`(unix + 11644473600) × 10^7`。
 
-## 十一、合规
+## 十四、合规
 
 本文只记录功能级结论、证据位置与验收方法：
 

@@ -5,8 +5,9 @@ doc_type: "architecture"
 status: "active"
 owner_agent: "lead"
 version_scope: "build-1035-bundle-play (versionCode 1035009)"
+revision: 1
 created: "2026-11-07"
-updated: "2026-11-07"
+updated: "2026-11-18"
 source_documents:
   - ".rea-analysis/v1035/decoded/res/xml/singlepane.xml"
   - ".rea-analysis/v1035/decoded/res/xml/lockscreen.xml"
@@ -31,6 +32,8 @@ source_documents:
 # Poweramp「设置 → 锁屏」分支总览
 
 > **本文定位**：锁屏分支的**入口总览 + 四份专文的导航地图**。
+>
+> 证据制度（`ev_` ID 制 / smali 指针制）、版本域路径映射、混淆命名对照见 `poweramp-corpus-conventions.md`。
 > 只写"这一支由什么组成、各部分写在哪儿、彼此如何咬合"；**不重述**任何一条偏好的细节——
 > 细节全部落在四份专文里，本文只给索引与边界。
 

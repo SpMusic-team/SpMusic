@@ -1,0 +1,22 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+# Rust 社区惯例，与 src-tauri 现有代码缩进一致
+[*.rs]
+indent_size = 4
+
+# Windows PowerShell 脚本保持 CRLF 与 4 空格缩进
+[*.ps1]
+end_of_line = crlf
+indent_size = 4
+
+# Markdown 依赖行尾两个空格表达硬换行，不能裁剪
+[*.md]
+trim_trailing_whitespace = false

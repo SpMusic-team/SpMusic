@@ -1,0 +1,15 @@
+# 统一换行符与文本判定，避免跨机器同步时出现「文件显示已改动但 diff 为空」。
+#
+# 仓库内统一以 LF 存储。检出时除 PowerShell 脚本外同样使用 LF：
+# VS Code、WebStorm、ESLint、Vite、Rust 工具链均可正常处理，
+# 而本仓库 13 个 .ps1 依赖 CRLF（Windows PowerShell 5.1 的部分场景对纯 LF 不友好）。
+* text=auto eol=lf
+
+*.ps1 text eol=crlf
+
+# 二进制资产：禁止文本转换与行级 diff
+*.png  binary
+*.webp binary
+*.ico  binary
+*.icns binary
+*.aac  binary

@@ -1,137 +1,84 @@
-# SpMusic Codex Instructions
+# SpMusic 开发规范
 
-This repository uses project-specific Agent prompts and Codex custom agents.
+本文件是本仓库唯一的开发规范。产品定位：本地优先的桌面音乐播放器（React + TypeScript 前端，Tauri 2 + Rust 后端）。输出默认使用简体中文。
 
-## Source Of Truth
+## 常用命令
 
-- Agent registry: `.agents/prompt/agents.json`
-- Agent prompt files: `.agents/prompt/*_Agent.md`
-- Agent prompt template: `.agents/prompt/templates/Agent_Prompt_Template.md`
-- Legacy prompt mirror: `agent-prompt/`
-- Codex custom agents: `.codex/agents/*.toml`
-- Git workflow: `GIT_WORKFLOW.md`
+```bash
+npm install      # 安装依赖
+npm run dev      # 前端开发服务器
+npm run build    # 构建（含 TypeScript 检查）
+npm run lint     # Lint
+npm run tauri    # Tauri CLI
+npm run docs     # 文档工作台 http://127.0.0.1:4175
+npm run docs:test # 文档工作台单元测试
+```
 
-When there is a conflict, prefer the latest checked-in prompt file under `.agents/prompt/` over copied, mirrored, or remembered instructions.
+改动完成后至少运行 `npm run lint`；涉及前端构建配置、Tauri 配置或类型定义时再运行 `npm run build`。
 
-## Before Working
+## 目录与边界
 
-- Read `.agents/prompt/agents.json` when a task involves choosing or coordinating Agents.
-- Read the relevant `.agents/prompt/*_Agent.md` before acting as that Agent.
-- Respect each Agent's allowed outputs and forbidden paths.
-- Do not assume old Agent instructions are still valid after prompt files change.
+- `src/` ── React 前端（播放器、外观、UI 组件、文档工作台）
+- `src-tauri/` ── Tauri 应用与 Rust 后端，音频能力只能从这里暴露
+- `docs/` ── 需求、架构、任务、实现与变更记录等文档
+- `tools/` ── 文档工作台与音频语料工具
+- `test-fixtures/` ── 确定性合成音频语料
 
-## Agent Usage
+前端不得直接调用系统能力，一律走已注册的 Tauri command / event。新增或改动跨层契约（command 参数、event 载荷、共享类型、错误语义）时先在 `docs/architecture/` 记录，再动代码。
 
-- Use PM Agent for planning, scope control, prioritization, task cards, and Agent registry maintenance.
-- Use Requirements Agent for requirement analysis only; it does not create Sprint plans or task cards.
-- Use Architecture Agent for module boundaries, data contracts, and Tauri command boundaries.
-- Use UI/UX Agent for user flows, screen states, and interaction design.
-- Use Frontend Agent for React, TypeScript, styling, and frontend integration.
-- Use Rust/Tauri Agent for Rust commands, Tauri backend boundaries, and desktop capabilities.
-- Use Test Agent for verification plans, test cases, and regression checks.
-- Use Documentation Agent for README and docs consistency.
+## 行为约束
 
-## Agent Shortcuts
+- 不伪造能力：没有实现的功能不要写成已实现，模拟或占位状态不得描述为真实能力。
+- 不吞错、不静默降级：错误要显式暴露并带上下文；禁止用空 `catch` 或默认值把失败伪装成成功。
+- 修根因，不修症状：定位到真实原因再改，不用特判、延迟重试或放宽断言掩盖问题。
+- 不越权跨层：改前端不顺手改 Rust 后端，反过来也一样；需要跨层时先说明理由。
+- 新依赖、新权限、新外部服务先确认必要性再引入，并说明替代方案。
+- 不改任务范围外的文件，不顺手重排、重命名或用格式化工具扫全仓。
 
-When the user starts a message with one of these prefixes, route the request to the matching custom agent:
+## 文档
 
-- `@pm` -> use `pm` agent
-- `@req` -> use `requirements` agent
-- `@arch` -> use `architecture` agent
-- `@ui` -> use `ui_ux` agent
-- `@fe` -> use `frontend` agent
-- `@tauri` -> use `rust_tauri` agent
-- `@test` -> use `test` agent
-- `@doc` -> use `documentation` agent
+`docs/` 下的 Markdown 与根 `README.md` 带 YAML front matter，字段固定：
 
-Routing to a custom agent means actually delegating or spawning that agent when the runtime supports it. Merely reading the agent prompt and impersonating the role in the main agent does not count, except for the direct-work exceptions below or when delegation tooling is unavailable.
+```yaml
+---
+doc_id: TASK-SP-012
+title: 标题
+doc_type: task        # requirement | architecture | implementation | decision | task | test | change | ui | plan | index
+status: active        # active | draft | ready | in-review | done | superseded | blocked
+owner_agent: lead
+version_scope: v0.1   # project | v0.1 | v0.2 | research | future | corpus
+created: "2026-11-20" # 必须加引号，否则会被解析成日期对象
+updated: "2026-11-20"
+source_documents:
+  - "docs/architecture/overall-architecture.md"
+---
+```
 
-If the shortcut ends with `?`, answer only and do not edit files unless the user explicitly asks for file changes.
+- 九个字段都不能为空：`source_documents` 至少写一项（没有上游就写 `user request: …`）。
+- `created` / `updated` 用 `YYYY-MM-DD` 且必须加引号。
+- `title` 与正文一级标题一致；括号副标题、`决策：` 这类体裁前缀不算冲突。
+- 正文相对链接必须指向真实存在的文件。
+- `docs/corpus/` 是 Poweramp / foobar2000 的逆向语料，只做证据存档，同样适用上述字段。
+- 用 `npm run docs` 的校验面板检查上述规则。
 
-Examples:
+## 任务卡
 
-- `@req? Should theme switching enter MVP?`
-- `@arch? How should player state be modeled?`
-- `@fe Implement the player shell UI from the approved task.`
-- `@doc Update README according to current capabilities.`
+`docs/tasks/` 下的任务卡只写五节，够用就好：
 
-## Mandatory Subagent Workflow
+```markdown
+## 目标
 
-The main agent is the coordinator, integrator, and final verifier for non-trivial work. Change, build, and fix tasks must be delegated to the matching implementation agent unless they meet the direct-work exceptions below.
+## 非目标
 
-### Required Delegation
+## 验收标准
 
-Use one or more subagents when any of the following is true:
+## 涉及文件
 
-- the task crosses two or more Agent responsibility domains, especially Frontend plus Rust/Tauri
-- the task is expected to modify three or more business files or affect multiple independent modules
-- the task changes a state machine, async lifecycle, shared state, data contract, Tauri command/event boundary, public interface, or error semantics
-- the task is a large refactor, performance optimization, compatibility change, or production-path migration
-- two or more independent read-only investigations, code-mapping passes, documentation checks, or review workstreams can proceed separately
-- the work exceeds the current agent's responsibility or allowed output paths
-- the user explicitly requests delegation, parallel work, independent verification, or multi-Agent collaboration
+## 备注
+```
 
-For delegated implementation, the main agent must assign the matching specialist, avoid duplicating that specialist's work, integrate the result, and run the final repository-level checks.
+背景并入「目标」，风险与依赖并入「备注」。不要为单张卡增补额外章节。
 
-### Direct-Work Exceptions
+## Git
 
-The main agent may work directly only when the task is confined to one responsibility domain and is clearly low risk, such as:
-
-- answering a question, reporting status, or performing a focused read-only inspection
-- a small single-file documentation, copy, comment, spelling, formatting, or local styling correction
-- a mechanical change whose delegation overhead is greater than the work and which does not alter behavior, contracts, state, permissions, or runtime boundaries
-- work that cannot be split safely because delegation would require multiple agents to write the same files
-
-If there is doubt whether an implementation is low risk, delegate it.
-
-### Architecture Review Triggers
-
-Architecture Agent review is required before implementation when any of the following is true:
-
-- the change crosses two or more of React, Tauri commands/events, Rust, or local desktop capabilities
-- it introduces or changes shared data models, shared state, public interfaces, command/event contracts, dependency direction, or error semantics
-- it adds a dependency, permission, persistence mechanism, audio-engine capability, plugin boundary, external service, or runtime capability
-- multiple implementation agents depend on the same contract or shared module
-- module ownership, dependency direction, or responsibility boundaries are unclear
-
-Pure visual styling, a local component-internal refactor, or a single-module fix within an existing contract does not require Architecture Agent review.
-
-### Independent Verification Triggers
-
-Test Agent must independently verify completed implementation when any of the following is true:
-
-- the task is P0/P1, a defect fix, a release candidate, or pre-merge validation
-- user-visible behavior, state transitions, frontend/backend communication, file access, permissions, or error handling changed
-- the change affects cross-module contracts, asynchronous work, concurrency, timing, performance, or compatibility
-- the feature lacks automated coverage or acceptance requires manual interaction checks
-- the implementation agent cannot provide complete build, test, and regression evidence
-
-Pure documentation, planning, comments, or formatting-only changes do not require Test Agent review, but the main agent must still run appropriate basic checks.
-
-### Ownership And Concurrency
-
-- Every file has exactly one write owner during a work phase.
-- Each delegated task must state its responsibility, allowed files or directories, and any shared files it must not modify.
-- Parallel implementation is allowed only when write sets are explicitly non-overlapping.
-- Shared files such as `package.json`, lockfiles, shared types, application entry points, and Tauri configuration must have one owner and be changed sequentially.
-- Architecture, Test, and Code Review agents are read-only by default. Assign explicit paths separately if they must write architecture documents or tests.
-- Subagents must not revert, overwrite, reformat, or opportunistically modify changes outside their assigned ownership.
-- The main agent resolves integration issues and runs final validation after all delegated writes finish.
-- If non-overlapping ownership cannot be established, execute the work serially.
-
-## Prompt Update Rules
-
-When updating any Agent prompt:
-
-- update `.agents/prompt/agents.json` and the legacy mirror `agent-prompt/agents.json` if responsibilities, status, prompt paths, or allowed outputs changed
-- update `.codex/agents/*.toml` only if the Codex custom agent behavior or prompt path changed
-- mention prompt changes clearly in the final response
-- use a docs-style commit message, for example `docs: update agent prompts`
-
-## Project Commands
-
-- Install dependencies: `npm install`
-- Frontend dev server: `npm run dev`
-- Build: `npm run build`
-- Lint: `npm run lint`
-- Tauri CLI: `npm run tauri`
+分支模型为单人主干开发，提交信息格式见 [GIT_WORKFLOW.md](GIT_WORKFLOW.md)。提交前确认 `git status` 里没有与本次任务无关的改动。

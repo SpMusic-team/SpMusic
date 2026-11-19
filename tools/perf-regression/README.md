@@ -58,6 +58,8 @@ node tools/perf-regression/run.mjs --worktree D:\SpMusic-perf-versions\V1 --vers
 
 `results/current/*.json`：`schemaVersion`、`engine`（git commit、worktree、浏览器、视口、延迟模型、打桩清单）、`scenarios`（每场景的中位数/极值、命令构成、sourcePath 哈希）。
 
+`results/` 已在 `.gitignore` 中忽略：单次测量可达十几 MB，属本地产物。需要时按上面的命令重新生成。
+
 ## 已知版本约束
 
 | 版本 | 有无搜索页 | 有无"加入既有歌单" |

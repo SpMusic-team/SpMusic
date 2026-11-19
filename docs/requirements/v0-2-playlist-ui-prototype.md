@@ -1,10 +1,10 @@
 ---
 doc_id: "REQ-V0-2-PLAYLIST-UI"
 title: "v0.2 虚构播放列表管理 UI 需求"
-doc_type: "requirements"
-status: "approved-candidate"
-owner_agent: "Requirements Agent"
-version_scope: "v0.2-candidate"
+doc_type: "requirement"
+status: "draft"
+owner_agent: "lead"
+version_scope: "v0.2"
 created: "2026-07-09"
 updated: "2026-07-09"
 source_documents:

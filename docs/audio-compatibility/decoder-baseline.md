@@ -1,10 +1,10 @@
 ---
 doc_id: "AUDIO-COMPATIBILITY-DECODER-BASELINE"
 title: "音频解析链路第三阶段基线"
-doc_type: "test-report"
+doc_type: "test"
 status: "active"
-owner_agent: "Audio Compatibility Agent"
-version_scope: "audio-compatibility-phase-3"
+owner_agent: "lead"
+version_scope: "project"
 created: "2026-07-26"
 updated: "2026-07-26"
 source_documents:

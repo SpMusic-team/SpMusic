@@ -2,8 +2,8 @@
 doc_id: "DEC-2026-07-24-V0-1-REAL-AUDIO"
 title: "v0.1 真实本地播放范围变更"
 doc_type: "decision"
-status: "accepted"
-owner_agent: "PM Agent"
+status: "done"
+owner_agent: "lead"
 version_scope: "v0.1"
 created: "2026-07-24"
 updated: "2026-07-24"
@@ -12,7 +12,7 @@ source_documents:
   - "docs/decisions/2026-07-09-v0-1-ui-prototype-scope.md"
   - "docs/sprint-plan.md"
 ---
-# 决策：v0.1 纳入真实本地播放最小闭环
+# v0.1 真实本地播放范围变更
 
 ## 状态
 

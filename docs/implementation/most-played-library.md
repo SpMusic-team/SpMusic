@@ -3,13 +3,13 @@ doc_id: "IMPL-MOST-PLAYED-LIBRARY"
 title: "最常播放页面实现"
 doc_type: "implementation"
 status: "active"
-owner_agent: "Frontend Agent"
+owner_agent: "lead"
 version_scope: "project"
 created: "2026-11-05"
 updated: "2026-11-05"
 source_documents:
   - "docs/architecture/most-played-library.md"
-  - "docs/architecture/poweramp-recents-views.md"
+  - "docs/corpus/poweramp-recents-views.md"
   - "Figma V4Gbm9HJrUOsTiwXl2XcXV 9226:10916"
 ---
 

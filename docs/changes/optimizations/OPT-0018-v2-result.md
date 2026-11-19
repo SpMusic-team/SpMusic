@@ -1,9 +1,9 @@
 ---
 doc_id: "OPT-0018-V2-RESULT"
 title: "OPT-0018 v2 列表封面路径通道：实施、真机实测与保留/回滚判定依据"
-doc_type: "test-report"
-owner_agent: "Test Agent"
-status: "历史实施报告；独立验收不通过"
+doc_type: "test"
+owner_agent: "lead"
+status: "superseded"
 module: "列表封面加载链路"
 version_scope: "project"
 created: "2026-11-08"
@@ -19,7 +19,7 @@ source_documents:
   - "git commits: 09cc450 / 28312ab / 71adeed / 2f67d99"
 ---
 
-# OPT-0018 v2 列表封面路径通道：实施、真机实测与判定依据
+# OPT-0018 v2 列表封面路径通道：实施、真机实测与保留/回滚判定依据
 
 > **历史实施记录（2026-11-08）**：本文保留当时的数据与判断。[早期独立验证报告](../../test/opt-0018-independent-verification-2026-11-08.md)记录了 `9e3a4f9` 的两个 P1，后续已在 `3847bcc` 修复。develop 合入范围、正式往返对照结果和待解决问题见[集成记录](./OPT-0018-develop-integration.md)。
 

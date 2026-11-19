@@ -3,12 +3,11 @@ doc_id: "IMPL-PLAYLIST-COVER-BACKEND-CONCURRENCY"
 title: "播放列表封面后端并发改造与探测去重"
 doc_type: "implementation"
 status: "active"
-owner_agent: "Rust/Tauri Agent"
+owner_agent: "lead"
 version_scope: "project"
 created: "2026-10-25"
 updated: "2026-10-25"
 source_documents:
-  - ".agents/prompt/Rust_Tauri_Agent.md"
   - "user request: 优化播放列表专辑封面冷启动加载速度（并发改造 + 专辑级去重）"
   - "docs/architecture/audio-visual-pipeline.md"
 ---

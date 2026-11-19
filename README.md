@@ -52,7 +52,7 @@ SpMusic 是一个本地优先的桌面音乐播放器项目，目标是构建轻
 - 队列：用户选中单个音频文件后，仍可生成同目录非递归、只读的会话内临时队列。
 - 元数据：读取基础标签；存在嵌入式歌词或封面时展示，缺失时使用后备状态。
 - 兼容性：已建立基于仓库确定性合成语料的格式兼容性矩阵（当前证据以 Windows x64 为主）。
-- 文档：已建立需求索引、路线图、Sprint 计划、发布计划、架构与实现说明，并内置本地文档工作台。
+- 文档：架构、实现、决策、任务、测试与变更记录分类存放，全量入口见 [docs/README.md](docs/README.md)，并内置本地文档工作台。
 
 > 说明：上述播放、队列、歌词 / 封面等能力目前处于“已实现候选 / 待验收”状态。代码与自动检查证据已经存在，但 v0.1 综合真实播放验证（SP-018）、Tauri 制品构建与制品 smoke（SP-019）尚未完成，因此本项目尚未对外宣布“已验证”或“已发布”。版本号也尚未对齐：`package.json` 仍为 `0.0.0`，`src-tauri` 为 `0.1.0`。
 
@@ -103,7 +103,7 @@ SpMusic 是一个本地优先的桌面音乐播放器项目，目标是构建轻
 
 ## 验证与证据边界
 
-- 自动检查：`npm run lint`、`npm run build`、`cargo fmt -- --check`、`cargo check`、`cargo test` 已在任务记录中通过（详见 [Sprint 计划](docs/sprint-plan.md) 与相关任务卡）。
+- 自动检查：`npm run lint`、`npm run build` 与 Rust 侧的 `cargo fmt -- --check`、`cargo check`、`cargo test` 均有通过记录，证据在对应任务卡与 [docs/test/](docs/test/index.md) 的验证报告里。
 - 格式兼容性：[音频格式能力矩阵](docs/audio-compatibility/format-capability-matrix.md) 基于仓库内确定性合成语料，对 MP3、FLAC、AAC / M4A、ALAC、Ogg Vorbis / Opus、WebM、Matroska / FLAC、WAV、AIFF、CAF 等组合验证了解码、duration 与 seek；标签 / 歌词 / 封面仅对部分组合有证据。`verified` 只表示指定语料与检查维度通过，不代表所有同扩展名文件均兼容。
 - 平台：当前自动与实现证据主要来自 Windows x64；macOS、Linux、ARM64 尚未认证。
 - 未完成：SP-018 综合真实播放验证（含声卡实机可听播放）与 SP-019 制品构建 / 制品 smoke / 版本一致性尚未完成；在这些证据产生前，README 不把这些能力写成“已验证 / 已发布”。
@@ -192,19 +192,15 @@ npm run docs:start
 npm run docs:test
 ```
 
-工作台会扫描仓库中的 Markdown 文件，并监听磁盘变更。`docs/`、`README.md`、`GIT_WORKFLOW.md` 和 PM Agent 管理的 `.agents/prompt/*.md` / `.agents/prompt/templates/*.md` 可编辑；选择 `PM Agent` 时会自动显示 PM 管理的 Agent 提示词和模板。其他内部 Markdown 可按需显示，但默认不进入普通文档列表。新建、移动和重命名仍限制在 `docs/` 目录，保存使用内容版本检查避免覆盖外部编辑器中的新修改。
+工作台会扫描仓库中的 Markdown 文件，并监听磁盘变更。`docs/`、`README.md`、`GIT_WORKFLOW.md` 可编辑；`.agents/` 等内部 Markdown 默认不进入文档列表，需要时可在列表选项中显式显示。新建、移动和重命名仍限制在 `docs/` 目录，保存使用内容版本检查避免覆盖外部编辑器中的新修改。
 
-## v0.1 范围与发布状态
+## v0.1 范围与当前状态
 
-v0.1 的目标是“真实本地播放可发布闭环”：在已完成播放器界面上，实现可验证的真实本地音频播放链路，并完成综合验证、Tauri 制品构建、制品 smoke 与版本一致性收口。
+v0.1 的目标是「真实本地播放可发布闭环」，完整规划记录在已归档的 [Sprint 计划](docs/sprint-plan.md) 里。
 
-当前发布收口任务状态（详见 [Sprint 计划](docs/sprint-plan.md)）：
+那份计划停在 2026-07～10：当时 SP-016 / SP-017 待验收、SP-018 综合验证未做、SP-019 制品未构建。此后代码已经越过 v0.1 的范围，曲库、播放列表、封面与缩略图、全局快捷键等能力都已实现，`src-tauri/src` 下有对应的 Rust 模块与 Tauri command。
 
-- SP-016（真实音频后端）、SP-017（前端真实播放接入）：实现候选，待 SP-018 验收。
-- SP-018（综合真实播放验证）：就绪，未完成。
-- SP-019（制品、版本一致性与制品 smoke）：就绪，未完成。
-- SP-020（需求基线重整）、SP-021（架构契约对齐）：就绪 / 进行中。
-- SP-010（README 收口）：本文档对应任务，最终结论依赖上述验证结果。
+判断某个能力现在有没有，以代码与 [docs/implementation/](docs/implementation/index.md) 为准，不要用归档的规划文档推断。全量文档索引见 [docs/README.md](docs/README.md)。
 
 ## 不支持的能力
 
@@ -225,10 +221,8 @@ v0.1 的目标是“真实本地播放可发布闭环”：在已完成播放器
 
 ## 文档入口
 
-- [需求索引](docs/requirements.md)
-- [路线图](docs/roadmap.md)
-- [Sprint 计划](docs/sprint-plan.md)
-- [发布计划](docs/release-plan.md)
+全量索引见 [docs/README.md](docs/README.md)，那里按目录列出全部文档与「想做什么该读哪篇」。
+
 - [总体架构](docs/architecture/overall-architecture.md)
 - [真实音频播放架构](docs/architecture/real-audio-playback.md)
 - [播放列表曲目标签摘要契约](docs/architecture/playlist-track-summaries.md)
@@ -240,14 +234,14 @@ v0.1 的目标是“真实本地播放可发布闭环”：在已完成播放器
 - [解码兼容性基线](docs/audio-compatibility/decoder-baseline.md)
 - [v0.1 历史需求](docs/requirements/v0-1-foundation.md)（部分内容已被 2026-07 范围决策覆盖）
 - [v0.2 播放列表 UI 候选需求](docs/requirements/v0-2-playlist-ui-prototype.md)
-- [变更记录](docs/changes/)（bug 与优化记录）
+- [变更记录](docs/changes/index.md)（bug 与优化记录）
+- [需求索引](docs/requirements.md) / [路线图](docs/roadmap.md) / [Sprint 计划](docs/sprint-plan.md) / [发布计划](docs/release-plan.md)（已归档的历史规划快照）
 
 ## 项目结构
 
 ```text
 .
-├── .agents/             # 项目协作 Agent 注册表、提示词和模板
-├── agent-prompt/        # Agent 提示词镜像
+├── .agents/             # 可复用的项目 skill（shadcn、Radix→Base UI 迁移）
 ├── docs/                # 需求、路线图、计划、任务、架构、UI、实现与变更记录
 ├── public/              # 前端静态资源
 ├── src/                 # React 前端源码（播放器、外观、UI 组件、文档工作台）
@@ -261,5 +255,5 @@ v0.1 的目标是“真实本地播放可发布闭环”：在已完成播放器
 
 ## 协作约定
 
-- 项目使用 Codex Agent 协作，Agent 注册表与提示词位于 `.agents/prompt/`，协作说明见 [AGENTS.md](AGENTS.md)。
+- 开发规范与行为约束见 [AGENTS.md](AGENTS.md)。
 - Git 工作流约定见 [GIT_WORKFLOW.md](GIT_WORKFLOW.md)。

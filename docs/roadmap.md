@@ -1,12 +1,12 @@
 ---
 doc_id: "ROADMAP"
 title: "SpMusic 路线图"
-doc_type: "roadmap"
-status: "active"
-owner_agent: "PM Agent"
+doc_type: "plan"
+status: "superseded"
+owner_agent: "lead"
 version_scope: "project"
 created: "2026-07-09"
-updated: "2026-10-01"
+updated: "2026-11-20"
 source_documents:
   - "docs/requirements.md"
   - "docs/decisions/2026-07-24-v0-1-real-audio-scope.md"
@@ -18,7 +18,12 @@ source_documents:
   - "docs/decisions/2026-09-30-plugin-host-architecture.md"
   - "docs/test/plugin-host-design-review.md"
 ---
+
 # SpMusic 路线图
+
+> **历史档案（2026-11-20 归档）。** 本文是 2026-07～10 期间版本路线任务的规划快照，`status` 已置为 `superseded`，不再维护。
+> 此后代码已越过本文描述的范围：曲库与文件夹扫描、播放列表增删与重排、封面与缩略图、全局快捷键等能力已在 `src-tauri/src` 落地。
+> 当前能力边界以**代码**与 [docs/architecture/](architecture/index.md)、[docs/implementation/](implementation/index.md) 为准；本文只作历史记录，不能用来判断现在做没做某个功能。全量文档索引见 [docs/README.md](README.md)。
 
 ## 摘要
 

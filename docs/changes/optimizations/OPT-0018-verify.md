@@ -1,9 +1,9 @@
 ---
 doc_id: "OPT-0018-VERIFY"
 title: "OPT-0018 真机实测指引"
-doc_type: "test-plan"
-owner_agent: "Test Agent"
-status: "待实测"
+doc_type: "test"
+owner_agent: "lead"
+status: "draft"
 module: "专辑库列表封面加载链路"
 version_scope: "project"
 created: "2026-11-07"

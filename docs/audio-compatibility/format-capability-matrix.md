@@ -1,10 +1,10 @@
 ---
 doc_id: "AUDIO-COMPATIBILITY-MATRIX"
 title: "音频格式能力矩阵"
-doc_type: "compatibility-evidence"
+doc_type: "change"
 status: "active"
-owner_agent: "Audio Compatibility Agent"
-version_scope: "existing-format-hardening"
+owner_agent: "lead"
+version_scope: "project"
 created: "2026-07-26"
 updated: "2026-07-26"
 source_documents:

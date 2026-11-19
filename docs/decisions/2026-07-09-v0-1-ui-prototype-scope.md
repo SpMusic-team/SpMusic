@@ -3,7 +3,7 @@ doc_id: "DEC-2026-07-09-V0-1-UI-SCOPE"
 title: "v0.1 UI 原型范围"
 doc_type: "decision"
 status: "superseded"
-owner_agent: "PM Agent"
+owner_agent: "lead"
 version_scope: "v0.1"
 created: "2026-07-09"
 updated: "2026-07-24"
@@ -12,7 +12,7 @@ source_documents:
   - "docs/sprint-plan.md"
   - "docs/decisions/2026-07-24-v0-1-real-audio-scope.md"
 ---
-# 决策：v0.1 只做播放界面，虚构播放列表管理 UI 顺延到 v0.2
+# v0.1 UI 原型范围
 
 ## 状态
 

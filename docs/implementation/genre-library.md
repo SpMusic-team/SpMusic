@@ -3,14 +3,14 @@ doc_id: "IMPL-GENRE-LIBRARY"
 title: "流派分类页面实现"
 doc_type: "implementation"
 status: "active"
-owner_agent: "Frontend Agent"
+owner_agent: "lead"
 version_scope: "project"
 created: "2026-11-05"
 updated: "2026-11-05"
 source_documents:
   - "user request: 参照 Poweramp 文档及 Figma 实现流派页面"
   - "docs/architecture/genre-library.md"
-  - "docs/architecture/poweramp-category-views.md"
+  - "docs/corpus/poweramp-category-views.md"
   - "https://www.figma.com/design/V4Gbm9HJrUOsTiwXl2XcXV/SpMusic?node-id=9208-9760"
 ---
 

@@ -1,9 +1,9 @@
 ---
 doc_id: "UI-PLAYER-SHELL"
 title: "播放界面 UI 规格"
-doc_type: "ui-spec"
+doc_type: "ui"
 status: "draft"
-owner_agent: "UI/UX Agent"
+owner_agent: "lead"
 version_scope: "v0.1"
 created: "2026-07-11"
 updated: "2026-07-27"

@@ -1,10 +1,10 @@
 ---
 doc_id: "OPT-0018-DEVELOP-INTEGRATION"
 title: "OPT-0018 列表封面路径方案集成记录"
-doc_type: "optimization-result"
-status: "develop 集成"
-owner_agent: "Documentation Agent"
-version_scope: "develop"
+doc_type: "change"
+status: "done"
+owner_agent: "lead"
+version_scope: "project"
 created: "2026-11-09"
 updated: "2026-11-10"
 source_documents:

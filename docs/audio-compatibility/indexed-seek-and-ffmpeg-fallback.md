@@ -1,10 +1,10 @@
 ---
 doc_id: "AUDIO-COMPATIBILITY-INDEXED-SEEK-FFMPEG-FALLBACK"
 title: "索引 Seek 与 LGPL FFmpeg Fallback 决策记录"
-doc_type: "technical-decision-record"
+doc_type: "decision"
 status: "active"
-owner_agent: "Audio Compatibility Agent"
-version_scope: "audio-compatibility-phase-4"
+owner_agent: "lead"
+version_scope: "project"
 created: "2026-07-26"
 updated: "2026-07-26"
 source_documents:

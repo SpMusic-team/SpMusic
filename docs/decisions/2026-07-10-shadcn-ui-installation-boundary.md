@@ -2,17 +2,16 @@
 doc_id: "DEC-2026-07-10-SHADCN-UI-BOUNDARY"
 title: "shadcn/ui 前端基底接入边界"
 doc_type: "decision"
-status: "accepted"
-owner_agent: "PM Agent"
+status: "done"
+owner_agent: "lead"
 version_scope: "v0.1"
 created: "2026-07-10"
 updated: "2026-07-10"
 source_documents:
-  - "agent-prompt/PM_Agent.md"
   - "docs/tasks/sp-007-minimal-player-shell-implementation.md"
   - "package.json"
 ---
-# 决策：shadcn/ui 作为前端基底单独接入
+# shadcn/ui 前端基底接入边界
 
 ## 背景
 

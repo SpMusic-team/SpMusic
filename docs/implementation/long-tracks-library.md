@@ -3,13 +3,13 @@ doc_id: "IMPL-LONG-TRACKS-LIBRARY"
 title: "长分类实现说明"
 doc_type: "implementation"
 status: "active"
-owner_agent: "Frontend Agent"
+owner_agent: "lead"
 version_scope: "project"
 created: "2026-10-30"
 updated: "2026-10-30"
 source_documents:
   - "user request: 实现媒体库下长分类，完整复用所有歌曲界面，默认15分钟及以上"
-  - "docs/architecture/poweramp-recents-views.md"
+  - "docs/corpus/poweramp-recents-views.md"
   - "src/features/player/model/longTracks.ts"
 ---
 

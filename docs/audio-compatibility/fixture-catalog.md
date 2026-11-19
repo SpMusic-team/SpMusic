@@ -1,10 +1,10 @@
 ---
 doc_id: "AUDIO-COMPATIBILITY-FIXTURE-CATALOG"
 title: "音频兼容性合成语料目录"
-doc_type: "test-catalog"
+doc_type: "test"
 status: "active"
-owner_agent: "Audio Compatibility Agent"
-version_scope: "existing-format-hardening"
+owner_agent: "lead"
+version_scope: "project"
 created: "2026-07-26"
 updated: "2026-07-26"
 source_documents:

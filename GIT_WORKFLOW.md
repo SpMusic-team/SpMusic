@@ -44,6 +44,7 @@ feature/*（可选）
 * 禁止强制推送
 * 禁止删除
 * 推送前本地 `npm run lint` 和 `npm run build` 应通过
+* 完成任务并跑完验证后默认提交，不需要逐次征询；一次任务按主题拆成若干提交，不要把不相关的改动塞进同一个提交
 
 ### 3.2 `feature/*`
 
@@ -307,61 +308,4 @@ CI/CD 配置
 预计影响：登录、注册、Token 校验
 预计时间：今晚完成
 分支：feature/auth-refactor
-```
-
----
-
-## 9. 发布流程（`main` 启用后适用）
-
-以下流程在首次正式发布、`main` 被启用后执行。
-
-1. 确认 `develop` 通过完整验证（`npm run lint`、`npm run build`、`cargo check`、制品 smoke）。
-2. 对齐版本号：`package.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml` 三处一致。
-3. 合并到 `main`：
-
-```bash
-git checkout main
-git pull origin main
-git merge --no-ff develop
-git push origin main
-```
-
-4. 打 tag 并推送：
-
-```bash
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-版本号建议：
-
-```text
-v0.1.0    初始可用版本
-v0.2.0    新增功能
-v0.2.1    Bug 修复
-v1.0.0    首个正式稳定版本
-```
-
----
-
-## 10. 最终流程图
-
-```text
-开始开发
-   ↓
-同步 develop
-   ↓
-（改动大？）→ 是 → 建 feature/* 分支
-   ↓ 否              ↓
-   └──────────────→ 开发并小步提交
-                       ↓
-                   推送（feature 分支先合回 develop）
-                       ↓
-                   本地验证 lint / build / cargo check
-                       ↓
-                   发布时（main 启用后）
-                       ↓
-                   合并 develop → main
-                       ↓
-                   打 Tag / 创建 Release
 ```

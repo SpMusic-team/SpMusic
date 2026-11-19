@@ -2,9 +2,9 @@
 doc_id: "DEC-2026-09-30-ALL-BUSINESS-PLUGIN-GOAL"
 title: "全业务插件化长期目标"
 doc_type: "decision"
-status: "accepted"
-owner_agent: "PM Agent"
-version_scope: "long-term"
+status: "done"
+owner_agent: "lead"
+version_scope: "future"
 created: "2026-09-30"
 updated: "2026-09-30"
 source_documents:

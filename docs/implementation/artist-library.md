@@ -3,7 +3,7 @@ doc_id: "IMPL-ARTIST-LIBRARY"
 title: "媒体库艺术家分类实现"
 doc_type: "implementation"
 status: "active"
-owner_agent: "Frontend Agent"
+owner_agent: "lead"
 version_scope: "project"
 created: "2026-10-28"
 updated: "2026-10-29"
@@ -14,7 +14,7 @@ source_documents:
   - "https://www.figma.com/design/V4Gbm9HJrUOsTiwXl2XcXV/SpMusic?node-id=8117-19352"
   - "https://www.figma.com/design/V4Gbm9HJrUOsTiwXl2XcXV/SpMusic?node-id=8134-19952"
   - "docs/architecture/artist-library.md"
-  - "docs/architecture/poweramp-entity-views.md"
+  - "docs/corpus/poweramp-entity-views.md"
 ---
 
 # 媒体库艺术家分类实现

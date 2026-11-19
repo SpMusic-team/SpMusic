@@ -1,9 +1,9 @@
 ---
 doc_id: "UI-PLAYER-RESPONSIVE-LAYOUT-STRATEGY"
 title: "播放界面响应式布局策略"
-doc_type: "ui-spec"
+doc_type: "ui"
 status: "draft"
-owner_agent: "UI/UX Agent"
+owner_agent: "lead"
 version_scope: "v0.1"
 created: "2026-09-15"
 updated: "2026-09-20"

@@ -3,7 +3,7 @@ doc_id: "IMPL-YEAR-LIBRARY"
 title: "年份分类页面实现"
 doc_type: "implementation"
 status: "active"
-owner_agent: "Frontend Agent"
+owner_agent: "lead"
 version_scope: "project"
 created: "2026-11-03"
 updated: "2026-11-04"
@@ -20,7 +20,7 @@ source_documents:
   - "user request: 中等带图专辑行的真实容器外缘与播放列表歌曲一样对齐头图外缘"
   - "user request: 四类专辑页所有带图行档位同步头图外框对齐"
   - "user request: 艺术家、专辑艺术家、作曲家专辑页头图下方入口间距与年份页一致"
-  - "docs/architecture/poweramp-category-views.md"
+  - "docs/corpus/poweramp-category-views.md"
   - "https://www.figma.com/design/V4Gbm9HJrUOsTiwXl2XcXV/SpMusic?node-id=9190-8873"
 ---
 

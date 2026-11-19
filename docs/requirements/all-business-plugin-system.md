@@ -1,10 +1,10 @@
 ---
 doc_id: "REQ-PLUGIN-001"
 title: "需求分析：全部业务能力插件化"
-doc_type: "requirements"
-status: "approved-product-direction"
-owner_agent: "Requirements Agent"
-version_scope: "long-term"
+doc_type: "requirement"
+status: "done"
+owner_agent: "lead"
+version_scope: "future"
 created: "2026-09-30"
 updated: "2026-09-30"
 source_documents:

@@ -1,16 +1,16 @@
 ---
 doc_id: "REQ-V0-1-FOUNDATION"
 title: "v0.1 项目地基版本需求分析"
-doc_type: "requirements"
-status: "approved"
-owner_agent: "Requirements Agent"
+doc_type: "requirement"
+status: "done"
+owner_agent: "lead"
 version_scope: "v0.1"
 created: "2026-07-09"
 updated: "2026-07-10"
 source_documents:
   - "docs/requirements/总需求分析.md"
 ---
-# 需求分析：v0.1 播放界面
+# v0.1 项目地基版本需求分析
 
 ## 摘要
 
@@ -87,7 +87,6 @@ v0.1 播放界面是后续虚构播放列表管理 UI、真实播放、媒体库
 
 - `docs/requirements/总需求分析.md`：作为最终产品愿景和长期范围来源。
 - `docs/requirements.md`：作为需求索引和版本状态汇总。
-- `agent-prompt/agents.json`：用于确认后续可参与 Agent 及职责边界。
 - Architecture Agent：如播放器状态结构、假歌曲结构存在争议，应先给出边界建议。
 - UI/UX Agent：如播放界面、交互状态和 Empty State 需要进一步细化，应单独产出 UI 规格。
 

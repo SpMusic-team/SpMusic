@@ -1,12 +1,14 @@
 ---
 doc_id: "AUDIO-EXISTING-FORMAT-HARDENING"
 title: "现有音频格式完善报告"
-doc_type: "implementation-evidence"
+doc_type: "implementation"
 status: "active"
-owner_agent: "Audio Compatibility Agent"
-version_scope: "existing-format-hardening"
+owner_agent: "lead"
+version_scope: "project"
 created: "2026-07-26"
 updated: "2026-07-26"
+source_documents:
+  - "docs/audio-compatibility/fixture-catalog.md（语料生成器 v3，42 项登记与生成结果）"
 ---
 # 现有音频格式完善报告
 

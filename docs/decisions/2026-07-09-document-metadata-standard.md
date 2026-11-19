@@ -2,11 +2,11 @@
 doc_id: "DEC-2026-07-09-DOC-METADATA"
 title: "文档元数据规范"
 doc_type: "decision"
-status: "accepted"
-owner_agent: "PM Agent"
+status: "done"
+owner_agent: "lead"
 version_scope: "project"
 created: "2026-07-09"
-updated: "2026-07-09"
+updated: "2026-11-20"
 source_documents:
   - "user request"
 ---
@@ -45,73 +45,30 @@ source_documents:
 ## 字段说明
 
 - `doc_id`：稳定唯一 ID，不随标题调整而改变。
-- `title`：中文标题。
-- `doc_type`：例如 `requirements`、`requirements-index`、`roadmap`、`sprint-plan`、`release-plan`、`task`、`decision`、`agent-prompt`、`template`。
-- `status`：例如 `draft`、`in-review`、`active`、`approved`、`accepted`、`deferred`。
-- `owner_agent`：负责维护该文档的 Agent。
-- `version_scope`：适用范围，例如 `project`、`long-term`、`v0.1`、`future`、`deferred`。
+- `title`：中文标题，与正文一级标题一致。括号副标题（如「（build-1035）」）与「决策：」「测试报告：」这类体裁前缀不算不一致。
+- `doc_type`：取值为 `requirement`、`architecture`、`implementation`、`decision`、`task`、`test`、`change`、`ui`、`plan`、`index` 十种之一。
+- `status`：取值为 `active`、`draft`、`ready`、`in-review`、`done`、`superseded`、`blocked` 七种之一。
+- `owner_agent`：负责方。历史字段名保留，当前统一取 `lead`，不再对应任何角色体系。
+- `version_scope`：取值为 `project`、`v0.1`、`v0.2`、`research`、`future`、`corpus` 六种之一。
 - `created`：首次创建日期。
 - `updated`：最近更新日期。
-- `source_documents`：生成或更新该文档所依据的来源。
+- `source_documents`：生成或更新该文档所依据的来源，至少一项。
+
+## 适用范围
+
+元数据规范只约束项目文档：`docs/` 下的 Markdown 与仓库根 `README.md`。
+
+以下路径不属于项目文档体系，不要求 front matter：`.agents/skills/`（外部 skill 原文，带哈希锁）、`.rea-analysis/`（反汇编取证产物）、`tools/*/README.md`（工具自带说明）、`src-tauri/` 下的说明文件。
 
 ## 维护规则
 
-- 新增正式 Markdown 文档时必须带元数据。
-- 修改文档正文时应同步更新 `updated`。
-- 文档状态变化时必须更新 `status`。
-- 如果文档由另一个文档拆分或派生，必须把来源写入 `source_documents`。
-- 文件名用于路径稳定，`doc_id` 用于追溯稳定身份。
-
-## 元数据权限
-
-元数据可以由多个 Agent 维护，但必须遵守职责边界。
-
-### 通用权限
-
-所有 Agent 都可以在自己允许产出的文件中：
-
-- 创建完整 YAML front matter。
-- 更新 `updated`。
-- 补充 `source_documents`。
-- 修正明显的标题、路径或来源错误。
-- 将 `status` 从缺失状态补为与文档正文一致的初始状态。
-
-所有 Agent 默认不得：
-
-- 修改不属于自己允许产出范围的文件元数据。
-- 擅自修改 `doc_id`。
-- 擅自把其他 Agent 负责的文档状态改为 `approved`、`accepted`、`done` 或等价完成状态。
-- 擅自改变 `owner_agent`，除非 PM Agent 明确重新分配。
-- 删除已有 `source_documents`，除非确认其为错误来源并在正文或提交说明中解释。
-
-### 字段权限
-
-| 字段 | 默认可修改者 | 限制 |
-| --- | --- | --- |
-| `doc_id` | PM Agent | 创建后应保持稳定；其他 Agent 只能在新建自己产物时设置 |
-| `title` | 文档 owner_agent、PM Agent、Documentation Agent | 必须与正文标题一致 |
-| `doc_type` | 文档 owner_agent、PM Agent | 创建后不应频繁变更 |
-| `status` | 文档 owner_agent、PM Agent | 完成、批准、接受类状态只能由对应 owner 或 PM 更新 |
-| `owner_agent` | PM Agent | 代表职责归属，其他 Agent 不得擅自改 |
-| `version_scope` | PM Agent、文档 owner_agent | 不得扩大到未批准版本范围 |
-| `created` | 文档创建者 | 创建后不得修改，除非明显错误 |
-| `updated` | 所有修改该文档正文或元数据的 Agent | 修改时必须同步更新 |
-| `source_documents` | 所有修改该文档的 Agent | 可追加来源，删除来源需说明原因 |
-
-### Agent 级权限
-
-- PM Agent：可维护规划、任务、决策、发布、复盘、Agent 注册表、Agent 提示词和模板的元数据；可调整 `owner_agent`。
-- Requirements Agent：可维护 `docs/requirements.md`、`docs/requirements/*.md` 及需求归档文档的元数据；不得批准路线图、Sprint 或发布计划。
-- Architecture Agent：可维护 `docs/architecture/*.md` 和由其创建的架构决策文档元数据；不得修改产品需求状态。
-- UI/UX Agent：可维护 `docs/ui/*.md` 和由其创建的 UI 决策文档元数据；不得修改实现任务状态。
-- Frontend Agent：可维护 `src/` 相关实现说明文档和由其创建的前端测试说明元数据；不得修改 PM 或需求文档状态。
-- Rust/Tauri Agent：可维护 Rust/Tauri 实现说明文档元数据；不得修改产品需求或 UI 规格状态。
-- Test Agent：可维护 `docs/test/*.md`、测试报告和测试文件说明元数据；不得把产品任务改为完成，只能报告验证结果。
-- Documentation Agent：可检查并修复文档元数据完整性、标题一致性、链接来源和 `updated` 字段；不得擅自改变职责归属或批准状态。
+- 新增正式 Markdown 文档时必须带元数据；修改正文同步维护 `updated`，状态变化同步 `status`。
+- `doc_id` 创建后保持稳定，不随标题调整而改。
+- `source_documents` 可追加；删除来源需在提交说明中写明原因。
+- 文档由另一篇拆分或派生时，必须把来源写进 `source_documents`；文件名用于路径稳定，`doc_id` 用于追溯稳定身份。
+- 校验入口：`npm run docs` 的校验面板，或 `loadAllDocuments` 返回的 `issues`。
 
 ## 影响
 
-- PM Agent 负责维护规划、任务、决策类文档的元数据。
-- Requirements Agent 负责维护需求文档的元数据。
-- Documentation Agent 负责检查 README 和文档索引中的元数据完整性。
-- 其他 Agent 在创建自己的产物时必须遵守本规范。
+- `tools/docs-manager/lib.mjs` 按本规范校验；超出适用范围的路径不产生校验问题。
+- 新增文档缺字段、日期未加引号、链接目标不存在都会被校验面板报出来。

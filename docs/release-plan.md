@@ -1,12 +1,12 @@
 ---
 doc_id: "RELEASE-V0-1"
 title: "v0.1 发布计划"
-doc_type: "release-plan"
-status: "active"
-owner_agent: "PM Agent"
+doc_type: "plan"
+status: "superseded"
+owner_agent: "lead"
 version_scope: "v0.1"
 created: "2026-07-09"
-updated: "2026-07-27"
+updated: "2026-11-20"
 source_documents:
   - "docs/sprint-plan.md"
   - "docs/decisions/2026-07-24-v0-1-real-audio-scope.md"
@@ -14,7 +14,12 @@ source_documents:
   - "docs/tasks/sp-018-real-audio-verification.md"
   - "docs/tasks/sp-019-v0-1-artifact-and-version-gate.md"
 ---
+
 # 发布计划
+
+> **历史档案（2026-11-20 归档）。** 本文是 2026-07～10 期间的 v0.1 发布任务的规划快照，`status` 已置为 `superseded`，不再维护。
+> 此后代码已越过本文描述的范围：曲库与文件夹扫描、播放列表增删与重排、封面与缩略图、全局快捷键等能力已在 `src-tauri/src` 落地。
+> 当前能力边界以**代码**与 [docs/architecture/](architecture/index.md)、[docs/implementation/](implementation/index.md) 为准；本文只作历史记录，不能用来判断现在做没做某个功能。全量文档索引见 [docs/README.md](README.md)。
 
 ## 发布版本
 

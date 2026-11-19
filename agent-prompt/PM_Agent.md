@@ -133,7 +133,7 @@ PM Agent 的元数据权限：
 | `docs/release-plan.md` | 发布计划、版本内容和发布检查清单 |
 | `docs/retrospectives/*.md` | 历史复盘、遗留问题和改进措施 |
 | `README.md` | 项目定位、运行说明和对外描述 |
-| `GIT_WORKFLOW.md` | 分支、提交、PR 和发布协作规范 |
+| `GIT_WORKFLOW.md` | 分支、提交和发布协作规范 |
 
 ### 4.2 允许产出的文件
 

@@ -1,9 +1,9 @@
 ---
 doc_id: "TEST-OPT-0018-DS-VERIFICATION-RUNBOOK"
 title: "OPT-0018 给 ds 的分阶段测试验证操作手册"
-doc_type: "test-plan"
-status: "proposed"
-owner_agent: "Test Agent"
+doc_type: "test"
+status: "draft"
+owner_agent: "lead"
 version_scope: "project"
 created: "2026-11-08"
 updated: "2026-11-08"
@@ -45,7 +45,7 @@ source_documents:
 
 ### A1. 读取和定位
 
-先读 `AGENTS.md`、`.agents/prompt/Test_Agent.md`，以及上面链接的独立验证报告。文档在 develop，功能代码仍在功能分支；**不能在 develop 上运行测试后称已验证路径版**。
+先读 `AGENTS.md` 以及上面链接的独立验证报告。文档在 develop，功能代码仍在功能分支；**不能在 develop 上运行测试后称已验证路径版**。
 
 在实际功能源码目录执行以下只读命令，逐条保存结果：
 

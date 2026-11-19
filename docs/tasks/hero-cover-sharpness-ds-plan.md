@@ -2,9 +2,9 @@
 doc_id: "TASK-HERO-COVER-SHARPNESS-DS"
 title: "列表详情头图清晰度与两会话并行执行方案"
 doc_type: "task"
-status: "待决策、待执行"
-owner_agent: "PM Agent"
-version_scope: "含 OPT-0018 R1 的 develop"
+status: "draft"
+owner_agent: "lead"
+version_scope: "project"
 created: "2026-11-10"
 updated: "2026-11-10"
 source_documents:

@@ -1,16 +1,16 @@
 ---
 doc_id: "ARCH-DYNAMIC-PLAYLIST-FORMAT"
 title: "动态播放列表的持久化格式设计（SpMusic 自定）"
-doc_type: "architecture-design"
+doc_type: "architecture"
 status: "draft"
-owner_agent: "Architecture Agent"
-version_scope: "design"
+owner_agent: "lead"
+version_scope: "project"
 created: "2026-11-18"
 updated: "2026-11-18"
 source_documents:
   - "docs/architecture/search-grammar-gap-analysis.md"
-  - "docs/architecture/foobar2000-foobaka-phase-4-findings.md"
-  - "docs/architecture/foobar2000-library-mechanisms.md"
+  - "docs/corpus/foobar2000-foobaka-phase-4-findings.md"
+  - "docs/corpus/foobar2000-library-mechanisms.md"
 ---
 
 # 动态播放列表的持久化格式设计

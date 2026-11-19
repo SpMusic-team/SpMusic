@@ -1,9 +1,14 @@
 ---
 doc_id: "TEST-OPT-0018-POST-R1-DS-CAPABILITIES"
 title: "第三轮封面优化 · DS 工具能力实测记录"
-doc_type: "test-report"
-owner_agent: "Test Agent"
-status: "待 DS 执行并填写"
+doc_type: "test"
+owner_agent: "lead"
+status: "draft"
+version_scope: "project"
+created: "2026-11-10"
+updated: "2026-11-10"
+source_documents:
+  - "docs/tasks/opt-0018-post-r1-first-visit-ds-plan.md（要求逐阶段登记能力缺失）"
 ---
 
 # DS 工具能力实测记录

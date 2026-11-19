@@ -1,3 +1,17 @@
+---
+doc_id: "TEST-OPT-0018-JOB-DIAGNOSIS-2026-11-09"
+title: "作业级全链路诊断：请求发出 / 后端返回 / 预解码（基线 3847bcc）"
+doc_type: "test"
+status: "done"
+owner_agent: "lead"
+version_scope: "project"
+created: "2026-11-09"
+updated: "2026-11-09"
+source_documents:
+  - "docs/changes/optimizations/OPT-0018.md（父任务卡）"
+  - "实测记录：基线/候选 commit 见正文各节"
+---
+
 # 作业级全链路诊断：请求发出 / 后端返回 / 预解码（基线 3847bcc）
 
 > 本轮只加**诊断埋点**，产品逻辑与默认行为不变。埋点全部在构建期开关之后。

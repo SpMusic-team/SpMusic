@@ -1,16 +1,16 @@
 ---
 doc_id: "ARCH-SEARCH-GRAMMAR-GAP-ANALYSIS"
 title: "foobar2000 查询语法与 SpMusic 现状的差距分析"
-doc_type: "architecture-analysis"
+doc_type: "architecture"
 status: "draft"
-owner_agent: "Architecture Agent"
+owner_agent: "lead"
 version_scope: "research"
 created: "2026-11-18"
 updated: "2026-11-18"
 source_documents:
-  - "docs/architecture/foobar2000-disassembly-reference.md"
-  - "docs/architecture/foobar2000-search-mechanisms.md"
-  - "docs/architecture/foobar2000-foobaka-phase-4-findings.md"
+  - "docs/corpus/foobar2000-disassembly-reference.md"
+  - "docs/corpus/foobar2000-search-mechanisms.md"
+  - "docs/corpus/foobar2000-foobaka-phase-4-findings.md"
 ---
 
 # foobar2000 查询语法与 SpMusic 现状的差距分析
@@ -119,7 +119,7 @@ return songs.filter(song => {
 
 ### 4.1 反汇编得出的 `IS` 语义
 
-`IS` 的匹配器 `0x0063B3B0` 重建后（详见 [反汇编参考](foobar2000-disassembly-reference.md) §3.1）：
+`IS` 的匹配器 `0x0063B3B0` 重建后（详见 [反汇编参考](../corpus/foobar2000-disassembly-reference.md) §3.1）：
 
 ```c
 while (true) {

@@ -3,8 +3,8 @@ doc_id: "TASK-SP-022-THUMBNAIL-OPTIMIZATION-EXECUTION"
 title: "SP-022 缩略图清理、基线与分阶段优化执行卡"
 doc_type: "task"
 status: "done"
-owner_agent: "PM Agent"
-version_scope: "SP-022"
+owner_agent: "lead"
+version_scope: "project"
 created: "2026-10-20"
 updated: "2026-10-21"
 source_documents:
@@ -15,7 +15,6 @@ source_documents:
   - "docs/test/sp-022-thumbnail-optimization-comparison.md"
   - "主协调 Agent：B0、B1、B1b、B2 提交身份与阶段进度（2026-10-21）"
   - "主协调 Agent 与 Test Agent：1797 条真实列表五组 B0/B2/B3 对照及首开复核（2026-10-21）"
-  - ".agents/prompt/agents.json"
   - "GIT_WORKFLOW.md"
 ---
 

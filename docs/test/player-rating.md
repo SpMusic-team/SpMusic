@@ -1,12 +1,12 @@
 ---
 doc_id: TEST-PLAYER-RATING
 title: 播放界面五星评分与视频手势验证
-doc_type: test
-status: active
-owner_agent: Test Agent
-version_scope: player-rating
-created: 2026-11-07
-updated: 2026-11-07
+doc_type: "test"
+status: "active"
+owner_agent: "lead"
+version_scope: "project"
+created: "2026-11-07"
+updated: "2026-11-07"
 source_documents:
   - user request: 补全播放界面五星评分并参照两段视频实现交互
   - src/features/player/components/StarRating.tsx

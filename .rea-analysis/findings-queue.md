@@ -1,6 +1,6 @@
 # Poweramp 播放队列 — 方法体实证证据（Q1–Q4 闭环）
 
-**用途**：把 `docs/architecture/poweramp-queue-runtime-reference.md` 中标注为【实证·任务卡】的 8 个方法体，升级为【实证·产物】级证据。
+**用途**：把 `docs/corpus/poweramp-queue-runtime-reference.md` 中标注为【实证·任务卡】的 8 个方法体，升级为【实证·产物】级证据。
 本文每条均为 JADX 反编译原文，未经改写。
 
 | 项 | 值 |

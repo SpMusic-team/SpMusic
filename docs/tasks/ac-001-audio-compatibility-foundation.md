@@ -3,13 +3,12 @@ doc_id: "TASK-AC-001"
 title: "音频兼容性首阶段：合成测试语料与格式能力矩阵"
 doc_type: "task"
 status: "in-review"
-owner_agent: "Audio Compatibility Agent"
-version_scope: "audio-compatibility-phase-1"
+owner_agent: "lead"
+version_scope: "project"
 created: "2026-07-26"
 updated: "2026-07-27"
 source_documents:
   - "docs/requirements/总需求分析.md"
-  - ".agents/prompt/Audio_Compatibility_Agent.md"
   - "src-tauri/Cargo.toml"
   - "user request: 建设几乎所有常见音频格式的测试集并推动广泛格式解析能力"
   - "docs/decisions/2026-07-27-v0-1-implemented-capabilities-boundary.md"
@@ -115,8 +114,6 @@ Audio Compatibility Agent 在本任务中只拥有以下新路径：
 
 ## 输入
 
-- `.agents/prompt/Audio_Compatibility_Agent.md`
-- `.agents/prompt/agents.json`
 - `docs/requirements/总需求分析.md`
 - `src-tauri/Cargo.toml`
 - `src-tauri/src/audio/**/*`

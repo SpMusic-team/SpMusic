@@ -1,9 +1,9 @@
 ---
 doc_id: "TEST-2026-10-29-COVER-CACHE-ISOLATION"
 title: "封面缓存测试隔离验证"
-doc_type: "test-report"
-status: "completed"
-owner_agent: "Test Agent"
+doc_type: "test"
+status: "done"
+owner_agent: "lead"
 version_scope: "project"
 created: "2026-10-29"
 updated: "2026-10-29"

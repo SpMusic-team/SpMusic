@@ -1,3 +1,17 @@
+---
+doc_id: "TEST-OPT-0018-FIRST-OPEN-PROTOCOL-2026-11-08"
+title: "场景 B「首次打开来源」正式测试协议（预登记）"
+doc_type: "test"
+status: "done"
+owner_agent: "lead"
+version_scope: "project"
+created: "2026-11-08"
+updated: "2026-11-08"
+source_documents:
+  - "docs/changes/optimizations/OPT-0018.md（父任务卡）"
+  - "实测记录：基线/候选 commit 见正文各节"
+---
+
 # 场景 B「首次打开来源」正式测试协议（预登记）
 
 > 在正式批次开始**之前**固定，不可事后修改。

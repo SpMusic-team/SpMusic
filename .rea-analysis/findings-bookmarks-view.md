@@ -1,6 +1,6 @@
 # Poweramp 书签 —— 方法体实证
 
-**用途**：支撑 `docs/architecture/poweramp-bookmarks-view.md`。
+**用途**：支撑 `docs/corpus/poweramp-bookmarks-view.md`。
 本文只存方法体原文，分析见架构文档。
 
 | 项 | 值 |

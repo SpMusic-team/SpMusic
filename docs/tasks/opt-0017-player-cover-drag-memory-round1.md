@@ -2,9 +2,9 @@
 doc_id: "TASK-OPT-0017-PLAYER-COVER-DRAG-MEMORY-R1"
 title: "播放页拖动切歌内存优化实施与测试方案"
 doc_type: "task"
-status: "待 DS 执行"
-owner_agent: "PM Agent"
-version_scope: "Windows Release 播放页封面拖动切歌"
+status: "draft"
+owner_agent: "lead"
+version_scope: "project"
 created: "2026-11-17"
 updated: "2026-11-17"
 source_documents:

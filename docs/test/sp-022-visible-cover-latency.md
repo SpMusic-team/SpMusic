@@ -1,10 +1,10 @@
 ---
 doc_id: "TEST-SP-022-VISIBLE-COVER-LATENCY"
 title: "测试报告：停滚后的可见封面加载"
-doc_type: "test-report"
+doc_type: "test"
 status: "in-review"
-owner_agent: "Test Agent"
-version_scope: "SP-022 可见封面延迟实验"
+owner_agent: "lead"
+version_scope: "project"
 created: "2026-10-21"
 updated: "2026-10-21"
 source_documents:

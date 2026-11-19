@@ -3,8 +3,8 @@ doc_id: "TASK-SP-022-VISIBLE-COVER-LATENCY"
 title: "SP-022 停滚后可见封面加载优化与回滚验证"
 doc_type: "task"
 status: "done"
-owner_agent: "PM Agent"
-version_scope: "SP-022 本轮可见封面优化"
+owner_agent: "lead"
+version_scope: "project"
 created: "2026-10-21"
 updated: "2026-10-21"
 source_documents:
@@ -16,7 +16,6 @@ source_documents:
   - "docs/tasks/sp-022-thumbnail-optimization-execution.md"
   - "docs/test/sp-022-thumbnail-optimization-comparison.md"
   - "docs/test/sp-022-visible-cover-latency.md"
-  - ".agents/prompt/agents.json"
   - "GIT_WORKFLOW.md"
 ---
 

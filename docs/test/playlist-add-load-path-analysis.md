@@ -1,3 +1,17 @@
+---
+doc_id: "TEST-PLAYLIST-ADD-LOAD-PATH-ANALYSIS"
+title: "搜索页添加歌曲后「播放列表歌曲列表变慢」— 静态加载链路分析"
+doc_type: "test"
+status: "done"
+owner_agent: "lead"
+version_scope: "project"
+created: "2026-11-02"
+updated: "2026-11-02"
+source_documents:
+  - "docs/changes/optimizations/OPT-0018.md（父任务卡）"
+  - "实测记录：基线/候选 commit 见正文各节"
+---
+
 # 搜索页添加歌曲后「播放列表歌曲列表变慢」— 静态加载链路分析
 
 状态：只读分析（未修改任何产品代码）

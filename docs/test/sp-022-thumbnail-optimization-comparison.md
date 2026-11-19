@@ -1,10 +1,10 @@
 ---
 doc_id: "TEST-SP-022-THUMBNAIL-OPTIMIZATION-COMPARISON"
 title: "测试报告：缩略图基线与三阶段优化对照"
-doc_type: "test-report"
+doc_type: "test"
 status: "in-review"
-owner_agent: "Test Agent"
-version_scope: "SP-022 顺序优化实验"
+owner_agent: "lead"
+version_scope: "project"
 created: "2026-10-20"
 updated: "2026-10-21"
 source_documents:

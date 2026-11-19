@@ -1,3 +1,17 @@
+---
+doc_id: "TEST-OPT-0018-CONCURRENCY-EXPERIMENT-2026-11-09"
+title: "owner 并发实验：并发 2 vs 3 vs 4（基线 3847bcc）"
+doc_type: "test"
+status: "done"
+owner_agent: "lead"
+version_scope: "project"
+created: "2026-11-09"
+updated: "2026-11-09"
+source_documents:
+  - "docs/changes/optimizations/OPT-0018.md（父任务卡）"
+  - "实测记录：基线/候选 commit 见正文各节"
+---
+
 # owner 并发实验：并发 2 vs 3 vs 4（基线 3847bcc）
 
 > **结论：并发提高没有带来改善，实验撤回。** 未合入 develop，产品改动已还原。

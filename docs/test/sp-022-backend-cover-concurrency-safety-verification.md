@@ -1,15 +1,14 @@
 ---
 doc_id: "TEST-SP-022-BACKEND-COVER-CONCURRENCY-SAFETY"
 title: "测试报告：后端封面并发候选安全合同独立验证"
-doc_type: "test-report"
+doc_type: "test"
 status: "in-review"
-owner_agent: "Test Agent"
-version_scope: "SP-022 默认 N=1 安全基础及 N=2 合成实验候选"
+owner_agent: "lead"
+version_scope: "project"
 created: "2026-10-20"
 updated: "2026-10-20"
 source_documents:
   - "user request: 你来进行下一步吧"
-  - ".agents/prompt/Test_Agent.md"
   - "docs/architecture/sp-022-backend-cover-concurrency-safety.md"
   - "docs/implementation/sp-022-backend-cover-concurrency-safety.md"
   - "docs/tasks/sp-022-backend-cover-concurrency-experiment-plan.md"

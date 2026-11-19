@@ -1,3 +1,17 @@
+---
+doc_id: "TEST-OPT-0018-DS-VERIFICATION-REPORT-2026-11-08"
+title: "OPT-0018 ds 本轮验证报告"
+doc_type: "test"
+status: "done"
+owner_agent: "lead"
+version_scope: "project"
+created: "2026-11-08"
+updated: "2026-11-08"
+source_documents:
+  - "docs/changes/optimizations/OPT-0018.md（父任务卡）"
+  - "实测记录：基线/候选 commit 见正文各节"
+---
+
 # OPT-0018 ds 本轮验证报告
 
 ## 摘要
@@ -17,7 +31,7 @@
 | 路径版 B0（被测） | `9e3a4f921b35f9c9191c28604c72db5c8a91a694` | 复现两个 P1 |
 
 - 被测源码目录：`D:\SpMusic`，分支 `feature/opt-0018-path-lane-v2`，HEAD = B0。
-- 工作树差异：仅两处与本次无关的逆向文档改动（`.rea-analysis/findings-queue-view.md`、`docs/architecture/poweramp-queue-view.md`），未参与构建。
+- 工作树差异：仅两处与本次无关的逆向文档改动（`.rea-analysis/findings-queue-view.md`、`docs/corpus/poweramp-queue-view.md`），未参与构建。
 - 证据根：`%LOCALAPPDATA%\spmusic-coverlane\ds-20261108-185150`（原始日志、退出码、diff 已保存）。
 
 ## 命令（均为我本轮亲手执行）

@@ -3,7 +3,7 @@ doc_id: "ARCH-REAL-AUDIO-PLAYBACK"
 title: "架构说明：v0.1 真实本地播放架构契约"
 doc_type: "architecture"
 status: "active"
-owner_agent: "Architecture Agent"
+owner_agent: "lead"
 version_scope: "v0.1"
 created: "2026-07-24"
 updated: "2026-10-19"
@@ -28,7 +28,6 @@ source_documents:
   - "src/features/player/services/audioCommands.ts"
   - "src/features/player/components/PlayerShell.tsx"
   - "docs/audio-compatibility/format-capability-matrix.md"
-  - ".agents/prompt/Architecture_Agent.md"
 ---
 # 架构说明：v0.1 真实本地播放架构契约
 

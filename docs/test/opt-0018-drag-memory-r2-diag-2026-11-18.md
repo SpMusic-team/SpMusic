@@ -2,10 +2,14 @@
 doc_id: "TASK-OPT-0018-DRAG-MEMORY-R2-DIAG"
 title: "OPT-0018 拖动内存第二轮诊断报告"
 doc_type: "test"
-status: "拖动阶段已达 223-249 MiB（100% 达标）；启动阶段 387-415 MiB 仍超标"
-version_scope: "Windows / WebView2 / 播放列表四列封面"
+status: "in-review"
+version_scope: "project"
 created: "2026-11-18"
 updated: "2026-11-18"
+owner_agent: "lead"
+source_documents:
+  - "docs/tasks/opt-0018-drag-memory-r2-ds-plan.md（父任务卡）"
+  - "docs/test/opt-0018-drag-memory-r1-2026-11-17.md（R1 结论）"
 ---
 
 # OPT-0018 拖动内存第二轮诊断报告

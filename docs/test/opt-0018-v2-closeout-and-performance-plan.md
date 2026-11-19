@@ -1,9 +1,9 @@
 ---
 doc_id: "TEST-OPT-0018-V2-CLOSEOUT-PERFORMANCE"
 title: "OPT-0018 v2 收尾验收与封面加载性能实验方案"
-doc_type: "test-plan"
-status: "proposed"
-owner_agent: "Test Agent"
+doc_type: "test"
+status: "draft"
+owner_agent: "lead"
 version_scope: "project"
 created: "2026-11-08"
 updated: "2026-11-08"

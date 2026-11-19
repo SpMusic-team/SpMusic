@@ -2,9 +2,9 @@
 doc_id: "TASK-OPT-0018-POST-R1-FIRST-VISIT"
 title: "第三轮列表封面首次到达优化执行方案"
 doc_type: "task"
-status: "待执行"
-owner_agent: "PM Agent"
-version_scope: "包含 R1 的 develop"
+status: "ready"
+owner_agent: "lead"
+version_scope: "project"
 created: "2026-11-10"
 updated: "2026-11-10"
 source_documents:

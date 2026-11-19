@@ -1,9 +1,9 @@
 ---
 doc_id: "TEST-PLAYLIST-SOURCE-SWITCH-ARTWORK"
 title: "测试报告：跨播放来源点歌的列表封面白屏闪烁"
-doc_type: "test-report"
+doc_type: "test"
 status: "in-review"
-owner_agent: "Test Agent"
+owner_agent: "lead"
 version_scope: "project"
 created: "2026-10-21"
 updated: "2026-10-21"

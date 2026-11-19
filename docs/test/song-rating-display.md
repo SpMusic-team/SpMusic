@@ -1,9 +1,9 @@
 ---
 doc_id: "TEST-SONG-RATING-DISPLAY"
 title: "全局歌曲评级徽标独立验证"
-doc_type: "test-report"
+doc_type: "test"
 status: "active"
-owner_agent: "Test Agent"
+owner_agent: "lead"
 version_scope: "project"
 created: "2026-11-08"
 updated: "2026-11-08"

@@ -1,10 +1,10 @@
 ---
 doc_id: "TEST-2026-10-26-FOLDER-NAVIGATION-MOTION"
 title: "文件夹导航投影与圆角独立验收"
-doc_type: "test-report"
+doc_type: "test"
 status: "active"
-owner_agent: "Test Agent"
-version_scope: "folder-navigation-motion"
+owner_agent: "lead"
+version_scope: "project"
 created: "2026-10-26"
 updated: "2026-10-26"
 source_documents:

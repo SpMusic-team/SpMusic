@@ -1,10 +1,10 @@
 ---
 doc_id: "TEST-SP-022-BACKEND-COVER-CONCURRENCY-GATE"
 title: "测试报告：后端有界并发测试计划闸门复核与 A0 复跑"
-doc_type: "test-report"
+doc_type: "test"
 status: "in-review"
-owner_agent: "Test Agent"
-version_scope: "future-unscheduled"
+owner_agent: "lead"
+version_scope: "future"
 created: "2026-10-20"
 updated: "2026-10-20"
 source_documents:

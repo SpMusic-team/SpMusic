@@ -426,5 +426,5 @@ Poweramp 不用原生 `SwitchPreference`，而是自建了一批：
 
 **关联文档**：
 - `.rea-analysis/findings-audio-output.md` — 音频输出链路与独占输出的 Native 层实证
-- `docs/architecture/poweramp-queue-runtime-reference.md` — 队列运行逻辑
-- `docs/architecture/poweramp-search-and-queue-impact.md` — 搜索与队列
+- `docs/corpus/poweramp-queue-runtime-reference.md` — 队列运行逻辑
+- `docs/corpus/poweramp-search-and-queue-impact.md` — 搜索与队列

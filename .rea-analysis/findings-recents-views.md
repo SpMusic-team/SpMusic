@@ -1,6 +1,6 @@
 # Poweramp「最近播放 / 最近添加 / 最多播放」——方法体实证
 
-**用途**：支撑 `docs/architecture/poweramp-recents-views.md`。
+**用途**：支撑 `docs/corpus/poweramp-recents-views.md`。
 本文只存方法体原文与偏好键映射，分析见架构文档。
 
 | 项 | 值 |

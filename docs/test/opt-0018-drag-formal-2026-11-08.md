@@ -1,3 +1,17 @@
+---
+doc_id: "TEST-OPT-0018-DRAG-FORMAL-2026-11-08"
+title: "真实滚动条拖动测试结果（候选 3847bcc）"
+doc_type: "test"
+status: "done"
+owner_agent: "lead"
+version_scope: "project"
+created: "2026-11-08"
+updated: "2026-11-08"
+source_documents:
+  - "docs/changes/optimizations/OPT-0018.md（父任务卡）"
+  - "实测记录：基线/候选 commit 见正文各节"
+---
+
 # 真实滚动条拖动测试结果（候选 3847bcc）
 
 > **前台可见窗口 + 正常后台策略**，真实指针拖动真实滚动条，以**松手时刻**为计时起点。

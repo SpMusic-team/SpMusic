@@ -1,9 +1,9 @@
 ---
 doc_id: "TEST-STREAM-DISPLAY-INFORMATION"
 title: "流视图信息与电台名称独立验证"
-doc_type: "test-report"
+doc_type: "test"
 status: "active"
-owner_agent: "Test Agent"
+owner_agent: "lead"
 version_scope: "project"
 created: "2026-11-06"
 updated: "2026-11-07"

@@ -1,10 +1,10 @@
 ---
 doc_id: "TEST-STREAM-PLAYER-FIXES-2026-11-07"
 title: "流完整播放界面与封面拖动验收"
-doc_type: "test-report"
+doc_type: "test"
 status: "active"
-owner_agent: "Test Agent"
-version_scope: "streams"
+owner_agent: "lead"
+version_scope: "project"
 created: "2026-11-07"
 updated: "2026-11-07"
 source_documents:

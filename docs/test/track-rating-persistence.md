@@ -1,9 +1,9 @@
 ---
 doc_id: "TEST-TRACK-RATING-PERSISTENCE"
 title: "歌曲评级持久化独立验证"
-doc_type: "test-report"
+doc_type: "test"
 status: "active"
-owner_agent: "Test Agent"
+owner_agent: "lead"
 version_scope: "project"
 created: "2026-11-08"
 updated: "2026-11-08"

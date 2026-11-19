@@ -447,6 +447,6 @@ public com.maxmpz.utils.y mo2455(RestProvider restProvider, Uri uri, long[] jArr
 
 ## 10. 与既有文档的关系
 
-- 队列状态机与 `next`/`prev` 语义：`docs/architecture/poweramp-queue-runtime-reference.md` + `.rea-analysis/findings-queue.md`
+- 队列状态机与 `next`/`prev` 语义：`docs/corpus/poweramp-queue-runtime-reference.md` + `.rea-analysis/findings-queue.md`
 - 播放列表实体 `k3` / 队列表 `m3` / 文件实体 `n0`：`.rea-analysis/findings-db.md`
 - 本文只补 **搜索实体 `v3` / `w3`** 及其与队列的接合点。

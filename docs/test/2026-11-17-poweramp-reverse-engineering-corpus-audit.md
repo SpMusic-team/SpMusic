@@ -1,10 +1,10 @@
 ---
 doc_id: "TEST-POWERAMP-RE-CORPUS-AUDIT"
 title: "Poweramp 逆向研究资料整体体检报告"
-doc_type: "test-report"
-status: "核查完成，结论可用；待处置项见 §6"
-owner_agent: "Test Agent"
-version_scope: "docs/architecture/poweramp-*.md 44 份（build-1025 / build-1035 两版证据域）"
+doc_type: "test"
+status: "done"
+owner_agent: "lead"
+version_scope: "corpus"
 created: "2026-11-17"
 updated: "2026-11-17"
 source_documents:
@@ -189,7 +189,7 @@ A 制文档（`bookmarks` / `category` / `entity` / `recents` / `streams` / `sea
 ## 6. 待处置项（按优先级）
 
 > **处置状态（2026-11-18 补记）**：P1 三项与 P2 的 `status` 项已处理完毕，
-> 处置落点与复核方式见 `docs/architecture/poweramp-corpus-conventions.md` §7。
+> 处置落点与复核方式见 `docs/corpus/poweramp-corpus-conventions.md` §7。
 > 本节原文保留不改，便于对照当年判断。
 
 | 优先级 | 事项 | 性质 | 建议动作 |

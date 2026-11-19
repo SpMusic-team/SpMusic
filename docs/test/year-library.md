@@ -1,9 +1,9 @@
 ---
 doc_id: "TEST-YEAR-LIBRARY"
 title: "媒体库年份双路径独立验证"
-doc_type: "test-report"
+doc_type: "test"
 status: "active"
-owner_agent: "Test Agent"
+owner_agent: "lead"
 version_scope: "project"
 created: "2026-11-03"
 updated: "2026-11-04"
@@ -21,7 +21,7 @@ source_documents:
   - "user request: 三贡献者专辑页的头图至全集入口间距与年份页保持一致"
   - "https://www.figma.com/design/V4Gbm9HJrUOsTiwXl2XcXV/SpMusic?node-id=9190-8873"
   - "docs/architecture/year-library.md"
-  - "docs/architecture/poweramp-category-views.md"
+  - "docs/corpus/poweramp-category-views.md"
   - "src/features/player/model/yearLibrary.model.test.mjs"
   - "src/features/player/components/yearLibrary.browser.test.mjs"
 ---

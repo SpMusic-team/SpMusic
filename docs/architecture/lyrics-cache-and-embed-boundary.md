@@ -3,7 +3,7 @@ doc_id: "ARCH-LYRICS-CACHE-EMBED-BOUNDARY"
 title: "架构说明：歌词缓存与显式内嵌歌词边界"
 doc_type: "architecture"
 status: "active"
-owner_agent: "Architecture Agent"
+owner_agent: "lead"
 version_scope: "v0.1"
 created: "2026-08-13"
 updated: "2026-08-13"
@@ -23,7 +23,6 @@ source_documents:
   - "src-tauri/src/lib.rs"
   - "src/features/player/services/audioCommands.ts"
   - "src/features/player/model/audioTrackModel.ts"
-  - ".agents/prompt/Architecture_Agent.md"
 ---
 
 # 架构说明：歌词缓存与显式内嵌歌词边界

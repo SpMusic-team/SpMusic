@@ -1,10 +1,10 @@
 ---
 doc_id: "TEST-OPT-0018-DRAG-MEMORY-R1"
 title: "OPT-0018 拖动内存第一轮执行与测试报告"
-doc_type: "test-report"
-status: "臂 N 已否决；E/F 待新协议复采验证；采集缺陷已修复"
-owner_agent: "Test Agent"
-version_scope: "develop ad54c3b + 工作树 WIP（快照 176fc56）"
+doc_type: "test"
+status: "in-review"
+owner_agent: "lead"
+version_scope: "project"
 created: "2026-11-17"
 updated: "2026-11-17"
 source_documents:

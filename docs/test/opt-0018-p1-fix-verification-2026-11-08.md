@@ -1,3 +1,17 @@
+---
+doc_id: "TEST-OPT-0018-P1-FIX-VERIFICATION-2026-11-08"
+title: "OPT-0018 P1 修复验证报告（候选 3847bcc）"
+doc_type: "test"
+status: "done"
+owner_agent: "lead"
+version_scope: "project"
+created: "2026-11-08"
+updated: "2026-11-08"
+source_documents:
+  - "docs/changes/optimizations/OPT-0018.md（父任务卡）"
+  - "实测记录：基线/候选 commit 见正文各节"
+---
+
 # OPT-0018 P1 修复验证报告（候选 3847bcc）
 
 > 前置报告保留未改动：[独立验证报告](opt-0018-independent-verification-2026-11-08.md)（结论：功能验收不通过，两个 P1）、[上一轮 ds 验证报告](opt-0018-ds-verification-report-2026-11-08.md)（阶段 B，两个 P1 复现）。

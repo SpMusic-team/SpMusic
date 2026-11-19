@@ -1,14 +1,13 @@
 ---
 doc_id: "TEST-PLUGIN-HOST-DESIGN-REVIEW"
 title: "测试报告：全业务插件宿主设计可验证性审查"
-doc_type: "test-report"
-status: "design-reviewed"
-owner_agent: "Test Agent"
-version_scope: "long-term-design"
+doc_type: "test"
+status: "done"
+owner_agent: "lead"
+version_scope: "future"
 created: "2026-09-30"
 updated: "2026-10-01"
 source_documents:
-  - ".agents/prompt/Test_Agent.md"
   - "docs/decisions/2026-07-09-document-metadata-standard.md"
   - "docs/requirements/all-business-plugin-system.md"
   - "docs/decisions/2026-09-30-all-business-plugin-system-goal.md"

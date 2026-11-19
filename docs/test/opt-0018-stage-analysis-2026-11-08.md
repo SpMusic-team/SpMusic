@@ -1,3 +1,17 @@
+---
+doc_id: "TEST-OPT-0018-STAGE-ANALYSIS-2026-11-08"
+title: "OPT-0018 阶段拆分（修订版，候选 3847bcc）"
+doc_type: "test"
+status: "done"
+owner_agent: "lead"
+version_scope: "project"
+created: "2026-11-08"
+updated: "2026-11-08"
+source_documents:
+  - "docs/changes/optimizations/OPT-0018.md（父任务卡）"
+  - "实测记录：基线/候选 commit 见正文各节"
+---
+
 # OPT-0018 阶段拆分（修订版，候选 3847bcc）
 
 > 本文替换此前同名分析的错误部分。前置：[P1 修复验证报告](opt-0018-p1-fix-verification-2026-11-08.md)。

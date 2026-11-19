@@ -1,3 +1,17 @@
+---
+doc_id: "TEST-OPT-0018-FIRST-OPEN-RESULT-2026-11-08"
+title: "OPT-0018 场景 B「首次打开来源」测试结果（候选 3847bcc）"
+doc_type: "test"
+status: "done"
+owner_agent: "lead"
+version_scope: "project"
+created: "2026-11-08"
+updated: "2026-11-08"
+source_documents:
+  - "docs/changes/optimizations/OPT-0018.md（父任务卡）"
+  - "实测记录：基线/候选 commit 见正文各节"
+---
+
 # OPT-0018 场景 B「首次打开来源」测试结果（候选 3847bcc）
 
 > 协议见 [预登记协议](opt-0018-first-open-protocol-2026-11-08.md)，在正式批次开始前冻结。

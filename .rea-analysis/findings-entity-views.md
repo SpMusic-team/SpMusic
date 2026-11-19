@@ -1,6 +1,6 @@
 # Poweramp 实体视图 —— 方法体实证证据
 
-**用途**：支撑 `docs/architecture/poweramp-entity-views.md` 的原始反编译证据。
+**用途**：支撑 `docs/corpus/poweramp-entity-views.md` 的原始反编译证据。
 本文只存**方法体原文与证据 ID**，分析见架构文档。
 
 | 项 | 值 |

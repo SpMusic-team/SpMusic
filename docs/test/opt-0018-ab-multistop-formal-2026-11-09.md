@@ -1,3 +1,17 @@
+---
+doc_id: "TEST-OPT-0018-AB-MULTISTOP-FORMAL-2026-11-09"
+title: "A/B 正式比较：旧像素版 vs 路径版（多点往返拖动，20 对）"
+doc_type: "test"
+status: "done"
+owner_agent: "lead"
+version_scope: "project"
+created: "2026-11-09"
+updated: "2026-11-09"
+source_documents:
+  - "docs/changes/optimizations/OPT-0018.md（父任务卡）"
+  - "实测记录：基线/候选 commit 见正文各节"
+---
+
 # A/B 正式比较：旧像素版 vs 路径版（多点往返拖动，20 对）
 
 > A = 旧像素版（`39C0955439DDB40CCD25398F16B9FE86EDF30E1A66E3241799FA6FBA38E85E47`），

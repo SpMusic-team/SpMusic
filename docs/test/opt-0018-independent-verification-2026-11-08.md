@@ -1,9 +1,9 @@
 ---
 doc_id: "TEST-OPT-0018-INDEPENDENT-2026-11-08"
 title: "OPT-0018 列表封面路径通道独立验证报告"
-doc_type: "test-report"
-status: "验证完成；功能验收不通过"
-owner_agent: "Test Agent"
+doc_type: "test"
+status: "done"
+owner_agent: "lead"
 version_scope: "project"
 created: "2026-11-08"
 updated: "2026-11-08"

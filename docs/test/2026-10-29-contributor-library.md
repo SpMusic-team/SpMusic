@@ -1,9 +1,9 @@
 ---
 doc_id: "TEST-2026-10-29-CONTRIBUTOR-LIBRARY"
 title: "专辑艺术家与作曲家分类独立验证"
-doc_type: "test-report"
+doc_type: "test"
 status: "active"
-owner_agent: "Test Agent"
+owner_agent: "lead"
 version_scope: "project"
 created: "2026-10-29"
 updated: "2026-10-29"

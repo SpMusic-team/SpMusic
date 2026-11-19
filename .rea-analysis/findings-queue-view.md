@@ -1,6 +1,6 @@
 # Poweramp「队列」—— 方法体实证
 
-**用途**：支撑 `docs/architecture/poweramp-queue-view.md`。
+**用途**：支撑 `docs/corpus/poweramp-queue-view.md`。
 本文只存方法体原文与关键常量，分析见架构文档。
 
 | 项 | 值 |
@@ -152,7 +152,7 @@ public final String[] Q0(Uri uri, r rVar, ArrayList arrayList, i1 i1Var) {
 
 **第 1 列是布尔比较式**，用于推导「入队后是否已播放」。
 
-> **语义方向（2026-11-08 复核）**：`>=` = **已播**，`<` = **未播**。决定性证据：`b0.smali:2834` 把 `<` 语句存入字段 `mQueueUnplayedCountSt`（未播计数）；`b0.smali:3897` `moveToFirstNotPlayedQueueEntryOrLast()` 判第 1 列 `== 0` 为 NotPlayed。详见 `docs/architecture/poweramp-queue-view.md` §3.4。
+> **语义方向（2026-11-08 复核）**：`>=` = **已播**，`<` = **未播**。决定性证据：`b0.smali:2834` 把 `<` 语句存入字段 `mQueueUnplayedCountSt`（未播计数）；`b0.smali:3897` `moveToFirstNotPlayedQueueEntryOrLast()` 判第 1 列 `== 0` 为 NotPlayed。详见 `docs/corpus/poweramp-queue-view.md` §3.4。
 
 ---
 

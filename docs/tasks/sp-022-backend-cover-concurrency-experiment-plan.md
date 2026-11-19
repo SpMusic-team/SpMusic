@@ -3,8 +3,8 @@ doc_id: "TASK-SP-022-BACKEND-COVER-CONCURRENCY"
 title: "任务：播放列表封面后端有界并发实验方案"
 doc_type: "task"
 status: "active"
-owner_agent: "PM Agent"
-version_scope: "future-unscheduled"
+owner_agent: "lead"
+version_scope: "future"
 created: "2026-10-20"
 updated: "2026-10-20"
 source_documents:
@@ -20,7 +20,6 @@ source_documents:
   - "docs/test/sp-022-backend-cover-concurrency-safety-verification.md"
   - "docs/architecture/playlist-artwork-loading.md"
   - "docs/decisions/2026-07-09-document-metadata-standard.md"
-  - ".agents/prompt/agents.json"
 ---
 
 # 任务：播放列表封面后端有界并发实验方案

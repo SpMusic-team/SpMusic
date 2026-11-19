@@ -1,6 +1,6 @@
 # Poweramp「流」—— 方法体实证
 
-**用途**：支撑 `docs/architecture/poweramp-streams-view.md`。
+**用途**：支撑 `docs/corpus/poweramp-streams-view.md`。
 本文只存方法体原文与关键常量，分析见架构文档。
 
 | 项 | 值 |

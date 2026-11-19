@@ -2,9 +2,9 @@
 doc_id: "TASK-OPT-0018-FIRST-VISIT-DS"
 title: "OPT-0018 首次到达封面加载优化：ds 分阶段执行方案"
 doc_type: "task"
-status: "proposed"
-owner_agent: "PM Agent"
-version_scope: "develop 后续优化"
+status: "draft"
+owner_agent: "lead"
+version_scope: "project"
 created: "2026-11-09"
 updated: "2026-11-09"
 source_documents:

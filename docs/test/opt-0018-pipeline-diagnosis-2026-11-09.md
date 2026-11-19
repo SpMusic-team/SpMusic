@@ -1,3 +1,17 @@
+---
+doc_id: "TEST-OPT-0018-PIPELINE-DIAGNOSIS-2026-11-09"
+title: "全链路诊断：首次到达的每一段耗时（基线 3847bcc，带埋点构建）"
+doc_type: "test"
+status: "done"
+owner_agent: "lead"
+version_scope: "project"
+created: "2026-11-09"
+updated: "2026-11-09"
+source_documents:
+  - "docs/changes/optimizations/OPT-0018.md（父任务卡）"
+  - "实测记录：基线/候选 commit 见正文各节"
+---
+
 # 全链路诊断：首次到达的每一段耗时（基线 3847bcc，带埋点构建）
 
 > 本文件只做诊断，**产品逻辑未改**（埋点为构建期开关，普通构建完全不含）。

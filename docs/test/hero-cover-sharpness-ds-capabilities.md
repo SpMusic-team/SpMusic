@@ -1,12 +1,17 @@
 ---
 doc_id: "TEST-HERO-COVER-SHARPNESS-DS-CAPABILITIES"
 title: "头图清晰度 · DS 工具能力实测记录"
-doc_type: "test-report"
-owner_agent: "Test Agent"
-status: "待 DS 执行并填写"
+doc_type: "test"
+owner_agent: "lead"
+status: "draft"
+version_scope: "project"
+created: "2026-11-10"
+updated: "2026-11-10"
+source_documents:
+  - "docs/tasks/hero-cover-sharpness-ds-plan.md（要求逐次登记工具缺失）"
 ---
 
-# 头图清晰度任务的 DS 工具能力实测记录
+# 头图清晰度 · DS 工具能力实测记录
 
 当前记录数为零，尚待 DS 在执行环境中填写。本文件由头图任务独占写入。列表任务另有能力报告。原生截图、DPR、缓存、进程采样、独占测速或跨会话协调工具不可用时，同样登记。每次执行先登记环境，遇到工具不可用就立即追加事件。在各阶段交接时，把正文中的事件编号关联到性能报告或运行清单。脱敏后保留能复现问题的命令、退出码和错误文本。
 

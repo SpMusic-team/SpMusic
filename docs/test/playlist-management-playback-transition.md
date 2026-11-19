@@ -1,15 +1,14 @@
 ---
 doc_id: "TEST-PLAYLIST-MANAGEMENT-PLAYBACK-TRANSITION"
 title: "列表管理进入播放列表的头图转场验证"
-doc_type: "test-report"
+doc_type: "test"
 status: "in-review"
-owner_agent: "Test Agent"
+owner_agent: "lead"
 version_scope: "project"
 created: "2026-10-17"
 updated: "2026-10-19"
 source_documents:
   - "user request: 列表管理界面切换到播放列表界面存在卡顿问题，其中在头图上特别明显"
-  - ".agents/prompt/Test_Agent.md"
   - "src/features/player/components/PlaylistLibraryPanel.tsx"
   - "src/features/player/components/PlaylistPanel.tsx"
   - "src/features/player/components/playlistManagementMotion.browser.test.mjs"

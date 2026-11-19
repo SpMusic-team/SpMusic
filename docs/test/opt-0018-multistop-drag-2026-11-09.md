@@ -1,3 +1,17 @@
+---
+doc_id: "TEST-OPT-0018-MULTISTOP-DRAG-2026-11-09"
+title: "多点往返拖动：整段与逐站测量（基线 3847bcc vs 候选）"
+doc_type: "test"
+status: "done"
+owner_agent: "lead"
+version_scope: "project"
+created: "2026-11-09"
+updated: "2026-11-09"
+source_documents:
+  - "docs/changes/optimizations/OPT-0018.md（父任务卡）"
+  - "实测记录：基线/候选 commit 见正文各节"
+---
+
 # 多点往返拖动：整段与逐站测量（基线 3847bcc vs 候选）
 
 > 全屏小卡片档位、**同一次会话内**在相隔较远的位置来回拖动，两版使用**相同路线、速度和停留时间**。

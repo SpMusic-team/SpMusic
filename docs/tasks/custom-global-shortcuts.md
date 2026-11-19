@@ -3,13 +3,12 @@ doc_id: "TASK-CUSTOM-GLOBAL-SHORTCUTS"
 title: "自定义全局快捷键设置"
 doc_type: "task"
 status: "active"
-owner_agent: "PM Agent"
+owner_agent: "lead"
 version_scope: "project"
 created: "2026-10-13"
 updated: "2026-10-13"
 source_documents:
   - "user request: 在设置中自定义五项全局快捷键及其默认组合"
-  - ".agents/prompt/agents.json"
   - "docs/decisions/2026-07-09-document-metadata-standard.md"
 ---
 

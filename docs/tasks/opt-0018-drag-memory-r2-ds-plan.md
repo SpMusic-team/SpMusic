@@ -2,9 +2,9 @@
 doc_id: "TASK-OPT-0018-DRAG-MEMORY-R2"
 title: "OPT-0018 拖动内存第二轮 DS 执行方案"
 doc_type: "task"
-status: "DS 已完成诊断，待配对复核离屏图片引用方案"
-owner_agent: "PM Agent"
-version_scope: "Windows / WebView2 活动播放列表封面"
+status: "in-review"
+owner_agent: "lead"
+version_scope: "project"
 created: "2026-11-17"
 updated: "2026-11-18"
 source_documents:

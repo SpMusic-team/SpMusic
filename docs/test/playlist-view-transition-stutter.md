@@ -1,9 +1,9 @@
 ---
 doc_id: "TEST-PLAYLIST-VIEW-TRANSITION-STUTTER"
 title: "播放列表视图切换卡顿验证"
-doc_type: "test-report"
+doc_type: "test"
 status: "in-review"
-owner_agent: "Test Agent"
+owner_agent: "lead"
 version_scope: "project"
 created: "2026-10-08"
 updated: "2026-10-08"
@@ -12,7 +12,6 @@ source_documents:
   - "C:/Users/winkeses/Downloads/播放列表动画缺陷.mp4"
   - "src/features/player/components/PlaylistPanel.tsx"
   - "src/features/player/components/playlistViewTransition.browser.test.mjs"
-  - ".agents/prompt/Test_Agent.md"
 ---
 
 # 测试报告：播放列表视图切换卡顿

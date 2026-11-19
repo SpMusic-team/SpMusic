@@ -1,15 +1,14 @@
 ---
 doc_id: "TEST-CUSTOM-GLOBAL-SHORTCUTS"
 title: "自定义全局快捷键独立验证"
-doc_type: "test-report"
+doc_type: "test"
 status: "in-review"
-owner_agent: "Test Agent"
+owner_agent: "lead"
 version_scope: "project"
 created: "2026-10-13"
 updated: "2026-10-13"
 source_documents:
   - "docs/tasks/custom-global-shortcuts.md"
-  - ".agents/prompt/Test_Agent.md"
   - "src/features/shortcuts/"
   - "src-tauri/src/global_shortcuts.rs"
   - "src-tauri/tests/global_shortcuts.rs"

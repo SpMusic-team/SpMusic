@@ -1,9 +1,9 @@
 ---
 doc_id: "TEST-STREAMS-LIBRARY"
 title: "流根页面与网络播放独立验证"
-doc_type: "test-report"
+doc_type: "test"
 status: "active"
-owner_agent: "Test Agent"
+owner_agent: "lead"
 version_scope: "project"
 created: "2026-11-05"
 updated: "2026-11-06"

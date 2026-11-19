@@ -3,14 +3,13 @@ doc_id: "TASK-SP-006"
 title: "shadcn/ui 基础接入与前端样式基线"
 doc_type: "task"
 status: "done"
-owner_agent: "Frontend Agent"
+owner_agent: "lead"
 version_scope: "v0.1"
 created: "2026-07-10"
 updated: "2026-07-10"
 source_documents:
   - "docs/tasks/sp-005-frontend-foundation-skeleton.md"
   - "docs/decisions/2026-07-10-shadcn-ui-installation-boundary.md"
-  - "agent-prompt/PM_Agent.md"
   - ".agents/skills/shadcn/SKILL.md"
 ---
 # 任务：shadcn/ui 基础接入与前端样式基线

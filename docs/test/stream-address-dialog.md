@@ -1,10 +1,10 @@
 ---
 doc_id: "TEST-STREAM-ADDRESS-DIALOG-2026-11-07"
 title: "添加流地址弹窗设计验收"
-doc_type: "test-report"
+doc_type: "test"
 status: "active"
-owner_agent: "Test Agent"
-version_scope: "streams"
+owner_agent: "lead"
+version_scope: "project"
 created: "2026-11-07"
 updated: "2026-11-07"
 source_documents:

@@ -1,10 +1,10 @@
 ---
 doc_id: "TEST-OPT-0018-DRAG-FORMAL-2026-11-15"
 title: "OPT-0018 列表封面正式拖动 A/B"
-doc_type: "test-report"
-status: "验证通过"
-owner_agent: "Test Agent"
-version_scope: "develop 4d4477c 与 Lanczos3/t2 最终候选"
+doc_type: "test"
+status: "done"
+owner_agent: "lead"
+version_scope: "project"
 created: "2026-11-15"
 updated: "2026-11-15"
 source_documents:

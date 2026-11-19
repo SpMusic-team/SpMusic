@@ -1,9 +1,9 @@
 ---
 doc_id: "TEST-ARTIST-LIBRARY"
 title: "媒体库艺术家分类独立验证"
-doc_type: "test-report"
+doc_type: "test"
 status: "active"
-owner_agent: "Test Agent"
+owner_agent: "lead"
 version_scope: "project"
 created: "2026-10-28"
 updated: "2026-10-29"

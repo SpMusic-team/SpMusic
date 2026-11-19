@@ -1,9 +1,9 @@
 ---
 doc_id: "TEST-OPT-0017-RAPID-COVER-SWITCH-MEMORY-PLAN"
 title: "快速拖动切歌的封面内存诊断与优化验证方案"
-doc_type: "test-plan"
-status: "待执行"
-owner_agent: "Test Agent"
+doc_type: "test"
+status: "ready"
+owner_agent: "lead"
 version_scope: "project"
 created: "2026-10-30"
 updated: "2026-10-30"

@@ -1,15 +1,15 @@
 ---
 doc_id: "TEST-LONG-TRACKS-LIBRARY"
 title: "长分类独立验证"
-doc_type: "test-report"
+doc_type: "test"
 status: "active"
-owner_agent: "Test Agent"
+owner_agent: "lead"
 version_scope: "project"
 created: "2026-10-30"
 updated: "2026-10-30"
 source_documents:
   - "user request: 实现媒体库长分类，样式动画复用所有歌曲，默认15分钟及以上，保留右侧字母栏与底部控制器和上方按钮"
-  - "docs/architecture/poweramp-recents-views.md"
+  - "docs/corpus/poweramp-recents-views.md"
   - "docs/implementation/long-tracks-library.md"
   - "src/features/player/model/longTracksIndependent.test.mjs"
   - "src/features/player/components/longTracksAcceptance.browser.test.mjs"

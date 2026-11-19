@@ -1,15 +1,15 @@
 ---
 doc_id: "TEST-HIGHEST-RATED-LIBRARY"
 title: "最高评级页面独立验证"
-doc_type: "test-report"
+doc_type: "test"
 status: "active"
-owner_agent: "Test Agent"
+owner_agent: "lead"
 version_scope: "project"
 created: "2026-11-08"
 updated: "2026-11-08"
 source_documents:
   - "user request: 按 Figma 9267:13676 完成最高评级，复用最常播放歌曲列表"
-  - "docs/architecture/poweramp-recents-views.md"
+  - "docs/corpus/poweramp-recents-views.md"
   - "src/features/player/components/highestRatedAcceptance.browser.test.mjs"
   - "src/features/player/model/highestRatedIndependent.test.mjs"
 ---

@@ -1,9 +1,9 @@
 ---
 doc_id: "TEST-GENRE-LIBRARY"
 title: "媒体库流派双路径独立验证"
-doc_type: "test-report"
+doc_type: "test"
 status: "active"
-owner_agent: "Test Agent"
+owner_agent: "lead"
 version_scope: "project"
 created: "2026-11-05"
 updated: "2026-11-05"

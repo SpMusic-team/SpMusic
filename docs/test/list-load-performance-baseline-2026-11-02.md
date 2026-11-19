@@ -1,9 +1,9 @@
 ---
 doc_id: "PERF-BASELINE-001"
 title: "媒体库列表加载速度基线（2026-11-02，当前版本）"
-doc_type: "performance-baseline"
-status: "已记录，复现入口可用"
-owner_agent: "Test Agent"
+doc_type: "test"
+status: "done"
+owner_agent: "lead"
 module: "媒体库列表加载与封面前瞻预取"
 version_scope: "project"
 created: "2026-11-02"
@@ -12,7 +12,6 @@ source_documents:
   - "用户反馈：从搜索页加入后歌曲列表加载变慢；随后澄清媒体库下各个视图的列表都慢，且 10-25 版本已有「所有歌曲」可作基线"
   - "docs/test/playlist-add-load-path-analysis.md（静态链路分析；§8 歌单场景实测；§9 媒体库各视图实测）"
   - "tools/perf-regression/（测量工具）"
-  - "tools/perf-regression/results/current/（原始 JSON）"
 ---
 
 # 媒体库列表加载速度基线（2026-11-02）
@@ -208,10 +207,7 @@ node tools/perf-regression/run.mjs --worktree D:\SpMusic --version-id V5 `
   --out tools/perf-regression/results/current/sc-album.json
 ```
 
-原始数据：`tools/perf-regression/results/current/`
-- `final-V5-SA.json`、`final-V5-1800.json`（当前版本）
-- `final-V1-SA.json`、`final-V1-1800.json`（10-25 基线）
-- `final-V5.json`（歌单 SW/S3）
+原始数据未入库：用上面的命令重新生成到 `tools/perf-regression/results/current/`（该目录已被 `.gitignore` 忽略）。本文表格里的数值即为当时产物，需要复核时按命令重跑并对照。
 
 harness 会校验目标 dev server 返回的 `PlayerShell.tsx` 确实来自指定 worktree（结果里的 `engine.originVerified`），避免测到错误版本。
 

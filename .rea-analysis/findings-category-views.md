@@ -1,6 +1,6 @@
 # Poweramp 年份 / 流派 —— 方法体实证
 
-**用途**：支撑 `docs/architecture/poweramp-category-views.md`。
+**用途**：支撑 `docs/corpus/poweramp-category-views.md`。
 本文只存方法体原文与偏好键，分析见架构文档。
 
 | 项 | 值 |

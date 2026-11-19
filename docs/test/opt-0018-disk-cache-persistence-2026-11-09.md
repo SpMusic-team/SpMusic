@@ -1,3 +1,17 @@
+---
+doc_id: "TEST-OPT-0018-DISK-CACHE-PERSISTENCE-2026-11-09"
+title: "磁盘缓存跨重启验证：命中、复用与重新生成"
+doc_type: "test"
+status: "done"
+owner_agent: "lead"
+version_scope: "project"
+created: "2026-11-09"
+updated: "2026-11-09"
+source_documents:
+  - "docs/changes/optimizations/OPT-0018.md（父任务卡）"
+  - "实测记录：基线/候选 commit 见正文各节"
+---
+
 # 磁盘缓存跨重启验证：命中、复用与重新生成
 
 > 验证目标：确认 256 档 JPEG 与索引真的写盘；退出应用后保留缓存再启动，拖到同一位置时这些目标是否**命中索引、读取已有 JPEG、还是重新缩放编码**。

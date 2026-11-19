@@ -2,9 +2,9 @@
 doc_id: "TASK-OPT-0018-DRAG-MEMORY-R1"
 title: "OPT-0018 拖动内存第一轮实现与测试方案"
 doc_type: "task"
-status: "待执行"
-owner_agent: "PM Agent"
-version_scope: "当前 develop 的 Windows / WebView2 封面列表"
+status: "ready"
+owner_agent: "lead"
+version_scope: "project"
 created: "2026-11-17"
 updated: "2026-11-17"
 source_documents:

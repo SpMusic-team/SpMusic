@@ -301,9 +301,9 @@ SpMusic 侧依据 `docs/architecture/media-library-page-relationships.md`。
 | 文档 | 关系 |
 | --- | --- |
 | `docs/architecture/media-library-page-relationships.md` | **SpMusic 现状**，本文做对照基准 |
-| `docs/architecture/poweramp-queue-runtime-reference.md` | 队列状态机（`next`/`prev`/`nextCategory`）。层级页的「不跨分类推进」与其中的 `nextCategory` 门控相关 |
-| `docs/architecture/poweramp-search-and-queue-impact.md` | 搜索实体 `v3` 也用 `x3[]` 子分类，与 `x0.v0()` 同型 |
-| `docs/architecture/poweramp-audio-settings-structure.md` | 该文的 P 系列未解与本文 L2 是同一 flag |
+| `docs/corpus/poweramp-queue-runtime-reference.md` | 队列状态机（`next`/`prev`/`nextCategory`）。层级页的「不跨分类推进」与其中的 `nextCategory` 门控相关 |
+| `docs/corpus/poweramp-search-and-queue-impact.md` | 搜索实体 `v3` 也用 `x3[]` 子分类，与 `x0.v0()` 同型 |
+| `docs/corpus/poweramp-audio-settings-structure.md` | 该文的 P 系列未解与本文 L2 是同一 flag |
 
 ---
 

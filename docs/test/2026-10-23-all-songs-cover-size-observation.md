@@ -1,9 +1,9 @@
 ---
 doc_id: "TEST-2026-10-23-ALL-SONGS-COVER-SIZE-OBSERVATION"
 title: "测试记录：所有歌曲封面请求尺寸与加载速度"
-doc_type: "test-note"
+doc_type: "test"
 status: "active"
-owner_agent: "Test Agent"
+owner_agent: "lead"
 version_scope: "project"
 created: "2026-10-23"
 updated: "2026-10-23"

@@ -1,9 +1,9 @@
 ---
 doc_id: "TEST-2026-11-10-PLAYER-MEMORY"
 title: "播放期内存增长根因诊断与优化建议"
-doc_type: "test-report"
-status: "调查完成；优化项未实施"
-owner_agent: "Test Agent"
+doc_type: "test"
+status: "done"
+owner_agent: "lead"
 version_scope: "project"
 module: "播放器内存 / 封面管线 / 音频可视化 / IPC 边界"
 created: "2026-11-10"

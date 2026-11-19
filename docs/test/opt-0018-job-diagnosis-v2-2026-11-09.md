@@ -1,3 +1,17 @@
+---
+doc_id: "TEST-OPT-0018-JOB-DIAGNOSIS-V2-2026-11-09"
+title: "作业级全链路诊断（细分版）：缓存命中 / 源图解码 / 缩放 / 编码"
+doc_type: "test"
+status: "done"
+owner_agent: "lead"
+version_scope: "project"
+created: "2026-11-09"
+updated: "2026-11-09"
+source_documents:
+  - "docs/changes/optimizations/OPT-0018.md（父任务卡）"
+  - "实测记录：基线/候选 commit 见正文各节"
+---
+
 # 作业级全链路诊断（细分版）：缓存命中 / 源图解码 / 缩放 / 编码
 
 > 本轮只改**诊断埋点**，产品行为与默认构建不变。

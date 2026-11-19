@@ -1,3 +1,17 @@
+---
+doc_id: "TEST-OPT-0018-FIRST-ARRIVAL-DIAGNOSIS-2026-11-09"
+title: "首次到达诊断（修订版）：全屏小卡片档位，基线 3847bcc"
+doc_type: "test"
+status: "done"
+owner_agent: "lead"
+version_scope: "project"
+created: "2026-11-09"
+updated: "2026-11-09"
+source_documents:
+  - "docs/changes/optimizations/OPT-0018.md（父任务卡）"
+  - "实测记录：基线/候选 commit 见正文各节"
+---
+
 # 首次到达诊断（修订版）：全屏小卡片档位，基线 3847bcc
 
 > **本版推翻了上一版的核心结论**，原因与更正见 §0。

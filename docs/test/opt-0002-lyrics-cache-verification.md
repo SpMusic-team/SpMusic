@@ -1,9 +1,9 @@
 ---
 doc_id: "TEST-OPT-0002-LYRICS-CACHE"
 title: "测试报告：OPT-0002 歌词缓存与显式内嵌歌词边界"
-doc_type: "test-report"
+doc_type: "test"
 status: "active"
-owner_agent: "Test Agent"
+owner_agent: "lead"
 version_scope: "v0.1"
 created: "2026-08-13"
 updated: "2026-08-13"

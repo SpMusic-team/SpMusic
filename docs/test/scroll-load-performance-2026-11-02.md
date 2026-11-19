@@ -1,9 +1,9 @@
 ---
 doc_id: "PERF-SCROLL-001"
 title: "拖动/滚动媒体库歌曲列表的分段耗时实测（2026-11-02）"
-doc_type: "performance-baseline"
-status: "已实测"
-owner_agent: "Test Agent"
+doc_type: "test"
+status: "done"
+owner_agent: "lead"
 module: "媒体库列表拖动/滚动与封面加载"
 version_scope: "project"
 created: "2026-11-02"
@@ -12,7 +12,6 @@ source_documents:
   - "用户反馈：媒体库各分类的歌曲列表在拖动时加载仍不够快"
   - "docs/test/list-load-performance-baseline-2026-11-02.md（首屏基线；本文补齐拖动期）"
   - "tools/perf-regression/scroll-probe.mjs（新增探针，未改 run.mjs / lib/* / src/）"
-  - "tools/perf-regression/results/current/scroll-900-1800-l4-l1-playlist.json（原始数据，11.5 MB）"
 ---
 
 # 拖动/滚动媒体库歌曲列表的分段耗时实测（2026-11-02）
@@ -21,7 +20,7 @@ source_documents:
 > 两者是不同阶段、不同瓶颈、不同优化手段。
 
 工具: `tools/perf-regression/scroll-probe.mjs`（新增，未改 `run.mjs` / `lib/*` / `src/`）
-原始数据: `tools/perf-regression/results/current/scroll-900-1800-l4-l1-playlist.json`（11.5 MB，12 次页面测量）
+原始数据: 单次 11.5 MB，未入库；按下方 §9 的复现命令重新生成到 `tools/perf-regression/results/current/`（该目录已被 `.gitignore` 忽略）
 
 ---
 

@@ -1,9 +1,9 @@
 ---
 doc_id: "TEST-RECENTLY-PLAYED-LIBRARY"
 title: "最近播放分类独立验证"
-doc_type: "test-report"
+doc_type: "test"
 status: "active"
-owner_agent: "Test Agent"
+owner_agent: "lead"
 version_scope: "project"
 created: "2026-10-30"
 updated: "2026-10-30"

@@ -1,10 +1,10 @@
 ---
 doc_id: "TEST-OPT-0018-DRAG-MEMORY-2026-11-15"
 title: "OPT-0018 连续拖动内存对照"
-doc_type: "test-report"
-status: "单机观察完成，待专项归因"
-owner_agent: "Test Agent"
-version_scope: "develop 4d4477c 与 Lanczos3/t2 最终候选"
+doc_type: "test"
+status: "in-review"
+owner_agent: "lead"
+version_scope: "project"
 created: "2026-11-15"
 updated: "2026-11-15"
 source_documents:

@@ -1,9 +1,9 @@
 ---
 doc_id: "TEST-BUG-0018-COVER-REENTRY"
 title: "BUG-0018 封面转场重入独立验证"
-doc_type: "test-report"
-status: "第二轮机制及有限原生样本通过 / 完整体验验收待定"
-owner_agent: "Test Agent"
+doc_type: "test"
+status: "in-review"
+owner_agent: "lead"
 version_scope: "project"
 created: "2026-10-11"
 updated: "2026-10-11"

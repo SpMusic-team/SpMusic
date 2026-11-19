@@ -1,10 +1,10 @@
 ---
 doc_id: "TEST-STREAM-AUTHOR-2026-11-07"
 title: "流播放控制器作者信息验收"
-doc_type: "test-report"
+doc_type: "test"
 status: "active"
-owner_agent: "Test Agent"
-version_scope: "streams"
+owner_agent: "lead"
+version_scope: "project"
 created: "2026-11-07"
 updated: "2026-11-07"
 source_documents:

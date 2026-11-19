@@ -108,7 +108,7 @@ const FILTER_PARAMS = ["docType", "status", "owner", "scope", "severity", "modul
 const PARAM_LABELS: Record<string, string> = {
   docType: "类型",
   status: "状态",
-  owner: "负责 Agent",
+  owner: "负责方",
   scope: "版本范围",
   severity: "严重程度",
   module: "模块",
@@ -126,26 +126,16 @@ const PARAM_KEYS: Record<string, string> = {
 }
 
 const DOC_TYPE_LABELS: Record<string, string> = {
-  task: "任务",
-  "optimization-requirement": "优化需求",
-  bug: "缺陷",
-  decision: "决策",
-  architecture: "架构",
-  requirements: "需求",
+  requirement: "需求",
+  architecture: "架构与研究",
   implementation: "实现说明",
-  "compatibility-evidence": "兼容性证据",
-  "implementation-evidence": "实现证据",
-  readme: "项目说明",
-  "release-plan": "发布计划",
-  "requirements-index": "需求索引",
-  roadmap: "路线图",
-  "sprint-plan": "迭代计划",
-  "technical-decision-record": "技术决策记录",
-  "test-catalog": "测试目录",
-  "test-report": "测试报告",
-  "ui-spec": "界面规范",
-  "agent-prompt": "Agent 提示词",
-  template: "模板",
+  decision: "决策",
+  task: "任务",
+  test: "测试记录",
+  change: "变更",
+  ui: "界面规范",
+  plan: "计划",
+  index: "索引",
 }
 
 const ISSUES_OPTIONS: { value: IssuesFilter; label: string }[] = [
@@ -612,7 +602,7 @@ export function App() {
                 className="border-0 px-0 shadow-none focus-visible:ring-0"
                 value={filters.query}
                 onChange={(event) => setFilters((current) => ({ ...current, query: event.target.value }))}
-                placeholder="搜索标题、正文，或字段:值（如 status:待处理）"
+                placeholder="搜索标题、正文，或字段:值（如 status:draft）"
                 aria-label="全文搜索"
               />
             </div>
@@ -672,8 +662,9 @@ export function App() {
                 <DropdownMenuContent align="start">
                   <DropdownMenuGroup>
                     <DropdownMenuItem onSelect={clearAllFilters}>全部文档</DropdownMenuItem>
-                    <DropdownMenuItem onSelect={() => applyPreset({ values: { status: ["待处理"] } })}>待处理项</DropdownMenuItem>
-                    <DropdownMenuItem onSelect={() => applyPreset({ values: { status: ["待评估"] } })}>待评估项</DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => applyPreset({ values: { status: ["draft"] } })}>草稿项</DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => applyPreset({ values: { status: ["in-review"] } })}>待复核项</DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => applyPreset({ values: { status: ["blocked"] } })}>受阻项</DropdownMenuItem>
                     <DropdownMenuItem onSelect={() => applyPreset({ issues: "any" })}>有问题文档</DropdownMenuItem>
                     <DropdownMenuItem onSelect={() => applyPreset({ issues: "errors" })}>仅错误文档</DropdownMenuItem>
                   </DropdownMenuGroup>
@@ -757,7 +748,7 @@ export function App() {
                 <DropdownMenuContent align="end">
                   <DropdownMenuGroup>
                     <DropdownMenuCheckboxItem checked={filters.includeInternal} onCheckedChange={(checked) => setIncludeInternal(checked === true)}>
-                      显示 Agent 与内部文档
+                      显示内部文档
                     </DropdownMenuCheckboxItem>
                   </DropdownMenuGroup>
                 </DropdownMenuContent>
@@ -948,7 +939,7 @@ export function App() {
                         <dt className="text-muted-foreground">文档 ID</dt><dd className="break-all">{metadataText(activeDocument.metadata.doc_id)}</dd>
                         <dt className="text-muted-foreground">类型</dt><dd>{docTypeText(activeDocument.metadata.doc_type)}</dd>
                         <dt className="text-muted-foreground">状态</dt><dd>{metadataText(activeDocument.metadata.status)}</dd>
-                        <dt className="text-muted-foreground">负责 Agent</dt><dd>{metadataText(activeDocument.metadata.owner_agent)}</dd>
+                        <dt className="text-muted-foreground">负责方</dt><dd>{metadataText(activeDocument.metadata.owner_agent)}</dd>
                         <dt className="text-muted-foreground">版本范围</dt><dd>{metadataText(activeDocument.metadata.version_scope)}</dd>
                         <dt className="text-muted-foreground">文件大小</dt><dd>{Math.max(1, Math.round(activeDocument.size / 1024))} KB</dd>
                         <dt className="text-muted-foreground">磁盘更新</dt><dd>{dateText(activeDocument.modifiedAt)}</dd>

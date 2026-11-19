@@ -20,7 +20,7 @@ const INITIAL_FIELDS: NewDocumentFields = {
   title: "",
   docType: "",
   status: "draft",
-  ownerAgent: "Documentation Agent",
+  ownerAgent: "lead",
   versionScope: "project",
   sourceDocument: "user request",
 }
@@ -101,7 +101,7 @@ export function DocumentForm({ open, onOpenChange, onSubmit }: DocumentFormProps
               <Input id="document-status" value={fields.status} onChange={(event) => update("status", event.target.value)} />
             </Field>
             <Field>
-              <FieldLabel htmlFor="document-owner">负责 Agent</FieldLabel>
+              <FieldLabel htmlFor="document-owner">负责方</FieldLabel>
               <Input id="document-owner" value={fields.ownerAgent} onChange={(event) => update("ownerAgent", event.target.value)} />
             </Field>
             <Field>

@@ -26,8 +26,15 @@ const EXCLUDED_DIRECTORIES = new Set([
 ])
 
 const EDITABLE_ROOT_FILES = new Set(["README.md", "GIT_WORKFLOW.md"])
-const INTERNAL_PREFIXES = [".agents/", ".codex/", "agent-prompt/"]
-const PM_MANAGED_INTERNAL_DOC_TYPES = new Set(["agent-prompt", "template"])
+const INTERNAL_PREFIXES = [".agents/", ".codex/"]
+
+// 元数据规范只约束项目文档：docs/ 下的文档与仓库根 README。
+// .agents/skills（外部 skill 原文，带哈希锁）、.rea-analysis（反汇编取证）、
+// tools/*/README.md（工具自带说明）、src-tauri 说明文件不属于项目文档体系，
+// 强行要求 front matter 只会制造噪声，因此不参与元数据校验。
+export function isDocumentedPath(relativePath) {
+  return relativePath === "README.md" || relativePath.startsWith("docs/")
+}
 const ASSET_CONTENT_TYPES = new Map([
   [".apng", "image/apng"],
   [".avif", "image/avif"],
@@ -75,9 +82,7 @@ export function isInternalPath(relativePath) {
 
 export function isEditablePath(relativePath) {
   const normalized = normalizeRepoPath(relativePath)
-  return normalized.startsWith("docs/")
-    || normalized.startsWith(".agents/prompt/")
-    || EDITABLE_ROOT_FILES.has(normalized)
+  return normalized.startsWith("docs/") || EDITABLE_ROOT_FILES.has(normalized)
 }
 
 export function resolveManagedPath(repositoryRoot, input, { write = false } = {}) {
@@ -140,6 +145,26 @@ function firstHeading(content) {
   return match?.[1]?.trim()
 }
 
+// 标题归一化：去掉体裁前缀、括号副标题、空白与标点后比较。
+// front matter 的 title 常带「（build-1035）」这类副标题，正文一级标题取主标题，
+// 二者信息量不同但指同一篇文档，不应报 TITLE_MISMATCH。
+const GENRE_PREFIX = /^(决策|测试报告|需求分析|任务|界面规范|UI 规格|架构说明|交接文档|测试计划|实现说明|变更记录|调研报告)\s*[:：]\s*/
+function normalizeTitle(value) {
+  return String(value ?? "")
+    .replace(GENRE_PREFIX, "")
+    .replace(/[（(][^）)]*[）)]/g, "")
+    .replace(/[\s\u3000]/g, "")
+    .replace(/[：:，,、。.！!？?\-—_\/|"']+/g, "")
+    .toLowerCase()
+}
+
+export function titlesAgree(metadataTitle, heading) {
+  const left = normalizeTitle(metadataTitle)
+  const right = normalizeTitle(heading)
+  if (!left || !right) return true
+  return left === right || left.includes(right) || right.includes(left)
+}
+
 function plainExcerpt(content) {
   return content
     .replace(/^---[\s\S]*?---\s*/u, "")
@@ -198,10 +223,19 @@ async function pathExists(target) {
   }
 }
 
+// 代码块与行内代码里的方括号写法（如反汇编操作数 `[field_vtbl+0x20](query)`）
+// 不是 Markdown 链接，扫描前先剥离，避免误报 BROKEN_LINK。
+function stripCode(content) {
+  return content
+    .replace(/```[\s\S]*?```/g, "")
+    .replace(/~~~[\s\S]*?~~~/g, "")
+    .replace(/`[^`\n]*`/g, "")
+}
+
 async function validateLinks(repositoryRoot, relativePath, content) {
   const issues = []
   const linkPattern = /!?\[[^\]]*\]\(([^)\s]+)(?:\s+["'][^"']*["'])?\)/g
-  for (const match of content.matchAll(linkPattern)) {
+  for (const match of stripCode(content).matchAll(linkPattern)) {
     const rawTarget = match[1].replace(/^<|>$/g, "")
     if (/^(?:https?:|mailto:|tel:|data:|#)/i.test(rawTarget)) continue
 
@@ -240,13 +274,13 @@ export async function parseDocument(repositoryRoot, relativePath, content, fileS
 
   const metadata = stringifyMetadata(parsed.data)
   const hasFrontMatter = /^---\s*\r?\n/.test(content)
-  const issues = validateMetadata(metadata, hasFrontMatter)
+  const issues = isDocumentedPath(relativePath) ? validateMetadata(metadata, hasFrontMatter) : []
   if (parseError) issues.unshift(issue("INVALID_FRONT_MATTER", parseError, "error"))
   issues.push(...(await validateLinks(repositoryRoot, relativePath, content)))
 
   const fallbackTitle = firstHeading(parsed.content) ?? path.basename(relativePath, path.extname(relativePath))
   const title = String(metadata.title || fallbackTitle)
-  if (metadata.title && firstHeading(parsed.content) && metadata.title !== firstHeading(parsed.content)) {
+  if (metadata.title && firstHeading(parsed.content) && !titlesAgree(metadata.title, firstHeading(parsed.content))) {
     issues.push(issue("TITLE_MISMATCH", "元数据 title 与正文一级标题不一致"))
   }
 
@@ -315,7 +349,7 @@ export async function loadAllDocuments(repositoryRoot) {
 export const FILTER_FIELDS = [
   { key: "doc_type", param: "docType", label: "类型" },
   { key: "status", param: "status", label: "状态" },
-  { key: "owner_agent", param: "owner", label: "负责 Agent" },
+  { key: "owner_agent", param: "owner", label: "负责方" },
   { key: "version_scope", param: "scope", label: "版本范围" },
   { key: "severity", param: "severity", label: "严重程度" },
   { key: "module", param: "module", label: "模块" },
@@ -456,15 +490,8 @@ function facetOptions(candidates, field) {
     .sort((left, right) => right.count - left.count || left.value.localeCompare(right.value, "zh-CN"))
 }
 
-function isPmManagedInternalDocument(document) {
-  return document.internal
-    && document.metadata.owner_agent === "PM Agent"
-    && PM_MANAGED_INTERNAL_DOC_TYPES.has(document.metadata.doc_type)
-}
-
 function isVisibleDocument(document, filters) {
-  if (filters.includeInternal || !document.internal) return true
-  return filters.owner === "PM Agent" && isPmManagedInternalDocument(document)
+  return filters.includeInternal || !document.internal
 }
 
 export function buildDocumentIndex(documents, filters = {}) {

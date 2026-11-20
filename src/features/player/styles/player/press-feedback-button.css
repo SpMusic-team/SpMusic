@@ -1,0 +1,58 @@
+.press-feedback-button {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.press-feedback-button:focus-visible {
+  outline: 2px solid var(--player-blue);
+  outline-offset: 2px;
+}
+
+.press-feedback-button-ripple {
+  position: absolute;
+  top: var(--press-feedback-y);
+  left: var(--press-feedback-x);
+  z-index: 1;
+  display: block;
+  width: var(--press-feedback-diameter);
+  height: var(--press-feedback-diameter);
+  border-radius: 50%;
+  background: var(--press-feedback-color, var(--player-surface-variant, #dde3ea));
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(0);
+  transform-origin: center;
+  pointer-events: none;
+  will-change: transform, opacity;
+  animation: press-feedback-button-ripple 250ms ease-out both;
+}
+
+/* The feedback belongs to the button surface. Icons and labels stay visually
+   stable above it, including animated glyph frames used by like/dislike. */
+.press-feedback-button > :not(.press-feedback-button-ripple) {
+  position: relative;
+  z-index: 2;
+}
+
+.press-feedback-button-surface-variant {
+  --press-feedback-color: var(--player-surface-variant, #dde3ea);
+}
+
+.press-feedback-button-secondary-container {
+  --press-feedback-color: var(--player-secondary-container, #d3e5f5);
+}
+
+@keyframes press-feedback-button-ripple {
+  0% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(0);
+  }
+  82% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  100% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}

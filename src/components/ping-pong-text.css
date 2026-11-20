@@ -1,0 +1,38 @@
+.ping-pong-text {
+  display: block;
+  min-width: 0;
+}
+
+.ping-pong-text-viewport {
+  position: relative;
+  display: block;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.ping-pong-text-static {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ping-pong-text-moving {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: block;
+  width: max-content;
+  visibility: hidden;
+  white-space: nowrap;
+  will-change: transform;
+}
+
+.ping-pong-text[data-animated="true"] .ping-pong-text-static {
+  visibility: hidden;
+}
+
+.ping-pong-text[data-animated="true"] .ping-pong-text-moving {
+  visibility: visible;
+}

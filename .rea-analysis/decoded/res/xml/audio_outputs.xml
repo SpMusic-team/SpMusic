@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen android:title="@string/pref_audio_output" w:searchIndexer="com.maxmpz.audioplayer.preference.SettingsHelperAudioOutputs$SearchIndexer" w:searchBreadcrumb1="@string/pref_audio_engine"
+  xmlns:android="http://schemas.android.com/apk/res/android" xmlns:w="http://schemas.android.com/apk/res-auto">
+    <PreferenceCategory android:title="@string/pref_output_plugins" android:key="output_plugins_list" />
+    <com.maxmpz.audioplayer.preference.RawTextPreference android:key="output_unassigned_text" />
+    <Preference android:title="@string/pref_restore_defaults" android:key="restore_defaults" />
+</PreferenceScreen>

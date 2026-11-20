@@ -1,0 +1,95 @@
+.player-settings-dialog {
+  width: min(520px, calc(100vw - 32px));
+  max-width: min(520px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+}
+
+.global-shortcut-settings {
+  min-width: 0;
+}
+
+.global-shortcut-settings [data-slot="field-content"] {
+  min-width: 0;
+}
+
+.global-shortcut-settings > [data-slot="field-group"] {
+  /* Inline-size containment inside a flex fieldset collapses its rows in Chromium.
+     This group uses fixed horizontal fields and needs no container queries. */
+  container-type: normal;
+}
+
+@media (max-width: 460px) {
+  .global-shortcut-settings [data-slot="field"] {
+    flex-direction: column;
+  }
+}
+
+.player-settings-dialog[data-theme-manager-open="true"] {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.player-settings-overlay-hidden {
+  background: transparent;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.theme-manager-overlay {
+  background: transparent;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.player-settings-group {
+  gap: 12px;
+}
+
+.player-settings-row {
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 0;
+}
+
+.player-settings-row + .player-settings-row {
+  border-top: 1px solid color-mix(in srgb, var(--player-muted) 16%, transparent);
+}
+
+.player-settings-row [data-slot="field-content"] {
+  min-width: 0;
+}
+
+.player-settings-theme-row button {
+  flex: 0 0 auto;
+}
+
+.player-settings-library-row button {
+  flex: 0 0 auto;
+}
+
+.player-settings-library-errors {
+  overflow-wrap: anywhere;
+  font-size: 0.875rem;
+  color: var(--player-muted);
+}
+
+.player-settings-library-errors ul {
+  margin: 4px 0 0;
+  padding-left: 20px;
+}
+
+@media (max-width: 460px) {
+  .player-settings-library-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .player-settings-library-row button {
+    align-self: flex-start;
+  }
+}

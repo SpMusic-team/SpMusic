@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen android:title="@string/buttons"
+  xmlns:android="http://schemas.android.com/apk/res/android" xmlns:z="http://schemas.android.com/apk/res-auto" xmlns:w="http://schemas.android.com/apk/res-auto">
+    <com.maxmpz.audioplayer.preference.RawTextPreference w:line1="@string/media_notify_actions_unified_hint" w:smallLine2="@string/media_notify_actions_unified_hint2" w:smallLine3="@string/media_notify_actions_unified_hint3" w:smallLine4="@string/media_notify_actions_unified_hint4" />
+    <PreferenceCategory android:title="@string/notify_android_auto">
+        <com.maxmpz.audioplayer.preference.TagListPreference android:title="@string/pref_notify_action1" android:key="notify_action1" w:entries="@array/pref_notify_actions_entries" w:values="@array/pref_notify_actions_values" w:summaries="@array/pref_notify_actions_summaries" w:icons="@array/pref_notify_actions_icons" />
+        <com.maxmpz.audioplayer.preference.TagListPreference android:title="@string/pref_notify_action2" android:key="notify_action2" w:entries="@array/pref_notify_actions_entries" w:values="@array/pref_notify_actions_values" w:summaries="@array/pref_notify_actions_summaries" w:icons="@array/pref_notify_actions_icons" />
+    </PreferenceCategory>
+    <PreferenceCategory android:title="@string/android_auto_other">
+        <com.maxmpz.audioplayer.preference.TagListPreference android:title="@string/pref_notify_action3" android:key="notify_action3" w:entries="@array/pref_notify_actions_entries" w:values="@array/pref_notify_actions_values" w:summaries="@array/pref_notify_actions_summaries" w:icons="@array/pref_notify_actions_icons" />
+        <com.maxmpz.audioplayer.preference.TagListPreference android:title="@string/pref_notify_action4" android:key="notify_action4" w:entries="@array/pref_notify_actions_entries" w:values="@array/pref_notify_actions_values" w:summaries="@array/pref_notify_actions_summaries" w:icons="@array/pref_notify_actions_icons" />
+        <com.maxmpz.audioplayer.preference.TagListPreference android:title="@string/pref_notify_action5" android:key="notify_action5" w:entries="@array/pref_notify_actions_entries" w:values="@array/pref_notify_actions_values" w:summaries="@array/pref_notify_actions_summaries" w:icons="@array/pref_notify_actions_icons" />
+        <com.maxmpz.audioplayer.preference.TagListPreference android:title="@string/pref_notify_action6" android:key="notify_action6" w:entries="@array/pref_notify_actions_entries" w:values="@array/pref_notify_actions_values" w:summaries="@array/pref_notify_actions_summaries" w:icons="@array/pref_notify_actions_icons" />
+    </PreferenceCategory>
+    <Preference android:title="@string/pref_restore_defaults" android:key="restore_defaults" />
+</PreferenceScreen>

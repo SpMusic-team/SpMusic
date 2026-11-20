@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen w:searchIndexer="com.maxmpz.audioplayer.preference.SettingsHelperAudioOutputDeviceOpts$SearchIndexer"
+  xmlns:android="http://schemas.android.com/apk/res/android" xmlns:z="http://schemas.android.com/apk/res-auto" xmlns:w="http://schemas.android.com/apk/res-auto">
+    <com.maxmpz.audioplayer.preference.SwitchStringPreference android:persistent="false" android:key="output_switch" android:summary="@string/enable" w:skipSearch="true" />
+    <com.maxmpz.audioplayer.preference.NumberListPreference android:persistent="false" android:title="@string/pref_sample_rate" android:key="sample_rate" android:dialogTitle="@string/pref_sample_rate" />
+    <Preference android:persistent="false" android:key="sample_rate_static" w:skipSearch="true" />
+    <com.maxmpz.audioplayer.preference.NumberListPreference android:persistent="false" android:title="@string/sample_format" android:key="sample_fmt" android:dialogTitle="@string/sample_format" />
+    <Preference android:persistent="false" android:key="sample_bits_static" w:skipSearch="true" />
+    <com.maxmpz.audioplayer.preference.RawTextPreference android:key="pref_ar_format_changes_when_playing" android:summary="@string/pref_ar_format_changes_when_playing" />
+    <com.maxmpz.audioplayer.preference.RawTextPreference android:icon="@drawable/exclamation_circle_48dp" android:key="pref_sr_format_effects_override_hint" android:summary="@string/pref_sr_format_effects_override_hint" w:skipSearch="true" />
+    <com.maxmpz.audioplayer.preference.MultilineSwitchPreference android:persistent="false" android:title="@string/pref_output_float" android:key="float" />
+    <com.maxmpz.audioplayer.preference.RawTextPreference android:icon="@drawable/exclamation_circle_48dp" android:key="pref_hi_res_no_dvc_hint" w:skipSearch="true" />
+    <com.maxmpz.audioplayer.preference.MultilineSwitchPreference android:persistent="false" android:title="@string/pref_output_disable_dvc" android:key="no_dvc" android:summary="@string/pref_summary_output_disable_dvc" />
+    <com.maxmpz.audioplayer.preference.RawTextPreference android:persistent="false" android:key="bt_dvc_msg" />
+    <com.maxmpz.audioplayer.preference.MultilineSwitchPreference android:persistent="false" android:title="@string/pref_output_disable_headroom_gain" android:key="no_headroom" android:summary="@string/pref_summary_output_disable_headroom_gain" />
+    <Preference android:persistent="false" android:title="@string/pref_buffer_size" android:key="buffer_size" android:summary="@string/pref_summary_buffer_size" />
+    <com.maxmpz.audioplayer.preference.SeekbarPreference android:persistent="false" android:title="@string/pref_vis_lyrics_delay" android:key="vis_latency_ms" android:summary="@string/pref_summary_vis_lyrics_delay_d" android:defaultValue="0" w:max="2500" w:min="0" />
+    <com.maxmpz.audioplayer.preference.MultilineSwitchPreference android:persistent="false" android:title="@string/pref_output_oem_variant" android:key="oem_variant" android:summary="@string/pref_summary_output_oem_variant" />
+    <com.maxmpz.audioplayer.preference.MultilineSwitchPreference android:persistent="false" android:title="@string/pref_cc_force_aa" android:key="cc_force_aa" android:summary="@string/pref_summary_cc_force_aa" />
+    <com.maxmpz.audioplayer.preference.MultilineSwitchPreference android:persistent="false" android:title="@string/cc_show_meta" android:key="cc_show_meta" android:summary="@string/summary_cc_show_meta" />
+    <com.maxmpz.audioplayer.preference.MultilineSwitchPreference android:persistent="false" android:title="@string/pref_output_disable_equ_tone" android:key="no_equ" android:summary="@string/pref_summary_output_disable_equ_tone" />
+    <com.maxmpz.audioplayer.preference.MultilineSwitchPreference android:persistent="false" android:title="@string/pref_output_no_duck" android:key="no_duck" android:summary="@string/pref_summary_output_no_duck" />
+    <com.maxmpz.audioplayer.preference.MultilineSwitchPreference android:persistent="false" android:title="@string/pref_output_no_af" android:key="no_af" android:summary="@string/pref_summary_output_no_af" />
+    <Preference android:title="@string/pref_restore_defaults" android:key="restore_defaults" />
+</PreferenceScreen>
